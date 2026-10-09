@@ -23,6 +23,17 @@ export interface TextureRef {
   transform: UvTransform | null;
 }
 
+/** The material slots a composition file can give a texture. */
+export type TextureSlot = "baseColor" | "normal" | "roughness" | "metalness" | "emissive";
+
+export const TEXTURE_SLOTS: readonly TextureSlot[] = ["baseColor", "normal", "roughness", "metalness", "emissive"];
+
+/** A texture a composition file sets for a slot: the path it writes, and whether an image was found there. */
+export interface TextureOverride {
+  path: string;
+  found: boolean;
+}
+
 /** A metallic-roughness approximation of the file's material, for a neutral preview. */
 export interface Material {
   name: string;
@@ -46,6 +57,10 @@ export interface Material {
   alphaMode: AlphaMode;
   alphaCutoff: number;
   doubleSided: boolean;
+  /** Images the file names for a slot that were not found, by the path the file stores. Their slots are empty. */
+  missingTextures?: Partial<Record<TextureSlot, string>>;
+  /** Slots whose texture a composition file sets in place of the file's own. */
+  textureOverrides?: Partial<Record<TextureSlot, TextureOverride>>;
 }
 
 export interface Texture {

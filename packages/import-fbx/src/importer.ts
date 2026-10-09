@@ -8,6 +8,7 @@ import type {
   SceneDescription,
   SceneNode,
   TextureRef,
+  TextureSlot,
 } from "@arcue/scene";
 import {
   buildNodePaths,
@@ -58,10 +59,14 @@ async function buildMaterials(
 ): Promise<Material[]> {
   const result: Material[] = [];
   for (const [index, material] of materials.entries()) {
-    const ref = async (wire: WireTextureRef | null | undefined): Promise<TextureRef | null> => {
+    const missingTextures: Partial<Record<TextureSlot, string>> = {};
+    const ref = async (wire: WireTextureRef | null | undefined, slot?: TextureSlot): Promise<TextureRef | null> => {
       if (!wire) return null;
       const texture = await textures.resolve(wire.file);
-      if (texture === null) return null;
+      if (texture === null) {
+        if (slot) missingTextures[slot] = textures.storedPath(wire.file);
+        return null;
+      }
       return {
         texture,
         uvSet: uvSetIndex(meshes, index, wire.uvSet),
@@ -70,24 +75,26 @@ async function buildMaterials(
         transform: wire.transform,
       };
     };
-    result.push({
+    const built: Material = {
       name: material.name,
       baseColor: material.baseColor,
-      baseColorTexture: await ref(material.baseColorTexture),
+      baseColorTexture: await ref(material.baseColorTexture, "baseColor"),
       metallic: material.metallic,
       roughness: material.roughness,
       metallicRoughnessTexture: null,
-      roughnessTexture: await ref(material.roughnessTexture),
-      metalnessTexture: await ref(material.metalnessTexture),
-      normalTexture: await ref(material.normalTexture),
+      roughnessTexture: await ref(material.roughnessTexture, "roughness"),
+      metalnessTexture: await ref(material.metalnessTexture, "metalness"),
+      normalTexture: await ref(material.normalTexture, "normal"),
       normalScale: 1,
       occlusionTexture: await ref(material.occlusionTexture),
       emissive: material.emissive,
-      emissiveTexture: await ref(material.emissiveTexture),
+      emissiveTexture: await ref(material.emissiveTexture, "emissive"),
       alphaMode: material.alphaMode,
       alphaCutoff: 0.5,
       doubleSided: material.doubleSided,
-    });
+    };
+    if (Object.keys(missingTextures).length > 0) built.missingTextures = missingTextures;
+    result.push(built);
   }
   return result;
 }

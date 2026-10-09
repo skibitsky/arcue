@@ -1,6 +1,7 @@
 import type { Clip, Track } from "./clip";
 import { clipNames, displayNames } from "./clip";
-import type { Material, Texture, TextureRef } from "./material";
+import type { Material, Texture, TextureRef, TextureSlot } from "./material";
+import { TEXTURE_SLOTS } from "./material";
 import type { Mesh } from "./mesh";
 import type { SceneNode } from "./node";
 import type { ScenePart } from "./parts";
@@ -36,10 +37,6 @@ export function splitMemberPath(path: string): { file: string | null; path: stri
   return { file: null, path };
 }
 
-export type TextureSlot = "baseColor" | "normal" | "roughness" | "metalness" | "emissive";
-
-export const TEXTURE_SLOTS: readonly TextureSlot[] = ["baseColor", "normal", "roughness", "metalness", "emissive"];
-
 /** Another file of a composition, imported on its own. */
 export interface CompositionMember {
   /** The file's path relative to the model's folder, with "/" separators. It prefixes the file's node paths. */
@@ -55,13 +52,19 @@ export interface CompositionAttachment {
   bone: string | null;
 }
 
+/** A composition's texture for a material slot: the path it writes, and the image, or null when none was found. */
+export interface CompositionTexture {
+  path: string;
+  texture: Texture | null;
+}
+
 /** What to load into one view with a model, after the files were read. */
 export interface Composition {
   /** Files whose clips bind to the model's nodes by name. */
   animations: readonly CompositionMember[];
   attach: readonly CompositionAttachment[];
-  /** Textures that replace the files' own, by material name and slot. A null texture could not be read. */
-  materials: Readonly<Record<string, Partial<Record<TextureSlot, Texture | null>>>>;
+  /** Textures that replace the files' own, by material name and slot. */
+  materials: Readonly<Record<string, Partial<Record<TextureSlot, CompositionTexture>>>>;
   /** Part ids hidden until someone shows them. */
   hidden: readonly string[];
   /** Problems found while reading the files, such as a missing member, added to the scene's warnings. */
@@ -411,19 +414,21 @@ class SceneBuilder {
         continue;
       }
       for (const slot of TEXTURE_SLOTS) {
-        const texture = slots[slot];
-        if (!texture) continue;
-        this.#textures.push(texture);
-        const ref: TextureRef = {
-          texture: this.#textures.length - 1,
-          uvSet: 0,
-          wrapU: "repeat",
-          wrapV: "repeat",
-          transform: null,
-        };
+        const entry = slots[slot];
+        if (!entry) continue;
+        let ref: TextureRef | null = null;
+        if (entry.texture) {
+          this.#textures.push(entry.texture);
+          ref = { texture: this.#textures.length - 1, uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null };
+        }
         for (const target of targets) {
           const material = this.#materials[target];
-          if (material) this.#materials[target] = withTexture(material, slot, ref);
+          if (!material) continue;
+          const overrides = { ...material.textureOverrides, [slot]: { path: entry.path, found: ref !== null } };
+          this.#materials[target] = {
+            ...(ref ? withTexture(material, slot, ref) : material),
+            textureOverrides: overrides,
+          };
         }
       }
     }

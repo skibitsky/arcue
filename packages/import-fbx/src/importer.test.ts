@@ -575,6 +575,9 @@ describe("export checks", () => {
   it("reports a texture that is not found as an error", async () => {
     const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX);
     expect(scene.materials[0]?.baseColorTexture).toBeNull();
+    expect(scene.materials[0]?.missingTextures).toEqual({
+      baseColor: "/private/tmp/striker-staging/StoneStriker-BaseColor.png",
+    });
     expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
       [
         "texture-path-absolute",
@@ -593,6 +596,7 @@ describe("export checks", () => {
     });
     expect(found).toEqual(["textures/painted.png", "C:/Users/artist/textures/painted.png"]);
     expect(scene.source.warnings.map((warning) => warning.code)).toEqual(["texture-not-found"]);
+    expect(scene.materials[0]?.missingTextures).toEqual({ baseColor: "textures/painted.png" });
   });
 });
 

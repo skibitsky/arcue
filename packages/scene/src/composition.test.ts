@@ -328,13 +328,21 @@ describe("composeScene", () => {
     const composed = composeScene(legs, {
       ...noComposition(),
       attach: [{ member: { file: "Shells.fbx", scene: shells }, node: null, bone: "Body" }],
-      materials: { Shell: { baseColor: texture, normal: null }, Missing: { baseColor: texture } },
+      materials: {
+        Shell: { baseColor: { path: "ShellPaint.png", texture }, normal: { path: "Bumps.png", texture: null } },
+        Missing: { baseColor: { path: "ShellPaint.png", texture } },
+      },
     });
     const shell = composed.materials.find((entry) => entry.name === "Shell");
     expect(shell?.baseColorTexture?.texture).toBe(composed.textures.indexOf(texture));
     expect(shell?.baseColor).toEqual([1, 1, 1, 1]);
     expect(shell?.normalTexture).toBeNull();
+    expect(shell?.textureOverrides).toEqual({
+      baseColor: { path: "ShellPaint.png", found: true },
+      normal: { path: "Bumps.png", found: false },
+    });
     expect(shells.materials[0]?.baseColorTexture).toBeNull();
+    expect(shells.materials[0]?.textureOverrides).toBeUndefined();
     expect(composed.source.warnings.map((warning) => [warning.code, warning.subject.name])).toEqual([
       ["material-not-found", "Missing"],
     ]);
