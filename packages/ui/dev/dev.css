@@ -1,0 +1,149 @@
+/* The harness frames the Workspace like the mockup's desk, and styles the fake 3D view's own canvas and pins. */
+
+#root {
+  height: 100%;
+}
+
+.dev-desk {
+  height: 100%;
+  padding: var(--space-10);
+}
+
+.dev-window {
+  height: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: var(--shadow-window);
+}
+
+.dev-lights {
+  display: flex;
+  gap: var(--space-8);
+  flex: none;
+}
+
+.dev-lights i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface-raised-strong);
+  box-shadow: inset 0 0 0 0.5px var(--line-strong);
+}
+
+@media (max-width: 760px) {
+  .dev-desk {
+    height: auto;
+    padding: 0;
+  }
+
+  .dev-window {
+    height: auto;
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+}
+
+.fv-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.fv-canvas[data-tool="comment"] {
+  cursor: crosshair;
+}
+
+.fv-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.fv-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--size-pin);
+  height: var(--size-pin);
+  margin: calc(var(--size-pin) / -2) 0 0 calc(var(--size-pin) / -2);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--feedback);
+  color: var(--feedback-ink);
+  font: var(--weight-bold) var(--text-xs) / var(--size-pin) var(--font-sans);
+  text-align: center;
+  box-shadow:
+    0 0 0 2px var(--surface-base),
+    var(--shadow-tooltip);
+  pointer-events: auto;
+  cursor: pointer;
+  transition:
+    scale var(--duration-fast),
+    opacity var(--duration-fast);
+}
+
+.fv-pin:hover,
+.fv-pin.is-selected {
+  scale: 1.14;
+}
+
+.fv-pin.is-selected {
+  box-shadow:
+    0 0 0 2px var(--surface-base),
+    0 0 0 6px var(--feedback-ring),
+    var(--shadow-tooltip);
+}
+
+.fv-pin.is-occluded {
+  opacity: 0.42;
+}
+
+.fv-pin[data-state="sent"] {
+  background: var(--feedback-sent);
+}
+
+.fv-pin[data-state="resolved"] {
+  background: var(--feedback-resolved);
+  color: var(--feedback-resolved-ink);
+}
+
+.fv-pin.is-new::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--feedback);
+  animation: fv-ring 1.6s var(--ease-standard) infinite;
+}
+
+@keyframes fv-ring {
+  from {
+    transform: scale(0.8);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.fv-brush {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-muted);
+  pointer-events: none;
+}
+
+.fv-brush.is-painting {
+  border-color: var(--feedback);
+  background: var(--feedback-soft);
+}

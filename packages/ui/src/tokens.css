@@ -1,0 +1,100 @@
+/* Each color belongs to one function. docs/design.md lists the functions and where each color is used. */
+:root {
+  color-scheme: dark;
+
+  /* Neutrals: warm charcoal surfaces, lines and text. */
+  --surface-desk: #121110;
+  --surface-base: #1b1a18;
+  --surface-panel: #22211f;
+  --surface-raised: #2b2a27;
+  --surface-raised-strong: #363431;
+  --surface-tooltip: #0e0d0c;
+  --surface-hover: rgba(236, 228, 214, 0.04);
+  --surface-hover-strong: rgba(236, 228, 214, 0.06);
+  --viewport-glow: #2d2b28;
+  --viewport-edge: #1a1917;
+  --line: rgba(236, 228, 214, 0.08);
+  --line-strong: rgba(236, 228, 214, 0.15);
+  --text: #ede9e2;
+  --text-muted: #b6b1a8;
+  --text-faint: #8f8a82;
+  --focus-ring: rgba(237, 233, 226, 0.7);
+
+  /* Feedback: pins, painted regions, the brush, the range selection, comment markers, Copy prompt. */
+  --feedback: #5b9cf6;
+  --feedback-hover: #78aef8;
+  --feedback-ink: #0b1526;
+  --feedback-soft: rgba(91, 156, 246, 0.16);
+  --feedback-ring: rgba(91, 156, 246, 0.35);
+  --feedback-sent: #4a6890;
+  --feedback-resolved: #34445c;
+  --feedback-resolved-ink: #8ea5c6;
+
+  /* The playhead: a thin red line. */
+  --playhead: #ff4b45;
+  --playhead-width: 1.5px;
+
+  /* Warnings and errors. */
+  --alert: #f0a43a;
+  --alert-soft: rgba(240, 164, 58, 0.14);
+
+  /* The status bar's dot for a watched file whose latest export is on screen. */
+  --live: #93bd8c;
+  --live-soft: rgba(147, 189, 140, 0.15);
+
+  --font-sans: "Figtree Variable", "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-ruler: 10px;
+  --text-marker: 10.5px;
+  --text-xs: 11.5px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 13.5px;
+  --text-xl: 15px;
+  --line-height: 1.4;
+  --line-height-text: 1.45;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --tracking-label: 0.04em;
+
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-14: 14px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-40: 40px;
+
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 999px;
+
+  --size-titlebar: 42px;
+  --size-toolbar: 44px;
+  --size-statusbar: 28px;
+  --size-panel: 320px;
+  --size-panel-narrow: 280px;
+  --size-control: 30px;
+  --size-control-sm: 26px;
+  --size-primary: 36px;
+  --size-chip: 22px;
+  --size-pin: 22px;
+  --size-marker: 20px;
+
+  --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-tooltip: 0 6px 18px rgba(0, 0, 0, 0.45);
+
+  --duration-fast: 0.15s;
+  --duration-medium: 0.2s;
+  --ease-standard: ease-out;
+}
