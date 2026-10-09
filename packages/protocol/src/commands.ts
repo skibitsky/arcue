@@ -1,0 +1,259 @@
+import { z } from "zod";
+import { cameraAnchorSchema, frameRangeSchema, indexSchema, spatialAnchorSchema, timeSelectionSchema } from "./anchors";
+import { assetIdSchema, bytesSchema, commentIdSchema } from "./assets";
+import { computedContextSchema } from "./context";
+import type { CommandDefinition } from "./definitions";
+import { command } from "./definitions";
+import { settingsSchema } from "./settings";
+import { displayModeSchema, viewStateSchema } from "./view-state";
+
+const assetRef = { assetId: assetIdSchema };
+const commentRef = { assetId: assetIdSchema, commentId: commentIdSchema };
+const commentTextSchema = z.string().trim().min(1);
+/** A clip's name in the file, such as "Armature|Charge". */
+const clipNameSchema = z.string().min(1);
+const versionIdSchema = z.string().min(1);
+
+export const commands = {
+  "asset.open": command({
+    description:
+      "Open an asset in a tab, or focus its tab when it is already open. Optionally show a clip, by its name in the file, and a frame.",
+    runsIn: "core",
+    input: z.object({
+      path: z.string().min(1),
+      clip: clipNameSchema.optional(),
+      frame: indexSchema.optional(),
+      /** The view to start from when the asset was not open yet, as a window restoring its tabs passes it. */
+      viewState: viewStateSchema.optional(),
+    }),
+    output: z.object({ assetId: assetIdSchema }),
+  }),
+  "asset.close": command({
+    description: "Close an asset's tab. Its review data stays on disk.",
+    runsIn: "core",
+    input: z.object(assetRef),
+    output: z.void(),
+  }),
+  "asset.reload": command({
+    description: "Parse the asset file again and swap in the new version. The previous version stays if parsing fails.",
+    runsIn: "core",
+    input: z.object(assetRef),
+    output: z.object({ version: z.string() }),
+  }),
+  "comment.create": command({
+    description: "Add a draft comment to the end of the asset's queue.",
+    runsIn: "core",
+    input: z.object({
+      ...assetRef,
+      text: commentTextSchema,
+      /** The asset version the target and time were picked on. The core rejects a version that is no longer current. */
+      version: versionIdSchema,
+      time: timeSelectionSchema,
+      target: spatialAnchorSchema.nullable(),
+      camera: cameraAnchorSchema,
+      context: computedContextSchema,
+      screenshot: bytesSchema.nullable(),
+    }),
+    output: z.object({ commentId: commentIdSchema }),
+  }),
+  "comment.update": command({
+    description:
+      "Edit a draft comment. Fields left out keep their values. A change of time or target must bring a new context and screenshot, and the version they were picked on.",
+    runsIn: "core",
+    input: z
+      .object({
+        ...commentRef,
+        text: commentTextSchema.optional(),
+        version: versionIdSchema.optional(),
+        time: timeSelectionSchema.optional(),
+        target: spatialAnchorSchema.nullable().optional(),
+        camera: cameraAnchorSchema.optional(),
+        context: computedContextSchema.optional(),
+        screenshot: bytesSchema.nullable().optional(),
+      })
+      .refine(
+        (input) =>
+          (input.time === undefined && input.target === undefined) ||
+          (input.context !== undefined && input.screenshot !== undefined && input.version !== undefined),
+        { message: "A new time or target needs a new context, screenshot and version.", path: ["context"] },
+      ),
+    output: z.void(),
+  }),
+  "comment.delete": command({
+    description: "Delete a draft comment.",
+    runsIn: "core",
+    input: z.object(commentRef),
+    output: z.void(),
+  }),
+  "comment.resolve": command({
+    description: "Mark a sent comment resolved: the new export fixed it.",
+    runsIn: "core",
+    input: z.object(commentRef),
+    output: z.void(),
+  }),
+  "comment.reopen": command({
+    description: "Return a sent or resolved comment to the queue with a follow-up message.",
+    runsIn: "core",
+    input: z.object({ ...commentRef, text: commentTextSchema }),
+    output: z.void(),
+  }),
+  "round.copy": command({
+    description: "Save the asset's queue as the next round, mark its comments sent, and copy the prompt.",
+    runsIn: "core",
+    input: z.object(assetRef),
+    output: z.object({
+      round: z.int().positive(),
+      prompt: z.string(),
+      copiedToClipboard: z.boolean(),
+    }),
+  }),
+  "settings.set": command({
+    description: "Change app settings. Fields left out keep their values. Returns the settings now in effect.",
+    runsIn: "core",
+    input: settingsSchema.partial(),
+    output: settingsSchema,
+  }),
+  "review.undo": command({
+    description: "Undo the asset's latest review edit, if there is one.",
+    runsIn: "core",
+    input: z.object(assetRef),
+    output: z.object({ changed: z.boolean() }),
+  }),
+  "review.redo": command({
+    description: "Redo the asset's latest undone review edit, if there is one.",
+    runsIn: "core",
+    input: z.object(assetRef),
+    output: z.object({ changed: z.boolean() }),
+  }),
+  "view.reportState": command({
+    description: "A window reports what it shows for an asset, so the core can restore the view after a crash.",
+    runsIn: "core",
+    internal: true,
+    input: z.object({ ...assetRef, state: viewStateSchema }),
+    output: z.void(),
+  }),
+  "view.reportFocus": command({
+    description:
+      "A window reports that it gained focus. The core shows newly opened assets in the window focused last.",
+    runsIn: "core",
+    internal: true,
+    input: z.object({}),
+    output: z.void(),
+  }),
+  "view.showAsset": command({
+    description:
+      "Show an asset in a tab of this window, at a clip and frame if given. The core sends it to one window before announcing the asset.",
+    runsIn: "view",
+    internal: true,
+    input: z.object({ ...assetRef, clip: clipNameSchema.optional(), frame: indexSchema.optional() }),
+    output: z.void(),
+  }),
+  "view.moveAsset": command({
+    description:
+      "Move an asset's tab from the window that shows it to the calling window, with its camera, clip and frame.",
+    runsIn: "core",
+    internal: true,
+    input: z.object(assetRef),
+    output: z.void(),
+  }),
+  "view.releaseAsset": command({
+    description:
+      "Remove an asset's tab from this window without closing the asset, and return what the tab showed. The core sends it before moving the tab to another window.",
+    runsIn: "view",
+    internal: true,
+    input: z.object(assetRef),
+    output: viewStateSchema.nullable(),
+  }),
+  "view.setClip": command({
+    description: "Show a clip by its name in the file, or the rest pose when clip is null.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, clip: clipNameSchema.nullable() }),
+    output: z.void(),
+  }),
+  "view.setFrame": command({
+    description: "Move the playhead to a frame of the current clip.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, frame: indexSchema }),
+    output: z.void(),
+  }),
+  "view.setPlaying": command({
+    description: "Play or pause the current clip.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, playing: z.boolean() }),
+    output: z.void(),
+  }),
+  "view.setSpeed": command({
+    description: "Set the playback speed, from 0.25 to 2.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, speed: z.number().min(0.25).max(2) }),
+    output: z.void(),
+  }),
+  "view.setLoop": command({
+    description: "Loop playback at the end of the clip, or stop there.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, loop: z.boolean() }),
+    output: z.void(),
+  }),
+  "view.setRange": command({
+    description: "Select a frame range of the current clip, or clear it. Playback loops inside the range.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, range: frameRangeSchema.nullable() }),
+    output: z.void(),
+  }),
+  "view.setCamera": command({
+    description: "Move the camera.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, camera: cameraAnchorSchema, animate: z.boolean().default(true) }),
+    output: z.void(),
+  }),
+  "view.frame": command({
+    description: "Fit the model in the view, or a comment's target when commentId is given.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, commentId: commentIdSchema.nullable().default(null) }),
+    output: z.void(),
+  }),
+  "view.setDisplayMode": command({
+    description: "Show the model lit, as clay or as wireframe.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, mode: displayModeSchema }),
+    output: z.void(),
+  }),
+  "view.setSkeleton": command({
+    description: "Show or hide the skeleton overlay.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, visible: z.boolean() }),
+    output: z.void(),
+  }),
+  "view.selectComment": command({
+    description: "Select a comment, jump to its time and restore its camera. Null clears the selection.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, commentId: commentIdSchema.nullable() }),
+    output: z.void(),
+  }),
+  "view.screenshot": command({
+    description:
+      "Render a PNG of the asset at a time and camera, by default the ones on screen. A range renders its start frame.",
+    runsIn: "view",
+    input: z.object({
+      ...assetRef,
+      width: z.int().min(16).max(4096).default(1280),
+      height: z.int().min(16).max(4096).default(720),
+      time: timeSelectionSchema.optional(),
+      camera: cameraAnchorSchema.optional(),
+      drawComments: z.boolean().default(false),
+    }),
+    output: z.object({ png: bytesSchema }),
+  }),
+} satisfies Record<string, CommandDefinition>;
+
+export type Commands = typeof commands;
+export type CommandName = keyof Commands;
+/** What a caller passes; defaults are not applied yet. */
+export type CommandInput<Name extends CommandName> = z.input<Commands[Name]["input"]>;
+/** What a handler receives: the input after validation and defaults. */
+export type CommandArgs<Name extends CommandName> = z.output<Commands[Name]["input"]>;
+export type CommandOutput<Name extends CommandName> = z.output<Commands[Name]["output"]>;
+
+export function isCommandName(name: string): name is CommandName {
+  return Object.hasOwn(commands, name);
+}
