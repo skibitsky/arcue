@@ -1,0 +1,140 @@
+import type { ReviewFile } from "@arcue/protocol";
+import { ArcueError } from "@arcue/protocol";
+import { contentHash } from "./hash";
+import type { ReviewEdit } from "./history";
+import { ReviewHistory } from "./history";
+import type { Platform } from "./platform";
+import type { ReviewLocation } from "./review-store";
+import { parseReview, reviewFilePath, serializeReview } from "./review-store";
+import { Serial } from "./serial";
+
+/** What one command does to the review. */
+export interface ReviewChange<Result> {
+  /** The review to save, or null when nothing changes. */
+  next: ReviewFile | null;
+  result: Result;
+  /** Makes the change undoable. */
+  edit?: ReviewEdit;
+  /** Ends the undo history, as copying a round does. */
+  clearHistory?: boolean;
+  /** Writes other files the change needs, after the review on disk was checked and before it is saved. */
+  prepare?: () => Promise<void>;
+  /** Removes what `prepare` wrote, when `prepare` or the save fails. */
+  rollback?: () => Promise<void>;
+  /** Runs once the change is saved and current. */
+  apply?: () => void;
+}
+
+export type ComputeChange<Result> = (review: ReviewFile) => ReviewChange<Result> | Promise<ReviewChange<Result>>;
+
+const ATTEMPTS = 3;
+const encoder = new TextEncoder();
+
+/**
+ * One asset's `review.json` while the asset is open. Changes run one at a time. Each starts from the file on disk:
+ * when another program changed it, the session adopts that content, drops the undo history, and computes the change
+ * from it. Just before saving it checks the file again and starts over if it moved.
+ */
+export class ReviewSession {
+  readonly history = new ReviewHistory();
+  readonly #platform: Platform;
+  readonly #location: ReviewLocation;
+  readonly #path: string;
+  readonly #changed: (review: ReviewFile) => void;
+  readonly #edits = new Serial();
+  #review: ReviewFile;
+  /** Hash of the file's text as this session last read or wrote it; null when there is no file. */
+  #diskHash: string | null;
+  #closed = false;
+
+  constructor(
+    platform: Platform,
+    location: ReviewLocation,
+    loaded: { review: ReviewFile; text: string | null },
+    changed: (review: ReviewFile) => void,
+  ) {
+    this.#platform = platform;
+    this.#location = location;
+    this.#path = reviewFilePath(location);
+    this.#review = loaded.review;
+    this.#diskHash = loaded.text === null ? null : textHash(loaded.text);
+    this.#changed = changed;
+  }
+
+  get review(): ReviewFile {
+    return this.#review;
+  }
+
+  run<Result>(compute: ComputeChange<Result>): Promise<Result> {
+    return this.#edits.run(async () => {
+      for (let attempt = 1; ; attempt++) {
+        if (this.#closed) throw new ArcueError("not-found", "The asset was closed.");
+        await this.#sync();
+        const change = await compute(this.#review);
+        if (change.next === null) {
+          change.apply?.();
+          return change.result;
+        }
+        const text = serializeReview(change.next);
+        if ((await this.#readDisk()).hash !== this.#diskHash) {
+          if (attempt < ATTEMPTS) continue;
+          throw new ArcueError("conflict", "review.json keeps changing on disk; try again.");
+        }
+        try {
+          await change.prepare?.();
+          await this.#platform.writeFileAtomic(this.#path, text);
+        } catch (error) {
+          await change.rollback?.().catch(() => undefined);
+          throw error;
+        }
+        this.#diskHash = textHash(text);
+        this.#review = change.next;
+        if (change.clearHistory) this.history.clear();
+        change.apply?.();
+        if (change.edit) this.history.record(change.edit);
+        this.#changed(change.next);
+        return change.result;
+      }
+    });
+  }
+
+  /** Takes in a change another program made to `review.json`, as a watcher reports it. */
+  refresh(): Promise<void> {
+    return this.#edits.run(async () => {
+      if (!this.#closed) await this.#sync();
+    });
+  }
+
+  /** Waits for the changes in flight, then refuses new ones. */
+  close(): Promise<void> {
+    return this.#edits.run(async () => {
+      this.#closed = true;
+    });
+  }
+
+  async #sync(): Promise<void> {
+    const disk = await this.#readDisk();
+    if (disk.hash === this.#diskHash) return;
+    if (disk.text === null) {
+      this.#diskHash = null;
+      return;
+    }
+    const external = parseReview(disk.text, this.#path);
+    this.#diskHash = disk.hash;
+    this.#review = { ...external, asset: { path: this.#location.assetPath } };
+    this.history.clear();
+    this.#changed(this.#review);
+  }
+
+  async #readDisk(): Promise<{ text: string | null; hash: string | null }> {
+    const stat = await this.#platform.stat(this.#path);
+    if (stat === null) return { text: null, hash: null };
+    if (stat.kind !== "file") throw new ArcueError("conflict", `${this.#path} is not a plain file.`);
+    const text = await this.#platform.readText(this.#path);
+    return { text, hash: textHash(text) };
+  }
+}
+
+function textHash(text: string): string {
+  return contentHash(encoder.encode(text));
+}
