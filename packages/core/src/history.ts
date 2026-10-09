@@ -1,4 +1,5 @@
 import type { Comment, ReviewFile } from "@arcue/protocol";
+import { byCreation } from "./comment-ids";
 
 /** The comments one edit touched, null where a comment did not exist, the whole queue and the dismissed warnings. */
 export interface ReviewSnapshot {
@@ -35,8 +36,8 @@ export function editBetween(before: ReviewFile, after: ReviewFile, ids: readonly
 }
 
 /**
- * Puts the snapshot's comments, queue and dismissed warnings into the review, keeping comments in the order of their
- * numbers.
+ * Puts the snapshot's comments, queue and dismissed warnings into the review, keeping comments in the order they
+ * were made.
  */
 export function applySnapshot(review: ReviewFile, snapshot: ReviewSnapshot): ReviewFile {
   const byId = new Map(review.comments.map((comment) => [comment.id, comment]));
@@ -44,7 +45,7 @@ export function applySnapshot(review: ReviewFile, snapshot: ReviewSnapshot): Rev
     if (comment) byId.set(id, comment);
     else byId.delete(id);
   }
-  const comments = [...byId.values()].sort((a, b) => commentNumber(a.id) - commentNumber(b.id));
+  const comments = [...byId.values()].sort(byCreation);
   return withDismissedWarnings({ ...review, comments, queue: [...snapshot.queue] }, snapshot.dismissedWarnings);
 }
 
@@ -52,10 +53,6 @@ export function applySnapshot(review: ReviewFile, snapshot: ReviewSnapshot): Rev
 export function withDismissedWarnings(review: ReviewFile, ids: readonly string[]): ReviewFile {
   const { dismissedWarnings: _previous, ...rest } = review;
   return ids.length === 0 ? rest : { ...rest, dismissedWarnings: [...ids] };
-}
-
-function commentNumber(id: string): number {
-  return Number(id.slice(1));
 }
 
 /** One asset's undo and redo stacks, for comment and composition edits alike. They live in memory only. */

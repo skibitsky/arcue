@@ -52,10 +52,10 @@ describe("round.copy", () => {
     const { assetId } = test;
     const copied: number[] = [];
     test.core.client.subscribe("round.copied", ({ round }) => copied.push(round));
-    await test.core.client.execute("comment.create", pinComment(assetId));
-    await test.core.client.execute("comment.update", { assetId, commentId: "c1", screenshot: Uint8Array.of(7) });
-    await test.core.client.execute("comment.create", looseComment(assetId));
-    await test.core.client.execute("comment.create", regionComment(assetId));
+    const { commentId: first } = await test.core.client.execute("comment.create", pinComment(assetId));
+    await test.core.client.execute("comment.update", { assetId, commentId: first, screenshot: Uint8Array.of(7) });
+    const { commentId: second } = await test.core.client.execute("comment.create", looseComment(assetId));
+    const { commentId: third } = await test.core.client.execute("comment.create", regionComment(assetId));
     test.clock.advance(90_000);
 
     const result = await test.window.client.execute("round.copy", { assetId });
@@ -63,10 +63,10 @@ describe("round.copy", () => {
     expect(copied).toEqual([1]);
     const folder = `${HERO_REVIEW}/rounds/round-1`;
     await expect(test.platform.readText(`${folder}/prompt.md`)).resolves.toBe(result.prompt);
-    await expect(test.platform.readFile(`${folder}/c1.png`)).resolves.toEqual(Uint8Array.of(7));
-    await expect(test.platform.readFile(`${folder}/c3.png`)).resolves.toEqual(png);
-    await expect(test.platform.exists(`${folder}/c2.png`)).resolves.toBe(false);
-    await expect(test.platform.exists(`${HERO_REVIEW}/screenshots/c1.png`)).resolves.toBe(false);
+    await expect(test.platform.readFile(`${folder}/${first}.png`)).resolves.toEqual(Uint8Array.of(7));
+    await expect(test.platform.readFile(`${folder}/${third}.png`)).resolves.toEqual(png);
+    await expect(test.platform.exists(`${folder}/${second}.png`)).resolves.toBe(false);
+    await expect(test.platform.exists(`${HERO_REVIEW}/screenshots/${first}.png`)).resolves.toBe(false);
     await expect(test.platform.list(`${HERO_REVIEW}/screenshots`)).resolves.toEqual([]);
 
     const data = roundDataSchema.parse(await readJson(test.platform, `${folder}/round.json`));
@@ -78,7 +78,7 @@ describe("round.copy", () => {
       space: { units: "m", up: "+Y", handedness: "right" },
     });
     expect(data.comments[0]).toEqual({
-      id: "c1",
+      id: first,
       number: 1,
       text: "The thumb bends outward.",
       time: { clip: "Armature|Charge", clipDisplayName: "Charge", frame: 34, seconds: 0.567 },
@@ -96,14 +96,14 @@ describe("round.copy", () => {
       },
       pose: { joints: [{ name: "Head", path: "Armature/Head", position: [1, 1.75, 0] }] },
       camera: { position: [0, 1, 3], target: [0, 1, 0], up: [0, 1, 0], fov: 30, label: "front" },
-      screenshot: "c1.png",
+      screenshot: `${first}.png`,
       madeOnVersion: test.version,
       anchorState: "exact",
       anchorVersion: test.version,
       earlierMessages: [],
     });
     expect(data.comments[1]).toMatchObject({
-      id: "c2",
+      id: second,
       number: 2,
       time: null,
       target: null,
@@ -111,7 +111,8 @@ describe("round.copy", () => {
       screenshot: null,
     });
     expect(data.comments[2]).toMatchObject({
-      id: "c3",
+      id: third,
+      number: 3,
       time: { frames: [12, 24], seconds: [0.2, 0.4] },
       target: { kind: "region", vertexCount: 4, centroid: { rest: [0.5, 0.5, 0] } },
     });
@@ -119,18 +120,18 @@ describe("round.copy", () => {
     const review = (await readJson(test.platform, `${HERO_REVIEW}/review.json`)) as ReviewFile;
     expect(review.queue).toEqual([]);
     expect(review.rounds).toEqual([
-      { number: 1, createdAt: "2026-10-08T14:03:30.000Z", version: test.version, comments: ["c1", "c2", "c3"] },
+      { number: 1, createdAt: "2026-10-08T14:03:30.000Z", version: test.version, comments: [first, second, third] },
     ]);
     expect(review.comments.map((comment) => [comment.status, comment.rounds, comment.context.screenshot])).toEqual([
-      ["sent", [1], "rounds/round-1/c1.png"],
+      ["sent", [1], `rounds/round-1/${first}.png`],
       ["sent", [1], null],
-      ["sent", [1], "rounds/round-1/c3.png"],
+      ["sent", [1], `rounds/round-1/${third}.png`],
     ]);
-    await expect(test.core.client.query("comment.screenshot", { assetId, commentId: "c1" })).resolves.toEqual(
+    await expect(test.core.client.query("comment.screenshot", { assetId, commentId: first })).resolves.toEqual(
       Uint8Array.of(7),
     );
 
-    expect(result.prompt).toMatchInlineSnapshot(`
+    expect(result.prompt.replaceAll(first, "<first>").replaceAll(third, "<third>")).toMatchInlineSnapshot(`
       "3D review · round 1 · 3 comments
       Asset: /work/game/Assets/Art/Hero.fbx
       Version 737efd4, exported 14:02
@@ -139,7 +140,7 @@ describe("round.copy", () => {
       Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.
 
       1. Clip "Charge", frame 34 · point on "Body", near bone "Head"
-         View: front · screenshot: c1.png
+         View: front · screenshot: <first>.png
          "The thumb bends outward."
 
       2. Rest pose · no surface target
@@ -147,7 +148,7 @@ describe("round.copy", () => {
 
       3. Clip "Run", frames 12–24 · region on "Body", 4 vertices
          Bones: Spine 70%, Hips 27%
-         View: back, slightly above · screenshot: c3.png
+         View: back, slightly above · screenshot: <third>.png
          "Soften this whole rim.""
     `);
   });
@@ -163,29 +164,29 @@ describe("round.copy", () => {
   it("marks a reopened comment as a follow-up and lists its earlier messages", async () => {
     const test = await setup();
     const { assetId } = test;
-    await test.core.client.execute("comment.create", pinComment(assetId));
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
     await test.core.client.execute("round.copy", { assetId });
-    await test.core.client.execute("comment.reopen", { assetId, commentId: "c1", text: "It still bends outward." });
+    await test.core.client.execute("comment.reopen", { assetId, commentId, text: "It still bends outward." });
     await test.core.client.execute("round.copy", { assetId });
-    await test.core.client.execute("comment.resolve", { assetId, commentId: "c1" });
-    await test.core.client.execute("comment.reopen", { assetId, commentId: "c1", text: "Now it bends too far in." });
+    await test.core.client.execute("comment.resolve", { assetId, commentId });
+    await test.core.client.execute("comment.reopen", { assetId, commentId, text: "Now it bends too far in." });
     const third = await test.core.client.execute("round.copy", { assetId });
 
     expect(third.round).toBe(3);
     const data = (await readJson(test.platform, `${HERO_REVIEW}/rounds/round-3/round.json`)) as RoundData;
     expect(data.comments[0]).toMatchObject({
       text: "Now it bends too far in.",
-      screenshot: "c1.png",
+      screenshot: `${commentId}.png`,
       earlierMessages: [
         { round: 1, text: "The thumb bends outward." },
         { round: 2, text: "It still bends outward." },
       ],
     });
-    await expect(test.platform.readFile(`${HERO_REVIEW}/rounds/round-3/c1.png`)).resolves.toEqual(png);
-    await expect(test.platform.exists(`${HERO_REVIEW}/rounds/round-1/c1.png`)).resolves.toBe(true);
-    expect(third.prompt.split("\n\n")[1]).toMatchInlineSnapshot(`
+    await expect(test.platform.readFile(`${HERO_REVIEW}/rounds/round-3/${commentId}.png`)).resolves.toEqual(png);
+    await expect(test.platform.exists(`${HERO_REVIEW}/rounds/round-1/${commentId}.png`)).resolves.toBe(true);
+    expect(third.prompt.split("\n\n")[1]?.replaceAll(commentId, "<id>")).toMatchInlineSnapshot(`
       "1. Clip "Charge", frame 34 · point on "Body", near bone "Head" · follow-up, first sent in round 1
-         View: front · screenshot: c1.png
+         View: front · screenshot: <id>.png
          Round 1: "The thumb bends outward."
          Round 2: "It still bends outward."
          "Now it bends too far in.""

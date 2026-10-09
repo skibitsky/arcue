@@ -33,7 +33,8 @@ const encoder = new TextEncoder();
 /**
  * One asset's `review.json` while the asset is open. Changes run one at a time. Each starts from the file on disk:
  * when another program changed it, the session adopts that content, drops the undo history, and computes the change
- * from it. Just before saving it checks the file again and starts over if it moved.
+ * from it. Just before saving it checks the file again and starts over if it moved. Each save adds one to the
+ * review's `revision`. A change that would write the text the file already holds, and no other file, is not saved.
  */
 export class ReviewSession {
   readonly history = new ReviewHistory();
@@ -70,13 +71,18 @@ export class ReviewSession {
       for (let attempt = 1; ; attempt++) {
         if (this.#closed) throw new ArcueError("not-found", "The asset was closed.");
         await this.#sync();
-        const change = await compute(this.#review);
-        if (change.next === null) {
+        const current = this.#review;
+        const change = await compute(current);
+        if (
+          change.next === null ||
+          (!change.prepare && !change.clearHistory && this.#matchesDisk({ ...change.next, revision: current.revision }))
+        ) {
           change.apply?.();
           if (change.edit) this.history.record(change.edit);
           return change.result;
         }
-        const text = serializeReview(change.next);
+        const next: ReviewFile = { ...change.next, revision: current.revision + 1 };
+        const text = serializeReview(next);
         if ((await this.#readDisk()).hash !== this.#diskHash) {
           if (attempt < ATTEMPTS) continue;
           throw new ArcueError("conflict", "review.json keeps changing on disk; try again.");
@@ -90,11 +96,11 @@ export class ReviewSession {
           throw error;
         }
         this.#diskHash = textHash(text);
-        this.#review = change.next;
+        this.#review = next;
         if (change.clearHistory) this.history.clear();
         change.apply?.();
         if (change.edit) this.history.record(change.edit);
-        this.#changed(change.next);
+        this.#changed(next);
         return change.result;
       }
     });
@@ -112,6 +118,11 @@ export class ReviewSession {
     return this.#edits.run(async () => {
       this.#closed = true;
     });
+  }
+
+  /** Whether saving the review would write the text the file already holds. */
+  #matchesDisk(review: ReviewFile): boolean {
+    return this.#diskHash !== null && textHash(serializeReview(review)) === this.#diskHash;
   }
 
   async #sync(): Promise<void> {

@@ -89,6 +89,7 @@ export class FakeCoreClient implements CoreClient {
   readonly #calls: { name: string; input: unknown }[] = [];
   #window: WindowHandler | null = null;
   #nextAsset = 1;
+  #nextComment = 1;
   #lastPrompt: string | null = null;
   #eventsMuted = false;
   #settings: Settings = { coordinates: "y-up" };
@@ -298,7 +299,7 @@ export class FakeCoreClient implements CoreClient {
         comments: [],
         queue: [],
         rounds: [],
-        nextCommentNumber: 1,
+        revision: 0,
       },
       screenshots: new Map(),
       viewState: null,
@@ -399,6 +400,11 @@ export class FakeCoreClient implements CoreClient {
     this.#emitReview(asset);
   }
 
+  /** An id in the core's form that no seeded review uses. */
+  #commentId(): string {
+    return `c${String(this.#nextComment++).padStart(26, "0")}`;
+  }
+
   #step(asset: FakeAsset, direction: "undo" | "redo"): { changed: boolean } {
     const [from, to] = direction === "undo" ? [asset.undo, asset.redo] : [asset.redo, asset.undo];
     const review = from.pop();
@@ -423,7 +429,7 @@ export class FakeCoreClient implements CoreClient {
     "comment.create": (args) => {
       const asset = this.#asset(args.assetId);
       this.#pickedOn(asset, args.version);
-      const id = `c${asset.review.nextCommentNumber}`;
+      const id = this.#commentId();
       const now = this.#now().toISOString();
       const version = asset.summary.version ?? "unknown";
       const comment: Comment = {
@@ -450,7 +456,6 @@ export class FakeCoreClient implements CoreClient {
         ...asset.review,
         comments: [...asset.review.comments, comment],
         queue: [...asset.review.queue, id],
-        nextCommentNumber: asset.review.nextCommentNumber + 1,
       };
       this.#emitReview(asset);
       return { commentId: id };
@@ -578,7 +583,7 @@ export class FakeCoreClient implements CoreClient {
       const warning = this.#warning(asset, id);
       const queued = asset.review.comments.find((entry) => entry.id === warning.commentId && entry.status === "draft");
       if (queued) return { commentId: queued.id };
-      const commentId = `c${asset.review.nextCommentNumber}`;
+      const commentId = this.#commentId();
       const now = this.#now().toISOString();
       const version = asset.summary.version ?? "unknown";
       const comment: Comment = {
@@ -610,7 +615,6 @@ export class FakeCoreClient implements CoreClient {
         ...asset.review,
         comments: [...asset.review.comments, comment],
         queue: [...asset.review.queue, commentId],
-        nextCommentNumber: asset.review.nextCommentNumber + 1,
       };
       this.#emitReview(asset);
       return { commentId };

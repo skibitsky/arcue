@@ -950,11 +950,14 @@ describe("undoing composition edits", () => {
     const test = await plain();
     const steps = history(test);
     const { version } = await sceneOf(test, test.assetId);
-    await test.window.client.execute("comment.create", looseComment(test.assetId, "The legs are too thin.", version));
+    const { commentId } = await test.window.client.execute(
+      "comment.create",
+      looseComment(test.assetId, "The legs are too thin.", version),
+    );
     await steps.add("BugShells.fbx");
     await steps.undo();
     let review = await test.core.client.query("review.get", { assetId: test.assetId });
-    expect(review.queue).toEqual(["c1"]);
+    expect(review.queue).toEqual([commentId]);
     await expect(steps.text()).resolves.toBeNull();
     await steps.undo();
     review = await test.core.client.query("review.get", { assetId: test.assetId });

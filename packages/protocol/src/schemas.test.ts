@@ -18,6 +18,7 @@ import {
   type surfaceAnchorSchema,
   timeAnchorSchema,
 } from "./anchors";
+import { commentIdSchema } from "./assets";
 import { commands, isCommandName } from "./commands";
 import { isEventName } from "./events";
 import { importWarningSchema } from "./import-warning";
@@ -89,6 +90,9 @@ const specRoundExample = {
 
 const camera: CameraAnchor = { position: [0, 1, 3], target: [0, 1, 0], up: [0, 1, 0], fov: 30 };
 
+const RANDOM_ID = "c01m4gp93004tff59tdwh9edd1r";
+const OTHER_RANDOM_ID = "c01m4gp93004tff59tdwh9edd1s";
+
 const surface: SurfaceAnchor = { kind: "surface", mesh: "Hero/Body", vertices: [0, 1, 2], weights: [0.2, 0.5, 0.3] };
 
 const context = {
@@ -140,7 +144,7 @@ function review(overrides: Partial<ReviewFile> = {}): ReviewFile {
     comments: [comment("c1", "draft"), comment("c2", "sent")],
     queue: ["c1"],
     rounds: [{ number: 1, createdAt: "2026-10-08T14:04:00.000Z", version: "3f9a2c1", comments: ["c2"] }],
-    nextCommentNumber: 3,
+    revision: 3,
     ...overrides,
   };
 }
@@ -274,12 +278,25 @@ describe("reviewFileSchema", () => {
     expect(reviewFileSchema.safeParse({ ...review(), schemaVersion: 2 }).success).toBe(false);
   });
 
-  it("rejects ids that do not follow the c-number pattern, in comments, the queue and rounds", () => {
+  it("rejects ids that are neither form, in comments, the queue and rounds", () => {
     expect(reviewFileSchema.safeParse(review({ comments: [comment("x1", "draft")], queue: ["x1"] })).success).toBe(
       false,
     );
     const round = { number: 1, createdAt: "2026-10-08T14:04:00.000Z", version: "3f9a2c1", comments: ["two"] };
     expect(reviewFileSchema.safeParse(review({ rounds: [round] })).success).toBe(false);
+  });
+
+  it("accepts random ids beside numbered ones", () => {
+    const comments = [comment(RANDOM_ID, "draft"), comment("c2", "sent")];
+    expect(reviewFileSchema.safeParse(review({ comments, queue: [RANDOM_ID] })).success).toBe(true);
+  });
+
+  it("loads a review written before ids were random, dropping nextCommentNumber and counting saves from 0", () => {
+    const { revision: _revision, ...older } = review();
+    const parsed = reviewFileSchema.parse({ ...older, nextCommentNumber: 3 });
+    expect(parsed.revision).toBe(0);
+    expect(parsed).not.toHaveProperty("nextCommentNumber");
+    expect(reviewFileSchema.safeParse(review({ revision: -1 })).success).toBe(false);
   });
 
   it("requires the queue to hold exactly the drafts, each once", () => {
@@ -296,16 +313,22 @@ describe("reviewFileSchema", () => {
     expect(reviewFileSchema.safeParse(review({ comments: [untargeted, comment("c2", "sent")] })).success).toBe(true);
   });
 
-  it("requires nextCommentNumber to be above every comment's number", () => {
-    expect(reviewFileSchema.safeParse(review({ nextCommentNumber: 2 })).success).toBe(false);
-    expect(reviewFileSchema.safeParse(review({ nextCommentNumber: 30 })).success).toBe(true);
-  });
-
   it("accepts only the screenshot layouts the core writes, named after the comment", () => {
     const withScreenshot = (screenshot: string | null) =>
       review({ comments: [{ ...comment("c1", "draft"), context: { ...context, screenshot } }, comment("c2", "sent")] });
     for (const screenshot of [null, "screenshots/c1.png", "screenshots/c1-3.png", "rounds/round-2/c1.png"]) {
       expect(reviewFileSchema.safeParse(withScreenshot(screenshot)).success, String(screenshot)).toBe(true);
+    }
+    const withRandomId = (screenshot: string) =>
+      review({
+        comments: [{ ...comment(RANDOM_ID, "draft"), context: { ...context, screenshot } }, comment("c2", "sent")],
+        queue: [RANDOM_ID],
+      });
+    for (const screenshot of [`screenshots/${RANDOM_ID}.png`, `screenshots/${RANDOM_ID}-2.png`]) {
+      expect(reviewFileSchema.safeParse(withRandomId(screenshot)).success, screenshot).toBe(true);
+    }
+    for (const screenshot of [`screenshots/${OTHER_RANDOM_ID}.png`, "screenshots/c1.png"]) {
+      expect(reviewFileSchema.safeParse(withRandomId(screenshot)).success, screenshot).toBe(false);
     }
     for (const screenshot of [
       "../../../.ssh/id_rsa",
@@ -345,6 +368,23 @@ describe("reviewFileSchema", () => {
     expect(
       reviewFileSchema.safeParse(review({ comments: [comment("c1", "draft"), comment("c1", "sent")] })).success,
     ).toBe(false);
+  });
+});
+
+describe("commentIdSchema", () => {
+  it("accepts a lowercase ULID or a number after the c, and nothing else", () => {
+    for (const id of [RANDOM_ID, "c7", "c12"]) expect(commentIdSchema.safeParse(id).success, id).toBe(true);
+    for (const id of [
+      "c",
+      RANDOM_ID.toUpperCase(),
+      `${RANDOM_ID}0`,
+      RANDOM_ID.slice(0, -1),
+      `c01m4gp93004tff59tdwh9edd1i`,
+      "c-01m4gp93004tff59tdwh9edd1r",
+      "c1/../c2",
+    ]) {
+      expect(commentIdSchema.safeParse(id).success, id).toBe(false);
+    }
   });
 });
 

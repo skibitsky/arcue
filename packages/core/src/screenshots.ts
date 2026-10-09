@@ -1,9 +1,10 @@
+import { COMMENT_ID_PATTERN, screenshotOwner } from "@arcue/protocol";
 import { insideWithoutLinks } from "./links";
 import { joinPath, pathInside } from "./paths";
 import type { Platform } from "./platform";
 
 /** Names of unsent screenshots in the review folder's `screenshots/` folder. Cleanup removes nothing else. */
-export const UNSENT_SCREENSHOT_NAME = /^c\d+(?:-[1-9]\d*)?\.png$/;
+export const UNSENT_SCREENSHOT_NAME = new RegExp(`^${COMMENT_ID_PATTERN}(?:-[1-9]\\d*)?\\.png$`);
 
 /**
  * The absolute path of a comment's stored screenshot, or null when the stored value is not one of the layouts the
@@ -11,9 +12,7 @@ export const UNSENT_SCREENSHOT_NAME = /^c\d+(?:-[1-9]\d*)?\.png$/;
  * `review.json` can be edited by hand or come from an untrusted repository, so nothing else is ever read.
  */
 export function screenshotFile(reviewFolder: string, commentId: string, stored: string | null): string | null {
-  if (stored === null || !/^c\d+$/.test(commentId)) return null;
-  const allowed = new RegExp(`^(?:screenshots/${commentId}(?:-[1-9]\\d*)?|rounds/round-[1-9]\\d*/${commentId})\\.png$`);
-  if (!allowed.test(stored)) return null;
+  if (stored === null || screenshotOwner(stored) !== commentId) return null;
   const resolved = joinPath(reviewFolder, stored);
   return pathInside(reviewFolder, resolved) === stored ? resolved : null;
 }

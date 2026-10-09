@@ -127,10 +127,10 @@ describe("asset.open", () => {
   it("keeps reviews of assets outside a repository in the app data folder", async () => {
     const test = await startTestCore({ "/loose/Rock.fbx": fakeAsset(heroSpec) });
     const assetId = await openAsset(test, "/loose/Rock.fbx");
-    await test.core.client.execute("comment.create", pinComment(assetId));
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
     await expect(readJson(test.platform, "/app-data/reviews/loose/Rock.fbx/review.json")).resolves.toMatchObject({
       asset: { path: "/loose/Rock.fbx" },
-      queue: ["c1"],
+      queue: [commentId],
     });
   });
 
@@ -255,7 +255,7 @@ describe("asset.close", () => {
   it("forgets the asset, stops watching it and keeps its review on disk", async () => {
     const test = await startTestCore(heroFiles());
     const assetId = await openAsset(test);
-    await test.core.client.execute("comment.create", pinComment(assetId));
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
     const events = record(test, "asset.closed", "asset.updated");
     await test.core.client.execute("asset.close", { assetId });
     expect(events).toEqual([{ name: "asset.closed", payload: { assetId } }]);
@@ -271,6 +271,8 @@ describe("asset.close", () => {
 
     const reopened = await openAsset(test);
     expect(reopened).not.toBe(assetId);
-    await expect(test.core.client.query("review.get", { assetId: reopened })).resolves.toMatchObject({ queue: ["c1"] });
+    await expect(test.core.client.query("review.get", { assetId: reopened })).resolves.toMatchObject({
+      queue: [commentId],
+    });
   });
 });

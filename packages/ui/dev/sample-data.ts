@@ -307,7 +307,7 @@ export function stoneResonatorReview(now = new Date()): ReviewFile {
       { number: 2, createdAt: roundTwo.toISOString(), version: "b71e04d", comments: ["c3"] },
       { number: 3, createdAt: roundThree.toISOString(), version: "9d03a5e", comments: ["c4", "c5"] },
     ],
-    nextCommentNumber: 10,
+    revision: 12,
   };
 }
 
@@ -328,7 +328,7 @@ export function emptyReview(path: string, version: string, now = new Date()): Re
     comments: [],
     queue: [],
     rounds: [],
-    nextCommentNumber: 1,
+    revision: 0,
   };
 }
 

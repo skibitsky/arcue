@@ -8,7 +8,7 @@ import {
   vec3Schema,
 } from "./anchors";
 import { commentIdSchema } from "./assets";
-import { commentContextSchema } from "./context";
+import { commentContextSchema, screenshotOwner } from "./context";
 import { commentWarningSchema, warningIdSchema } from "./import-warning";
 import { partViewSchema } from "./view-state";
 
@@ -79,10 +79,6 @@ export const commentSchema = z
     },
   );
 
-function screenshotOwner(path: string): string | undefined {
-  return /(c\d+)(?:-\d+)?\.png$/.exec(path)?.[1];
-}
-
 function anchoredVertexCount(target: z.output<typeof spatialAnchorSchema> | null): number {
   if (target === null) return 0;
   if (target.kind === "surface") return 3;
@@ -131,7 +127,8 @@ export const roundSummarySchema = z.object({
 
 /**
  * `review.json`: every comment, round and version of one asset. Only the core writes it.
- * The queue holds exactly the draft comments, each once, in the order the next prompt lists them.
+ * The queue holds exactly the draft comments, each once, in the order the next prompt lists them. Files written before
+ * comment ids were random also carry `nextCommentNumber`, which parsing drops.
  */
 export const reviewFileSchema = z
   .object({
@@ -144,7 +141,11 @@ export const reviewFileSchema = z
     comments: z.array(commentSchema),
     queue: z.array(commentIdSchema),
     rounds: z.array(roundSummarySchema),
-    nextCommentNumber: z.int().positive(),
+    /**
+     * Counts the core's saves of the file, so a writer can tell whether another save came between its read and its
+     * write. Each save adds one; a file written before the counter existed reads as 0.
+     */
+    revision: z.int().nonnegative().default(0),
     /** Import warnings dismissed on this asset, by id; absent when none is. */
     dismissedWarnings: z.array(warningIdSchema).optional(),
   })
@@ -167,11 +168,6 @@ export const reviewFileSchema = z
       queued.add(id);
     });
     review.comments.forEach((comment, index) => {
-      if (Number(comment.id.slice(1)) >= review.nextCommentNumber) {
-        issue(`Comment ${comment.id} is not below nextCommentNumber ${review.nextCommentNumber}.`, [
-          "nextCommentNumber",
-        ]);
-      }
       if (comment.status === "draft" && !queued.has(comment.id)) {
         issue(`Draft ${comment.id} is missing from the queue.`, ["comments", index, "status"]);
       }

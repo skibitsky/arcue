@@ -75,7 +75,7 @@ export function emptyReview(assetPath: string): ReviewFile {
     comments: [],
     queue: [],
     rounds: [],
-    nextCommentNumber: 1,
+    revision: 0,
   };
 }
 

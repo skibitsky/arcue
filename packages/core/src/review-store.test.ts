@@ -70,10 +70,10 @@ describe("loadReview and serializeReview", () => {
       review: emptyReview("/work/Hero.fbx"),
       text: null,
     });
-    const text = serializeReview({ ...emptyReview("/old/Hero.fbx"), nextCommentNumber: 4 });
+    const text = serializeReview({ ...emptyReview("/old/Hero.fbx"), revision: 4 });
     await platform.writeFile(`${location.folder}/review.json`, text);
     await expect(loadReview(platform, location)).resolves.toMatchObject({
-      review: { asset: { path: "/work/Hero.fbx" }, nextCommentNumber: 4 },
+      review: { asset: { path: "/work/Hero.fbx" }, revision: 4 },
       text,
     });
   });

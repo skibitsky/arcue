@@ -76,16 +76,18 @@ describe("parts", () => {
   it("replaces or clears a draft's parts view on update", async () => {
     const test = await setup();
     const { assetId } = test;
-    await test.window.client.execute("comment.create", { ...looseComment(assetId, "Check.", version) });
+    const { commentId } = await test.window.client.execute("comment.create", {
+      ...looseComment(assetId, "Check.", version),
+    });
     await test.window.client.execute("comment.update", {
       assetId,
-      commentId: "c1",
+      commentId,
       parts: { ...defaultView, shown: ["Hero/UCX_Body"] },
     });
     expect(await storedParts(test)).toEqual([{ ...defaultView, shown: ["Hero/UCX_Body"] }]);
-    await test.window.client.execute("comment.update", { assetId, commentId: "c1", text: "Still." });
+    await test.window.client.execute("comment.update", { assetId, commentId, text: "Still." });
     expect(await storedParts(test)).toEqual([{ ...defaultView, shown: ["Hero/UCX_Body"] }]);
-    await test.window.client.execute("comment.update", { assetId, commentId: "c1", parts: defaultView });
+    await test.window.client.execute("comment.update", { assetId, commentId, parts: defaultView });
     expect(await storedParts(test)).toEqual([undefined]);
   });
 

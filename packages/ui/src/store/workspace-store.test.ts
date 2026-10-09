@@ -99,9 +99,11 @@ describe("comments", () => {
     await flush();
     const create = client.calls.find((call) => call.name === "comment.create");
     expect(create?.input).toMatchObject({ text: "This spike is too short.", target: POINT, version: "3f9a2c1" });
-    expect(session.state.get().review?.queue).toEqual(["c7", "c8", "c9", "c10"]);
+    const added = session.state.get().review?.queue.at(-1);
+    expect(session.state.get().review?.queue).toEqual(["c7", "c8", "c9", added]);
+    expect(added).not.toMatch(/^c[789]$/);
     expect(session.state.get().box).toBeNull();
-    expect(session.state.get().added).toBe("c10");
+    expect(session.state.get().added).toBe(added);
     expect(viewport.screenshots.at(-1)?.overlays?.[0]?.number).toBeNull();
   });
 

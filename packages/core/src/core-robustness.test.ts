@@ -30,8 +30,8 @@ describe("round.copy failures", () => {
     const test = await setup();
     const order: string[] = [];
     test.core.client.subscribe("round.copied", () => order.push("event"));
-    await test.core.client.execute("comment.create", pinComment(test.assetId));
-    await test.core.client.execute("comment.update", { assetId: test.assetId, commentId: "c1", screenshot: png });
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(test.assetId));
+    await test.core.client.execute("comment.update", { assetId: test.assetId, commentId, screenshot: png });
     test.platform.fail = (operation) => {
       if (operation === "remove") order.push("cleanup");
       return operation === "remove";
@@ -48,13 +48,13 @@ describe("round.copy failures", () => {
 
   it("removes a partly written round folder, so the next round reuses its number", async () => {
     const test = await setup();
-    await test.core.client.execute("comment.create", pinComment(test.assetId));
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(test.assetId));
     for (const failing of [`${HERO_REVIEW}/rounds/round-1/prompt.md`, REVIEW_JSON]) {
       test.platform.fail = (operation, path) => operation === "write" && path === failing;
       await expect(test.core.client.execute("round.copy", { assetId: test.assetId })).rejects.toThrow(/refused/);
       await expect(test.platform.exists(`${HERO_REVIEW}/rounds/round-1`)).resolves.toBe(false);
       await expect(test.core.client.query("review.get", { assetId: test.assetId })).resolves.toMatchObject({
-        queue: ["c1"],
+        queue: [commentId],
         rounds: [],
       });
     }
@@ -68,7 +68,7 @@ describe("round.copy failures", () => {
     const test = await setup();
     test.platform.fail = (operation, path) => operation === "write" && path === REVIEW_JSON;
     await expect(test.core.client.execute("comment.create", pinComment(test.assetId))).rejects.toThrow(/refused/);
-    await expect(test.platform.exists(`${HERO_REVIEW}/screenshots/c1.png`)).resolves.toBe(false);
+    await expect(test.platform.list(`${HERO_REVIEW}/screenshots`)).resolves.toEqual([]);
   });
 });
 
@@ -76,15 +76,15 @@ describe("deleting a reopened draft", () => {
   it("drops only the pending follow-up and restores the status it was reopened from", async () => {
     const test = await setup();
     const { assetId } = test;
-    await test.core.client.execute("comment.create", pinComment(assetId));
-    await test.core.client.execute("comment.create", looseComment(assetId));
+    const { commentId: first } = await test.core.client.execute("comment.create", pinComment(assetId));
+    const { commentId: second } = await test.core.client.execute("comment.create", looseComment(assetId));
     await test.core.client.execute("round.copy", { assetId });
-    await test.core.client.execute("comment.resolve", { assetId, commentId: "c2" });
-    await test.core.client.execute("comment.reopen", { assetId, commentId: "c1", text: "Still bent." });
-    await test.core.client.execute("comment.reopen", { assetId, commentId: "c2", text: "Washed out again." });
+    await test.core.client.execute("comment.resolve", { assetId, commentId: second });
+    await test.core.client.execute("comment.reopen", { assetId, commentId: first, text: "Still bent." });
+    await test.core.client.execute("comment.reopen", { assetId, commentId: second, text: "Washed out again." });
 
-    await test.core.client.execute("comment.delete", { assetId, commentId: "c1" });
-    await test.core.client.execute("comment.delete", { assetId, commentId: "c2" });
+    await test.core.client.execute("comment.delete", { assetId, commentId: first });
+    await test.core.client.execute("comment.delete", { assetId, commentId: second });
     const review = (await readJson(test.platform, REVIEW_JSON)) as ReviewFile;
     expect(review.queue).toEqual([]);
     expect(
@@ -96,13 +96,13 @@ describe("deleting a reopened draft", () => {
         rounds,
       })),
     ).toEqual([
-      { id: "c1", status: "sent", followUps: [], reopenedFrom: null, rounds: [1] },
-      { id: "c2", status: "resolved", followUps: [], reopenedFrom: null, rounds: [1] },
+      { id: first, status: "sent", followUps: [], reopenedFrom: null, rounds: [1] },
+      { id: second, status: "resolved", followUps: [], reopenedFrom: null, rounds: [1] },
     ]);
 
     await test.core.client.execute("review.undo", { assetId });
     await expect(test.core.client.query("review.get", { assetId })).resolves.toMatchObject({
-      queue: ["c2"],
+      queue: [second],
       comments: [{ status: "sent" }, { status: "draft", reopenedFrom: "resolved" }],
     });
   });
@@ -137,14 +137,14 @@ describe("review.json changed by another program", () => {
   it("applies a command to the file on disk, not to the state it last saved", async () => {
     const test = await setup();
     const { assetId } = test;
-    await test.core.client.execute("comment.create", pinComment(assetId));
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
     const edited = editOnDisk(test, (review) => {
       const [comment] = review.comments;
       if (comment) comment.text = "Edited in a text editor.";
     });
     await test.core.client.execute("comment.update", {
       assetId,
-      commentId: "c1",
+      commentId,
       camera: { position: [5, 5, 5], target: [0, 0, 0], up: [0, 1, 0], fov: 40 },
     });
     await edited;
@@ -184,9 +184,9 @@ describe("asset.close", () => {
     const { assetId } = test;
     const created = test.core.client.execute("comment.create", pinComment(assetId));
     const closed = test.core.client.execute("asset.close", { assetId });
-    await expect(created).resolves.toEqual({ commentId: "c1" });
+    const { commentId } = await created;
     await closed;
-    await expect(readJson(test.platform, REVIEW_JSON)).resolves.toMatchObject({ queue: ["c1"] });
+    await expect(readJson(test.platform, REVIEW_JSON)).resolves.toMatchObject({ queue: [commentId] });
     await expect(test.core.client.execute("comment.create", pinComment(assetId))).rejects.toMatchObject({
       code: "not-found",
     });
@@ -293,10 +293,10 @@ describe("keeping a repository's .arcue folder out of git", () => {
     await test.platform.remove(ARCUE);
     await test.core.idle();
     const writes = test.platform.writes.length;
-    await test.core.client.execute("comment.create", pinComment(test.assetId));
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(test.assetId));
     expect(test.platform.writes.slice(writes).map((write) => write.path)).toEqual([
       `${ARCUE}/.gitignore`,
-      `${HERO_REVIEW}/screenshots/c1.png`,
+      `${HERO_REVIEW}/screenshots/${commentId}.png`,
       REVIEW_JSON,
     ]);
   });

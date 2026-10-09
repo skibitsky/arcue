@@ -2,6 +2,7 @@ import type { AssetWarning, Comment, CommentWarning, ReviewFile, WarningFix } fr
 import { ArcueError, warningId } from "@arcue/protocol";
 import type { CameraAnchor, ImportWarning, SceneDescription } from "@arcue/scene";
 import { memberPath } from "@arcue/scene";
+import { byCreation } from "./comment-ids";
 import { dirname, joinPath } from "./paths";
 
 /**
@@ -37,7 +38,7 @@ function newestComment(review: ReviewFile, id: string): Comment | null {
   let newest: Comment | null = null;
   for (const comment of review.comments) {
     if (comment.warning?.id !== id) continue;
-    if (!newest || Number(comment.id.slice(1)) > Number(newest.id.slice(1))) newest = comment;
+    if (!newest || byCreation(comment, newest) > 0) newest = comment;
   }
   return newest;
 }

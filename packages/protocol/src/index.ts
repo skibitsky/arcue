@@ -19,6 +19,7 @@ export {
   assetStatusSchema,
   assetSummarySchema,
   bytesSchema,
+  COMMENT_ID_PATTERN,
   commentIdSchema,
 } from "./assets";
 export type { BridgeInfo, HandshakeOptions, LaunchInfo } from "./bridge";
@@ -55,6 +56,7 @@ export {
   computedContextSchema,
   jointPositionSchema,
   SCREENSHOT_PATH,
+  screenshotOwner,
 } from "./context";
 export type { CommandDefinition, EventDefinition, QueryDefinition, Runner } from "./definitions";
 export type { ArcueErrorOptions, ErrorCode, ValidationIssue, WireError } from "./errors";

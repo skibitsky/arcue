@@ -1,8 +1,20 @@
 import { z } from "zod";
 import { indexSchema, vec3Schema } from "./anchors";
+import { COMMENT_ID_PATTERN } from "./assets";
 
-/** The layouts of a comment's stored screenshot. The comment schema also checks that `c<n>` is the comment's id. */
-export const SCREENSHOT_PATH = /^(?:screenshots\/c\d+(?:-[1-9]\d*)?|rounds\/round-[1-9]\d*\/c\d+)\.png$/;
+/**
+ * The layouts of a comment's stored screenshot, each named after a comment id, which `screenshotOwner` returns. The
+ * comment schema also checks that it is the comment's own id.
+ */
+export const SCREENSHOT_PATH = new RegExp(
+  `^(?:screenshots/(${COMMENT_ID_PATTERN})(?:-[1-9]\\d*)?|rounds/round-[1-9]\\d*/(${COMMENT_ID_PATTERN}))\\.png$`,
+);
+
+/** The comment id a screenshot path is named after, or undefined when the path is not one of the layouts. */
+export function screenshotOwner(path: string): string | undefined {
+  const match = SCREENSHOT_PATH.exec(path);
+  return match?.[1] ?? match?.[2];
+}
 
 export const boneShareSchema = z.object({
   name: z.string(),
@@ -32,7 +44,7 @@ export const commentContextSchema = z.object({
   viewLabel: z.string(),
   /**
    * Screenshot path relative to the asset's review folder, in one of the layouts the core writes:
-   * `screenshots/c<n>.png`, `screenshots/c<n>-<k>.png` for a replaced screenshot, or `rounds/round-<r>/c<n>.png`.
+   * `screenshots/<id>.png`, `screenshots/<id>-<k>.png` for a replaced screenshot, or `rounds/round-<r>/<id>.png`.
    */
   screenshot: z.string().regex(SCREENSHOT_PATH).nullable(),
 });

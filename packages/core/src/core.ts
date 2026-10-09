@@ -26,6 +26,7 @@ import {
 } from "@arcue/protocol";
 import type { SceneDescription, SceneNode } from "@arcue/scene";
 import { findNode, materialSlots, splitMemberPath } from "@arcue/scene";
+import { CommentIds } from "./comment-ids";
 import {
   hasExtension,
   isConventionAnimation,
@@ -117,6 +118,7 @@ export class ArcueCore {
   readonly #showAssetTimeoutMs: number;
   readonly #formatClockTime: (epochMs: number) => string;
   readonly #onError: ListenerErrorHandler;
+  readonly #commentIds = new CommentIds();
   #nextAssetNumber = 1;
 
   /** Creates the core and reads its settings. */
@@ -281,6 +283,10 @@ export class ArcueCore {
 
   #now(): string {
     return new Date(this.#platform.clock.now()).toISOString();
+  }
+
+  #newCommentId(): string {
+    return this.#commentIds.next(this.#platform.clock.now());
   }
 
   #windowFor(asset: OpenAsset, context: CallContext): string {
@@ -810,7 +816,7 @@ export class ArcueCore {
       const { scene, version } = asset.pickedOn(args.version);
       const time = resolveTime(scene, args.time);
       const entry = args.target ? checkTarget(scene, args.target) : null;
-      const id = `c${review.nextCommentNumber}`;
+      const id = this.#newCommentId();
       const slot = args.screenshot ? await this.#screenshotSlot(asset, id) : null;
       const now = this.#now();
       const comment: Comment = {
@@ -833,12 +839,7 @@ export class ArcueCore {
       };
       const parts = storedPartView(scene, args.parts);
       if (parts) comment.parts = parts;
-      const next: ReviewFile = {
-        ...review,
-        comments: [...review.comments, comment],
-        queue: [...review.queue, id],
-        nextCommentNumber: review.nextCommentNumber + 1,
-      };
+      const next: ReviewFile = { ...review, comments: [...review.comments, comment], queue: [...review.queue, id] };
       return {
         next,
         result: { commentId: id },
@@ -983,7 +984,7 @@ export class ArcueCore {
       const warning = findWarning(listWarnings(scene, review, asset.path), args.warningId);
       const queued = review.comments.find((comment) => comment.id === warning.commentId && comment.status === "draft");
       if (queued) return { next: null, result: { commentId: queued.id } };
-      const id = `c${review.nextCommentNumber}`;
+      const id = this.#newCommentId();
       const now = this.#now();
       const clipName = warningClip(warning);
       const clip = clipName === null ? null : findClip(scene, clipName);
@@ -1006,12 +1007,7 @@ export class ArcueCore {
         reopenedFrom: null,
         warning: commentWarning(warning),
       };
-      const next: ReviewFile = {
-        ...review,
-        comments: [...review.comments, comment],
-        queue: [...review.queue, id],
-        nextCommentNumber: review.nextCommentNumber + 1,
-      };
+      const next: ReviewFile = { ...review, comments: [...review.comments, comment], queue: [...review.queue, id] };
       return { next, result: { commentId: id }, edit: editBetween(review, next, [id]) };
     });
   }

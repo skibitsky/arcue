@@ -214,11 +214,10 @@ describe("comment.createFromWarning", () => {
       assetId: test.assetId,
       warningId: MISSING,
     });
-    expect(commentId).toBe("c1");
     const review = await savedReview(test);
-    expect(review.queue).toEqual(["c1"]);
+    expect(review.queue).toEqual([commentId]);
     expect(review.comments[0]).toMatchObject({
-      id: "c1",
+      id: commentId,
       text: "Texture not found: Eyes.png",
       status: "draft",
       time: { kind: "none" },
@@ -231,10 +230,10 @@ describe("comment.createFromWarning", () => {
         detail: "Stored path: C:/art/Eyes.png",
       },
     });
-    expect((await listed(test)).find((warning) => warning.id === MISSING)?.commentId).toBe("c1");
+    expect((await listed(test)).find((warning) => warning.id === MISSING)?.commentId).toBe(commentId);
     await expect(
       test.window.client.execute("comment.createFromWarning", { assetId: test.assetId, warningId: MISSING }),
-    ).resolves.toEqual({ commentId: "c1" });
+    ).resolves.toEqual({ commentId });
     expect((await savedReview(test)).comments).toHaveLength(1);
 
     await test.window.client.execute("review.undo", { assetId: test.assetId });
@@ -254,7 +253,10 @@ describe("comment.createFromWarning", () => {
 
   it("names the warning and its subject in the prompt and keeps it in round.json", async () => {
     const test = await setup();
-    await test.window.client.execute("comment.createFromWarning", { assetId: test.assetId, warningId: MISSING });
+    const { commentId: sent } = await test.window.client.execute("comment.createFromWarning", {
+      assetId: test.assetId,
+      warningId: MISSING,
+    });
     const { round, prompt } = await test.window.client.execute("round.copy", { assetId: test.assetId });
     expect(prompt).toContain(
       [
@@ -270,10 +272,13 @@ describe("comment.createFromWarning", () => {
       subject: { kind: "texture", name: "Eyes.png" },
       detail: "Stored path: C:/art/Eyes.png",
     });
-    expect((await listed(test)).find((warning) => warning.id === MISSING)?.commentId).toBe("c1");
-    await expect(
-      test.window.client.execute("comment.createFromWarning", { assetId: test.assetId, warningId: MISSING }),
-    ).resolves.toEqual({ commentId: "c2" });
+    expect((await listed(test)).find((warning) => warning.id === MISSING)?.commentId).toBe(sent);
+    const { commentId: again } = await test.window.client.execute("comment.createFromWarning", {
+      assetId: test.assetId,
+      warningId: MISSING,
+    });
+    expect(again).not.toBe(sent);
+    expect((await listed(test)).find((warning) => warning.id === MISSING)?.commentId).toBe(again);
   });
 });
 

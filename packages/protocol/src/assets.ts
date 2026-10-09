@@ -2,8 +2,14 @@ import { z } from "zod";
 
 export const assetIdSchema = z.string().min(1);
 
-/** "c" and a number that is never reused within the asset, such as "c7". */
-export const commentIdSchema = z.string().regex(/^c\d+$/);
+/**
+ * A comment id as a regular expression source: "c" and 26 lowercase ULID digits, such as
+ * "c01m4gp93004tff59tdwh9edd1r", or "c" and a number for comments made before ids were random, such as "c7".
+ */
+export const COMMENT_ID_PATTERN = "c(?:[0-9a-hjkmnp-tv-z]{26}|\\d+)";
+
+/** A comment id, never reused within the asset. */
+export const commentIdSchema = z.string().regex(new RegExp(`^${COMMENT_ID_PATTERN}$`));
 
 export const bytesSchema = z.custom<Uint8Array>((value) => value instanceof Uint8Array, "Expected bytes.");
 

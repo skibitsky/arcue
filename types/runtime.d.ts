@@ -13,3 +13,5 @@ declare class TextDecoder {
 type Transferable = object;
 
 declare function structuredClone<Value>(value: Value, options?: { transfer?: Transferable[] }): Value;
+
+declare const crypto: { getRandomValues<Bytes extends Uint8Array>(array: Bytes): Bytes };
