@@ -1,14 +1,25 @@
 import type { Comment, ReviewFile } from "@arcue/protocol";
 import { byCreation } from "./comment-ids";
 
-/** The comments one edit touched, null where a comment did not exist, the whole queue and the dismissed warnings. */
-export interface ReviewSnapshot {
-  comments: ReadonlyMap<string, Comment | null>;
-  queue: readonly string[];
-  dismissedWarnings: readonly string[];
+/** Where a queued comment stood: just before the comment `before`, or last when that is null. */
+export interface QueueSpot {
+  before: string | null;
 }
 
-/** An edit of the comments, the queue and the dismissed warnings in `review.json`. */
+/**
+ * What one edit touched, as it was on one side of the edit: the touched comments with their queue entries, and the
+ * touched dismissed warnings. Applying it leaves everything else as it is, so an undo never reverts other changes.
+ */
+export interface ReviewSnapshot {
+  /** Each touched comment, or null where it did not exist. */
+  comments: ReadonlyMap<string, Comment | null>;
+  /** The queue entry of each touched comment, or null where it was not queued, last queued first. */
+  queue: ReadonlyMap<string, QueueSpot | null>;
+  /** Each touched warning id, and whether it was dismissed. */
+  dismissedWarnings: ReadonlyMap<string, boolean>;
+}
+
+/** An edit of comments, queue entries and dismissed warnings in `review.json`. */
 export interface CommentEdit {
   kind: "comments";
   before: ReviewSnapshot;
@@ -25,28 +36,59 @@ export interface CompositionEdit {
 
 export type ReviewEdit = CommentEdit | CompositionEdit;
 
-/** Records the edit that turns `before` into `after` for the listed comments. */
-export function editBetween(before: ReviewFile, after: ReviewFile, ids: readonly string[]): CommentEdit {
-  const snapshot = (review: ReviewFile): ReviewSnapshot => ({
-    comments: new Map(ids.map((id) => [id, review.comments.find((comment) => comment.id === id) ?? null])),
-    queue: [...review.queue],
-    dismissedWarnings: [...(review.dismissedWarnings ?? [])],
-  });
+/** The comments, with their queue entries, and the warning ids one edit touched. */
+export interface Touched {
+  comments?: readonly string[];
+  warnings?: readonly string[];
+}
+
+/** Records the edit that turns `before` into `after` for what it touched. */
+export function editBetween(before: ReviewFile, after: ReviewFile, touched: Touched): CommentEdit {
+  const comments = touched.comments ?? [];
+  const warnings = touched.warnings ?? [];
+  const snapshot = (review: ReviewFile): ReviewSnapshot => {
+    const queue = new Map<string, QueueSpot | null>();
+    for (let index = review.queue.length - 1; index >= 0; index--) {
+      const id = review.queue[index];
+      if (id !== undefined && comments.includes(id)) queue.set(id, { before: review.queue[index + 1] ?? null });
+    }
+    for (const id of comments) if (!queue.has(id)) queue.set(id, null);
+    const dismissed = new Set(review.dismissedWarnings ?? []);
+    return {
+      comments: new Map(comments.map((id) => [id, review.comments.find((comment) => comment.id === id) ?? null])),
+      queue,
+      dismissedWarnings: new Map(warnings.map((id) => [id, dismissed.has(id)])),
+    };
+  };
   return { kind: "comments", before: snapshot(before), after: snapshot(after) };
 }
 
 /**
- * Puts the snapshot's comments, queue and dismissed warnings into the review, keeping comments in the order they
- * were made.
+ * Puts the snapshot's comments, queue entries and dismissed warnings into the review and leaves the rest as it is.
+ * A comment that comes back goes before the first comment made after it. A queue entry goes back before the comment
+ * it stood before, or last when that comment is no longer queued.
  */
 export function applySnapshot(review: ReviewFile, snapshot: ReviewSnapshot): ReviewFile {
-  const byId = new Map(review.comments.map((comment) => [comment.id, comment]));
+  const comments = review.comments.flatMap((comment) => {
+    const restored = snapshot.comments.get(comment.id);
+    return restored === undefined ? [comment] : restored === null ? [] : [restored];
+  });
   for (const [id, comment] of snapshot.comments) {
-    if (comment) byId.set(id, comment);
-    else byId.delete(id);
+    if (comment === null || comments.some((entry) => entry.id === id)) continue;
+    const at = comments.findIndex((entry) => byCreation(entry, comment) > 0);
+    comments.splice(at < 0 ? comments.length : at, 0, comment);
   }
-  const comments = [...byId.values()].sort(byCreation);
-  return withDismissedWarnings({ ...review, comments, queue: [...snapshot.queue] }, snapshot.dismissedWarnings);
+  const queue = review.queue.filter((id) => !snapshot.queue.has(id));
+  for (const [id, spot] of snapshot.queue) {
+    if (spot === null) continue;
+    const at = spot.before === null ? -1 : queue.indexOf(spot.before);
+    queue.splice(at < 0 ? queue.length : at, 0, id);
+  }
+  const dismissed = (review.dismissedWarnings ?? []).filter((id) => snapshot.dismissedWarnings.get(id) !== false);
+  for (const [id, wasDismissed] of snapshot.dismissedWarnings) {
+    if (wasDismissed && !dismissed.includes(id)) dismissed.push(id);
+  }
+  return withDismissedWarnings({ ...review, comments, queue }, dismissed);
 }
 
 /** The review with these dismissed warnings; none leaves the field out of `review.json`. */

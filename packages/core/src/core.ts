@@ -859,7 +859,7 @@ export class ArcueCore {
       return {
         next,
         result: { commentId: id },
-        edit: editBetween(review, next, [id]),
+        edit: editBetween(review, next, { comments: [id] }),
         ...this.#screenshotWrite(slot, args.screenshot),
       };
     });
@@ -904,7 +904,7 @@ export class ArcueCore {
       return {
         next,
         result: undefined,
-        edit: editBetween(review, next, [comment.id]),
+        edit: editBetween(review, next, { comments: [comment.id] }),
         ...this.#screenshotWrite(slot, args.screenshot),
       };
     });
@@ -930,7 +930,7 @@ export class ArcueCore {
               }),
               queue,
             };
-      return { next, result: undefined, edit: editBetween(review, next, [comment.id]) };
+      return { next, result: undefined, edit: editBetween(review, next, { comments: [comment.id] }) };
     });
   }
 
@@ -940,7 +940,7 @@ export class ArcueCore {
       const comment = findComment(review, args.commentId);
       if (comment.status !== "sent") throw new ArcueError("conflict", "Only sent comments can be resolved.");
       const next = replaceComment(review, { ...comment, status: "resolved", updatedAt: this.#now() });
-      return { next, result: undefined, edit: editBetween(review, next, [comment.id]) };
+      return { next, result: undefined, edit: editBetween(review, next, { comments: [comment.id] }) };
     });
   }
 
@@ -964,7 +964,7 @@ export class ArcueCore {
         ],
       });
       const next = { ...reopened, queue: [...reopened.queue, comment.id] };
-      return { next, result: undefined, edit: editBetween(review, next, [comment.id]) };
+      return { next, result: undefined, edit: editBetween(review, next, { comments: [comment.id] }) };
     });
   }
 
@@ -986,7 +986,7 @@ export class ArcueCore {
       const added = chosen.filter((id) => !current.includes(id));
       if (added.length === 0) return { next: null, result: undefined };
       const next = withDismissedWarnings(review, [...current, ...added]);
-      return { next, result: undefined, edit: editBetween(review, next, []) };
+      return { next, result: undefined, edit: editBetween(review, next, { warnings: added }) };
     });
   }
 
@@ -1029,7 +1029,7 @@ export class ArcueCore {
       };
       if (author) comment.author = author;
       const next: ReviewFile = { ...review, comments: [...review.comments, comment], queue: [...review.queue, id] };
-      return { next, result: { commentId: id }, edit: editBetween(review, next, [id]) };
+      return { next, result: { commentId: id }, edit: editBetween(review, next, { comments: [id] }) };
     });
   }
 
