@@ -1,0 +1,99 @@
+name: Deploy web host
+
+# Pull requests get a preview version of the web host at a per-PR alias. A push to main deploys it
+# once the CI workflow, including the end-to-end tests, has passed for that commit.
+# Every job skips when the CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID secret is missing, as on forks.
+
+on:
+  pull_request:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-web-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  WRANGLER_SEND_METRICS: "false"
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
+
+jobs:
+  deploy:
+    name: ${{ github.event_name == 'pull_request' && 'Preview' || 'Production' }}
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check for Cloudflare secrets
+        id: secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping the web host deployment: CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set."
+          fi
+
+      - if: steps.secrets.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          persist-credentials: false
+      - if: steps.secrets.outputs.present == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.secrets.outputs.present == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - if: steps.secrets.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.secrets.outputs.present == 'true'
+        run: pnpm --filter @arcue/web build
+
+      - name: Upload a preview version
+        id: preview
+        if: steps.secrets.outputs.present == 'true' && github.event_name == 'pull_request'
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+          ALIAS: pr-${{ github.event.pull_request.number }}
+          MESSAGE: ${{ github.event.pull_request.title }}
+        run: |
+          pnpm exec wrangler versions upload --preview-alias "$ALIAS" --tag "${HEAD_SHA::12}" --message="${MESSAGE:0:100}"
+          url="$(jq -r 'select(.type == "version-upload") | .preview_alias_url // .preview_url // empty' "$WRANGLER_OUTPUT_FILE_PATH" | tail -n 1)"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Comment the preview link
+        if: steps.preview.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ steps.preview.outputs.url }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none \
+            --body "Web host preview: $URL ($HEAD_SHA). Samples open from the empty state, or link one with \`?sample=pebble-golem&clip=Armature%7CWalk&frame=12\`."
+
+      - name: Deploy
+        if: steps.secrets.outputs.present == 'true' && github.event_name == 'workflow_run'
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --message "${HEAD_SHA::12}"
