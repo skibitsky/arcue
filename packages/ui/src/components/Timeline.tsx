@@ -97,6 +97,7 @@ function ClipPicker({ store, session, clip }: { store: WorkspaceStore; session: 
   );
   const restCount = counts.get(null) ?? 0;
   const name = clip?.displayName ?? "Rest pose";
+  const grouped = groups.length > 1 || groups.some((group) => group.removable);
   return (
     <DropdownMenu.Root modal={false}>
       <Tip label="Clip">
@@ -117,7 +118,7 @@ function ClipPicker({ store, session, clip }: { store: WorkspaceStore; session: 
           >
             <MenuItem value={REST_VALUE} label="Rest pose" count={restCount} />
             <DropdownMenu.Separator className="menu-sep" />
-            {groups.length > 1
+            {grouped
               ? groups.map((group, index) => (
                   <DropdownMenu.Group key={group.file ?? ""} aria-label={group.file ?? modelName}>
                     {index > 0 ? <DropdownMenu.Separator className="menu-sep" /> : null}
@@ -142,7 +143,10 @@ function ClipPicker({ store, session, clip }: { store: WorkspaceStore; session: 
   );
 }
 
-/** An added file's name over its clips; hovering it shows a trash button when the file can leave the view. */
+/**
+ * An added file's name over its clips. When the file can leave the view, hovering the name shows a trash button, which
+ * is also a menu item, so the arrow keys reach it.
+ */
 function ClipGroupLabel({ file, onRemove }: { file: string; onRemove: (() => void) | undefined }) {
   return (
     <DropdownMenu.Label className="menu-label clip-group">
@@ -151,15 +155,11 @@ function ClipGroupLabel({ file, onRemove }: { file: string; onRemove: (() => voi
       </span>
       {onRemove ? (
         <Tip label="Remove from view">
-          <button
-            type="button"
-            className="ibtn ibtn-sm clip-remove"
-            aria-label={`Remove ${file} from the view`}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={onRemove}
-          >
-            <Icon name="trash" />
-          </button>
+          <DropdownMenu.Item asChild textValue={file} onSelect={onRemove}>
+            <button type="button" className="ibtn ibtn-sm clip-remove" aria-label={`Remove ${file} from the view`}>
+              <Icon name="trash" />
+            </button>
+          </DropdownMenu.Item>
         </Tip>
       ) : null}
     </DropdownMenu.Label>

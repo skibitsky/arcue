@@ -869,6 +869,35 @@ describe("undoing composition edits", () => {
     await expect(parentOf("BugShells.fbx//Hero/ShellA")).resolves.toBe("Hero/Body/Leg");
   });
 
+  it("moves several nodes of a file in one edit, which one undo takes back", async () => {
+    const original = `${JSON.stringify(composition)}\n`;
+    const test = await setup({ [SIDECAR]: original });
+    const steps = history(test);
+    const attach = (nodes: string[]) =>
+      test.window.client.execute("composition.attachFile", {
+        assetId: test.assetId,
+        file: "BugShells.fbx",
+        nodes,
+        bone: "Hero/Body/Leg",
+      });
+    await expect(attach(["Hero/ShellA", "ShellC"])).rejects.toMatchObject({
+      code: "not-found",
+      message: "Node ShellC of BugShells.fbx is not attached or set in the composition.",
+    });
+    await expect(steps.text()).resolves.toBe(original);
+    const writes = test.platform.writes.length;
+    await attach(["Hero/ShellA", "ShellB"]);
+    expect(test.platform.writes.slice(writes).filter((write) => write.path === SIDECAR)).toHaveLength(1);
+    expect(await readJson(test.platform, SIDECAR)).toMatchObject({
+      attach: [
+        { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
+        { file: "BugShells.fbx", node: "ShellB", bone: "Leg" },
+      ],
+    });
+    await expect(steps.undo()).resolves.toEqual({ changed: true });
+    await expect(steps.text()).resolves.toBe(original);
+  });
+
   it("refuses with conflict and writes nothing when the file changed since the edit", async () => {
     const test = await plain();
     const steps = history(test);

@@ -1,9 +1,19 @@
+import { isMacPlatform } from "./format";
 import type { AssetSession } from "./store/asset-session";
 
 const TEXT_FIELDS = "input, textarea, select, [contenteditable='true']";
 const WIDGETS_WITH_KEYS = "[role='menu'], [role='dialog'], [role='slider'], input[type='range']";
 const ACTIVATED_BY_SPACE = "button, a[href], summary, [role='button'], [role='tab'], [role='menuitem']";
 const BRUSH_STEP = 4;
+
+/** Cmd+Z and Shift+Cmd+Z on macOS; Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y elsewhere. */
+function historyKey(event: KeyboardEvent): "undo" | "redo" | null {
+  const mac = isMacPlatform();
+  if (event.altKey || !(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return null;
+  const key = event.key.toLowerCase();
+  if (key === "z") return event.shiftKey ? "redo" : "undo";
+  return key === "y" && !mac && !event.shiftKey ? "redo" : null;
+}
 
 /** Runs the spec's shortcuts for the visible tab. Returns true when the key was used. */
 export function handleShortcut(event: KeyboardEvent, session: AssetSession): boolean {
@@ -14,7 +24,12 @@ export function handleShortcut(event: KeyboardEvent, session: AssetSession): boo
     void session.copyPrompt();
     return true;
   }
-  if (event.defaultPrevented || target?.closest(TEXT_FIELDS) || target?.closest(WIDGETS_WITH_KEYS)) return false;
+  if (event.defaultPrevented || target?.closest(TEXT_FIELDS)) return false;
+  const history = historyKey(event);
+  if (history === "undo") void session.undo();
+  if (history === "redo") void session.redo();
+  if (history) return true;
+  if (target?.closest(WIDGETS_WITH_KEYS)) return false;
   const selection = session.state.get().selection;
   if (
     (key === "Delete" || (mod && key === "Backspace")) &&

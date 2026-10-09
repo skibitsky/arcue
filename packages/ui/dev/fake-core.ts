@@ -51,7 +51,22 @@ interface FakeAsset {
   review: ReviewFile;
   screenshots: Map<string, Uint8Array | null>;
   viewState: ViewState | null;
+  /** Reviews before each undoable edit, newest last, and those undo took back. */
+  undo: ReviewFile[];
+  redo: ReviewFile[];
 }
+
+/** The commands review.undo takes back, as the core's history records them. */
+const UNDOABLE = new Set<CommandName>([
+  "comment.create",
+  "comment.update",
+  "comment.delete",
+  "comment.resolve",
+  "comment.reopen",
+  "comment.createFromWarning",
+  "warning.dismiss",
+  "warning.dismissAll",
+]);
 
 type WindowHandler = (request: IncomingRequest) => Promise<unknown>;
 type CommandHandlers = {
@@ -138,7 +153,16 @@ export class FakeCoreClient implements CoreClient {
     const handler = this.#commands[name] as (
       args: CommandArgs<Name>,
     ) => Promise<CommandOutput<Name>> | CommandOutput<Name>;
-    return handler(parsed.data as CommandArgs<Name>);
+    const args = parsed.data as CommandArgs<Name>;
+    if (!UNDOABLE.has(name) || !("assetId" in args)) return handler(args);
+    const asset = this.#asset(args.assetId);
+    const before = asset.review;
+    const result = await handler(args);
+    if (asset.review !== before) {
+      asset.undo.push(before);
+      asset.redo = [];
+    }
+    return result;
   }
 
   async query<Name extends QueryName>(name: Name, input: QueryInput<Name>): Promise<QueryOutput<Name>> {
@@ -149,8 +173,8 @@ export class FakeCoreClient implements CoreClient {
     return structuredClone(await handler(parsed.data as QueryArgs<Name>));
   }
 
-  /** Simulates a new export of the file: the asset reloads with a new version. */
-  async simulateExport(assetId: string, options: { fail?: string } = {}): Promise<void> {
+  /** Simulates a new export of the file: the asset reloads with a new version, and with `scene` when given. */
+  async simulateExport(assetId: string, options: { fail?: string; scene?: SceneDescription } = {}): Promise<void> {
     const asset = this.#asset(assetId);
     this.#setSummary(asset, { status: "loading", error: null });
     await this.#delay();
@@ -158,6 +182,7 @@ export class FakeCoreClient implements CoreClient {
       this.#setSummary(asset, { status: "failed", error: options.fail });
       return;
     }
+    if (options.scene && asset.seed) asset.seed = { ...asset.seed, scene: options.scene };
     const version = Math.random().toString(16).slice(2, 9);
     const now = this.#now().toISOString();
     asset.review = {
@@ -277,6 +302,8 @@ export class FakeCoreClient implements CoreClient {
       },
       screenshots: new Map(),
       viewState: null,
+      undo: [],
+      redo: [],
     };
     this.#assets.set(assetId, asset);
     await show(assetId);
@@ -370,6 +397,16 @@ export class FakeCoreClient implements CoreClient {
     if (added.length === 0) return;
     asset.review = { ...asset.review, dismissedWarnings: [...current, ...added] };
     this.#emitReview(asset);
+  }
+
+  #step(asset: FakeAsset, direction: "undo" | "redo"): { changed: boolean } {
+    const [from, to] = direction === "undo" ? [asset.undo, asset.redo] : [asset.redo, asset.undo];
+    const review = from.pop();
+    if (!review) return { changed: false };
+    to.push(asset.review);
+    asset.review = review;
+    this.#emitReview(asset);
+    return { changed: true };
   }
 
   readonly #commands: CommandHandlers = {
@@ -530,6 +567,8 @@ export class FakeCoreClient implements CoreClient {
         ],
       };
       this.#lastPrompt = prompt;
+      asset.undo = [];
+      asset.redo = [];
       this.#emitReview(asset);
       this.#emit("round.copied", { assetId, round });
       return { round, prompt, copiedToClipboard: this.#options.coreClipboard ?? false };
@@ -595,8 +634,8 @@ export class FakeCoreClient implements CoreClient {
       this.#settings = { ...this.#settings, ...args };
       return structuredClone(this.#settings);
     },
-    "review.undo": () => ({ changed: false }),
-    "review.redo": () => ({ changed: false }),
+    "review.undo": ({ assetId }) => this.#step(this.#asset(assetId), "undo"),
+    "review.redo": ({ assetId }) => this.#step(this.#asset(assetId), "redo"),
     "view.reportState": ({ assetId, state }) => {
       this.#asset(assetId).viewState = state;
     },

@@ -1,5 +1,13 @@
 import type { PartView, SceneDescription, ScenePart } from "@arcue/scene";
-import { isDefaultPartView, lodLevels, partShown, shownByDefault, splitMemberPath, visibleMeshes } from "@arcue/scene";
+import {
+  isDefaultPartView,
+  knownPartView,
+  lodLevels,
+  partShown,
+  shownByDefault,
+  splitMemberPath,
+  visibleMeshes,
+} from "@arcue/scene";
 import { formatCount } from "../format";
 
 /**
@@ -61,6 +69,11 @@ function partNode(part: ScenePart): OutlineNode {
   return { item: { kind: "part", key: `p:${part.id}`, name: part.name, part }, children: [] };
 }
 
+/** The key of a file's row under a bone, by its node index, or at the top as a set piece for null. */
+export function fileRowKey(file: string, bone: number | null): string {
+  return `f:${file}:${bone ?? -1}`;
+}
+
 /**
  * The outline of a scene: the model file with its parts and bones, each added file under the bone it hangs on with
  * its parts, then the added files that stay in place. `bones` "all" lists the whole bone tree; "attached" lists only
@@ -97,7 +110,7 @@ export function outlineTree(scene: SceneDescription, modelName: string, bones: "
   const groupNode = (group: Group): OutlineNode => ({
     item: {
       kind: "file",
-      key: `f:${group.file}:${group.anchor}`,
+      key: fileRowKey(group.file, group.anchor >= 0 ? group.anchor : null),
       name: group.file,
       file: group.file,
       bone: group.anchor >= 0 ? group.anchor : null,
@@ -298,8 +311,10 @@ export interface ViewChip {
  * The chip for a comment's parts view, or null for the default view. It names the visible parts when there are two
  * or fewer, otherwise "3 of 5 parts", and its tip lists what was hidden. Collision helpers count only when shown.
  */
-export function viewChip(scene: SceneDescription | null, view: PartView | null | undefined): ViewChip | null {
-  if (!scene || !view || isDefaultPartView(view)) return null;
+export function viewChip(scene: SceneDescription | null, stored: PartView | null | undefined): ViewChip | null {
+  if (!scene || !stored) return null;
+  const view = knownPartView(scene.parts, stored);
+  if (isDefaultPartView(view)) return null;
   const drawable = scene.parts.filter((part) => part.role !== "socket" && part.levels.length > 0);
   const visible = drawable.filter((part) => partShown(scene.parts, view, part));
   const counted = drawable.filter((part) => part.role === "model" || visible.includes(part));
@@ -311,7 +326,8 @@ export function viewChip(scene: SceneDescription | null, view: PartView | null |
   }
   if (visibilityChanged(view)) {
     if (visible.length === counted.length) label.push("All parts");
-    else if (visible.length > 0 && visible.length <= 2) label.push(visible.map((part) => part.name).join(", "));
+    else if (visible.length === 0) label.push("No parts");
+    else if (visible.length <= 2) label.push(visible.map((part) => part.name).join(", "));
     else label.push(`${visible.length} of ${counted.length} parts`);
     const hidden = counted.filter((part) => !visible.includes(part));
     const extra = visible.filter((part) => !shownByDefault(part));

@@ -13,6 +13,7 @@ import { slotLabel } from "../store/view-files";
 import type { WorkspaceStore } from "../store/workspace-store";
 import { IconButton, Tip } from "./controls";
 import { Icon } from "./Icon";
+import { outlineButtonDomId } from "./Outline";
 
 const displayModes: { mode: DisplayMode; label: string; icon: "lit" | "clay" | "wireframe" }[] = [
   { mode: "lit", label: "Lit", icon: "lit" },
@@ -91,6 +92,7 @@ function OutlineButton({ session }: { session: AssetSession }) {
   return (
     <>
       <IconButton
+        id={outlineButtonDomId(session.assetId)}
         icon="outline"
         label="Outline"
         shortcut="O"

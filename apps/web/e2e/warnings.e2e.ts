@@ -100,6 +100,9 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
   await expect(panel.getByRole("button", { name: /^Comment 1: Texture not found/ })).toBeVisible();
   await rows.filter({ hasText: "File not found: pebble-golem-extra.fbx" }).hover();
   await expect(rows.filter({ hasText: "pebble-golem-extra.fbx" }).getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(
+    rows.filter({ hasText: "pebble-golem-extra.fbx" }).getByRole("button", { name: "Remove from view" }),
+  ).toBeVisible();
   await page.screenshot({ path: `${SHOTS}warnings-draft.png` });
 
   await rows.filter({ hasText: "Part not found: Helmet" }).hover();
@@ -132,6 +135,8 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
   await status.click();
   await list.getByRole("button", { name: "Dismiss all" }).click();
   await expect(status).toBeHidden();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(status).toHaveText(/\+4$/);
 });
 
 test("offers an unused texture as the base color, after which the warning is gone", async ({ page }) => {

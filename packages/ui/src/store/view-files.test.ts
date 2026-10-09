@@ -197,7 +197,7 @@ describe("dropping files on a model's view", () => {
     ]);
   });
 
-  it("asks at the drop point for a file with meshes, then adds it or opens it in a new tab", async () => {
+  it("asks at the drop point for a file with meshes, then adds it with its role or opens it in a new tab", async () => {
     const { host, opened } = fakeHost();
     const { client, store, session } = await openStone({
       files: host,
@@ -209,15 +209,18 @@ describe("dropping files on a model's view", () => {
       assetId: session.assetId,
       x: 10,
       y: 20,
-      models: [`${FOLDER}/Shells.fbx`, `${FOLDER}/Turn.fbx`],
+      models: [
+        { path: `${FOLDER}/Shells.fbx`, role: "set" },
+        { path: `${FOLDER}/Turn.fbx`, role: "animation" },
+      ],
     });
     expect(callsOf(client, "composition.addFile")).toEqual([]);
 
     await store.answerDrop("view");
     expect(store.state.get().dropPrompt).toBeNull();
     expect(callsOf(client, "composition.addFile")).toEqual([
-      { assetId: session.assetId, file: `${FOLDER}/Shells.fbx` },
-      { assetId: session.assetId, file: `${FOLDER}/Turn.fbx` },
+      { assetId: session.assetId, file: `${FOLDER}/Shells.fbx`, role: "set" },
+      { assetId: session.assetId, file: `${FOLDER}/Turn.fbx`, role: "animation" },
     ]);
 
     await store.dropOnView(session.assetId, dropped, { x: 30, y: 40 });
@@ -230,10 +233,12 @@ describe("dropping files on a model's view", () => {
     expect(store.state.get().dropPrompt).toBeNull();
   });
 
-  it("asks when a dropped model cannot be inspected", async () => {
-    const { store, session } = await openStone({ files: fakeHost().host });
+  it("asks when a dropped model cannot be inspected, and then lets the core pick its role", async () => {
+    const { client, store, session } = await openStone({ files: fakeHost().host });
     await store.dropOnView(session.assetId, [file("Odd.fbx")], { x: 0, y: 0 });
-    expect(store.state.get().dropPrompt?.models).toEqual([`${FOLDER}/Odd.fbx`]);
+    expect(store.state.get().dropPrompt?.models).toEqual([{ path: `${FOLDER}/Odd.fbx`, role: null }]);
+    await store.answerDrop("view");
+    expect(callsOf(client, "composition.addFile")).toEqual([{ assetId: session.assetId, file: `${FOLDER}/Odd.fbx` }]);
   });
 
   const withMissing = (missing: Material["missingTextures"][]) => (scene: SceneDescription) => ({

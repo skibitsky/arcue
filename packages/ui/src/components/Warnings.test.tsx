@@ -1,3 +1,5 @@
+import type { SceneDescription } from "@arcue/scene";
+import { importWarning } from "@arcue/scene";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -87,6 +89,76 @@ describe("import warnings in the status bar", () => {
     await act(() => flush());
     expect(document.querySelector(".sb-warn")).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Import warnings" })).toBeNull();
+  });
+
+  it("brings dismissed warnings back with Ctrl+Z and dismisses them again with Ctrl+Y or Ctrl+Shift+Z", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    await user.click(screen.getByRole("button", { name: "Dismiss all" }));
+    await act(() => flush());
+    expect(document.querySelector(".sb-warn")).toBeNull();
+    await user.keyboard("{Control>}z{/Control}");
+    await act(() => flush());
+    expect(statusItem().textContent).toBe("Texture not found: Eyes.png+3");
+    await user.keyboard("{Control>}y{/Control}");
+    await act(() => flush());
+    expect(document.querySelector(".sb-warn")).toBeNull();
+    await user.keyboard("{Control>}z{/Control}{Control>}{Shift>}z{/Shift}{/Control}");
+    await act(() => flush());
+    expect(document.querySelector(".sb-warn")).toBeNull();
+  });
+
+  it("undoes with Cmd+Z on macOS, where Ctrl+Z and Cmd+Y do nothing", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      const { client } = await renderStone();
+      const user = userEvent.setup();
+      const undos = () => client.calls.filter((call) => call.name === "review.undo" || call.name === "review.redo");
+      await user.keyboard("{Control>}z{/Control}{Meta>}y{/Meta}");
+      expect(undos()).toHaveLength(0);
+      await user.keyboard("{Meta>}z{/Meta}{Meta>}{Shift>}z{/Shift}{/Meta}");
+      expect(undos().map((call) => call.name)).toEqual(["review.undo", "review.redo"]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("leaves Ctrl+Z to a focused text field", async () => {
+    const { client } = await renderStone();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("textbox", { name: /comment/i }));
+    await user.keyboard("{Control>}z{/Control}");
+    expect(client.calls.some((call) => call.name === "review.undo")).toBe(false);
+  });
+
+  it("removes a member file that failed to load from the view", async () => {
+    const lost = (scene: SceneDescription): SceneDescription => ({
+      ...scene,
+      source: {
+        ...scene.source,
+        warnings: [
+          importWarning("file-not-found", { kind: "file", name: "lost.fbx" }, "lost.fbx was not found", "lost.fbx"),
+          importWarning(
+            "file-not-found",
+            { kind: "file", name: "StoneResonator@Idle.fbx" },
+            "StoneResonator@Idle.fbx was not found",
+            "StoneResonator@Idle.fbx",
+          ),
+        ],
+      },
+    });
+    const { client } = await renderStone(lost);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^lost\.fbx was not found/ }));
+    const [first, second] = rows() as [HTMLElement, HTMLElement];
+    expect(within(first).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(within(second).queryByRole("button", { name: "Remove from view" })).toBeNull();
+    await user.click(within(first).getByRole("button", { name: "Remove from view" }));
+    await act(() => flush());
+    expect(client.calls.find((call) => call.name === "composition.removeFile")?.input).toMatchObject({
+      file: STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "lost.fbx"),
+    });
   });
 
   it("chooses an image for the slot a missing texture names, through the host's open dialog", async () => {

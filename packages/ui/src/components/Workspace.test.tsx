@@ -240,11 +240,32 @@ describe("Workspace", () => {
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("group", { name: "Turns.fbx" })).toBeTruthy();
     expect(within(menu).getByRole("menuitemradio", { name: /TurnLeft/ })).toBeTruthy();
-    expect(within(menu).queryByRole("button", { name: "Remove StoneResonator@Idle.fbx from the view" })).toBeNull();
-    await user.click(within(menu).getByRole("button", { name: "Remove Turns.fbx from the view" }));
+    expect(within(menu).queryByRole("menuitem", { name: "Remove StoneResonator@Idle.fbx from the view" })).toBeNull();
+    await user.click(within(menu).getByRole("menuitem", { name: "Remove Turns.fbx from the view" }));
     await act(() => flush());
     expect(client.calls.find((call) => call.name === "composition.removeFile")?.input).toMatchObject({
       file: STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Turns.fbx"),
+    });
+  });
+
+  it("reaches a group's trash button with the arrow keys, even for the only file that brings clips", async () => {
+    const onlyAdded = (scene: SceneDescription): SceneDescription => ({
+      ...scene,
+      clips: scene.clips.slice(0, 1).map((clip) => ({ ...clip, file: "Anims.fbx" })),
+    });
+    const { client } = await renderStone({ scene: onlyAdded });
+    const user = userEvent.setup();
+    act(() => screen.getByRole("button", { name: /^Clip: / }).focus());
+    await user.keyboard("{Enter}");
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("group", { name: "Anims.fbx" })).toBeTruthy();
+    expect(document.activeElement?.textContent).toMatch(/^Rest pose/);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove Anims.fbx from the view");
+    await user.keyboard("{Enter}");
+    await act(() => flush());
+    expect(client.calls.find((call) => call.name === "composition.removeFile")?.input).toMatchObject({
+      file: STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Anims.fbx"),
     });
   });
 
@@ -313,7 +334,7 @@ describe("Workspace", () => {
       fireEvent.drop(view, { dataTransfer: { files: [new File(["x"], "Crate.fbx")], types: ["Files"] } });
       await flush();
     });
-    expect(store.state.get().dropPrompt?.models).toEqual(["/work/Crate.fbx"]);
+    expect(store.state.get().dropPrompt?.models).toEqual([{ path: "/work/Crate.fbx", role: null }]);
     const user = userEvent.setup();
     await user.click(screen.getByRole("menuitem", { name: "Add to view" }));
     await act(() => flush());

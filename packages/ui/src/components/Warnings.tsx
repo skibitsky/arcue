@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AssetSession } from "../store/asset-session";
 import { listedWarnings } from "../store/asset-session";
 import { useSelect } from "../store/observable";
+import { removableFromView } from "../store/view-files";
 import type { WorkspaceStore } from "../store/workspace-store";
 import { IconButton, Tip } from "./controls";
 import { Icon } from "./Icon";
@@ -20,6 +21,7 @@ const fixLabels: Record<WarningFix["kind"], string> = {
 export function WarningsStatus({ store, session }: { store: WorkspaceStore; session: AssetSession }) {
   const all = useSelect(session.state, (state) => state.warnings);
   const review = useSelect(session.state, (state) => state.review);
+  const modelName = useSelect(session.state, (state) => state.summary.name);
   const warnings = useMemo(() => listedWarnings({ warnings: all }), [all]);
   const [open, setOpen] = useState(false);
   const first = warnings[0];
@@ -60,7 +62,14 @@ export function WarningsStatus({ store, session }: { store: WorkspaceStore; sess
           </div>
           <ul className="warn-list">
             {warnings.map((warning) => (
-              <WarningRow key={warning.id} store={store} session={session} warning={warning} review={review} />
+              <WarningRow
+                key={warning.id}
+                store={store}
+                session={session}
+                warning={warning}
+                review={review}
+                modelName={modelName}
+              />
             ))}
           </ul>
         </Popover.Content>
@@ -80,19 +89,29 @@ function subjectText(warning: AssetWarning): string {
   return warning.file !== undefined && warning.file !== warning.subject.name ? `${subject} · ${warning.file}` : subject;
 }
 
+/** The member file a warning is about, when removing it takes it out of the view. */
+function removableMember(warning: AssetWarning, modelName: string): string | null {
+  const { file } = warning;
+  if (file === undefined || warning.subject.kind !== "file") return null;
+  return removableFromView(file, modelName) ? file : null;
+}
+
 function WarningRow({
   store,
   session,
   warning,
   review,
+  modelName,
 }: {
   store: WorkspaceStore;
   session: AssetSession;
   warning: AssetWarning;
   review: ReviewFile | null;
+  modelName: string;
 }) {
   const number = draftNumber(review, warning.commentId);
   const fix = warning.fix?.kind === "choose-texture" && !store.canAddFiles ? null : warning.fix;
+  const removable = warning.fix?.kind === "retry" ? removableMember(warning, modelName) : null;
   const runFix = () => {
     if (fix?.kind === "choose-texture") void store.chooseTexture(session.assetId, fix.material, fix.slot);
     else void session.fixWarning(warning);
@@ -112,6 +131,15 @@ function WarningRow({
           {fix ? (
             <button type="button" className="warn-fix warn-hover" onClick={runFix}>
               {fixLabels[fix.kind]}
+            </button>
+          ) : null}
+          {removable !== null ? (
+            <button
+              type="button"
+              className="warn-fix warn-hover"
+              onClick={() => void store.removeFileFromView(session.assetId, removable)}
+            >
+              Remove from view
             </button>
           ) : null}
           {number !== null ? (

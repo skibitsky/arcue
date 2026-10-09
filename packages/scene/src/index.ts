@@ -35,6 +35,7 @@ export {
   describeParts,
   isDefaultPartView,
   isolationAsVisibility,
+  knownPartView,
   levelFor,
   lodLevels,
   partRoleOf,

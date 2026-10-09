@@ -251,6 +251,21 @@ export function lodLevels(parts: readonly ScenePart[]): number[] {
   return [...levels].sort((a, b) => a - b);
 }
 
+/**
+ * The view with only the parts the scene has: unknown hidden and shown ids dropped, the rest sorted once each, an
+ * unknown isolated part cleared, and the LOD no higher than the scene's highest level.
+ */
+export function knownPartView(parts: readonly ScenePart[], view: PartView): PartView {
+  const ids = new Set(parts.map((part) => part.id));
+  const known = (list: readonly string[]) => [...new Set(list.filter((id) => ids.has(id)))].sort();
+  return {
+    hidden: known(view.hidden),
+    shown: known(view.shown),
+    isolated: view.isolated !== null && ids.has(view.isolated) ? view.isolated : null,
+    lod: Math.min(view.lod, lodLevels(parts).at(-1) ?? 0),
+  };
+}
+
 /** Rest-pose bounds of the meshes a view draws, or null when it draws none. */
 export function viewBounds(
   meshes: readonly Pick<Mesh, "restPositions">[],

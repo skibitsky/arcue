@@ -1,6 +1,7 @@
-import type { ScenePart } from "@arcue/scene";
-import { partShown } from "@arcue/scene";
-import type { DragEvent, KeyboardEvent, MouseEvent } from "react";
+import type { SceneDescription, ScenePart } from "@arcue/scene";
+import { partShown, splitMemberPath } from "@arcue/scene";
+import { DropdownMenu } from "radix-ui";
+import type { DragEvent, KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isMacPlatform } from "../format";
 import type { AssetSession } from "../store/asset-session";
@@ -9,6 +10,7 @@ import type { OutlineFile, OutlineItem, OutlineRow } from "../store/outline";
 import {
   dropRowKey,
   dropTarget,
+  fileRowKey,
   hasOutline,
   isTreeKey,
   outlineRows,
@@ -32,11 +34,48 @@ interface Drag {
   target: number | null | undefined;
 }
 
+interface Bone {
+  node: number;
+  name: string;
+}
+
 function iconOf(item: OutlineItem): IconName {
   if (item.kind === "bone") return "bone";
   if (item.kind === "part") return "mesh";
   if (item.kind === "file" && item.bone !== null) return "link";
   return "cube";
+}
+
+/** The DOM id of an asset's outline button, which takes the focus when the drawer closes around it. */
+export function outlineButtonDomId(assetId: string): string {
+  return `arcue-outline-${assetId.replace(/[^\w-]/g, "-")}`;
+}
+
+/** Focuses the outline button, or the toolbar's first button when the model no longer has an outline. */
+function focusToolbar(assetId: string): void {
+  const button = document.getElementById(outlineButtonDomId(assetId));
+  if (button) {
+    button.focus();
+    return;
+  }
+  const panel = document.querySelector(".ws:not([hidden]) .toolbar button:not(:disabled)");
+  if (panel instanceof HTMLElement) panel.focus();
+}
+
+/** The model's own bones, which an added file can attach to. */
+function modelBones(scene: SceneDescription): Bone[] {
+  return scene.nodes.flatMap((node, index) =>
+    node.kind === "bone" && splitMemberPath(node.path).file === null ? [{ node: index, name: node.name }] : [],
+  );
+}
+
+/** The row that keeps the focus when a file row and the rows under it leave: the next row after them, else the one above. */
+function rowAfterRemoving(rows: readonly OutlineRow[], key: string): string | null {
+  const at = rows.findIndex((row) => row.item.key === key);
+  const row = rows[at];
+  if (!row) return null;
+  const after = rows.slice(at + 1).find((candidate) => candidate.depth <= row.depth);
+  return after?.item.key ?? rows[at - 1]?.item.key ?? null;
 }
 
 /** The outline drawer: the model's files, the bones they hang on and their parts, docked left of the 3D view. */
@@ -50,33 +89,50 @@ export function OutlineDrawer({ store, session }: { store: WorkspaceStore; sessi
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [focused, setFocused] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const rowElements = useRef(new Map<string, HTMLDivElement>());
   const pendingFocus = useRef<string | null>(null);
+  const focusInside = useRef(false);
   const treeRef = useRef<HTMLDivElement>(null);
 
-  const available = scene !== null && hasOutline(scene);
+  const visible = scene !== null && open && hasOutline(scene);
   const name = modelName || "Model";
   const filtering = filter.trim() !== "";
   const tree = useMemo(
-    () => (scene && available ? outlineTree(scene, name, skeleton || filtering ? "all" : "attached") : []),
-    [scene, available, name, skeleton, filtering],
+    () => (scene && visible ? outlineTree(scene, name, skeleton || filtering ? "all" : "attached") : []),
+    [scene, visible, name, skeleton, filtering],
   );
   const showFilter = useMemo(
-    () => scene !== null && available && outlineSize(outlineTree(scene, name, "all")) > FILTER_ROWS,
-    [scene, available, name],
+    () => scene !== null && visible && outlineSize(outlineTree(scene, name, "all")) > FILTER_ROWS,
+    [scene, visible, name],
   );
+  const shownParts = useMemo(
+    () => new Set(scene?.parts.flatMap((part) => (partShown(scene.parts, view, part) ? [part.id] : [])) ?? []),
+    [scene, view],
+  );
+  const bones = useMemo(() => (scene && visible ? modelBones(scene) : []), [scene, visible]);
   const rows = useMemo(() => outlineRows(tree, { filter, collapsed }), [tree, filter, collapsed]);
   const focusKey = rows.some((row) => row.item.key === focused) ? focused : (rows[0]?.item.key ?? null);
   const dropKey = drag && drag.target !== undefined ? dropRowKey(rows, drag.target) : null;
 
   useEffect(() => {
     const key = pendingFocus.current;
-    if (key === null) return;
+    const element = key === null ? undefined : rowElements.current.get(key);
+    if (!element) return;
     pendingFocus.current = null;
-    rowElements.current.get(key)?.focus();
+    const active = document.activeElement;
+    const ours = active === null || active === document.body || active.closest(".outline, [role=menu]") !== null;
+    if (ours) element.focus();
   });
 
-  if (!scene || !available) return null;
+  useEffect(() => {
+    if (visible || !focusInside.current) return;
+    focusInside.current = false;
+    const active = document.activeElement;
+    if (active === null || active === document.body) focusToolbar(session.assetId);
+  }, [visible, session.assetId]);
+
+  if (!scene || !visible) return null;
 
   const moveFocus = (key: string) => {
     setFocused(key);
@@ -90,26 +146,40 @@ export function OutlineDrawer({ store, session }: { store: WorkspaceStore; sessi
     });
   const toggleEye = (part: ScenePart, alt: boolean) => {
     if (alt) session.isolatePart(view.isolated === part.id ? null : part.id);
-    else session.setPartVisible(part.id, !partShown(scene.parts, view, part));
+    else session.setPartVisible(part.id, !shownParts.has(part.id));
+  };
+  const remove = (file: OutlineFile, keepFocus: boolean) => {
+    const next = keepFocus ? rowAfterRemoving(rows, file.key) : null;
+    if (next !== null) moveFocus(next);
+    void store.removeFileFromView(session.assetId, file.file);
+  };
+  const attach = (file: OutlineFile, bone: number | null) => {
+    moveFocus(fileRowKey(file.file, bone));
+    void session.attachFile(file, bone);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
     if (event.target instanceof HTMLInputElement || event.metaKey || event.ctrlKey) return;
+    const row = rows.find((candidate) => candidate.item.key === focusKey);
     if (isTreeKey(event.key) && !event.altKey) {
       event.preventDefault();
       const action = treeKey(rows, focusKey, event.key);
       if (action && "toggle" in action) toggleRow(action.toggle);
       else if (action) moveFocus(action.focus);
     } else if (event.key === "Delete" || event.key === "Backspace") {
-      const row = rows.find((candidate) => candidate.item.key === focusKey);
       if (row?.item.kind === "file") {
         event.preventDefault();
-        void store.removeFileFromView(session.assetId, row.item.file);
+        remove(row.item, true);
       }
     } else if (event.key === " ") {
       event.preventDefault();
-      const row = rows.find((candidate) => candidate.item.key === focusKey);
       if (!event.repeat && row?.item.kind === "part") toggleEye(row.item.part, event.altKey);
+    } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+      if (row?.item.kind === "file") {
+        event.preventDefault();
+        setMenuFor(row.item.key);
+      }
     }
   };
 
@@ -133,7 +203,24 @@ export function OutlineDrawer({ store, session }: { store: WorkspaceStore; sessi
   };
 
   return (
-    <aside className="outline" aria-label="Outline" hidden={!open}>
+    <aside
+      className="outline"
+      aria-label="Outline"
+      onFocus={() => {
+        focusInside.current = true;
+      }}
+      onBlur={(event) => {
+        const aside = event.currentTarget;
+        const next = event.relatedTarget;
+        if (next instanceof Node) {
+          if (!aside.contains(next)) focusInside.current = false;
+          return;
+        }
+        setTimeout(() => {
+          if (aside.isConnected && !aside.contains(document.activeElement)) focusInside.current = false;
+        }, 0);
+      }}
+    >
       {showFilter || store.canAddFiles ? (
         <div className="dr-head">
           {showFilter ? (
@@ -193,7 +280,7 @@ export function OutlineDrawer({ store, session }: { store: WorkspaceStore; sessi
             focusable={row.item.key === focusKey}
             dropping={row.item.key === dropKey}
             dragging={drag?.item.key === row.item.key}
-            shown={row.item.kind === "part" ? partShown(scene.parts, view, row.item.part) : true}
+            shown={row.item.kind === "part" ? shownParts.has(row.item.part.id) : true}
             isolated={row.item.kind === "part" && view.isolated === row.item.part.id}
             register={(element) => {
               if (element) rowElements.current.set(row.item.key, element);
@@ -202,7 +289,11 @@ export function OutlineDrawer({ store, session }: { store: WorkspaceStore; sessi
             onFocus={() => setFocused(row.item.key)}
             onToggle={() => toggleRow(row.item.key)}
             onEye={toggleEye}
-            onRemove={(file) => void store.removeFileFromView(session.assetId, file.file)}
+            onRemove={(file) => remove(file, treeRef.current?.contains(document.activeElement) ?? false)}
+            onMenu={(file) => {
+              setFocused(file.key);
+              setMenuFor(file.key);
+            }}
             onDragStart={(event, item) => {
               event.dataTransfer.setData(OUTLINE_DRAG_TYPE, item.key);
               event.dataTransfer.effectAllowed = "move";
@@ -211,7 +302,21 @@ export function OutlineDrawer({ store, session }: { store: WorkspaceStore; sessi
             onDragEnd={() => setDrag(null)}
             onDragOver={(event) => over(event, row.item.key)}
             onDrop={(event) => drop(event, row.item.key)}
-          />
+          >
+            {row.item.kind === "file" ? (
+              <FileMenu
+                open={menuFor === row.item.key}
+                file={row.item}
+                bones={bones}
+                onAttach={(bone) => attach(row.item as OutlineFile, bone)}
+                onRemove={() => remove(row.item as OutlineFile, true)}
+                onClose={() => setMenuFor(null)}
+                onFocusBack={() => {
+                  if (pendingFocus.current === null) rowElements.current.get(row.item.key)?.focus();
+                }}
+              />
+            ) : null}
+          </TreeRow>
         ))}
       </div>
     </aside>
@@ -230,10 +335,12 @@ interface TreeRowProps {
   onToggle: () => void;
   onEye: (part: ScenePart, alt: boolean) => void;
   onRemove: (file: OutlineFile) => void;
+  onMenu: (file: OutlineFile) => void;
   onDragStart: (event: DragEvent, item: OutlineFile) => void;
   onDragEnd: () => void;
   onDragOver: (event: DragEvent) => void;
   onDrop: (event: DragEvent) => void;
+  children?: ReactNode;
 }
 
 function TreeRow(props: TreeRowProps) {
@@ -257,6 +364,7 @@ function TreeRow(props: TreeRowProps) {
       aria-level={row.depth + 1}
       aria-expanded={row.expandable ? row.expanded : undefined}
       aria-selected={props.focusable}
+      aria-haspopup={file ? "menu" : undefined}
       tabIndex={props.focusable ? 0 : -1}
       className={classes}
       style={{ paddingLeft: 4 + row.depth * INDENT }}
@@ -264,6 +372,14 @@ function TreeRow(props: TreeRowProps) {
       onFocus={(event) => {
         if (event.target === event.currentTarget) props.onFocus();
       }}
+      onContextMenu={
+        file
+          ? (event) => {
+              event.preventDefault();
+              props.onMenu(file);
+            }
+          : undefined
+      }
       onDragStart={file ? (event) => props.onDragStart(event, file) : undefined}
       onDragEnd={props.onDragEnd}
       onDragOver={props.onDragOver}
@@ -305,7 +421,91 @@ function TreeRow(props: TreeRowProps) {
           </button>
         </Tip>
       ) : null}
+      {props.children}
     </div>
+  );
+}
+
+/**
+ * A file row's menu, opened by a right-click, the Menu key or Shift+F10: attach the file to a bone of the model,
+ * detach it, or remove it from the view. It stays mounted while closed, so it sees the key that opens it and then
+ * focuses its first item, as menus opened from the keyboard do.
+ */
+function FileMenu({
+  open,
+  file,
+  bones,
+  onAttach,
+  onRemove,
+  onClose,
+  onFocusBack,
+}: {
+  open: boolean;
+  file: OutlineFile;
+  bones: readonly Bone[];
+  onAttach: (bone: number | null) => void;
+  onRemove: () => void;
+  onClose: () => void;
+  /** Returns the focus to the row, unless the menu closed because of a click or focus outside it. */
+  onFocusBack: () => void;
+}) {
+  const targets = bones.filter((bone) => bone.node !== file.bone);
+  const outside = useRef(false);
+  return (
+    <DropdownMenu.Root open={open} onOpenChange={(next) => (next ? undefined : onClose())} modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <span className="tr-menu-anchor" aria-hidden="true" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="menu menu-file"
+          side="bottom"
+          align="end"
+          sideOffset={2}
+          collisionPadding={8}
+          aria-label={file.name}
+          aria-labelledby={undefined}
+          onInteractOutside={() => {
+            outside.current = true;
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (!outside.current) onFocusBack();
+            outside.current = false;
+          }}
+        >
+          {targets.length > 0 ? (
+            <DropdownMenu.Sub>
+              <DropdownMenu.SubTrigger className="menu-item">
+                <Icon name="link" className="mi-icon" />
+                <span className="mi-label">Attach to bone</span>
+                <Icon name="chevronRight" className="mi-icon" />
+              </DropdownMenu.SubTrigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.SubContent className="menu menu-bones" sideOffset={4} collisionPadding={8}>
+                  {targets.map((bone) => (
+                    <DropdownMenu.Item key={bone.node} className="menu-item" onSelect={() => onAttach(bone.node)}>
+                      <Icon name="bone" className="mi-icon" />
+                      <span className="mi-label">{bone.name}</span>
+                    </DropdownMenu.Item>
+                  ))}
+                </DropdownMenu.SubContent>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Sub>
+          ) : null}
+          {file.bone !== null ? (
+            <DropdownMenu.Item className="menu-item" onSelect={() => onAttach(null)}>
+              <Icon name="cube" className="mi-icon" />
+              <span className="mi-label">Detach</span>
+            </DropdownMenu.Item>
+          ) : null}
+          <DropdownMenu.Item className="menu-item" onSelect={onRemove}>
+            <Icon name="trash" className="mi-icon" />
+            <span className="mi-label">Remove from view</span>
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
