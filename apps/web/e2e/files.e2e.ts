@@ -127,16 +127,18 @@ test("adds an animation file from the open dialog, groups its clips, and removes
   await expect(group.getByRole("menuitemradio", { name: /Turn/ })).toBeVisible();
   await group.getByText("beetle-turn.fbx").hover();
   await page.screenshot({ path: `${SHOTS}files-clip-groups.png` });
-  await group.getByRole("button", { name: "Remove beetle-turn.fbx from the view" }).click();
+  await group.getByRole("menuitem", { name: "Remove beetle-turn.fbx from the view" }).click();
   await expect(menu.getByRole("group", { name: "beetle-turn.fbx" })).toHaveCount(0);
   expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).not.toContain("Armature|Turn");
 
-  const undone = await page.evaluate(async (id) => {
-    const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
-    return client.execute("review.undo", { assetId: id });
-  }, assetId);
-  expect(undone).toEqual({ changed: true });
-  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).toContain("Armature|Turn");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect
+    .poll(async () => (await sceneFacts(page, assetId)).clips.map(([name]) => name))
+    .toContain("Armature|Turn");
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await expect
+    .poll(async () => (await sceneFacts(page, assetId)).clips.map(([name]) => name))
+    .not.toContain("Armature|Turn");
 });
 
 test("drops models on a model's view: animations join at once, anything else asks", async ({ page }) => {

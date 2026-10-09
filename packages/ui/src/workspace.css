@@ -1261,6 +1261,17 @@
   opacity: 1;
 }
 
+.clip-remove[data-highlighted] {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+@media (hover: none) {
+  .clip-remove {
+    opacity: 1;
+  }
+}
+
 .menu-sep {
   height: 1px;
   margin: var(--space-4) var(--space-6);
