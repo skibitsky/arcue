@@ -41,7 +41,7 @@ function pickFiles(): void {
   const input = document.createElement("input");
   input.type = "file";
   input.multiple = true;
-  input.accept = ".fbx,image/*";
+  input.accept = ".fbx,.arcue,image/*";
   input.addEventListener("change", () => openFiles([...(input.files ?? [])]));
   input.click();
 }

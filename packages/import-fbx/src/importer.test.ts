@@ -133,6 +133,12 @@ describe.each(manifest.files)("$file", (expected) => {
       expect(scene.nodes.filter((node) => node.kind === "bone")).toHaveLength(0);
       return;
     }
+    const bones = scene.nodes.filter((node) => node.kind === "bone");
+    expect(bones.map((node) => node.name).sort()).toEqual([...armature.bone_names].sort());
+    if (!expected.meshes.some((mesh) => mesh.skinned)) {
+      expect(scene.skeletons).toHaveLength(0);
+      return;
+    }
     expect(scene.skeletons).toHaveLength(1);
     const skeleton = scene.skeletons[0];
     const jointNames = skeleton?.joints.map((joint) => scene.nodes[joint]?.name) ?? [];
@@ -146,9 +152,11 @@ describe.each(manifest.files)("$file", (expected) => {
     expect(scene.nodes[root?.parent ?? -1]?.name).toBe(armature.name);
     expect(scene.nodes.filter((node) => node.kind === "bone")).toHaveLength(armature.bone_count);
     for (const node of scene.nodes) expect(node.parent).toBeLessThan(scene.nodes.indexOf(node));
-    expect(scene.nodes.find((node) => node.name === "Hand.R")?.path).toBe(
-      "Armature/Hips/Spine/Chest/Shoulder.R/UpperArm.R/Forearm.R/Hand.R",
-    );
+    if (armature.bone_names.includes("Hand.R")) {
+      expect(scene.nodes.find((node) => node.name === "Hand.R")?.path).toBe(
+        "Armature/Hips/Spine/Chest/Shoulder.R/UpperArm.R/Forearm.R/Hand.R",
+      );
+    }
   });
 
   it("makes one clip per take with the file's names, frame range and key density", () => {
