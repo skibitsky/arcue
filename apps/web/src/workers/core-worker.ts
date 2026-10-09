@@ -1,0 +1,70 @@
+import type { Clock } from "@arcue/core";
+import { ArcueCore, MemoryPlatform } from "@arcue/core";
+import { ArcueError, createPeer, portEndpoint } from "@arcue/protocol";
+import type {
+  ConnectWindowInput,
+  ImportWorkerFailed,
+  SeedFilesInput,
+  StartImportWorker,
+  StopImportWorker,
+} from "../host-protocol";
+import { hostEvents, hostRequests, pageEvents } from "../host-protocol";
+import { closableEndpoint } from "./closable-endpoint";
+import { freeClosedFiles } from "./free-closed-files";
+
+const clock: Clock = {
+  now: () => Date.now(),
+  setTimer(delayMs, callback) {
+    const handle = setTimeout(callback, delayMs);
+    return () => clearTimeout(handle);
+  },
+};
+
+let windows = 0;
+let importWorkers = 0;
+const closeImportWorker = new Map<number, () => void>();
+
+const platform = new MemoryPlatform({
+  clock,
+  startImportWorker() {
+    const id = ++importWorkers;
+    const channel = new MessageChannel();
+    const start: StartImportWorker = { id, port: channel.port2 };
+    const closable = closableEndpoint(portEndpoint(channel.port1));
+    closeImportWorker.set(id, closable.close);
+    page.emit(hostEvents.startImportWorker, start, [channel.port2]);
+    return {
+      endpoint: closable.endpoint,
+      terminate() {
+        closeImportWorker.delete(id);
+        channel.port1.close();
+        const stop: StopImportWorker = { id };
+        page.emit(hostEvents.stopImportWorker, stop);
+      },
+    };
+  },
+});
+
+const page = createPeer(portEndpoint(self), {
+  async handleRequest({ name, input }) {
+    if (name === hostRequests.connectWindow) {
+      const { port } = input as ConnectWindowInput;
+      const core = await started;
+      windows += 1;
+      core.connect(portEndpoint(port), { connection: `window-${windows}`, caller: "window" });
+      return null;
+    }
+    if (name === hostRequests.seedFiles) {
+      for (const file of (input as SeedFilesInput).files) await platform.writeFile(file.path, file.bytes);
+      return null;
+    }
+    throw new ArcueError("unknown-command", `The core worker does not handle "${name}".`);
+  },
+});
+
+page.onEvent((name, payload) => {
+  if (name === pageEvents.importWorkerFailed) closeImportWorker.get((payload as ImportWorkerFailed).id)?.();
+});
+
+const started = ArcueCore.start({ platform, onError: (error) => console.error(error) });
+void started.then((core) => freeClosedFiles(core.client, platform, (error) => console.error(error)));
