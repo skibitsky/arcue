@@ -15,6 +15,7 @@ const fixLabels: Record<WarningFix["kind"], string> = {
   retry: "Retry",
   "use-as-base-color": "Use as base color",
   "choose-texture": "Choose texture",
+  "choose-model": "Choose file",
 };
 
 /** The status bar's import warnings: the first message and a count, opening the list above. Absent without any. */

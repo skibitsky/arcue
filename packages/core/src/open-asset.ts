@@ -11,16 +11,20 @@ import { Serial } from "./serial";
 /** Everything the core holds for one open asset. */
 export class OpenAsset {
   readonly id: string;
-  /** Normalized absolute path of the asset file. */
-  readonly path: string;
+  /** Normalized absolute path of the asset file. It changes only when the asset follows its file to a new path. */
+  path: string;
   /** The model's composition file, `composition.json` in its review folder. */
-  readonly compositionPath: string;
-  readonly location: ReviewLocation;
+  compositionPath: string;
+  location: ReviewLocation;
   readonly session: ReviewSession;
   /** Earlier reviews that may belong to the asset, best first, as `review.candidates` lists them. */
   candidates: ReviewCandidate[] = [];
   /** Earlier reviews to compare the meshes of the first version with, until it loads. */
   earlier: EarlierReview[] = [];
+  /** The full hash and size of the model file the version on screen was read from. */
+  identity: { hash: string; size: number } | null = null;
+  /** The model file stayed missing after a change, and no file in its folder could be followed. */
+  missing = false;
   /** The composition file applied to the version on screen, or null for a plain model. */
   composition: string | null = null;
   status: AssetStatus = "loading";
@@ -50,6 +54,16 @@ export class OpenAsset {
     this.path = path;
     this.location = location;
     this.session = session;
+    this.compositionPath = compositionFilePath(location);
+  }
+
+  /** Points the asset at its model's new path and review folder, keeping its id and the model's parsed scene. */
+  relocate(path: string, location: ReviewLocation): void {
+    const parsed = this.imported.get(this.path);
+    this.imported.delete(this.path);
+    if (parsed) this.imported.set(path, parsed);
+    this.path = path;
+    this.location = location;
     this.compositionPath = compositionFilePath(location);
   }
 

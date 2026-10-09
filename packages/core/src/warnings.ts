@@ -1,31 +1,47 @@
 import type { AssetWarning, Comment, CommentWarning, ReviewFile, WarningFix } from "@arcue/protocol";
 import { ArcueError, warningId } from "@arcue/protocol";
 import type { CameraAnchor, ImportWarning, SceneDescription } from "@arcue/scene";
-import { memberPath } from "@arcue/scene";
+import { importWarning, memberPath } from "@arcue/scene";
 import { byCreation } from "./comment-ids";
-import { dirname, joinPath } from "./paths";
+import { basename, dirname, joinPath } from "./paths";
 
 /**
  * The scene's import warnings with their ids, errors first. Each says whether the review dismissed it, the newest
  * comment made from it, and the command that fixes it. A warning listed twice is listed once.
  */
 export function listWarnings(scene: SceneDescription, review: ReviewFile, assetPath: string): AssetWarning[] {
-  const dismissed = new Set(review.dismissedWarnings ?? []);
   const seen = new Set<string>();
   const warnings: AssetWarning[] = [];
   for (const warning of scene.source.warnings) {
     const id = warningId(warning);
     if (seen.has(id)) continue;
     seen.add(id);
-    warnings.push({
-      id,
-      ...warning,
-      dismissed: dismissed.has(id),
-      commentId: newestComment(review, id)?.id ?? null,
-      fix: fixFor(warning, scene, assetPath),
-    });
+    warnings.push(withReview(warning, review, fixFor(warning, scene, assetPath)));
   }
   return [...warnings.filter((entry) => entry.severity === "error"), ...warnings.filter((e) => e.severity !== "error")];
+}
+
+/**
+ * The error for a model whose file is gone while it is open, when no file in its folder could be followed. Retry
+ * loads it once it is back; the fix relinks the asset to a file the person chooses.
+ */
+export function modelNotFound(review: ReviewFile, assetPath: string): AssetWarning {
+  const name = basename(assetPath);
+  const warning = importWarning("model-not-found", { kind: "file", name }, `Model not found: ${name}`, undefined, {
+    detail: `${assetPath} was removed or renamed.`,
+  });
+  return withReview(warning, review, { kind: "choose-model" });
+}
+
+function withReview(warning: ImportWarning, review: ReviewFile, fix: WarningFix | null): AssetWarning {
+  const id = warningId(warning);
+  return {
+    id,
+    ...warning,
+    dismissed: (review.dismissedWarnings ?? []).includes(id),
+    commentId: newestComment(review, id)?.id ?? null,
+    fix,
+  };
 }
 
 export function findWarning(warnings: readonly AssetWarning[], id: string): AssetWarning {

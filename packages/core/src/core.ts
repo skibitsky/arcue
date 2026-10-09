@@ -46,7 +46,7 @@ import {
 import type { AssetFiles, ReadFile } from "./composition-load";
 import { buildAssetScene, readAssetFiles } from "./composition-load";
 import { readableImageExtensions } from "./file-search";
-import { versionIdOf } from "./hash";
+import { contentHash, versionIdOf } from "./hash";
 import type { CompositionEdit } from "./history";
 import { applySnapshot, editBetween, withDismissedWarnings } from "./history";
 import { readUnityGuid } from "./identity";
@@ -89,7 +89,15 @@ import { Serial } from "./serial";
 import type { ServeOptions } from "./serve";
 import { serveEndpoint } from "./serve";
 import { SettingsStore } from "./settings";
-import { commentWarning, findWarning, frontCamera, listWarnings, warningClip, warningPrompt } from "./warnings";
+import {
+  commentWarning,
+  findWarning,
+  frontCamera,
+  listWarnings,
+  modelNotFound,
+  warningClip,
+  warningPrompt,
+} from "./warnings";
 import { WindowRegistry } from "./windows";
 
 export interface ArcueCoreOptions {
@@ -112,6 +120,9 @@ export interface ArcueCoreOptions {
 }
 
 const VIEW_SHOW_ASSET = "view.showAsset";
+
+/** The most files in a missing model's folder that the core checks for the model under a new name. */
+const MAX_RENAME_CANDIDATES = 256;
 const VIEW_RELEASE_ASSET = "view.releaseAsset";
 
 /**
@@ -201,6 +212,7 @@ export class ArcueCore {
     this.#unregister.push(
       registry.handleCommand("asset.open", (args, context) => this.#opening.run(() => this.#open(args, context))),
       registry.handleCommand("asset.close", (args) => this.#close(args.assetId)),
+      registry.handleCommand("asset.relink", (args) => this.#relinkAsset(args.assetId, args.path)),
       registry.handleCommand("asset.reload", async (args) => ({
         version: await this.#load(this.#asset(args.assetId)),
       })),
@@ -410,13 +422,7 @@ export class ArcueCore {
       this.registry.emit("review.relinked", { assetId: asset.id, from: earlier.moved, automatic: true });
     }
     this.#offer(asset);
-    asset.stopWatching.push(
-      this.#platform.watch(path, () => this.#fileChanged(asset)),
-      this.#platform.watch(reviewPath, () => {
-        void this.#track(asset.session.refresh().catch((error: unknown) => this.#onError(error)));
-      }),
-    );
-    this.#watchComposition(asset, [asset.compositionPath]);
+    this.#watchAsset(asset);
     void this.#load(asset).catch(() => undefined);
     return { assetId: asset.id };
   }
@@ -499,6 +505,18 @@ export class ArcueCore {
       this.registry.emit("review.relinked", { assetId: asset.id, from, automatic: false });
       await this.#load(asset, true).catch(() => undefined);
     });
+  }
+
+  /** Watches the model file, its review file, and its composition file until it loads the files that one names. */
+  #watchAsset(asset: OpenAsset): void {
+    for (const stop of asset.stopWatching.splice(0)) stop();
+    asset.stopWatching.push(
+      this.#platform.watch(asset.path, () => this.#fileChanged(asset)),
+      this.#platform.watch(reviewFilePath(asset.location), () => {
+        void this.#track(asset.session.refresh().catch((error: unknown) => this.#onError(error)));
+      }),
+    );
+    this.#watchComposition(asset, [asset.compositionPath]);
   }
 
   /** Watches the composition file and the files it names, and stops watching files it no longer names. */
@@ -588,7 +606,10 @@ export class ArcueCore {
     if (previous !== undefined) {
       const model = current.get(asset.path) ?? null;
       const before = previous.get(asset.path) ?? null;
-      if (model === null && before === null) return;
+      if (model === null && before === null) {
+        void this.#track(this.#modelGone(asset));
+        return;
+      }
       const settled = paths.every(
         (path) => previous.has(path) && sameStat(current.get(path) ?? null, previous.get(path) ?? null),
       );
@@ -603,6 +624,109 @@ export class ArcueCore {
   }
 
   /** Loads the asset's files, and with `force` records and re-anchors even a version that is already on screen. */
+  /**
+   * The model stayed missing across two checks, so it was not replaced by an export. When exactly one file in its
+   * folder has the bytes of the version on screen or the model's Unity GUID, the asset follows that file; otherwise
+   * the asset reports "model-not-found".
+   */
+  async #modelGone(asset: OpenAsset): Promise<void> {
+    try {
+      const renamed = await this.#findRenamed(asset);
+      if (renamed !== null) {
+        await this.#follow(asset, renamed, true);
+        return;
+      }
+    } catch (error) {
+      if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
+    }
+    if (asset.closed || asset.missing || (await this.#platform.exists(asset.path))) return;
+    asset.missing = true;
+    this.#failed(asset, new Error(`Model not found: ${asset.name}`));
+  }
+
+  /**
+   * The one file in the model's folder, with the model's extension, that has the size and full hash of the file the
+   * version on screen was read from, or the model's Unity GUID in its `.meta` file. Null when there is none or more
+   * than one. It checks at most `MAX_RENAME_CANDIDATES` files, hashes only those of the same size, and skips files
+   * other tabs show.
+   */
+  async #findRenamed(asset: OpenAsset): Promise<string | null> {
+    const { identity } = asset;
+    const guid = asset.session.review.asset.guid ?? null;
+    if (identity === null && guid === null) return null;
+    const folder = dirname(asset.path);
+    const extension = asset.name.slice(asset.name.lastIndexOf(".")).toLowerCase();
+    const open = new Set([...this.#assets.values()].map((other) => other.path));
+    const entries = await this.#platform.list(folder);
+    const names = new Set(entries.map((entry) => entry.name));
+    const files = entries.filter((entry) => entry.kind === "file" && hasExtension(entry.name, [extension]));
+    const found: string[] = [];
+    for (const entry of files.slice(0, MAX_RENAME_CANDIDATES)) {
+      const path = joinPath(folder, entry.name);
+      if (open.has(path)) continue;
+      const sameBytes =
+        identity !== null &&
+        (await this.#platform.stat(path))?.size === identity.size &&
+        contentHash(await this.#platform.readFile(path)) === identity.hash;
+      const sameGuid =
+        !sameBytes &&
+        guid !== null &&
+        names.has(`${entry.name}.meta`) &&
+        (await readUnityGuid(this.#platform, path)) === guid;
+      if (sameBytes || sameGuid) found.push(path);
+    }
+    const [only] = found;
+    return found.length === 1 && only !== undefined ? only : null;
+  }
+
+  /** Points an asset whose model is gone at a file the caller chose, as `asset.relink` asks. */
+  async #relinkAsset(assetId: string, given: string): Promise<void> {
+    const asset = this.#asset(assetId);
+    const path = normalizePath(given);
+    if (path === asset.path) throw new ArcueError("invalid-input", `${asset.name} is already at ${path}.`);
+    if (await this.#platform.exists(asset.path)) {
+      throw new ArcueError("conflict", `${asset.name} still exists, so its review stays with it.`);
+    }
+    if ((await this.#platform.stat(path))?.kind !== "file")
+      throw new ArcueError("not-found", `${path} does not exist.`);
+    if ([...this.#assets.values()].some((other) => other.path === path && !other.closing)) {
+      throw new ArcueError("conflict", `${basename(path)} is open in another tab.`);
+    }
+    await this.#follow(asset, path, false);
+  }
+
+  /**
+   * Points the asset at its model's new path. It moves the review folder to the new path's place, which refuses a file
+   * that has a review of its own, keeps the asset's id, watches the new files and reloads. Windows retitle the tab on
+   * "asset.updated" and learn of the move from "review.relinked".
+   */
+  #follow(asset: OpenAsset, path: string, automatic: boolean): Promise<void> {
+    return this.#inCompositionLine(asset, async () => {
+      const from = asset.path;
+      const location = await locateReview(this.#platform, path);
+      if (
+        location.workspaceRoot &&
+        !(await insideWithoutLinks(this.#platform, location.workspaceRoot, location.folder))
+      ) {
+        throw new ArcueError("conflict", `The review folder ${location.folder} goes through a symbolic link.`);
+      }
+      await asset.session.moveTo(location, async () => {
+        if (!(await this.#platform.exists(reviewFilePath(asset.location)))) return;
+        await moveReview(this.#platform, { from: asset.location, fromModel: from, to: location, toModel: path });
+      });
+      asset.cancelStabilityCheck();
+      asset.stabilityCheck++;
+      asset.relocate(path, location);
+      asset.missing = false;
+      asset.candidates = [];
+      asset.earlier = [];
+      this.#watchAsset(asset);
+      this.registry.emit("asset.updated", { asset: asset.summary });
+      this.registry.emit("review.relinked", { assetId: asset.id, from, automatic });
+      await this.#load(asset, true).catch(() => undefined);
+    });
+  }
+
   #load(asset: OpenAsset, force = false): Promise<string> {
     return this.#track(asset.loads.run(() => this.#loadVersion(asset, force)));
   }
@@ -618,6 +742,7 @@ export class ArcueCore {
       this.#failed(asset, error);
       throw error;
     }
+    asset.missing = false;
     this.#watchComposition(asset, files.watch);
     const versionId = files.versionId;
     if (versionId === asset.version && !force) {
@@ -662,6 +787,7 @@ export class ArcueCore {
             asset.session.history.mapComments((comment) => reanchorer.reanchor(comment));
             asset.scene = scene;
             asset.version = versionId;
+            asset.identity = { hash: files.model.hash, size: files.model.size };
             asset.composition = files.composition?.file.path ?? null;
             asset.status = "ready";
             asset.error = null;
@@ -1083,7 +1209,8 @@ export class ArcueCore {
 
   /** The import warnings of the version on screen; none before the first version loads. */
   #warnings(asset: OpenAsset, review: ReviewFile = asset.session.review): AssetWarning[] {
-    return asset.scene ? listWarnings(asset.scene, review, asset.path) : [];
+    const listed = asset.scene ? listWarnings(asset.scene, review, asset.path) : [];
+    return asset.missing ? [modelNotFound(review, asset.path), ...listed] : listed;
   }
 
   /** Dismisses the listed warnings, or every warning not dismissed yet for null, as one undoable edit. */
@@ -1114,7 +1241,7 @@ export class ArcueCore {
     const asset = this.#asset(args.assetId);
     return asset.session.run((review) => {
       const { scene, version } = asset.loaded();
-      const warning = findWarning(listWarnings(scene, review, asset.path), args.warningId);
+      const warning = findWarning(this.#warnings(asset, review), args.warningId);
       const queued = review.comments.find((comment) => comment.id === warning.commentId && comment.status === "draft");
       if (queued) return { next: null, result: { commentId: queued.id } };
       const id = this.#newCommentId();

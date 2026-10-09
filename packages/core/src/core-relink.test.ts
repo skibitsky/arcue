@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { FakeAssetSpec, TestCore } from "./test-support";
 import {
   fakeAsset,
+  flush,
   HERO,
   HERO_REVIEW,
   HERO_VERSION,
@@ -24,6 +25,17 @@ function record(test: TestCore, ...names: EventName[]): { name: EventName; paylo
   const events: { name: EventName; payload: unknown }[] = [];
   for (const name of names) test.core.client.subscribe(name, (payload) => events.push({ name, payload }));
   return events;
+}
+
+/** Lets file changes settle through the core's stability checks. */
+async function settle(test: TestCore): Promise<void> {
+  for (let check = 0; check < 3; check++) {
+    await flush();
+    await test.core.idle();
+    test.clock.advance(300);
+  }
+  await flush();
+  await test.core.idle();
 }
 
 /** Opens a model, comments on it and closes it, as a review left behind before its file was renamed. */
@@ -274,4 +286,162 @@ describe("a renamed model outside a repository", () => {
 
 async function sceneVersion(test: TestCore, assetId: string): Promise<string> {
   return (await test.core.client.query("scene.get", { assetId })).version;
+}
+
+describe("an open model whose file is renamed", () => {
+  async function commented(files: Record<string, string> = heroFiles()) {
+    const test = await startTestCore(files);
+    const assetId = await openAsset(test);
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
+    return { test, assetId, commentId };
+  }
+
+  it("follows its file to the new name, keeping its id, comments and screenshots, and watches the new file", async () => {
+    const { test, assetId, commentId } = await commented();
+    const events = record(test, "asset.updated", "review.relinked", "review.changed");
+    await test.platform.rename(HERO, STRIKER);
+    await settle(test);
+
+    expect(events.find((event) => event.name === "review.relinked")?.payload).toEqual({
+      assetId,
+      from: HERO,
+      automatic: true,
+    });
+    const renamed = events.find((event) => event.name === "asset.updated")?.payload;
+    expect(renamed).toMatchObject({ asset: { assetId, path: STRIKER, name: "Striker.fbx" } });
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: STRIKER, name: "Striker.fbx", status: "ready", error: null }],
+    });
+    await expect(test.platform.exists(HERO_REVIEW)).resolves.toBe(false);
+    await expect(test.platform.exists(`${STRIKER_REVIEW}/screenshots/${commentId}.png`)).resolves.toBe(true);
+    const review = await test.core.client.query("review.get", { assetId });
+    expect(review.asset.path).toBe("Assets/Art/Striker.fbx");
+    expect(review.comments.map((comment) => comment.id)).toEqual([commentId]);
+    await expect(test.core.client.query("warning.list", { assetId })).resolves.toEqual({ warnings: [] });
+
+    await test.platform.writeFile(STRIKER, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4 }] }));
+    await settle(test);
+    expect(await sceneVersion(test, assetId)).not.toBe(HERO_VERSION);
+    await test.core.client.execute(
+      "comment.create",
+      looseComment(assetId, "Later.", await sceneVersion(test, assetId)),
+    );
+    await expect(test.platform.readText(`${STRIKER_REVIEW}/review.json`)).resolves.toContain("Later.");
+  });
+
+  it("follows the file with its Unity GUID when Unity renamed it and it was exported again", async () => {
+    const { test, assetId } = await commented({ ...heroFiles(), [`${HERO}.meta`]: `guid: ${GUID}\n` });
+    await test.platform.rename(HERO, STRIKER);
+    await test.platform.rename(`${HERO}.meta`, `${STRIKER}.meta`);
+    await test.platform.writeFile(STRIKER, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4 }] }));
+    await settle(test);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: STRIKER, status: "ready" }],
+    });
+    expect((await test.core.client.query("review.get", { assetId })).comments[0]).toMatchObject({
+      anchorState: "moved",
+    });
+  });
+
+  it("says the model is not found when no single file matches, and loads it again once it is back", async () => {
+    const { test, assetId } = await commented({ ...heroFiles(), [`${ART}/A.fbx`]: fakeAsset(heroSpec) });
+    await test.platform.writeFile(`${ART}/B.fbx`, fakeAsset(heroSpec));
+    await test.platform.remove(HERO);
+    await settle(test);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO, status: "failed", version: HERO_VERSION, error: "Model not found: Hero.fbx" }],
+    });
+    const { warnings } = await test.core.client.query("warning.list", { assetId });
+    expect(warnings).toEqual([
+      {
+        id: "model-not-found:file:Hero.fbx",
+        code: "model-not-found",
+        severity: "error",
+        subject: { kind: "file", name: "Hero.fbx" },
+        message: "Model not found: Hero.fbx",
+        detail: `${HERO} was removed or renamed.`,
+        dismissed: false,
+        commentId: null,
+        fix: { kind: "choose-model" },
+      },
+    ]);
+    await expect(test.core.client.query("warning.prompt", { assetId })).resolves.toMatchObject({
+      prompt: expect.stringContaining("1. Model not found: Hero.fbx"),
+    });
+    await expect(
+      test.core.client.execute("comment.createFromWarning", { assetId, warningId: "model-not-found:file:Hero.fbx" }),
+    ).resolves.toMatchObject({ commentId: expect.any(String) });
+
+    await test.platform.writeFile(HERO, fakeAsset(heroSpec));
+    await settle(test);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO, status: "ready", error: null }],
+    });
+    await expect(test.core.client.query("warning.list", { assetId })).resolves.toEqual({ warnings: [] });
+  });
+
+  it("does not follow a file that has a review of its own", async () => {
+    const test = await startTestCore({ ...heroFiles(), [STRIKER]: fakeAsset({ ...heroSpec, fps: 30 }) });
+    await review(test, STRIKER, (await openVersion(test, STRIKER)) ?? "");
+    const assetId = await openAsset(test);
+    await test.platform.remove(STRIKER);
+    await test.platform.rename(HERO, STRIKER);
+    await settle(test);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO, status: "failed", error: "Model not found: Hero.fbx" }],
+    });
+    await expect(test.platform.exists(`${HERO_REVIEW}/review.json`)).resolves.toBe(true);
+  });
+});
+
+describe("asset.relink", () => {
+  it("points an asset whose model is gone at the file the person chose, and moves its review", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    await test.platform.remove(HERO);
+    await test.platform.writeFile(STRIKER, fakeAsset({ ...heroSpec, fps: 30 }));
+    await settle(test);
+    expect((await test.core.client.query("warning.list", { assetId })).warnings[0]?.code).toBe("model-not-found");
+    const events = record(test, "review.relinked");
+
+    await test.window.client.execute("asset.relink", { assetId, path: STRIKER });
+    await test.core.idle();
+    expect(events).toEqual([{ name: "review.relinked", payload: { assetId, from: HERO, automatic: false } }]);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: STRIKER, status: "ready", error: null }],
+    });
+    await expect(test.core.client.query("warning.list", { assetId })).resolves.toEqual({ warnings: [] });
+    const review = await test.core.client.query("review.get", { assetId });
+    expect(review.comments).toHaveLength(1);
+    expect(review.versions).toHaveLength(2);
+    await expect(test.platform.exists(HERO_REVIEW)).resolves.toBe(false);
+  });
+
+  it("refuses while the model is still there, a missing file, and a file with a review of its own", async () => {
+    const test = await startTestCore({ ...heroFiles(), [STRIKER]: fakeAsset({ ...heroSpec, fps: 30 }) });
+    await review(test, STRIKER, (await openVersion(test, STRIKER)) ?? "");
+    const assetId = await openAsset(test);
+    await expect(test.window.client.execute("asset.relink", { assetId, path: STRIKER })).rejects.toMatchObject({
+      code: "conflict",
+      message: "Hero.fbx still exists, so its review stays with it.",
+    });
+    await test.platform.remove(HERO);
+    await expect(
+      test.window.client.execute("asset.relink", { assetId, path: `${ART}/Missing.fbx` }),
+    ).rejects.toMatchObject({ code: "not-found" });
+    await expect(test.window.client.execute("asset.relink", { assetId, path: STRIKER })).rejects.toMatchObject({
+      code: "conflict",
+      message: "Striker.fbx already has a review, so the review of Hero.fbx stays where it is.",
+    });
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({ assets: [{ path: HERO }] });
+  });
+});
+
+/** The version a file loads as, read by opening and closing it. */
+async function openVersion(test: TestCore, path: string): Promise<string | null> {
+  const assetId = await openAsset(test, path);
+  const version = await sceneVersion(test, assetId);
+  await test.core.client.execute("asset.close", { assetId });
+  return version;
 }

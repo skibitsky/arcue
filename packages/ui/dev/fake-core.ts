@@ -640,6 +640,10 @@ export class FakeCoreClient implements CoreClient {
     },
     "review.undo": ({ assetId }) => this.#step(this.#asset(assetId), "undo"),
     "review.redo": ({ assetId }) => this.#step(this.#asset(assetId), "redo"),
+    "asset.relink": ({ assetId }) => {
+      this.#asset(assetId);
+      throw new ArcueError("conflict", "The fake core never loses a model file.");
+    },
     "review.relink": ({ assetId }) => {
       this.#asset(assetId);
       throw new ArcueError("not-found", "The fake core keeps no earlier reviews.");

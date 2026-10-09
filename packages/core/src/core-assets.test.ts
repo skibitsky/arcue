@@ -221,29 +221,25 @@ describe("loading versions", () => {
     expect(reloaded.scene.meshes[0]?.sourceVertexCount).toBe(25);
   });
 
-  it("waits for a removed file to come back, as an atomic replace does", async () => {
-    const test = await startTestCore(heroFiles());
+  it("reloads a file an export replaced by removing it first, and never takes the removal for a rename", async () => {
+    const test = await startTestCore(heroFiles({ ...heroSpec, fps: 30 }));
+    await test.platform.writeFile("/work/game/Assets/Art/Copy.fbx", fakeAsset({ ...heroSpec, fps: 30 }));
     const assetId = await openAsset(test);
-    const events = record(test, "asset.updated");
+    const events = record(test, "asset.updated", "review.relinked");
     await test.platform.remove(HERO);
     await flush();
     await test.core.idle();
-    test.clock.advance(300);
-    await flush();
-    await test.core.idle();
-    test.clock.advance(300);
-    await flush();
-    await test.core.idle();
-    expect(events).toEqual([]);
-    expect(test.clock.pendingTimers).toBe(0);
-
-    test.clock.advance(1000);
+    test.clock.advance(200);
     await test.platform.writeFile(HERO, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4 }] }));
+    for (let check = 0; check < 3; check++) {
+      await flush();
+      await test.core.idle();
+      test.clock.advance(300);
+    }
     await flush();
     await test.core.idle();
-    test.clock.advance(300);
-    await flush();
-    await test.core.idle();
+    expect(test.clock.pendingTimers).toBe(0);
+    expect(events.map((event) => event.name)).toEqual(["asset.updated", "asset.updated"]);
     expect(statuses(events)).toEqual(["loading", "ready"]);
     await expect(test.core.client.query("scene.get", { assetId })).resolves.toMatchObject({
       scene: { meshes: [{ sourceVertexCount: 16 }] },

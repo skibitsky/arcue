@@ -49,6 +49,13 @@ export const commands = {
     input: z.object(assetRef),
     output: z.object({ version: z.string() }),
   }),
+  "asset.relink": command({
+    description:
+      "Point an open asset whose model file is gone at the file's new path, after a rename or move that Arcue could not follow by itself. Its review folder moves along, the asset keeps its id, and its tab takes the new name. Fails while the old file still exists, and when the new file has a review of its own.",
+    runsIn: "core",
+    input: z.object({ ...assetRef, path: z.string().min(1) }),
+    output: z.void(),
+  }),
   "comment.create": command({
     description: "Add a draft comment to the end of the asset's queue.",
     runsIn: "core",

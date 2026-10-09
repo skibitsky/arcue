@@ -34,8 +34,9 @@ export const importWarningSchema: z.ZodType<ImportWarning> = z.object(importWarn
 export const warningIdSchema = z.string().min(1);
 
 /**
- * The command that fixes a warning: `view.setClip`, `asset.reload`, `material.setTexture` on the base color, or
- * `material.setTexture` on the slot with an image the person chooses.
+ * The command that fixes a warning: `view.setClip`, `asset.reload`, `material.setTexture` on the base color,
+ * `material.setTexture` on the slot with an image the person chooses, or `asset.relink` to a model file the person
+ * chooses.
  */
 export const warningFixSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("show-clip"), clip: z.string().min(1) }),
@@ -47,6 +48,7 @@ export const warningFixSchema = z.discriminatedUnion("kind", [
     file: z.string().min(1),
   }),
   z.object({ kind: z.literal("choose-texture"), material: z.string().min(1), slot: textureSlotSchema }),
+  z.object({ kind: z.literal("choose-model") }),
 ]);
 
 /** An import warning of the version on screen, with its id and what the review recorded about it. */
