@@ -9,13 +9,15 @@ import { createPeer, withTransfer } from "./transport/peer";
 
 /**
  * Requests on the private channel between the core and an import worker; they are not core commands.
- * The core sends "import.run". While it runs, the worker may send "import.readFile" and "import.findFile" back to
- * the core for files the asset references, such as external textures. All are sent as kind "command".
+ * The core sends "import.run". While it runs, the worker may send "import.readFile", "import.findFile" and
+ * "import.locateFile" back to the core for files the asset references, such as external textures. All are sent as
+ * kind "command".
  */
 export const importRequests = {
   run: "import.run",
   readFile: "import.readFile",
   findFile: "import.findFile",
+  locateFile: "import.locateFile",
 } as const;
 
 const importRunInputSchema = z.object({ fileName: z.string().min(1), bytes: bytesSchema });
@@ -49,6 +51,12 @@ export type ImportFindFileInput = z.output<typeof importFindFileInputSchema>;
 /** Null when no image was found. */
 export type ImportFindFileOutput = FoundFile | null;
 
+/** "import.locateFile" takes the same input as "import.findFile". */
+export type ImportLocateFileInput = ImportFindFileInput;
+
+/** Where the image was found, relative to the asset's folder, without its bytes; null when none was found. */
+export type ImportLocateFileOutput = string | null;
+
 /** The import worker's side of the channel: runs the importer that matches the file name. */
 export function serveImportWorker(endpoint: MessageEndpoint, importers: readonly Importer[]): Peer {
   const peer: Peer = createPeer(endpoint, {
@@ -65,7 +73,11 @@ export function serveImportWorker(endpoint: MessageEndpoint, importers: readonly
         const request: ImportFindFileInput = { storedPath };
         return (await peer.request("command", importRequests.findFile, request)) as ImportFindFileOutput;
       };
-      const scene = await importer.import({ fileName, bytes, readFile, findFile });
+      const locateFile = async (storedPath: string) => {
+        const request: ImportLocateFileInput = { storedPath };
+        return (await peer.request("command", importRequests.locateFile, request)) as ImportLocateFileOutput;
+      };
+      const scene = await importer.import({ fileName, bytes, readFile, findFile, locateFile });
       return withTransfer(scene, collectTransferables(scene));
     },
   });

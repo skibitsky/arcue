@@ -119,7 +119,7 @@ function buildClips(clips: readonly ParsedClip[], fps: number): Clip[] {
 
 async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<SceneDescription> {
   const meshes: Mesh[] = parsed.meshes.map((mesh) => ({ ...mesh, topology: topologyFingerprint(mesh) }));
-  const textures = createTextureResolver(parsed.textureFiles, request.findFile);
+  const textures = createTextureResolver(parsed.textureFiles, request.findFile, request.locateFile);
   const materials = await buildMaterials(parsed.materials, meshes, textures);
   const nodes = buildNodes(parsed);
   const lodGroups = new Set(parsed.nodes.flatMap((node, index) => (node.lodGroup ? [index] : [])));

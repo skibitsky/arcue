@@ -43,6 +43,7 @@ describe.skipIf(files.length === 0)("files listed in ARCUE_EXTRA_FBX", () => {
         bytes,
         readFile: () => Promise.resolve(null),
         findFile: findBeside(path),
+        locateFile: async (storedPath) => (await findBeside(path)(storedPath))?.path ?? null,
       });
       const importMs = performance.now() - importStart;
 

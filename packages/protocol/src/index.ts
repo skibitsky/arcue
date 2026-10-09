@@ -69,6 +69,8 @@ export {
 export type {
   ImportFindFileInput,
   ImportFindFileOutput,
+  ImportLocateFileInput,
+  ImportLocateFileOutput,
   ImportReadFileInput,
   ImportReadFileOutput,
   ImportRunInput,

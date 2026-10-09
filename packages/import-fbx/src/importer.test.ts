@@ -27,18 +27,21 @@ import { fbxImporter } from "./importer";
 
 const BOUNDS_TOLERANCE = 1e-3;
 
-const noFiles: Pick<ImportRequest, "readFile" | "findFile"> = {
+const noFiles: Pick<ImportRequest, "readFile" | "findFile" | "locateFile"> = {
   readFile: () => Promise.resolve(null),
   findFile: () => Promise.resolve(null),
+  locateFile: () => Promise.resolve(null),
 };
 
 function importText(
   fileName: string,
   text: string,
   findFile: (storedPath: string) => Promise<FoundFile | null> = noFiles.findFile,
+  locateFile: (storedPath: string) => Promise<string | null> = async (storedPath) =>
+    (await findFile(storedPath))?.path ?? null,
 ): Promise<SceneDescription> {
   const bytes = new TextEncoder().encode(text);
-  return fbxImporter.import({ ...noFiles, fileName, bytes, findFile });
+  return fbxImporter.import({ ...noFiles, fileName, bytes, findFile, locateFile });
 }
 
 function textureName(scene: SceneDescription, ref: { texture: number } | null | undefined): string | null {
@@ -622,10 +625,18 @@ describe("export checks", () => {
     expect(scene.materials[0]?.missingTextures).toEqual({ baseColor: "textures/painted.png" });
   });
 
-  it("warns about a texture that no material links, with where its image was found", async () => {
-    const scene = await importText("body.fbx", UNLINKED_TEXTURE_FBX, (storedPath) =>
-      Promise.resolve(storedPath === "textures/Body_BaseColor.png" ? { path: storedPath, bytes: PNG_SIGNATURE } : null),
+  it("warns about a texture that no material links, with where its image was found, without reading it", async () => {
+    const read: string[] = [];
+    const scene = await importText(
+      "body.fbx",
+      UNLINKED_TEXTURE_FBX,
+      (storedPath) => {
+        read.push(storedPath);
+        return Promise.resolve(null);
+      },
+      (storedPath) => Promise.resolve(storedPath === "textures/Body_BaseColor.png" ? storedPath : null),
     );
+    expect(read).toEqual([]);
     expect(scene.textures).toEqual([]);
     expect(scene.source.warnings).toEqual([
       {

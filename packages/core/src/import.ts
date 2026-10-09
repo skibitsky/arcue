@@ -69,6 +69,9 @@ export async function importAsset(
         return readReferencedFile(platform, assetPath, relativePath, readRoot);
       }
       if (name === importRequests.findFile) return search.find(importFindFileInputSchema.parse(input).storedPath);
+      if (name === importRequests.locateFile) {
+        return search.locate(importFindFileInputSchema.parse(input).storedPath);
+      }
       throw new ArcueError("unknown-command", `The core has no "${name}".`);
     },
   });

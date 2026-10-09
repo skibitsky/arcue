@@ -52,5 +52,6 @@ export function importSample(
     bytes: readSample(file),
     readFile: () => Promise.resolve(null),
     findFile,
+    locateFile: async (storedPath) => (await findFile(storedPath))?.path ?? null,
   });
 }
