@@ -6,7 +6,7 @@ import { createViewport } from "../src/index";
 import { buildCreature } from "./creature";
 import { albedoSpread, changedShare, modelPixels } from "./pixels";
 import type { SampleName } from "./samples";
-import { importSample, isSampleName, SAMPLES } from "./samples";
+import { importBeetle, importSample, isSampleName, SAMPLES } from "./samples";
 import type { TextureAgreement } from "./texture-check";
 import { textureAgreement } from "./texture-check";
 
@@ -33,6 +33,8 @@ export interface Harness {
   buildCreature(skin: boolean): SceneDescription;
   /** Imports a sample FBX file through the FBX importer, shows it framed in the rest pose and makes it `scene`. */
   loadSample(name: SampleName): Promise<SceneDescription>;
+  /** Imports the modular beetle's files, composes them as `beetle.arcue` says, and shows the result. */
+  loadBeetle(): Promise<SceneDescription>;
   /** Shows a scene, framed in the rest pose, and makes it `scene`. */
   showScene(scene: SceneDescription): Promise<void>;
   modelPixels(shot: string, background: string): Promise<number>;
@@ -77,6 +79,8 @@ declare global {
     harness?: Harness;
   }
 }
+
+const BEETLE = "beetle";
 
 let drawCount = 0;
 for (const name of ["drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced"] as const) {
@@ -246,12 +250,21 @@ async function main(): Promise<void> {
     show(`${name}.fbx`);
     return scene;
   };
+  const loadBeetle = async () => {
+    if (modelSelect instanceof HTMLSelectElement) modelSelect.value = BEETLE;
+    show("importing beetle.arcue");
+    const scene = await importBeetle();
+    await showScene(scene);
+    show("beetle.arcue");
+    return scene;
+  };
   if (modelSelect instanceof HTMLSelectElement) {
     modelSelect.append(new Option("Creature", ""));
     for (const name of Object.keys(SAMPLES)) modelSelect.append(new Option(`${name}.fbx`, name));
+    modelSelect.append(new Option("beetle.arcue", BEETLE));
     modelSelect.addEventListener("change", () => {
       const name = modelSelect.value;
-      void (isSampleName(name) ? loadSample(name) : showScene(creature));
+      void (name === BEETLE ? loadBeetle() : isSampleName(name) ? loadSample(name) : showScene(creature));
     });
   }
   let playing = false;
@@ -289,6 +302,7 @@ async function main(): Promise<void> {
     },
     buildCreature: (skin) => buildCreature(skin ? textures : { skin: null, badge: null }, detail),
     loadSample,
+    loadBeetle,
     showScene,
     modelPixels,
     albedoSpread,
@@ -297,7 +311,9 @@ async function main(): Promise<void> {
     withLods,
   };
   const requested = new URLSearchParams(location.search).get("model") ?? "";
-  if (isSampleName(requested)) {
+  if (requested === BEETLE) {
+    await loadBeetle();
+  } else if (isSampleName(requested)) {
     await loadSample(requested);
   } else {
     await viewport.setScene(creature);

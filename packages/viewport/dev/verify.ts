@@ -359,6 +359,102 @@ async function sampleChecks(page: Page, origin: Origin): Promise<void> {
   );
 }
 
+/**
+ * Composes the modular beetle from its files and checks that the shell attached to the Body bone rides it through
+ * the walk: it moves on screen, the Body bone drives it, and it keeps its distance to the bone at every frame.
+ */
+async function compositionChecks(page: Page): Promise<void> {
+  const result = await page.evaluate(async (size) => {
+    const harness = window.harness;
+    if (!harness) throw new Error("no harness");
+    const scene = await harness.loadBeetle();
+    const node = scene.nodes.find((candidate) => candidate.path === "beetle-shells.fbx//ShellRound");
+    const mesh = node?.mesh === null || !node ? undefined : scene.meshes[node.mesh];
+    if (!node || !mesh) return null;
+    let top = 0;
+    let height = Number.NEGATIVE_INFINITY;
+    for (let triangle = 0; triangle < mesh.indices.length / 3; triangle++) {
+      const y = [0, 1, 2].reduce((sum, k) => {
+        const source = mesh.sourceVertex[mesh.indices[triangle * 3 + k] ?? 0] ?? 0;
+        return sum + (mesh.restPositions[source * 3 + 1] ?? 0);
+      }, 0);
+      if (y > height) {
+        height = y;
+        top = triangle;
+      }
+    }
+    const vertices = [0, 1, 2].map((k) => mesh.sourceVertex[mesh.indices[top * 3 + k] ?? 0] ?? 0) as [
+      number,
+      number,
+      number,
+    ];
+    const pin = {
+      kind: "surface" as const,
+      mesh: node.path,
+      vertices,
+      weights: [0.34, 0.33, 0.33] as [number, number, number],
+    };
+    const clip = "Armature|Walk";
+    const fps = scene.clips.find((candidate) => candidate.name === clip)?.fps ?? 30;
+    harness.viewport.setClip(clip);
+    const frames = [];
+    for (const frame of [0, 8, 15, 23]) {
+      harness.viewport.setTime(frame / fps);
+      const context = harness.viewport.computeContext(pin, { kind: "frame", clip, frame });
+      const body = context.joints.find((joint) => joint.name === "Body")?.position ?? null;
+      const posed = context.centroid?.posed ?? null;
+      frames.push({
+        frame,
+        bone: context.bones[0]?.name ?? null,
+        posed,
+        reach: posed && body ? Math.hypot(posed[0] - body[0], posed[1] - body[1], posed[2] - body[2]) : null,
+        screen: harness.viewport.screenPosition(pin),
+      });
+    }
+    const camera = harness.viewport.getCamera();
+    const shot = await harness.screenshotBase64({ ...size, camera, time: { kind: "frame", clip, frame: 8 } });
+    harness.viewport.setClip(null);
+    return {
+      parts: scene.parts.map((part) => `${part.id}${part.hiddenByDefault ? " hidden" : ""}`),
+      warnings: scene.source.warnings.length,
+      frames,
+      shot,
+    };
+  }, SHOT);
+  if (result) save("29-beetle-walk-08", result.shot);
+  check("the modular beetle composes from its three files without warnings", result?.warnings === 0, result?.parts);
+  const frames = result?.frames ?? [];
+  const first = frames[0];
+  const travel = Math.max(
+    0,
+    ...frames.map((entry) =>
+      entry.posed && first?.posed
+        ? Math.hypot(entry.posed[0] - first.posed[0], entry.posed[1] - first.posed[1], entry.posed[2] - first.posed[2])
+        : 0,
+    ),
+  );
+  const reaches = frames.map((entry) => entry.reach ?? Number.NaN);
+  const screenTravel = Math.max(
+    0,
+    ...frames.map((entry) =>
+      entry.screen && first?.screen ? Math.hypot(entry.screen.x - first.screen.x, entry.screen.y - first.screen.y) : 0,
+    ),
+  );
+  check(
+    "the shell attached to the Body bone moves with it through Armature|Walk",
+    frames.length === 4 &&
+      frames.every((entry) => entry.bone === "Body") &&
+      travel > 0.005 &&
+      screenTravel > 2 &&
+      Math.max(...reaches) - Math.min(...reaches) < 0.0005,
+    {
+      travel: Math.round(travel * 10000) / 10000,
+      screenTravel: Math.round(screenTravel),
+      reaches: reaches.map((reach) => Math.round(reach * 10000) / 10000),
+    },
+  );
+}
+
 async function main(): Promise<void> {
   const server = await createServer({
     configFile: join(here, "vite.config.ts"),
@@ -844,6 +940,7 @@ async function main(): Promise<void> {
       { lost, restored, meanDifference: difference },
     );
     await sampleChecks(page, origin);
+    await compositionChecks(page);
     check("the page logged no errors", errors.length === 0, errors.slice(0, 5));
   } finally {
     await browser.close();
