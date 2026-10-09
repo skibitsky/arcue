@@ -52,4 +52,8 @@ export interface Texture {
   name: string;
   mimeType: string;
   bytes: Uint8Array;
+  /** The path the asset stores for the image, as written there. */
+  storedPath: string;
+  /** Where the image was read, relative to the asset's folder with "/" separators; null when the asset embeds it. */
+  foundPath: string | null;
 }

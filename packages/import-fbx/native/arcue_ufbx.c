@@ -46,8 +46,9 @@ typedef struct {
 
 typedef struct {
 	const char *code;
-	char *message;
+	const char *subject_kind;
 	char *subject;
+	char *detail;
 } Warning;
 
 typedef struct {
@@ -280,18 +281,19 @@ static BlobRef blob_write(Context *ctx, const void *data, size_t element_size, s
 	return ref;
 }
 
-static void add_warning(Context *ctx, const char *code, const char *message, ufbx_string subject) {
+static void add_warning(Context *ctx, const char *code, const char *subject_kind, ufbx_string subject, const char *detail) {
 	if (ctx->warning_count == ctx->warning_capacity) {
 		ctx->warning_capacity = ctx->warning_capacity > 0 ? ctx->warning_capacity * 2 : 8;
 		ctx->warnings = (Warning *)realloc_array(ctx->warnings, ctx->warning_capacity, sizeof(Warning));
 	}
 	Warning *warning = &ctx->warnings[ctx->warning_count++];
 	warning->code = code;
-	warning->message = copy_string(message, strlen(message));
+	warning->subject_kind = subject_kind;
 	warning->subject = subject.data ? copy_string(subject.data, subject.length) : NULL;
+	warning->detail = detail ? copy_string(detail, strlen(detail)) : NULL;
 }
 
-static const ufbx_string NO_SUBJECT = { NULL, 0 };
+static const ufbx_string THE_FILE = { NULL, 0 };
 
 static void matrix_to_floats(const ufbx_matrix *m, double out[16]) {
 	for (int c = 0; c < 4; c++) {
@@ -440,8 +442,7 @@ static void compute_rest_pose(Context *ctx) {
 		}
 	}
 	if (conflict) {
-		add_warning(ctx, "invalid-data",
-			"Meshes were bound to the skeleton in different poses. The rest pose follows the first mesh.", NO_SUBJECT);
+		add_warning(ctx, "bind-pose-mismatch", "file", THE_FILE, NULL);
 	}
 
 	ufbx_matrix root_world = scene->root_node->node_to_world;
@@ -471,6 +472,29 @@ static const char *node_kind(const Context *ctx, const ufbx_node *node) {
 	return "empty";
 }
 
+static ufbx_quat file_rotation(const ufbx_node *node) {
+	ufbx_vec3 zero = { 0.0, 0.0, 0.0 };
+	ufbx_vec3 euler = ufbx_find_vec3(&node->props, "Lcl Rotation", zero);
+	if (!node->use_rotation_space) return ufbx_euler_to_quat(euler, UFBX_ROTATION_ORDER_XYZ);
+	ufbx_quat pre = ufbx_euler_to_quat(ufbx_find_vec3(&node->props, "PreRotation", zero), UFBX_ROTATION_ORDER_XYZ);
+	ufbx_quat post = ufbx_euler_to_quat(ufbx_find_vec3(&node->props, "PostRotation", zero), UFBX_ROTATION_ORDER_XYZ);
+	ufbx_quat post_inverse = { -post.x, -post.y, -post.z, post.w };
+	ufbx_quat rotation = ufbx_euler_to_quat(euler, node->rotation_order);
+	return ufbx_quat_normalize(ufbx_quat_mul(ufbx_quat_mul(pre, rotation), post_inverse));
+}
+
+static void write_file_transform(Json *json, const ufbx_node *node) {
+	ufbx_quat r = file_rotation(node);
+	ufbx_vec3 one = { 1.0, 1.0, 1.0 };
+	ufbx_vec3 s = ufbx_find_vec3(&node->props, "Lcl Scaling", one);
+	double rotation[4] = { r.x, r.y, r.z, r.w };
+	double scale[3] = { s.x, s.y, s.z };
+	json_key(json, "fileRotation");
+	json_floats(json, rotation, 4);
+	json_key(json, "fileScale");
+	json_floats(json, scale, 3);
+}
+
 static void write_nodes(Context *ctx) {
 	Json *json = &ctx->json;
 	json_key(json, "nodes");
@@ -494,6 +518,7 @@ static void write_nodes(Context *ctx) {
 		json_floats(json, rotation, 4);
 		json_key(json, "scale");
 		json_floats(json, scale, 3);
+		write_file_transform(json, node);
 		json_key(json, "mesh");
 		int32_t mesh = ctx->mesh_index[node->typed_id];
 		if (mesh >= 0) {
@@ -762,7 +787,7 @@ static void build_geometry(Context *ctx, const ufbx_node *node, Geometry *geomet
 	memset(geometry, 0, sizeof(*geometry));
 	geometry->uv_count = mesh->uv_sets.count < MAX_UV_SETS ? mesh->uv_sets.count : MAX_UV_SETS;
 	if (mesh->uv_sets.count > MAX_UV_SETS) {
-		add_warning(ctx, "unsupported-feature", "Only the first 8 UV sets of the mesh are kept.", node->name);
+		add_warning(ctx, "too-many-uv-sets", "node", node->name, NULL);
 	}
 	geometry->positions = (float *)alloc_array(size_mul(capacity, 3), sizeof(float));
 	geometry->normals = (float *)alloc_array(size_mul(capacity, 3), sizeof(float));
@@ -929,7 +954,7 @@ static JointMap map_joints(Context *ctx, const ufbx_node *node, const ufbx_skin_
 	}
 	free(joint_of_node);
 	if (dropped) {
-		add_warning(ctx, "unsupported-feature", "The skin uses more than 65534 bones; the influences of the others are dropped.", node->name);
+		add_warning(ctx, "too-many-bones", "node", node->name, NULL);
 	}
 	return map;
 }
@@ -1046,7 +1071,7 @@ static ufbx_matrix write_skin(Context *ctx, const ufbx_node *node, const Geometr
 	}
 	for (size_t i = 0; i < mesh->skin_deformers.count; i++) {
 		if (mesh->skin_deformers.data[i] != skin && mesh->skin_deformers.data[i]->clusters.count > 0) {
-			add_warning(ctx, "unsupported-feature", "Only the first skin deformer of the mesh is used.", node->name);
+			add_warning(ctx, "extra-skins", "node", node->name, NULL);
 			break;
 		}
 	}
@@ -1060,7 +1085,7 @@ static ufbx_matrix write_skin(Context *ctx, const ufbx_node *node, const Geometr
 		map.joints[map.joint_count] = (uint32_t)ctx->node_index[node->typed_id];
 		write_matrix_floats(&unbind, map.inverse_bind + map.joint_count * 16);
 		map.joint_count++;
-		add_warning(ctx, "invalid-data", "Some vertices have no skin weights. They follow the mesh node.", node->name);
+		add_warning(ctx, "unweighted-vertices", "node", node->name, NULL);
 	}
 
 	double bind_values[16];
@@ -1127,7 +1152,7 @@ static void write_morph_targets(Context *ctx, const ufbx_node *node, const Geome
 		}
 	}
 	if (in_betweens) {
-		add_warning(ctx, "unsupported-feature", "In-between shape keys are not supported; each uses its final shape.", node->name);
+		add_warning(ctx, "inbetween-shapes", "node", node->name, NULL);
 	}
 
 	float *dense_positions = (float *)alloc_array(size_mul(source_count, 3), sizeof(float));
@@ -1564,10 +1589,8 @@ static void write_tracks(Context *ctx, const ufbx_anim_stack *stack) {
 		for (size_t m = 0; m < ctx->mesh_count; m++) write_weights_track(ctx, bake, &ctx->meshes[m]);
 	} else {
 		char reason[400];
-		char message[512];
 		ufbx_format_error(reason, sizeof(reason), &error);
-		snprintf(message, sizeof(message), "The clip could not be sampled: %s", reason);
-		add_warning(ctx, "invalid-data", message, stack->name);
+		add_warning(ctx, "clip-not-sampled", "clip", stack->name, reason);
 	}
 	json_close(&ctx->json, "]");
 	ufbx_free_baked_anim(bake);
@@ -1661,7 +1684,7 @@ static void write_space(Json *json, const ufbx_scene *scene) {
 static void write_warnings(Context *ctx) {
 	const ufbx_metadata *metadata = &ctx->scene->metadata;
 	if (metadata->mirror_axis != UFBX_MIRROR_AXIS_NONE) {
-		add_warning(ctx, "other", "The file uses left-handed axes; Arcue mirrored it along X to make it right-handed.", NO_SUBJECT);
+		add_warning(ctx, "left-handed-axes", "file", THE_FILE, NULL);
 	}
 	for (size_t i = 0; i < metadata->warnings.count; i++) {
 		const ufbx_warning *warning = &metadata->warnings.data[i];
@@ -1672,7 +1695,7 @@ static void write_warnings(Context *ctx) {
 		} else {
 			snprintf(message, sizeof(message), "%.*s", length, warning->description.data);
 		}
-		add_warning(ctx, "invalid-data", message, NO_SUBJECT);
+		add_warning(ctx, "invalid-data", "file", THE_FILE, message);
 	}
 
 	Json *json = &ctx->json;
@@ -1683,11 +1706,17 @@ static void write_warnings(Context *ctx) {
 		json_open(json, "{");
 		json_key(json, "code");
 		json_cstring(json, warning->code);
-		json_key(json, "message");
-		json_cstring(json, warning->message);
+		json_key(json, "subjectKind");
+		json_cstring(json, warning->subject_kind);
 		json_key(json, "subject");
 		if (warning->subject) {
 			json_cstring(json, warning->subject);
+		} else {
+			json_null(json);
+		}
+		json_key(json, "detail");
+		if (warning->detail) {
+			json_cstring(json, warning->detail);
 		} else {
 			json_null(json);
 		}
@@ -1728,8 +1757,8 @@ static uint8_t *error_result(const char *message) {
 
 static void free_context(Context *ctx) {
 	for (size_t i = 0; i < ctx->warning_count; i++) {
-		free(ctx->warnings[i].message);
 		free(ctx->warnings[i].subject);
+		free(ctx->warnings[i].detail);
 	}
 	free(ctx->warnings);
 	for (size_t i = 0; i < ctx->skeleton_count; i++) {

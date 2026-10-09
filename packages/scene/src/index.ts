@@ -5,8 +5,8 @@ export type { TopologyFingerprint, TopologyInput } from "./fingerprint";
 export { sameTopology, topologyFingerprint } from "./fingerprint";
 export type { Barycentric, NearestVertex, SurfacePoint } from "./geometry";
 export { closestPointOnTriangle, closestSurfacePoint, nearestVertex, sourceIndices } from "./geometry";
-export type { Importer, ImportRequest } from "./importer";
-export { findImporter, referencedFileCandidates } from "./importer";
+export type { FoundFile, Importer, ImportRequest, StoredPath } from "./importer";
+export { findImporter, parseStoredPath } from "./importer";
 export type { AlphaMode, Material, Texture, TextureRef, UvTransform, WrapMode } from "./material";
 export type { Bounds, Quat, Vec3, Vec4 } from "./math";
 export { boundsOfPoints } from "./math";
@@ -23,12 +23,15 @@ export type {
   Exporter,
   ImportWarning,
   ImportWarningCode,
+  ImportWarningSeverity,
+  ImportWarningSubject,
+  ImportWarningSubjectKind,
   SourceFormat,
   SourceInfo,
   Space,
   SpaceConversion,
 } from "./source";
-export { SCENE_SPACE } from "./source";
+export { importWarning, importWarningSeverity, SCENE_SPACE } from "./source";
 export {
   frameCountFor,
   frameToSeconds,

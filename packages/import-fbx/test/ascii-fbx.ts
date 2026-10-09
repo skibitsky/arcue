@@ -1,6 +1,17 @@
 const FRAME = 46186158000 / 30;
 
-function asciiFbx(objects: string, connections: string, { coordAxisSign = 1 } = {}): string {
+interface FileSettings {
+  coordAxisSign?: number;
+  /** 1 for Y up, 2 for Z up. */
+  upAxis?: 1 | 2;
+  unitScaleFactor?: number;
+}
+
+function asciiFbx(
+  objects: string,
+  connections: string,
+  { coordAxisSign = 1, upAxis = 1, unitScaleFactor = 100 }: FileSettings = {},
+): string {
   return `; FBX 7.4.0 project file
 FBXHeaderExtension:  {
 	FBXHeaderVersion: 1003
@@ -9,13 +20,13 @@ FBXHeaderExtension:  {
 GlobalSettings:  {
 	Version: 1000
 	Properties70:  {
-		P: "UpAxis", "int", "Integer", "",1
+		P: "UpAxis", "int", "Integer", "",${upAxis}
 		P: "UpAxisSign", "int", "Integer", "",1
-		P: "FrontAxis", "int", "Integer", "",2
-		P: "FrontAxisSign", "int", "Integer", "",1
+		P: "FrontAxis", "int", "Integer", "",${upAxis === 1 ? 2 : 1}
+		P: "FrontAxisSign", "int", "Integer", "",${upAxis === 1 ? 1 : -1}
 		P: "CoordAxis", "int", "Integer", "",0
 		P: "CoordAxisSign", "int", "Integer", "",${coordAxisSign}
-		P: "UnitScaleFactor", "double", "Number", "",100
+		P: "UnitScaleFactor", "double", "Number", "",${unitScaleFactor}
 		P: "TimeMode", "enum", "", "",6
 	}
 }
@@ -334,3 +345,90 @@ ${TRIANGLE_MODEL}
 
 /** The eight-byte PNG signature, enough for the importer to tell the image type. */
 export const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+
+/** The triangle's node with the given local transform properties, such as `P: "Lcl Scaling", ...`. */
+function transformedTriangle(properties: string): string {
+  return `${TRIANGLE_GEOMETRY}
+	Model: 2000, "Model::Tri", "Mesh" {
+		Version: 232
+		Properties70:  {
+${properties}
+		}
+	}`;
+}
+
+/** A meter file whose root node is scaled by 100, as Blender writes it with "All Local" in a meter scene. */
+export const ROOT_SCALE_FBX = asciiFbx(
+  transformedTriangle(`			P: "Lcl Scaling", "Lcl Scaling", "", "A",100,100,100`),
+  TRIANGLE_CONNECTIONS,
+);
+
+/** A centimeter file whose root node is scaled by 100, which only turns meter-sized content into centimeters. */
+export const CENTIMETER_ROOT_SCALE_FBX = asciiFbx(
+  transformedTriangle(`			P: "Lcl Scaling", "Lcl Scaling", "", "A",100,100,100`),
+  TRIANGLE_CONNECTIONS,
+  { unitScaleFactor: 1 },
+);
+
+/** A Z-up file whose root node is still rotated -90° about X, so its content lies on its back. */
+export const ROOT_ROTATION_FBX = asciiFbx(
+  transformedTriangle(`			P: "Lcl Rotation", "Lcl Rotation", "", "A",-90,0,0`),
+  TRIANGLE_CONNECTIONS,
+  { upAxis: 2 },
+);
+
+/** A Y-up file whose root node is rotated -90° about X to stand Z-up content up, as Blender writes it. */
+export const Y_UP_ROOT_ROTATION_FBX = asciiFbx(
+  transformedTriangle(`			P: "Lcl Rotation", "Lcl Rotation", "", "A",-90,0,0`),
+  TRIANGLE_CONNECTIONS,
+);
+
+/** A meter file with a "Rig" root holding an "Armature" scaled by 0.01, whose child "Hips" is a bone. */
+export const ARMATURE_SCALE_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Model: 6000, "Model::Rig", "Null" {
+		Version: 232
+	}
+	Model: 6001, "Model::Armature", "Null" {
+		Version: 232
+		Properties70:  {
+			P: "Lcl Scaling", "Lcl Scaling", "", "A",0.01,0.01,0.01
+		}
+	}
+	NodeAttribute: 6002, "NodeAttribute::Hips", "LimbNode" {
+		TypeFlags: "Skeleton"
+	}
+	Model: 6003, "Model::Hips", "LimbNode" {
+		Version: 232
+		Properties70:  {
+			P: "Lcl Scaling", "Lcl Scaling", "", "A",0.01,0.01,0.01
+		}
+	}`,
+  `	C: "OO",6000,0
+	C: "OO",6001,6000
+	C: "OO",6002,6003
+	C: "OO",6003,6001
+	C: "OO",2000,6000
+	C: "OO",1000,2000`,
+);
+
+/** The triangle with a texture whose only stored path is absolute, from the exporting machine. */
+export const ABSOLUTE_TEXTURE_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Material: 3000, "Material::Stone", "" {
+		Version: 102
+		ShadingModel: "lambert"
+	}
+	Texture: 4000, "Texture::Stone", "" {
+		Type: "TextureVideoClip"
+		Version: 202
+		TextureName: "Texture::Stone"
+		FileName: "/private/tmp/striker-staging/StoneStriker-BaseColor.png"
+		RelativeFilename: ""
+	}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",3000,2000
+	C: "OP",4000,3000, "DiffuseColor"`,
+);

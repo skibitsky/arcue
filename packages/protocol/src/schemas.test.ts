@@ -20,6 +20,7 @@ import {
 } from "./anchors";
 import { commands, isCommandName } from "./commands";
 import { isEventName } from "./events";
+import { importWarningSchema } from "./import-warning";
 import { isQueryName } from "./queries";
 import type { ReviewFile } from "./review";
 import { reviewFileSchema } from "./review";
@@ -381,5 +382,25 @@ describe("command definitions", () => {
     expect(isQueryName("review.get")).toBe(true);
     expect(isQueryName("viewState.get")).toBe(true);
     expect(isEventName("review.changed")).toBe(true);
+  });
+});
+
+describe("importWarningSchema", () => {
+  it("accepts a warning with a code, severity, subject and message", () => {
+    const warning = {
+      code: "texture-not-found",
+      severity: "error",
+      subject: { kind: "texture", name: "StoneStriker-BaseColor.png" },
+      message: "Texture not found: StoneStriker-BaseColor.png",
+    };
+    expect(importWarningSchema.parse(warning)).toEqual(warning);
+  });
+
+  it("rejects unknown codes and subjects", () => {
+    const base = { severity: "warning", message: "Root scale of 100 on Armature" };
+    expect(
+      importWarningSchema.safeParse({ ...base, code: "other", subject: { kind: "node", name: "A" } }).success,
+    ).toBe(false);
+    expect(importWarningSchema.safeParse({ ...base, code: "root-scale", subject: "Armature" }).success).toBe(false);
   });
 });

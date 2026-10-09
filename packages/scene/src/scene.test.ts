@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Importer } from "./importer";
-import { findImporter, referencedFileCandidates } from "./importer";
+import { findImporter, parseStoredPath } from "./importer";
 import { boundsOfPoints } from "./math";
 import type { SceneDescription } from "./scene";
 import { collectTransferables } from "./scene";
@@ -42,7 +42,15 @@ function sceneWithSharedBuffer(): { scene: SceneDescription; shared: ArrayBuffer
     ],
     skeletons: [],
     materials: [],
-    textures: [{ name: "albedo.png", mimeType: "image/png", bytes: new Uint8Array(8) }],
+    textures: [
+      {
+        name: "albedo",
+        mimeType: "image/png",
+        bytes: new Uint8Array(8),
+        storedPath: "albedo.png",
+        foundPath: "albedo.png",
+      },
+    ],
     clips: [],
     bounds: { min: [0, 0, 0], max: [0, 0, 0] },
   };
@@ -87,24 +95,26 @@ describe("findImporter", () => {
   });
 });
 
-describe("referencedFileCandidates", () => {
-  it("tries a relative path first, then the file name beside the asset and in its .fbm folder", () => {
-    expect(referencedFileCandidates("textures\\rock.png", "Rock.fbx")).toEqual([
-      "textures/rock.png",
-      "rock.png",
-      "Rock.fbm/rock.png",
-    ]);
+describe("parseStoredPath", () => {
+  it("keeps a relative path with forward slashes", () => {
+    expect(parseStoredPath("textures\\rock.png")).toEqual({
+      name: "rock.png",
+      relative: "textures/rock.png",
+      absolute: false,
+    });
   });
 
-  it("drops absolute paths from the exporting machine", () => {
-    expect(referencedFileCandidates("C:\\Users\\artist\\rock.png", "Rock.fbx")).toEqual([
-      "rock.png",
-      "Rock.fbm/rock.png",
-    ]);
-    expect(referencedFileCandidates("/home/artist/rock.png", "Rock.fbx")).toEqual(["rock.png", "Rock.fbm/rock.png"]);
+  it("marks paths from the exporting machine as absolute", () => {
+    expect(parseStoredPath("C:\\Users\\artist\\rock.png")).toEqual({
+      name: "rock.png",
+      relative: null,
+      absolute: true,
+    });
+    expect(parseStoredPath("/home/artist/rock.png")).toEqual({ name: "rock.png", relative: null, absolute: true });
+    expect(parseStoredPath("\\\\server\\share\\rock.png").absolute).toBe(true);
   });
 
-  it("returns nothing for an empty path", () => {
-    expect(referencedFileCandidates("", "Rock.fbx")).toEqual([]);
+  it("returns no name and no relative path for an empty path", () => {
+    expect(parseStoredPath("")).toEqual({ name: "", relative: null, absolute: false });
   });
 });

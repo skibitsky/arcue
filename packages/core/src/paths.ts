@@ -71,6 +71,16 @@ export function pathInside(root: string, path: string): string | null {
   return target.startsWith(prefix) ? target.slice(prefix.length) : null;
 }
 
+/** The path from folder `from` to `to` with "/" separators, such as "../Textures/Rock.png". Both share a root. */
+export function relativePath(from: string, to: string): string {
+  const base = split(from);
+  const target = split(to);
+  if (base.root !== target.root) throw new ArcueError("invalid-input", `"${to}" is on another drive than "${from}".`);
+  let common = 0;
+  while (common < base.parts.length && base.parts[common] === target.parts[common]) common++;
+  return [...base.parts.slice(common).map(() => ".."), ...target.parts.slice(common)].join("/");
+}
+
 /** Walks up from `path` to the nearest folder that contains ".git", a folder or a worktree's file. */
 export async function findGitRoot(path: string, exists: (path: string) => Promise<boolean>): Promise<string | null> {
   let current = normalizePath(path);

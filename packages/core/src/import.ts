@@ -1,24 +1,16 @@
 import type { ImportRunInput } from "@arcue/protocol";
-import { ArcueError, createPeer, importReadFileInputSchema, importRequests } from "@arcue/protocol";
+import {
+  ArcueError,
+  createPeer,
+  importFindFileInputSchema,
+  importReadFileInputSchema,
+  importRequests,
+} from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
+import { createFileSearch, isReadableImage } from "./file-search";
 import { insideWithoutLinks } from "./links";
 import { basename, dirname, joinPath, pathInside } from "./paths";
 import type { Platform } from "./platform";
-
-/** Extensions of the files an import worker may read, such as external textures. */
-export const readableImageExtensions: readonly string[] = [
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".tga",
-  ".tif",
-  ".tiff",
-  ".bmp",
-  ".dds",
-  ".exr",
-  ".hdr",
-  ".webp",
-];
 
 /**
  * Reads a file an asset references, answering an import worker's "import.readFile". The path is relative to the
@@ -36,8 +28,7 @@ export async function readReferencedFile(
   if (slashed === "" || slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
   const resolved = joinPath(dirname(assetPath), slashed);
   if (!pathInside(readRoot, resolved)) return null;
-  const name = basename(resolved).toLowerCase();
-  if (!readableImageExtensions.some((extension) => name.endsWith(extension))) return null;
+  if (!isReadableImage(basename(resolved))) return null;
   if (!(await insideWithoutLinks(platform, readRoot, resolved))) return null;
   const stat = await platform.stat(resolved);
   return stat?.kind === "file" ? platform.readFile(resolved) : null;
@@ -56,7 +47,7 @@ export interface ImportAssetOptions {
 /**
  * Parses an asset's bytes in a fresh import worker. The caller reads the file once and passes the bytes, so the
  * version it hashes is the version that gets parsed. The bytes' buffer may move to the worker. The worker reaches
- * other files only through `readReferencedFile`.
+ * other files only through `readReferencedFile` and a `createFileSearch` that lives as long as the import.
  */
 export async function importAsset(
   platform: Platform,
@@ -65,6 +56,7 @@ export async function importAsset(
   options: ImportAssetOptions = {},
 ): Promise<SceneDescription> {
   const readRoot = options.readRoot ?? (await platform.findWorkspaceRoot(assetPath)) ?? dirname(assetPath);
+  const search = createFileSearch(platform, assetPath, readRoot);
   const worker = platform.startImportWorker();
   const peer = createPeer(worker.endpoint, {
     requestTimeout:
@@ -72,9 +64,12 @@ export async function importAsset(
         ? undefined
         : { ms: options.timeoutMs, setTimer: (delay, callback) => platform.clock.setTimer(delay, callback) },
     handleRequest: ({ name, input }) => {
-      if (name !== importRequests.readFile) throw new ArcueError("unknown-command", `The core has no "${name}".`);
-      const { relativePath } = importReadFileInputSchema.parse(input);
-      return readReferencedFile(platform, assetPath, relativePath, readRoot);
+      if (name === importRequests.readFile) {
+        const { relativePath } = importReadFileInputSchema.parse(input);
+        return readReferencedFile(platform, assetPath, relativePath, readRoot);
+      }
+      if (name === importRequests.findFile) return search.find(importFindFileInputSchema.parse(input).storedPath);
+      throw new ArcueError("unknown-command", `The core has no "${name}".`);
     },
   });
   try {

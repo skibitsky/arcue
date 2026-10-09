@@ -59,7 +59,8 @@ export const fakeImporter: Importer = {
     const scene = fakeScene(spec);
     for (const path of spec.textures ?? []) {
       const texture = await readFile(path);
-      if (texture) scene.textures.push({ name: path, mimeType: "image/png", bytes: texture });
+      if (texture)
+        scene.textures.push({ name: path, mimeType: "image/png", bytes: texture, storedPath: path, foundPath: path });
     }
     return scene;
   },

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { SceneDescription } from "@arcue/scene";
+import type { FoundFile, SceneDescription } from "@arcue/scene";
 import { fbxImporter } from "../src/importer";
 
 export const samplesDir = fileURLToPath(new URL("../../../samples/", import.meta.url));
@@ -45,7 +45,12 @@ export function readSample(file: string): Uint8Array {
 
 export function importSample(
   file: string,
-  readFile: (relativePath: string) => Promise<Uint8Array | null> = () => Promise.resolve(null),
+  findFile: (storedPath: string) => Promise<FoundFile | null> = () => Promise.resolve(null),
 ): Promise<SceneDescription> {
-  return fbxImporter.import({ fileName: file, bytes: readSample(file), readFile });
+  return fbxImporter.import({
+    fileName: file,
+    bytes: readSample(file),
+    readFile: () => Promise.resolve(null),
+    findFile,
+  });
 }
