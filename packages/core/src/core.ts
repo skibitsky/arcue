@@ -46,10 +46,10 @@ import {
 import type { AssetFiles, ReadFile } from "./composition-load";
 import { buildAssetScene, readAssetFiles } from "./composition-load";
 import { readableImageExtensions } from "./file-search";
-import { contentHash, versionIdOf } from "./hash";
+import { versionIdOf } from "./hash";
 import type { CompositionEdit } from "./history";
 import { applySnapshot, editBetween, withDismissedWarnings } from "./history";
-import { readUnityGuid } from "./identity";
+import { fileIdentity, filesMatching } from "./identity";
 import { importAsset } from "./import";
 import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
@@ -63,7 +63,14 @@ import { Reanchorer } from "./reanchor";
 import type { CallContext } from "./registry";
 import { CommandRegistry } from "./registry";
 import type { EarlierReview } from "./relink";
-import { fileIdentity, findEarlierReviews, matchByIdentity, matchByStructure, rankCandidates } from "./relink";
+import {
+  findEarlierReviews,
+  matchByIdentity,
+  matchByStructure,
+  rankCandidates,
+  reviewedModelGone,
+  volumeThere,
+} from "./relink";
 import { isUntouched, moveReview, relabelMembers } from "./review-move";
 import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
@@ -122,10 +129,16 @@ export interface ArcueCoreOptions {
 }
 
 const VIEW_SHOW_ASSET = "view.showAsset";
+const VIEW_RELEASE_ASSET = "view.releaseAsset";
 
 /** The most files in a missing model's folder that the core checks for the model under a new name. */
 const MAX_RENAME_CANDIDATES = 256;
-const VIEW_RELEASE_ASSET = "view.releaseAsset";
+
+/**
+ * How long a model's file must stay missing before the core looks for it under a new name or says it is not found,
+ * so a slow export that removes the file before writing it again is never taken for a rename.
+ */
+const MISSING_MODEL_MS = 2000;
 
 /**
  * All review state, behind the command registry. Hosts start it with a platform and connect each window and bridge
@@ -434,8 +447,9 @@ export class ArcueCore {
   /**
    * For a file without a review: finds the reviews whose model is gone and, when exactly one has a version with the
    * file's bytes or the file's Unity GUID, moves it to the file's review folder. Several such reviews become candidates
-   * to offer; with none, the reviews are kept to compare meshes with once the file loads. A failure leaves the file
-   * without a review rather than failing the open.
+   * to offer, and so does a single one when the search stopped at a bound or the move was refused; with none, the
+   * reviews are kept to compare meshes with once the file loads. A failure leaves the file without a review rather
+   * than failing the open.
    */
   async #earlierReview(
     location: ReviewLocation,
@@ -446,15 +460,18 @@ export class ArcueCore {
     try {
       if ((await this.#platform.stat(reviewFilePath(location))) !== null) return none;
       const open = new Set([...this.#assets.values()].map((asset) => asset.location.folder));
-      const earlier = await findEarlierReviews(this.#platform, location, open);
+      const { reviews: earlier, complete } = await findEarlierReviews(this.#platform, location, open);
       if (earlier.length === 0) return none;
-      const guid = await readUnityGuid(this.#platform, path);
-      const matches = await matchByIdentity(earlier, fileIdentity(this.#platform, path, size, guid));
+      const matches = await matchByIdentity(earlier, fileIdentity(this.#platform, path, size));
       const [only] = matches;
-      if (only && matches.length === 1) {
+      if (only && matches.length === 1 && complete) {
         const { location: from, model } = only.earlier;
-        await moveReview(this.#platform, { from, fromModel: model, to: location, toModel: path });
-        return { ...none, moved: model };
+        try {
+          await moveReview(this.#platform, { from, fromModel: model, to: location, toModel: path });
+          return { ...none, moved: model };
+        } catch (error) {
+          if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
+        }
       }
       return { ...none, candidates: offered(matches), unmatched: matches.length === 0 ? earlier : [] };
     } catch (error) {
@@ -478,32 +495,44 @@ export class ArcueCore {
 
   /**
    * Moves the review of an earlier path of the asset's model onto the asset, as `review.relink` asks, replacing the
-   * review that opening the asset wrote while that holds nothing but versions. The earlier model must be gone and its
-   * review folder inside the asset's reviews root, and the asset reloads to re-anchor the comments.
+   * review that opening the asset wrote while that holds nothing but versions. The earlier model must be gone under
+   * every path its review folder stands for, and its review folder inside the asset's reviews root. The checks and
+   * the move run with the opens, so no tab opens that review meanwhile, and the asset reloads to re-anchor the comments.
    */
   #relinkReview(assetId: string, given: string): Promise<void> {
     const asset = this.#asset(assetId);
     return this.#inCompositionLine(asset, async () => {
       const from = normalizePath(given);
-      const earlier = reviewLocationIn(this.#platform.appDataDir, asset.location.workspaceRoot, from);
-      if (earlier === null || earlier.root !== asset.location.root || from === asset.path) {
-        throw new ArcueError("invalid-input", `${given} is not an earlier path of ${asset.name} in the same reviews.`);
-      }
-      if (await this.#platform.exists(from)) {
-        throw new ArcueError("conflict", `${basename(from)} still exists, so its review stays with it.`);
-      }
-      if ([...this.#assets.values()].some((open) => open.location.folder === earlier.folder)) {
-        throw new ArcueError("conflict", `The review of ${basename(from)} is open in a tab.`);
-      }
-      await asset.session.moveTo(asset.location, () =>
-        moveReview(this.#platform, {
-          from: earlier,
-          fromModel: from,
-          to: asset.location,
-          toModel: asset.path,
-          replaceUntouched: true,
-        }),
-      );
+      await this.#opening.run(async () => {
+        const earlier = reviewLocationIn(this.#platform.appDataDir, asset.location.workspaceRoot, from);
+        if (earlier === null || earlier.folder === asset.location.folder) {
+          throw new ArcueError(
+            "invalid-input",
+            `${given} is not an earlier path of ${asset.name} in the same reviews.`,
+          );
+        }
+        if (!(await volumeThere(this.#platform, earlier, from))) {
+          throw new ArcueError(
+            "unavailable",
+            `The drive of ${basename(from)} is not connected, so its review stays where it is.`,
+          );
+        }
+        if (!(await reviewedModelGone(this.#platform, earlier, from))) {
+          throw new ArcueError("conflict", `${basename(from)} still exists, so its review stays with it.`);
+        }
+        if ([...this.#assets.values()].some((open) => open.location.folder === earlier.folder)) {
+          throw new ArcueError("conflict", `The review of ${basename(from)} is open in a tab.`);
+        }
+        await asset.session.moveTo(asset.location, () =>
+          moveReview(this.#platform, {
+            from: earlier,
+            fromModel: from,
+            to: asset.location,
+            toModel: asset.path,
+            replaceUntouched: true,
+          }),
+        );
+      });
       asset.candidates = [];
       asset.earlier = [];
       this.registry.emit("review.relinked", { assetId: asset.id, from, automatic: false });
@@ -597,24 +626,27 @@ export class ArcueCore {
 
   /**
    * Parses the files once two checks a short interval apart see the same size and modification time for the model
-   * and every file of its composition, so an export that writes several files reloads once.
+   * and every file of its composition, so an export that writes several files reloads once. A model that stays
+   * missing for `MISSING_MODEL_MS` is looked for under a new name.
    */
   async #checkStable(
     asset: OpenAsset,
     check: number,
     previous: ReadonlyMap<string, FileStat | null> | undefined,
+    missingSince: number | null = null,
   ): Promise<void> {
     const paths = [asset.path, ...asset.compositionWatchers.keys()];
     const stats = await Promise.all(paths.map((path) => this.#platform.stat(path)));
     const current = new Map(paths.map((path, index) => [path, stats[index] ?? null]));
     if (asset.closed || check !== asset.stabilityCheck) return;
+    const model = current.get(asset.path) ?? null;
+    const now = this.#platform.clock.now();
+    const missing = model === null ? (missingSince ?? now) : null;
+    if (missing !== null && now - missing >= MISSING_MODEL_MS) {
+      void this.#track(this.#modelGone(asset));
+      return;
+    }
     if (previous !== undefined) {
-      const model = current.get(asset.path) ?? null;
-      const before = previous.get(asset.path) ?? null;
-      if (model === null && before === null) {
-        void this.#track(this.#modelGone(asset));
-        return;
-      }
       const settled = paths.every(
         (path) => previous.has(path) && sameStat(current.get(path) ?? null, previous.get(path) ?? null),
       );
@@ -624,7 +656,7 @@ export class ArcueCore {
       }
     }
     asset.cancelStabilityCheck = this.#platform.clock.setTimer(this.#stabilityIntervalMs, () => {
-      void this.#track(this.#checkStable(asset, check, current));
+      void this.#track(this.#checkStable(asset, check, current, missing));
     });
   }
 
@@ -646,6 +678,8 @@ export class ArcueCore {
   /**
    * Writes each lost file found under a new name into the composition file at its new path, renames the review's ids
    * for it, and reloads. A composition file that changed meanwhile keeps any entry that no longer names the old path.
+   * The composition file is written as the review is saved, so a retry after another program changed the review
+   * computes both again.
    */
   async #relinkLostFiles(asset: OpenAsset, lost: readonly LostFile[], taken: ReadonlySet<string>): Promise<void> {
     const moved = await findLostFiles(this.#platform, asset.path, asset.readRoot, lost, taken);
@@ -653,24 +687,28 @@ export class ArcueCore {
     const changed = await this.#inCompositionLine(asset, () =>
       asset.session.run<boolean>(async (review) => {
         await this.#checkCompositionPath(asset);
-        const found = await readComposition(this.#platform, asset.compositionPath, "conflict");
+        const path = asset.compositionPath;
+        const found = await readComposition(this.#platform, path, "conflict");
         if (!found) return { next: null, result: false };
         const { composition, labels } = withMovedFiles(found.composition, dirname(asset.path), moved);
         const text = serializeComposition(composition);
         if (text === serializeComposition(found.composition)) return { next: null, result: false };
-        await prepareArcueFolder(this.#platform, asset.location);
-        await this.#platform.writeFileAtomic(asset.compositionPath, text);
-        return { next: relabelMembers(review, labels), result: true };
+        return {
+          next: relabelMembers(review, labels),
+          result: true,
+          prepare: () => this.#platform.writeFileAtomic(path, text),
+          rollback: () => this.#platform.writeFileAtomic(path, found.text),
+        };
       }),
     );
     if (changed) await this.#load(asset).catch(() => undefined);
   }
 
-  /** Loads the asset's files, and with `force` records and re-anchors even a version that is already on screen. */
   /**
-   * The model stayed missing across two checks, so it was not replaced by an export. When exactly one file in its
+   * The model stayed missing for `MISSING_MODEL_MS`, so an export did not replace it. When exactly one file in its
    * folder has the bytes of the version on screen or the model's Unity GUID, the asset follows that file; otherwise
-   * the asset reports "model-not-found".
+   * the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a refused move are
+   * expected, so they only end the search.
    */
   async #modelGone(asset: OpenAsset): Promise<void> {
     try {
@@ -680,7 +718,9 @@ export class ArcueCore {
         return;
       }
     } catch (error) {
-      if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
+      if (!(error instanceof ArcueError && (error.code === "conflict" || error.code === "not-found"))) {
+        this.#onError(error);
+      }
     }
     if (asset.closed || asset.missing || (await this.#platform.exists(asset.path))) return;
     asset.missing = true;
@@ -688,91 +728,107 @@ export class ArcueCore {
   }
 
   /**
-   * The one file in the model's folder, with the model's extension, that has the size and full hash of the file the
-   * version on screen was read from, or the model's Unity GUID in its `.meta` file. Null when there is none or more
-   * than one. It checks at most `MAX_RENAME_CANDIDATES` files, hashes only those of the same size, and skips files
-   * other tabs show.
+   * The one file in the model's folder with the model's extension and a name the folder did not have when the model
+   * last loaded, that has the size and full hash of the file the version on screen was read from, or the model's
+   * Unity GUID in its `.meta` file. A rename makes a new name, while a backup copy that was already there never
+   * matches. Null when there is none or more than one, or before the folder's names are known. It checks at most
+   * `MAX_RENAME_CANDIDATES` files, compares sizes before it hashes, and skips files other tabs show.
    */
   async #findRenamed(asset: OpenAsset): Promise<string | null> {
-    const { identity } = asset;
+    const { identity, siblings } = asset;
     const guid = asset.session.review.asset.guid ?? null;
-    if (identity === null && guid === null) return null;
+    if (siblings === null || (identity === null && guid === null)) return null;
     const folder = dirname(asset.path);
-    const extension = asset.name.slice(asset.name.lastIndexOf(".")).toLowerCase();
+    const extension = extensionOf(asset.name);
     const open = new Set([...this.#assets.values()].map((other) => other.path));
-    const entries = await this.#platform.list(folder);
-    const names = new Set(entries.map((entry) => entry.name));
-    const files = entries.filter((entry) => entry.kind === "file" && hasExtension(entry.name, [extension]));
-    const found: string[] = [];
-    for (const entry of files.slice(0, MAX_RENAME_CANDIDATES)) {
-      const path = joinPath(folder, entry.name);
-      if (open.has(path)) continue;
-      const sameBytes =
-        identity !== null &&
-        (await this.#platform.stat(path))?.size === identity.size &&
-        contentHash(await this.#platform.readFile(path)) === identity.hash;
-      const sameGuid =
-        !sameBytes &&
-        guid !== null &&
-        names.has(`${entry.name}.meta`) &&
-        (await readUnityGuid(this.#platform, path)) === guid;
-      if (sameBytes || sameGuid) found.push(path);
-    }
+    const candidates = (await this.#platform.list(folder))
+      .filter((entry) => entry.kind === "file" && hasExtension(entry.name, [extension]) && !siblings.has(entry.name))
+      .map((entry) => joinPath(folder, entry.name))
+      .filter((path) => !open.has(path))
+      .slice(0, MAX_RENAME_CANDIDATES);
+    const found = await filesMatching(this.#platform, candidates, identity === null ? [] : [identity], guid);
     const [only] = found;
     return found.length === 1 && only !== undefined ? only : null;
   }
 
-  /** Points an asset whose model is gone at a file the caller chose, as `asset.relink` asks. */
-  async #relinkAsset(assetId: string, given: string): Promise<void> {
+  /** Points an asset whose model is gone at a model file the caller chose, as `asset.relink` asks. */
+  #relinkAsset(assetId: string, given: string): Promise<void> {
     const asset = this.#asset(assetId);
     const path = normalizePath(given);
     if (path === asset.path) throw new ArcueError("invalid-input", `${asset.name} is already at ${path}.`);
-    if (await this.#platform.exists(asset.path)) {
-      throw new ArcueError("conflict", `${asset.name} still exists, so its review stays with it.`);
+    if (!hasExtension(path, MODEL_EXTENSIONS)) {
+      throw new ArcueError("invalid-input", `${basename(path)} is not one of ${MODEL_EXTENSIONS.join(", ")}.`);
     }
-    if ((await this.#platform.stat(path))?.kind !== "file")
-      throw new ArcueError("not-found", `${path} does not exist.`);
-    if ([...this.#assets.values()].some((other) => other.path === path && !other.closing)) {
-      throw new ArcueError("conflict", `${basename(path)} is open in another tab.`);
-    }
-    await this.#follow(asset, path, false);
+    return this.#follow(asset, path, false);
   }
 
   /**
-   * Points the asset at its model's new path. It moves the review folder to the new path's place, which refuses a file
-   * that has a review of its own, keeps the asset's id, watches the new files and reloads. Windows retitle the tab on
-   * "asset.updated" and learn of the move from "review.relinked".
+   * Points the asset at its model's new path, which must be in the same reviews root. The checks and the move of the
+   * review folder run with the opens, so no other tab opens the new path meanwhile. The move refuses a file that has
+   * a review of its own, except, when the person chose the file, a review that holds nothing but versions. The asset
+   * keeps its id, watches the new files and reloads. Windows retitle the tab on "asset.updated" and learn of the move
+   * from "review.relinked". An automatic follow stops when the old file is back.
    */
   #follow(asset: OpenAsset, path: string, automatic: boolean): Promise<void> {
     return this.#inCompositionLine(asset, async () => {
       const from = asset.path;
-      const location = await locateReview(this.#platform, path);
-      if (
-        location.workspaceRoot &&
-        !(await insideWithoutLinks(this.#platform, location.workspaceRoot, location.folder))
-      ) {
-        throw new ArcueError("conflict", `The review folder ${location.folder} goes through a symbolic link.`);
-      }
-      await asset.session.moveTo(location, async () => {
-        if (!(await this.#platform.exists(reviewFilePath(asset.location)))) return;
-        await moveReview(this.#platform, { from: asset.location, fromModel: from, to: location, toModel: path });
+      const followed = await this.#opening.run(async () => {
+        if (await this.#platform.exists(from)) {
+          if (automatic) return false;
+          throw new ArcueError("conflict", `${asset.name} still exists, so its review stays with it.`);
+        }
+        if ((await this.#platform.stat(path))?.kind !== "file") {
+          throw new ArcueError("not-found", `${path} does not exist.`);
+        }
+        if ([...this.#assets.values()].some((other) => other.path === path && !other.closing)) {
+          throw new ArcueError(
+            "conflict",
+            `${basename(path)} is open in another tab. Close it, then choose the file again.`,
+          );
+        }
+        const location = await locateReview(this.#platform, path);
+        if (location.root !== asset.location.root) {
+          throw new ArcueError(
+            "invalid-input",
+            `${basename(path)} is not in the same repository as ${asset.name}, so the review cannot move to it.`,
+          );
+        }
+        if (
+          location.workspaceRoot &&
+          !(await insideWithoutLinks(this.#platform, location.workspaceRoot, location.folder))
+        ) {
+          throw new ArcueError("conflict", `The review folder ${location.folder} goes through a symbolic link.`);
+        }
+        await asset.session.moveTo(location, async () => {
+          if (!(await this.#platform.exists(reviewFilePath(asset.location)))) return;
+          await moveReview(this.#platform, {
+            from: asset.location,
+            fromModel: from,
+            to: location,
+            toModel: path,
+            replaceUntouched: !automatic,
+          });
+        });
+        if (asset.closed) return false;
+        asset.cancelStabilityCheck();
+        asset.stabilityCheck++;
+        asset.relocate(path, location);
+        asset.missing = false;
+        asset.status = "loading";
+        asset.error = null;
+        asset.candidates = [];
+        asset.earlier = [];
+        this.#watchAsset(asset);
+        return true;
       });
-      if (asset.closed) return;
-      asset.cancelStabilityCheck();
-      asset.stabilityCheck++;
-      asset.relocate(path, location);
-      asset.missing = false;
-      asset.status = "loading";
-      asset.error = null;
-      asset.candidates = [];
-      asset.earlier = [];
-      this.#watchAsset(asset);
+      if (!followed) return;
       this.registry.emit("asset.updated", { asset: asset.summary });
       this.registry.emit("review.relinked", { assetId: asset.id, from, automatic });
       await this.#load(asset, true).catch(() => undefined);
     });
   }
 
+  /** Loads the asset's files, and with `force` records and re-anchors even a version that is already on screen. */
   #load(asset: OpenAsset, force = false): Promise<string> {
     return this.#track(asset.loads.run(() => this.#loadVersion(asset, force)));
   }
@@ -789,6 +845,8 @@ export class ArcueCore {
       throw error;
     }
     asset.missing = false;
+    const named = files.siblings.filter((name) => hasExtension(name, [extensionOf(asset.name)]));
+    asset.siblings = named.length <= MAX_RENAME_CANDIDATES ? new Set(named) : null;
     this.#watchComposition(asset, files.watch);
     this.#searchLostFiles(asset, files);
     const versionId = files.versionId;
@@ -1453,6 +1511,11 @@ export class ArcueCore {
       return { next: null, result: undefined };
     });
   }
+}
+
+/** A file name's extension in lowercase, such as ".fbx". */
+function extensionOf(name: string): string {
+  return name.slice(name.lastIndexOf(".")).toLowerCase();
 }
 
 /** The matches worth offering, best first: reviews that hold comments, rounds or dismissed warnings. */

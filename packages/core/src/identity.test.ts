@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseUnityGuid, readUnityGuid } from "./identity";
+import { contentHash } from "./hash";
+import { filesMatching, parseUnityGuid, readUnityGuid } from "./identity";
 import { MemoryPlatform } from "./memory-platform";
+import type { FileStat } from "./platform";
 
 const GUID = "4f2a9c1e8b7d4e3f9a0b1c2d3e4f5a6b";
 
@@ -45,5 +47,42 @@ describe("readUnityGuid", () => {
     await expect(readUnityGuid(platform, "/Assets/Hero.fbx")).resolves.toBeNull();
     await expect(readUnityGuid(platform, "/Assets/Rock.fbx")).resolves.toBeNull();
     await expect(readUnityGuid(platform, "/Assets/Box.fbx")).resolves.toBeNull();
+  });
+});
+
+describe("filesMatching", () => {
+  class Recording extends MemoryPlatform {
+    readonly calls: string[] = [];
+
+    override async stat(path: string): Promise<FileStat | null> {
+      this.calls.push(`stat ${path}`);
+      return super.stat(path);
+    }
+
+    override async readFile(path: string): Promise<Uint8Array> {
+      this.calls.push(`read ${path}`);
+      return super.readFile(path);
+    }
+  }
+
+  it("matches the same size and full hash, or else the same GUID, reading every size before anything else", async () => {
+    const recorded = { size: 4, hash: contentHash(new TextEncoder().encode("hero")) };
+    const platform = new Recording({
+      files: {
+        "/a/Long.fbx": "longer",
+        "/a/Same.fbx": "hero",
+        "/a/Other.fbx": "head",
+        "/a/Renamed.fbx": "edited",
+        "/a/Renamed.fbx.meta": meta,
+      },
+    });
+    const paths = ["/a/Long.fbx", "/a/Same.fbx", "/a/Other.fbx", "/a/Renamed.fbx", "/a/Missing.fbx"];
+    await expect(filesMatching(platform, paths, [recorded], GUID)).resolves.toEqual(["/a/Same.fbx", "/a/Renamed.fbx"]);
+    const firstRead = platform.calls.findIndex((call) => !call.startsWith("stat /a/") || call.endsWith(".meta"));
+    expect(platform.calls.slice(0, firstRead)).toEqual(paths.map((path) => `stat ${path}`));
+    expect(platform.calls.filter((call) => call.startsWith("read /a/") && !call.endsWith(".meta"))).toEqual([
+      "read /a/Same.fbx",
+      "read /a/Other.fbx",
+    ]);
   });
 });

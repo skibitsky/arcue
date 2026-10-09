@@ -245,6 +245,35 @@ describe("loading versions", () => {
       scene: { meshes: [{ sourceVertexCount: 16 }] },
     });
   });
+
+  it("waits for a removed file to come back after a long gap, as a slow export does", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    await test.platform.writeFile("/work/game/Assets/Art/Striker.fbx", fakeAsset(heroSpec));
+    const events = record(test, "asset.updated", "review.relinked");
+    await test.platform.remove(HERO);
+    for (let check = 0; check < 5; check++) {
+      await flush();
+      await test.core.idle();
+      test.clock.advance(300);
+    }
+    expect(events).toEqual([]);
+
+    await test.platform.writeFile(HERO, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4 }] }));
+    for (let check = 0; check < 3; check++) {
+      await flush();
+      await test.core.idle();
+      test.clock.advance(300);
+    }
+    await flush();
+    await test.core.idle();
+    expect(test.clock.pendingTimers).toBe(0);
+    expect(statuses(events)).toEqual(["loading", "ready"]);
+    expect(events.map((event) => event.name)).not.toContain("review.relinked");
+    await expect(test.core.client.query("scene.get", { assetId })).resolves.toMatchObject({
+      scene: { meshes: [{ sourceVertexCount: 16 }] },
+    });
+  });
 });
 
 describe("asset.close", () => {

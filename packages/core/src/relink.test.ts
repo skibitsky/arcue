@@ -1,12 +1,16 @@
 import type { AssetVersion, MeshTopology, ReviewFile } from "@arcue/protocol";
+import { ArcueError } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
+import { fileIdentity } from "./identity";
 import { MemoryPlatform } from "./memory-platform";
+import type { FileStat } from "./platform";
 import type { EarlierReview } from "./relink";
 import {
-  fileIdentity,
   findEarlierReviews,
+  MAX_EARLIER_REVIEWS,
   matchByIdentity,
   rankCandidates,
+  reviewedModelGone,
   STRUCTURE_MATCH_SHARE,
   sameStructure,
 } from "./relink";
@@ -69,7 +73,7 @@ describe("matchByIdentity", () => {
     let hashed = 0;
     const file = {
       size: 10,
-      guid: "4f2a9c1e8b7d4e3f9a0b1c2d3e4f5a6b",
+      guid: async () => "4f2a9c1e8b7d4e3f9a0b1c2d3e4f5a6b",
       hash: async () => {
         hashed++;
         return "0123456789abcdef";
@@ -88,7 +92,7 @@ describe("matchByIdentity", () => {
 
   it("reads and hashes a file at most once", async () => {
     const platform = new MemoryPlatform({ files: { "/Striker.fbx": "0123456789" } });
-    const identity = fileIdentity(platform, "/Striker.fbx", 10, null);
+    const identity = fileIdentity(platform, "/Striker.fbx", 10);
     expect(await identity.hash()).toBe(await identity.hash());
     expect(await identity.hash()).toMatch(/^[0-9a-f]{16}$/);
   });
@@ -131,18 +135,65 @@ describe("findEarlierReviews", () => {
     });
     const location = reviewLocationIn("/app-data", null, "/art/New.fbx");
     const found = await findEarlierReviews(platform, location, new Set(["/app-data/reviews/art/Open.fbx"]));
-    expect(found.map((entry) => entry.model)).toEqual(["/art/Gone.fbx"]);
+    expect(found).toMatchObject({ complete: true });
+    expect(found.reviews.map((entry) => entry.model)).toEqual(["/art/Gone.fbx"]);
   });
 
   it("finds the review of a model on a drive or a network share in the app data folder", async () => {
     const platform = new MemoryPlatform({
       files: {
+        "C:/Art/New.fbx": "x",
+        "//server/share/New.fbx": "x",
         "/app-data/reviews/C/Art/Hero.fbx/review.json": review("C:/Art/Hero.fbx"),
         "/app-data/reviews/server/share/Hero.fbx/review.json": review("//server/share/Hero.fbx"),
       },
     });
     const found = await findEarlierReviews(platform, reviewLocationIn("/app-data", null, "C:/Art/New.fbx"), new Set());
-    expect(found.map((entry) => entry.model)).toEqual(["C:/Art/Hero.fbx", "//server/share/Hero.fbx"]);
+    expect(found.reviews.map((entry) => entry.model)).toEqual(["C:/Art/Hero.fbx", "//server/share/Hero.fbx"]);
+  });
+
+  it("never takes the review of a model on a drive, share or volume that is not there", async () => {
+    const platform = new MemoryPlatform({
+      files: {
+        "/app-data/reviews/D/Art/Hero.fbx/review.json": review("D:/Art/Hero.fbx"),
+        "/app-data/reviews/server/share/Hero.fbx/review.json": review("//server/share/Hero.fbx"),
+        "/app-data/reviews/Volumes/Ejected/Hero.fbx/review.json": review("/Volumes/Ejected/Hero.fbx"),
+        "/Volumes/Mounted/New.fbx": "x",
+        "/app-data/reviews/Volumes/Mounted/Hero.fbx/review.json": review("/Volumes/Mounted/Hero.fbx"),
+      },
+    });
+    const location = reviewLocationIn("/app-data", null, "/Volumes/Mounted/New.fbx");
+    const found = await findEarlierReviews(platform, location, new Set());
+    expect(found.reviews.map((entry) => entry.model)).toEqual(["/Volumes/Mounted/Hero.fbx"]);
+  });
+
+  it("takes only a definite not-found for a model that is gone", async () => {
+    class Unreadable extends MemoryPlatform {
+      override async stat(path: string): Promise<FileStat | null> {
+        if (path.endsWith("Locked.fbx")) throw new ArcueError("forbidden", `${path}: permission denied`);
+        return super.stat(path);
+      }
+    }
+    const platform = new Unreadable({
+      files: {
+        "/app-data/reviews/art/Locked.fbx/review.json": review("/art/Locked.fbx"),
+        "/app-data/reviews/art/Gone.fbx/review.json": review("/art/Gone.fbx"),
+      },
+    });
+    const found = await findEarlierReviews(platform, reviewLocationIn("/app-data", null, "/art/New.fbx"), new Set());
+    expect(found.reviews.map((entry) => entry.model)).toEqual(["/art/Gone.fbx"]);
+  });
+
+  it("says when it stopped at a bound before it saw every folder", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: MAX_EARLIER_REVIEWS + 1 }, (_, index) => [
+        `/app-data/reviews/art/Gone${index}.fbx/review.json`,
+        review(`/art/Gone${index}.fbx`),
+      ]),
+    );
+    const platform = new MemoryPlatform({ files });
+    const found = await findEarlierReviews(platform, reviewLocationIn("/app-data", null, "/art/New.fbx"), new Set());
+    expect(found).toMatchObject({ complete: false, reviews: { length: MAX_EARLIER_REVIEWS } });
   });
 
   it("does not look through a reviews folder that is a symbolic link", async () => {
@@ -155,6 +206,29 @@ describe("findEarlierReviews", () => {
     });
     const location = reviewLocationIn("/app-data", "/work/game", "/work/game/Assets/New.fbx");
     expect(location).not.toBeNull();
-    if (location) await expect(findEarlierReviews(platform, location, new Set())).resolves.toEqual([]);
+    if (location) {
+      await expect(findEarlierReviews(platform, location, new Set())).resolves.toEqual({ reviews: [], complete: true });
+    }
+  });
+});
+
+describe("reviewedModelGone", () => {
+  class Watched extends MemoryPlatform {
+    readonly statted: string[] = [];
+
+    override async stat(path: string): Promise<FileStat | null> {
+      this.statted.push(path);
+      return super.stat(path);
+    }
+  }
+
+  it("checks every path an app data review folder stands for, and never a server named like a drive", async () => {
+    const platform = new Watched({ files: { "C:/Art/Hero.fbx": "x" } });
+    const location = reviewLocationIn("/app-data", null, "/C/Art/Hero.fbx");
+    await expect(reviewedModelGone(platform, location, "/C/Art/Hero.fbx")).resolves.toBe(false);
+    await platform.remove("C:/Art/Hero.fbx");
+    platform.statted.length = 0;
+    await expect(reviewedModelGone(platform, location, "/C/Art/Hero.fbx")).resolves.toBe(true);
+    expect(platform.statted).toEqual(["/C/Art/Hero.fbx", "C:/Art/Hero.fbx"]);
   });
 });

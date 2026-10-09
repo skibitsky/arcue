@@ -109,10 +109,14 @@ export function createFileSearch(platform: Platform, assetPath: string, readRoot
   };
 }
 
+/** The most files `findFilesByExtension` returns. */
+export const MAX_FOUND_FILES = 256;
+
 /**
  * The files with one of the extensions in the given folders and every folder below them, breadth first, for finding a
  * file that was renamed. It follows the same rules as the search for images: inside `readRoot`, never through links,
- * and at most `MAX_SEARCHED_FOLDERS` folders listed.
+ * and at most `MAX_SEARCHED_FOLDERS` folders listed. It skips folders whose names start with a dot, such as ".git" and
+ * ".arcue", and stops at `MAX_FOUND_FILES` files.
  */
 export async function findFilesByExtension(
   platform: Platform,
@@ -125,14 +129,15 @@ export async function findFilesByExtension(
   const queue = folders.filter((folder) => pathInside(root, folder) !== null);
   const listed = new Set<string>();
   const files: string[] = [];
-  while (queue.length > 0 && listed.size < MAX_SEARCHED_FOLDERS) {
+  while (queue.length > 0 && listed.size < MAX_SEARCHED_FOLDERS && files.length < MAX_FOUND_FILES) {
     const folder = queue.shift();
     if (folder === undefined || listed.has(folder)) continue;
     listed.add(folder);
     for (const entry of await listFolder(platform, root, folder, matches)) {
       const path = joinPath(folder, entry.name);
-      if (entry.kind === "directory") queue.push(path);
-      else files.push(path);
+      if (entry.kind === "directory") {
+        if (!entry.name.startsWith(".")) queue.push(path);
+      } else if (files.length < MAX_FOUND_FILES) files.push(path);
     }
   }
   return files;

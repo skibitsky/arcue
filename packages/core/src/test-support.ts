@@ -279,6 +279,8 @@ export class RecordingPlatform extends MemoryPlatform {
   /** The file names the import workers parsed, in order. */
   readonly parsed: string[];
   fail: ((operation: "write" | "remove", path: string) => boolean) | null = null;
+  /** Runs before each file is read, so a test can change files at that moment or hold the read back. */
+  beforeRead: ((path: string) => Promise<void> | void) | null = null;
 
   constructor(options: MemoryPlatformOptions = {}) {
     const parsed: string[] = [];
@@ -293,6 +295,16 @@ export class RecordingPlatform extends MemoryPlatform {
       })),
     });
     this.parsed = parsed;
+  }
+
+  override async readFile(path: string): Promise<Uint8Array> {
+    await this.beforeRead?.(path);
+    return super.readFile(path);
+  }
+
+  override async readText(path: string): Promise<string> {
+    await this.beforeRead?.(path);
+    return super.readText(path);
   }
 
   override async writeFile(path: string, data: Uint8Array | string): Promise<void> {

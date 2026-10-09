@@ -3,8 +3,7 @@ import { withRewrittenPaths, writtenPaths } from "./composition-file";
 import type { AssetFiles } from "./composition-load";
 import { MEMBER_NOT_FOUND } from "./composition-load";
 import { findFilesByExtension } from "./file-search";
-import { contentHash } from "./hash";
-import { readUnityGuid } from "./identity";
+import { filesMatching } from "./identity";
 import { basename, dirname, joinPath, relativePath } from "./paths";
 import type { Platform } from "./platform";
 import { relabelId } from "./review-move";
@@ -43,8 +42,8 @@ function recorded(review: ReviewFile, label: string): VersionFile | undefined {
 /**
  * Where each lost file went: the one file with its extension, in its own folder, the model's folder or a folder below
  * either, that has its size and full hash or its Unity GUID. The search is the file search's, bounded and link-free
- * inside `readRoot`, and it hashes only files of the same size. A file with no match or several stays lost, and paths
- * in `taken`, which the model and its composition already use, never match.
+ * inside `readRoot`; it compares sizes first and hashes only files of the same size. A file with no match or several
+ * stays lost, and paths in `taken`, which the model and its composition already use, never match.
  */
 export async function findLostFiles(
   platform: Platform,
@@ -65,22 +64,16 @@ export async function findLostFiles(
       [dirname(file.path), dirname(modelPath)],
       [extension],
     );
-    const matches: string[] = [];
-    for (const candidate of candidates) {
-      if (!taken.has(candidate) && (await sameFile(platform, candidate, file.identity))) matches.push(candidate);
-    }
+    const matches = await filesMatching(
+      platform,
+      candidates.filter((candidate) => !taken.has(candidate)),
+      [file.identity],
+      file.identity.guid,
+    );
     const [only] = matches;
     if (only !== undefined && matches.length === 1) found.set(file.path, only);
   }
   return found;
-}
-
-async function sameFile(platform: Platform, path: string, identity: VersionFile): Promise<boolean> {
-  const { hash, size, guid } = identity;
-  if (hash !== undefined && size !== undefined && (await platform.stat(path))?.size === size) {
-    if (contentHash(await platform.readFile(path)) === hash) return true;
-  }
-  return guid !== undefined && (await readUnityGuid(platform, path)) === guid;
 }
 
 /**

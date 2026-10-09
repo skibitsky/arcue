@@ -70,6 +70,8 @@ export interface AssetFiles {
   versionFiles: VersionFile[] | undefined;
   /** The composition's files to watch, besides the model. */
   watch: string[];
+  /** The names of the plain files in the model's folder, the model's own included, as listed for its animations. */
+  siblings: string[];
 }
 
 export interface ReadAssetOptions {
@@ -133,11 +135,10 @@ export async function readAssetFiles(
 
   const fromModel = (file: string) => joinPath(folder, file);
   const animations = (content?.animations ?? []).map(fromModel);
-  for (const entry of await platform.list(folder)) {
-    const path = joinPath(folder, entry.name);
-    if (entry.kind === "file" && isConventionAnimation(modelPath, entry.name) && !animations.includes(path)) {
-      animations.push(path);
-    }
+  const siblings = (await platform.list(folder)).filter((entry) => entry.kind === "file").map((entry) => entry.name);
+  for (const name of siblings) {
+    const path = joinPath(folder, name);
+    if (isConventionAnimation(modelPath, name) && !animations.includes(path)) animations.push(path);
   }
   const attach = (content?.attach ?? []).map((entry) => ({
     path: fromModel(entry.file),
@@ -214,6 +215,7 @@ export async function readAssetFiles(
     versionId,
     versionFiles,
     watch: [compositionPath, ...members.keys(), ...textures.map((texture) => texture.path)],
+    siblings,
   };
 }
 

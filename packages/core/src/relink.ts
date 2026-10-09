@@ -1,6 +1,7 @@
 import type { AssetVersion, MeshTopology, RelinkMatch, ReviewCandidate, ReviewFile } from "@arcue/protocol";
 import { splitMemberPath } from "@arcue/scene";
-import { contentHash } from "./hash";
+import type { FileIdentity } from "./identity";
+import { matchIdentity } from "./identity";
 import { insideWithoutLinks } from "./links";
 import { joinPath, normalizePath, pathInside } from "./paths";
 import type { Platform } from "./platform";
@@ -28,53 +29,35 @@ export interface EarlierReview {
   review: ReviewFile;
 }
 
-/** What identifies a file: its size, its full hash, read only when needed, and the GUID in its Unity `.meta` file. */
-export interface FileIdentity {
-  size: number;
-  hash: () => Promise<string>;
-  guid: string | null;
-}
-
-/** A file's identity, reading and hashing it only when a size matches. */
-export function fileIdentity(platform: Platform, path: string, size: number, guid: string | null): FileIdentity {
-  let hash: Promise<string> | null = null;
-  return {
-    size,
-    guid,
-    hash: () => {
-      hash ??= platform.readFile(path).then(contentHash);
-      return hash;
-    },
-  };
-}
-
 /**
  * The reviews under the location's reviews root whose model file is gone. A review whose model still exists belongs to
  * that model, as with a copy, and is never listed. It lists at most `MAX_SCANNED_FOLDERS` folders breadth first, reads
  * at most `MAX_EARLIER_REVIEWS` reviews, never follows links, and skips the folders in `skip`, such as the reviews of
- * open assets, and files it cannot read.
+ * open assets, and files it cannot read. `complete` is false when a bound stopped it before it saw every folder.
  */
 export async function findEarlierReviews(
   platform: Platform,
   location: ReviewLocation,
   skip: ReadonlySet<string>,
-): Promise<EarlierReview[]> {
+): Promise<{ reviews: EarlierReview[]; complete: boolean }> {
   const { root, workspaceRoot } = location;
-  if (workspaceRoot !== null && !(await insideWithoutLinks(platform, workspaceRoot, root))) return [];
-  const found: EarlierReview[] = [];
+  if (workspaceRoot !== null && !(await insideWithoutLinks(platform, workspaceRoot, root))) {
+    return { reviews: [], complete: true };
+  }
+  const reviews: EarlierReview[] = [];
   const queue = [root];
-  for (let listed = 0; listed < MAX_SCANNED_FOLDERS && found.length < MAX_EARLIER_REVIEWS; listed++) {
+  for (let listed = 0; listed < MAX_SCANNED_FOLDERS && reviews.length < MAX_EARLIER_REVIEWS; listed++) {
     const folder = queue.shift();
     if (folder === undefined) break;
     const entries = await platform.list(folder).catch(() => []);
     if (entries.some((entry) => entry.name === "review.json" && entry.kind === "file")) {
       const earlier = skip.has(folder) ? null : await readEarlierReview(platform, location, folder);
-      if (earlier) found.push(earlier);
+      if (earlier) reviews.push(earlier);
       continue;
     }
     for (const entry of entries) if (entry.kind === "directory") queue.push(joinPath(folder, entry.name));
   }
-  return found;
+  return { reviews, complete: queue.length === 0 };
 }
 
 async function readEarlierReview(
@@ -83,34 +66,75 @@ async function readEarlierReview(
   folder: string,
 ): Promise<EarlierReview | null> {
   const relative = pathInside(location.root, folder);
-  if (!relative) return null;
-  for (const model of modelPathsFor(location.workspaceRoot, relative)) {
-    if ((await platform.stat(model).catch(() => null)) !== null) return null;
-  }
+  if (!relative || !(await modelPathsGone(platform, location.workspaceRoot, relative))) return null;
   try {
     const path = joinPath(folder, "review.json");
     const review = parseReview(await platform.readText(path), path);
     const model =
       location.workspaceRoot === null ? normalizePath(review.asset.path) : joinPath(location.workspaceRoot, relative);
     const expected = reviewLocationIn(platform.appDataDir, location.workspaceRoot, model);
-    return expected?.folder === folder ? { model, location: expected, review } : null;
+    if (expected?.folder !== folder || !(await volumeThere(platform, expected, model))) return null;
+    return { model, location: expected, review };
   } catch {
     return null;
   }
 }
 
 /**
+ * Whether `model`, whose review is at `location`, is gone: each path its review folder stands for is definitely not
+ * found, and outside a repository the drive, network share or mounted volume of `model` is there, so a review never
+ * leaves a model on an ejected drive. Any other error means the model may exist.
+ */
+export async function reviewedModelGone(platform: Platform, location: ReviewLocation, model: string): Promise<boolean> {
+  const relative = pathInside(location.root, location.folder);
+  return (
+    !!relative &&
+    (await volumeThere(platform, location, model)) &&
+    (await modelPathsGone(platform, location.workspaceRoot, relative))
+  );
+}
+
+async function modelPathsGone(platform: Platform, workspaceRoot: string | null, relative: string): Promise<boolean> {
+  try {
+    for (const model of modelPathsFor(workspaceRoot, relative)) {
+      if ((await platform.stat(model)) !== null) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the drive, network share or mounted volume of `model` is there; always true inside a repository. */
+export async function volumeThere(platform: Platform, location: ReviewLocation, model: string): Promise<boolean> {
+  const volume = location.workspaceRoot === null ? volumeOf(model) : null;
+  return volume === null || (await platform.stat(volume).catch(() => null))?.kind === "directory";
+}
+
+/**
  * The model paths whose review folder is `relative` under the reviews root. In a repository there is one. In the app
- * data folder the root marks were dropped, so "C/Art/Hero.fbx" may come from "/C/Art/Hero.fbx", "C:/Art/Hero.fbx" or
- * the network share "//C/Art/Hero.fbx".
+ * data folder the root marks were dropped, so "C/Art/Hero.fbx" may come from "/C/Art/Hero.fbx" or "C:/Art/Hero.fbx",
+ * and "server/share/Hero.fbx" from "/server/share/Hero.fbx" or the network share "//server/share/Hero.fbx". A single
+ * letter is taken for a drive, never a server, so no path makes the system look for a server named "C".
  */
 function modelPathsFor(workspaceRoot: string | null, relative: string): string[] {
   if (workspaceRoot !== null) return [joinPath(workspaceRoot, relative)];
   const [first = "", ...rest] = relative.split("/");
   const paths = [`/${relative}`];
-  if (/^[A-Za-z]$/.test(first) && rest.length > 0) paths.push(`${first.toUpperCase()}:/${rest.join("/")}`);
-  if (rest.length > 1) paths.push(`//${relative}`);
+  const drive = /^[A-Za-z]$/.test(first);
+  if (drive && rest.length > 0) paths.push(`${first.toUpperCase()}:/${rest.join("/")}`);
+  if (!drive && rest.length > 1) paths.push(`//${relative}`);
   return paths;
+}
+
+/** The drive, network share or mounted volume an absolute path is on, or null for the system's own root. */
+function volumeOf(path: string): string | null {
+  return (
+    /^\/\/[^/]+\/[^/]+/.exec(path)?.[0] ??
+    /^[A-Z]:\//.exec(path)?.[0] ??
+    /^\/Volumes\/[^/]+(?=\/)/.exec(path)?.[0] ??
+    null
+  );
 }
 
 /**
@@ -123,11 +147,8 @@ export async function matchByIdentity(
 ): Promise<{ earlier: EarlierReview; match: RelinkMatch }[]> {
   const matches: { earlier: EarlierReview; match: RelinkMatch }[] = [];
   for (const entry of earlier) {
-    const sized = entry.review.versions.filter((version) => version.size === file.size && version.hash !== undefined);
-    const hash = sized.length > 0 ? await file.hash() : null;
-    if (sized.some((version) => version.hash === hash)) matches.push({ earlier: entry, match: "content" });
-    else if (file.guid !== null && entry.review.asset.guid === file.guid)
-      matches.push({ earlier: entry, match: "guid" });
+    const match = await matchIdentity(file, entry.review.versions, entry.review.asset.guid);
+    if (match !== null) matches.push({ earlier: entry, match });
   }
   return matches;
 }

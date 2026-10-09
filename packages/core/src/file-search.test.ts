@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFileSearch, findFilesByExtension, MAX_SEARCHED_FOLDERS } from "./file-search";
+import { createFileSearch, findFilesByExtension, MAX_FOUND_FILES, MAX_SEARCHED_FOLDERS } from "./file-search";
 import { MemoryPlatform } from "./memory-platform";
 import type { DirectoryEntry } from "./platform";
 
@@ -164,5 +164,19 @@ describe("findFilesByExtension", () => {
     const found = await findFilesByExtension(platform, "/repo", ["/repo"], [".fbx"]);
     expect(platform.listed.length).toBeLessThanOrEqual(MAX_SEARCHED_FOLDERS);
     expect(found.length).toBe(MAX_SEARCHED_FOLDERS - 1);
+  });
+
+  it("skips folders whose names start with a dot, and returns at most MAX_FOUND_FILES files", async () => {
+    const many = Object.fromEntries(
+      Array.from({ length: MAX_FOUND_FILES + 10 }, (_, index) => [`/repo/Art/Many/F${index}.fbx`, "a"]),
+    );
+    const platform = new CountingPlatform({
+      files: { "/repo/.git/Old.fbx": "a", "/repo/.arcue/reviews/Run.fbx": "b", "/repo/Run.fbx": "c", ...many },
+    });
+    const found = await findFilesByExtension(platform, "/repo", ["/repo"], [".fbx"]);
+    expect(found[0]).toBe("/repo/Run.fbx");
+    expect(found).toHaveLength(MAX_FOUND_FILES);
+    expect(platform.listed).not.toContain("/repo/.git");
+    expect(platform.listed).not.toContain("/repo/.arcue");
   });
 });

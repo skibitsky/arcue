@@ -23,6 +23,11 @@ export class OpenAsset {
   earlier: EarlierReview[] = [];
   /** The full hash and size of the model file the version on screen was read from. */
   identity: { hash: string; size: number } | null = null;
+  /**
+   * The names of the files with the model's extension in its folder when the model last loaded, so a rename shows as a
+   * name not among them. Null before the first load, and when there were more than the core checks for a rename.
+   */
+  siblings: ReadonlySet<string> | null = null;
   /** The model file stayed missing after a change, and no file in its folder could be followed. */
   missing = false;
   /** Lost composition files already looked for under a new name, by path, until the next `asset.reload`. */
