@@ -1,6 +1,12 @@
 import type { CompositionAttach, CompositionFile, ErrorCode, TextureSlotName } from "@arcue/protocol";
-import { ArcueError, COMPOSITION_EXTENSION, COMPOSITION_VERSION, compositionFileSchema } from "@arcue/protocol";
-import { dirname, joinPath, stemOf } from "./paths";
+import {
+  ArcueError,
+  COMPOSITION_EXTENSION,
+  COMPOSITION_VERSION,
+  compositionFileSchema,
+  joinsByName,
+} from "@arcue/protocol";
+import { basename, dirname, joinPath, stemOf } from "./paths";
 import type { Platform } from "./platform";
 
 /** Extensions of the model files a composition may load. */
@@ -20,10 +26,9 @@ export function compositionPathFor(modelPath: string): string {
   return joinPath(dirname(modelPath), `${stemOf(modelPath)}${COMPOSITION_EXTENSION}`);
 }
 
-/** Files named "<model stem>@<anything>" with a model extension join the model as animation files, as in Unity. */
+/** Files named "<model stem>@<anything>.fbx" join the model as animation files, as in Unity. */
 export function isConventionAnimation(modelPath: string, name: string): boolean {
-  const prefix = `${stemOf(modelPath)}@`;
-  return name.startsWith(prefix) && name.length > prefix.length && hasExtension(name, [".fbx"]);
+  return joinsByName(basename(modelPath), name);
 }
 
 /** Parses a composition file. Broken JSON, a newer version and content that breaks the schema reject with `code`. */

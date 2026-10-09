@@ -28,13 +28,17 @@ export {
 export type { ConnectionState, CoreClient, Unsubscribe } from "./client";
 export type { CommandArgs, CommandInput, CommandName, CommandOutput, Commands } from "./commands";
 export { commands, isCommandName } from "./commands";
-export type { CompositionAttach, CompositionFile, MaterialTextures, TextureSlotName } from "./composition";
+export type { CompositionAttach, CompositionFile, MaterialTextures, MemberRole, TextureSlotName } from "./composition";
 export {
   COMPOSITION_EXTENSION,
   COMPOSITION_VERSION,
   compositionAttachSchema,
   compositionFileSchema,
+  IMAGE_FILE_EXTENSIONS,
+  joinsByName,
   materialTexturesSchema,
+  memberRoleFor,
+  memberRoleSchema,
   relativeFileSchema,
   textureSlotSchema,
 } from "./composition";
@@ -82,7 +86,7 @@ export { reportListenerError } from "./listener-errors";
 export type { PartSummary } from "./parts";
 export { partSummarySchema } from "./parts";
 export type { Queries, QueryArgs, QueryInput, QueryName, QueryOutput } from "./queries";
-export { isQueryName, queries, sceneDescriptionSchema } from "./queries";
+export { isQueryName, materialSlotSchema, materialSlotsSchema, queries, sceneDescriptionSchema } from "./queries";
 export type {
   AnchorState,
   AssetVersion,

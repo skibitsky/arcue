@@ -2,7 +2,17 @@ import type { CommandInput, CompositionFile } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import type { FakeAssetSpec, TestCore } from "./test-support";
-import { camera, fakeAsset, flush, openAsset, pinContext, png, readJson, startTestCore } from "./test-support";
+import {
+  camera,
+  fakeAsset,
+  flush,
+  looseComment,
+  openAsset,
+  pinContext,
+  png,
+  readJson,
+  startTestCore,
+} from "./test-support";
 
 const FOLDER = "/work/game/Assets/Bug";
 const MODEL = `${FOLDER}/Bug.fbx`;
@@ -347,7 +357,7 @@ describe("composition commands", () => {
         node: "ShellA",
         bone: "Body",
       }),
-    ).resolves.toEqual({ path: SIDECAR });
+    ).resolves.toEqual({ path: SIDECAR, role: "attach" });
     expect(await sidecar(test)).toEqual({
       version: 1,
       model: "Bug.fbx",
@@ -444,5 +454,175 @@ describe("composition commands", () => {
     ).rejects.toMatchObject({ code: "conflict" });
     await expect(test.platform.readText(SIDECAR)).resolves.toBe("{ broken");
     expect(await readJson(test.platform, REVIEW)).toMatchObject({ asset: { path: "Assets/Bug/Bug.fbx" } });
+  });
+});
+
+describe("adding a file without naming its role", () => {
+  async function plain(): Promise<TestCore & { assetId: string }> {
+    return setup({
+      [SIDECAR]: null,
+      [`${FOLDER}/Empty.fbx`]: fakeAsset({ meshes: [] }),
+      [`${FOLDER}/Broken.fbx`]: fakeAsset({ meshes: [], fail: "Not an FBX file." }),
+    });
+  }
+
+  it("adds a file with clips and no meshes as an animation file, and anything with meshes in place", async () => {
+    const test = await plain();
+    const add = (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file });
+    const parsed = test.platform.parsed.length;
+    await expect(add(TURN)).resolves.toEqual({ path: SIDECAR, role: "animation" });
+    await expect(add("BugShells.fbx")).resolves.toEqual({ path: SIDECAR, role: "set" });
+    expect(test.platform.parsed.slice(parsed)).toEqual(["BugTurn.fbx", "BugShells.fbx"]);
+    expect(await readJson(test.platform, SIDECAR)).toEqual({
+      version: 1,
+      model: "Bug.fbx",
+      animations: ["Anim/BugTurn.fbx"],
+      attach: [{ file: "BugShells.fbx" }],
+    });
+    const { scene } = await sceneOf(test, test.assetId);
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Armature|Turn"]);
+    expect(scene.parts.map((part) => part.id)).toEqual([
+      "Hero/Legs",
+      "BugShells.fbx//Hero/ShellA",
+      "BugShells.fbx//Hero/ShellB",
+    ]);
+  });
+
+  it("refuses a file with neither meshes nor clips, and one that does not parse, without writing", async () => {
+    const test = await plain();
+    const add = (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file });
+    await expect(add("Empty.fbx")).rejects.toMatchObject({
+      code: "invalid-input",
+      message: "Empty.fbx has no meshes or clips.",
+    });
+    await expect(add("Broken.fbx")).rejects.toThrow("Not an FBX file.");
+    await expect(add("/elsewhere/Shells.fbx")).rejects.toMatchObject({
+      code: "invalid-input",
+      message: "Shells.fbx is outside the asset's workspace.",
+    });
+    await expect(test.platform.exists(SIDECAR)).resolves.toBe(false);
+  });
+});
+
+describe("listing materials", () => {
+  it("lists each material's slots with the composition's textures, found or missing, and always base color", async () => {
+    const test = await setup({
+      [SIDECAR]: JSON.stringify({
+        ...composition,
+        materials: { Shell: { baseColor: "../Textures/Shell.png", normal: "Lost.png" } },
+      }),
+    });
+    const { materials } = await test.core.client.query("scene.materials", { assetId: test.assetId });
+    expect(materials).toEqual([
+      {
+        material: "Shell",
+        slots: [
+          { slot: "baseColor", state: "set", path: "../Textures/Shell.png", overridden: true },
+          { slot: "normal", state: "missing", path: "Lost.png", overridden: true },
+        ],
+      },
+    ]);
+  });
+});
+
+describe("undoing composition edits", () => {
+  async function plain(): Promise<TestCore & { assetId: string }> {
+    return setup({ [SIDECAR]: null });
+  }
+
+  function history(test: TestCore & { assetId: string }) {
+    return {
+      undo: () => test.window.client.execute("review.undo", { assetId: test.assetId }),
+      redo: () => test.window.client.execute("review.redo", { assetId: test.assetId }),
+      add: (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file }),
+      parts: async () => (await sceneOf(test, test.assetId)).scene.parts.map((part) => part.id),
+      text: async () => ((await test.platform.exists(SIDECAR)) ? test.platform.readText(SIDECAR) : null),
+    };
+  }
+
+  it("removes a composition file the edit created, brings it back on redo, and reloads each time", async () => {
+    const test = await plain();
+    const steps = history(test);
+    await steps.add("BugShells.fbx");
+    const written = await steps.text();
+    await expect(steps.undo()).resolves.toEqual({ changed: true });
+    await expect(steps.text()).resolves.toBeNull();
+    await expect(steps.parts()).resolves.toEqual(["Hero/Legs"]);
+    await expect(steps.redo()).resolves.toEqual({ changed: true });
+    await expect(steps.text()).resolves.toBe(written);
+    await expect(steps.parts()).resolves.toHaveLength(3);
+    await expect(steps.redo()).resolves.toEqual({ changed: false });
+  });
+
+  it("writes back the file's earlier text as it was, and undoes texture and remove edits too", async () => {
+    const original = `${JSON.stringify(composition)}\n`;
+    const test = await setup({ [SIDECAR]: original });
+    const steps = history(test);
+    await test.window.client.execute("material.setTexture", {
+      assetId: test.assetId,
+      material: "Shell",
+      slot: "baseColor",
+      file: null,
+    });
+    await test.window.client.execute("composition.removeFile", { assetId: test.assetId, file: "BugShells.fbx" });
+    await expect(steps.parts()).resolves.toEqual(["Hero/Legs"]);
+    await steps.undo();
+    await expect(steps.parts()).resolves.toHaveLength(3);
+    await steps.undo();
+    await expect(steps.text()).resolves.toBe(original);
+  });
+
+  it("refuses with conflict and writes nothing when the file changed since the edit", async () => {
+    const test = await plain();
+    const steps = history(test);
+    await steps.add("BugShells.fbx");
+    const changed = JSON.stringify({ version: 1, model: "Bug.fbx", animations: ["Anim/BugTurn.fbx"] });
+    await test.platform.writeFile(SIDECAR, changed);
+    const writes = test.platform.writes.length;
+    await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
+    await expect(steps.text()).resolves.toBe(changed);
+    expect(test.platform.writes.slice(writes)).toEqual([]);
+
+    await test.platform.remove(SIDECAR);
+    await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
+    await expect(steps.text()).resolves.toBeNull();
+  });
+
+  it("refuses a redo when the file changed since the undo", async () => {
+    const test = await plain();
+    const steps = history(test);
+    await steps.add("BugShells.fbx");
+    await steps.undo();
+    await test.platform.writeFile(SIDECAR, JSON.stringify({ version: 1, model: "Bug.fbx" }));
+    await expect(steps.redo()).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("shares one history with comment edits, in the order they were made", async () => {
+    const test = await plain();
+    const steps = history(test);
+    const { version } = await sceneOf(test, test.assetId);
+    await test.window.client.execute("comment.create", looseComment(test.assetId, "The legs are too thin.", version));
+    await steps.add("BugShells.fbx");
+    await steps.undo();
+    let review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.queue).toEqual(["c1"]);
+    await expect(steps.text()).resolves.toBeNull();
+    await steps.undo();
+    review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.queue).toEqual([]);
+    await steps.redo();
+    await steps.redo();
+    await expect(steps.parts()).resolves.toHaveLength(3);
+  });
+
+  it("keeps composition edits and their undo one at a time, in the order they were asked for", async () => {
+    const test = await plain();
+    const steps = history(test);
+    await Promise.all([steps.add("BugShells.fbx"), steps.add(TURN), steps.undo(), steps.undo(), steps.redo()]);
+    expect(await readJson(test.platform, SIDECAR)).toEqual({
+      version: 1,
+      model: "Bug.fbx",
+      attach: [{ file: "BugShells.fbx" }],
+    });
   });
 });

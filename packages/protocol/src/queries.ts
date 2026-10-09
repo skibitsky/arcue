@@ -1,6 +1,7 @@
 import type { SceneDescription } from "@arcue/scene";
 import { z } from "zod";
 import { assetIdSchema, assetSummarySchema, bytesSchema, commentIdSchema } from "./assets";
+import { textureSlotSchema } from "./composition";
 import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
 import { assetInspectionSchema } from "./inspect";
@@ -13,6 +14,22 @@ const assetRef = { assetId: assetIdSchema };
 
 /** Not validated: a scene is large typed data that the core itself produced. */
 export const sceneDescriptionSchema = z.custom<SceneDescription>();
+
+/** A material's texture slot as `scene.materials` lists it. */
+export const materialSlotSchema = z.object({
+  slot: textureSlotSchema,
+  /** "set" shows an image, "missing" names one that was not found, "empty" has none. */
+  state: z.enum(["set", "missing", "empty"]),
+  /** The image's path as the model's file or the composition file writes it; null for an empty slot. */
+  path: z.string().nullable(),
+  /** The composition file sets this slot. */
+  overridden: z.boolean(),
+});
+
+export const materialSlotsSchema = z.object({
+  material: z.string(),
+  slots: z.array(materialSlotSchema),
+});
 
 export const queries = {
   "asset.list": query({
@@ -50,6 +67,12 @@ export const queries = {
       'List the parts of the asset version on screen: meshes, LOD groups with their levels, collision helpers and sockets, with the triangles of each level. Parts from another file of a composition have ids like "Shells.fbx//Boulder1".',
     input: z.object(assetRef),
     output: z.object({ parts: z.array(partSummarySchema) }),
+  }),
+  "scene.materials": query({
+    description:
+      "List the materials of the asset version on screen, each once by name, with the texture slots that have an image or miss one, and always the base color slot. A slot the composition file sets is marked overridden; material.setTexture with a null file restores the file's own texture.",
+    input: z.object(assetRef),
+    output: z.object({ materials: z.array(materialSlotsSchema) }),
   }),
   "asset.inspect": query({
     description:

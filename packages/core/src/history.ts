@@ -6,18 +6,30 @@ export interface ReviewSnapshot {
   queue: readonly string[];
 }
 
-export interface ReviewEdit {
+/** An edit of the comments and the queue in `review.json`. */
+export interface CommentEdit {
+  kind: "comments";
   before: ReviewSnapshot;
   after: ReviewSnapshot;
 }
 
+/** An edit of the asset's composition file: its text before and after, null where the file did not exist. */
+export interface CompositionEdit {
+  kind: "composition";
+  path: string;
+  before: string | null;
+  after: string | null;
+}
+
+export type ReviewEdit = CommentEdit | CompositionEdit;
+
 /** Records the edit that turns `before` into `after` for the listed comments. */
-export function editBetween(before: ReviewFile, after: ReviewFile, ids: readonly string[]): ReviewEdit {
+export function editBetween(before: ReviewFile, after: ReviewFile, ids: readonly string[]): CommentEdit {
   const snapshot = (review: ReviewFile): ReviewSnapshot => ({
     comments: new Map(ids.map((id) => [id, review.comments.find((comment) => comment.id === id) ?? null])),
     queue: [...review.queue],
   });
-  return { before: snapshot(before), after: snapshot(after) };
+  return { kind: "comments", before: snapshot(before), after: snapshot(after) };
 }
 
 /** Puts the snapshot's comments and queue into the review, keeping comments in the order of their numbers. */
@@ -35,7 +47,7 @@ function commentNumber(id: string): number {
   return Number(id.slice(1));
 }
 
-/** One asset's undo and redo stacks. They live in memory only. */
+/** One asset's undo and redo stacks, for comment and composition edits alike. They live in memory only. */
 export class ReviewHistory {
   #undo: ReviewEdit[] = [];
   #redo: ReviewEdit[] = [];
@@ -73,6 +85,7 @@ export class ReviewHistory {
   screenshots(): Set<string> {
     const paths = new Set<string>();
     for (const edit of [...this.#undo, ...this.#redo]) {
+      if (edit.kind !== "comments") continue;
       for (const snapshot of [edit.before, edit.after]) {
         for (const comment of snapshot.comments.values()) {
           if (comment?.context.screenshot) paths.add(comment.context.screenshot);
@@ -88,10 +101,8 @@ export class ReviewHistory {
       queue: snapshot.queue,
       comments: new Map([...snapshot.comments].map(([id, comment]) => [id, comment && map(comment)])),
     });
-    const mapEdit = (edit: ReviewEdit): ReviewEdit => ({
-      before: mapSnapshot(edit.before),
-      after: mapSnapshot(edit.after),
-    });
+    const mapEdit = (edit: ReviewEdit): ReviewEdit =>
+      edit.kind === "comments" ? { ...edit, before: mapSnapshot(edit.before), after: mapSnapshot(edit.after) } : edit;
     this.#undo = this.#undo.map(mapEdit);
     this.#redo = this.#redo.map(mapEdit);
   }

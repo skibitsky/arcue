@@ -1,3 +1,4 @@
+import { IMAGE_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { FoundFile } from "@arcue/scene";
 import { parseStoredPath } from "@arcue/scene";
 import { insideWithoutLinks } from "./links";
@@ -5,19 +6,7 @@ import { dirname, joinPath, normalizePath, pathInside, relativePath, stemOf } fr
 import type { DirectoryEntry, EntryKind, Platform } from "./platform";
 
 /** Extensions of the files an import worker may read, such as external textures. */
-export const readableImageExtensions: readonly string[] = [
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".tga",
-  ".tif",
-  ".tiff",
-  ".bmp",
-  ".dds",
-  ".exr",
-  ".hdr",
-  ".webp",
-];
+export const readableImageExtensions: readonly string[] = IMAGE_FILE_EXTENSIONS;
 
 /** The most folders one import may list while it searches for referenced files. */
 export const MAX_SEARCHED_FOLDERS = 256;

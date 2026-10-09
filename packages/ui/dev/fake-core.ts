@@ -1,4 +1,5 @@
 import type {
+  AssetInspection,
   AssetSummary,
   CommandArgs,
   CommandInput,
@@ -21,7 +22,7 @@ import type {
 } from "@arcue/protocol";
 import { ArcueError, commands, queries, reviewFileSchema } from "@arcue/protocol";
 import type { SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { countInRanges, isDefaultPartView, shownByDefault } from "@arcue/scene";
+import { countInRanges, isDefaultPartView, materialSlots, shownByDefault } from "@arcue/scene";
 
 export interface FakeAssetSeed {
   scene: SceneDescription;
@@ -38,6 +39,8 @@ export interface FakeCoreOptions {
   loadDelayMs?: number;
   /** Whether `round.copy` reaches the clipboard itself, as the desktop core does. The web host's core cannot. */
   coreClipboard?: boolean;
+  /** What `asset.inspect` reports for a path, or null when it cannot. */
+  inspect?: (path: string) => AssetInspection | null;
   now?: () => Date;
 }
 
@@ -486,7 +489,7 @@ export class FakeCoreClient implements CoreClient {
       this.#emit("round.copied", { assetId, round });
       return { round, prompt, copiedToClipboard: this.#options.coreClipboard ?? false };
     },
-    "composition.addFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
+    "composition.addFile": ({ assetId, role }) => ({ path: this.#compositionPath(assetId), role: role ?? "set" }),
     "composition.removeFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "material.setTexture": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "settings.set": (args) => {
@@ -558,8 +561,20 @@ export class FakeCoreClient implements CoreClient {
         })),
       };
     },
-    "asset.inspect": () => {
-      throw new ArcueError("unavailable", "The catalog does not inspect files.");
+    "scene.materials": ({ assetId }) => {
+      const asset = this.#asset(assetId);
+      if (!asset.seed) throw new ArcueError("not-found", "No scene is loaded.");
+      return {
+        materials: materialSlots(asset.seed.scene).map(({ material, slots }) => ({
+          material,
+          slots: slots.map(({ slot, state, path, overridden }) => ({ slot, state, path, overridden })),
+        })),
+      };
+    },
+    "asset.inspect": ({ path }) => {
+      const inspection = this.#options.inspect?.(path);
+      if (!inspection) throw new ArcueError("unavailable", "The catalog does not inspect files.");
+      return inspection;
     },
   };
 }

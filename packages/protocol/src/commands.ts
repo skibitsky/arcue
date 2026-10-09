@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { cameraAnchorSchema, frameRangeSchema, indexSchema, spatialAnchorSchema, timeSelectionSchema } from "./anchors";
 import { assetIdSchema, bytesSchema, commentIdSchema } from "./assets";
-import { textureSlotSchema } from "./composition";
+import { memberRoleSchema, textureSlotSchema } from "./composition";
 import { computedContextSchema } from "./context";
 import type { CommandDefinition } from "./definitions";
 import { command } from "./definitions";
@@ -120,13 +120,13 @@ export const commands = {
   }),
   "composition.addFile": command({
     description:
-      "Load another file into the asset's view and save it in the asset's composition file, which is created beside the model when there is none. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place. Adding a file again with the same node replaces its entry.",
+      "Load another file into the asset's view and save it in the asset's composition file, which is created beside the model when there is none. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place, and its bones merge into the model's bones of the same name, so a skinned mesh binds to the rig. Without a role the core reads the file: clips and no meshes make an animation file, meshes a set file. Adding a file again with the same node replaces its entry. Undo with review.undo.",
     runsIn: "core",
     input: z
       .object({
         ...assetRef,
         file: compositionMemberSchema,
-        role: z.enum(["animation", "attach", "set"]),
+        role: memberRoleSchema.optional(),
         /** A node's name or path in the file, for "attach" and "set". Without it the whole file comes along. */
         node: z.string().min(1).optional(),
         /** The model's bone that an "attach" file follows. */
@@ -136,22 +136,22 @@ export const commands = {
         message: 'An "attach" file needs a bone, and only it takes one.',
         path: ["bone"],
       })
-      .refine((input) => input.role !== "animation" || input.node === undefined, {
-        message: "An animation file takes no node.",
+      .refine((input) => (input.role ?? "animation") !== "animation" || input.node === undefined, {
+        message: "An animation file, or a file without a role, takes no node.",
         path: ["node"],
       }),
-    output: compositionOutput,
+    output: compositionOutput.extend({ role: memberRoleSchema }),
   }),
   "composition.removeFile": command({
     description:
-      'Remove a file from the asset\'s view and from its composition file. Files named "<model>@<clip>.fbx" beside the model join by their name and cannot be removed this way.',
+      'Remove a file from the asset\'s view and from its composition file. Files named "<model>@<clip>.fbx" beside the model join by their name and cannot be removed this way. Undo with review.undo.',
     runsIn: "core",
     input: z.object({ ...assetRef, file: compositionMemberSchema }),
     output: compositionOutput,
   }),
   "material.setTexture": command({
     description:
-      "Show a texture in a material slot of the asset, in place of what the model's file says, and save it in the composition file. A null file removes the override.",
+      "Show a texture in a material slot of the asset, in place of what the model's file says, and save it in the composition file. A null file removes the override. scene.materials lists the slots. Undo with review.undo.",
     runsIn: "core",
     input: z.object({
       ...assetRef,
@@ -169,13 +169,15 @@ export const commands = {
     output: settingsSchema,
   }),
   "review.undo": command({
-    description: "Undo the asset's latest review edit, if there is one.",
+    description:
+      "Undo the asset's latest review edit, if there is one: a comment edit or a change to its composition file. A composition file that changed since the edit is not touched, and the call fails with conflict.",
     runsIn: "core",
     input: z.object(assetRef),
     output: z.object({ changed: z.boolean() }),
   }),
   "review.redo": command({
-    description: "Redo the asset's latest undone review edit, if there is one.",
+    description:
+      "Redo the asset's latest undone review edit, if there is one. A composition file that changed since the undo is not touched, and the call fails with conflict.",
     runsIn: "core",
     input: z.object(assetRef),
     output: z.object({ changed: z.boolean() }),
