@@ -18,6 +18,7 @@ describe("locateReview", () => {
   it("puts reviews in .arcue/reviews at the repository root", async () => {
     await expect(locateReview(platform, "/work/game/Assets/Hero.fbx")).resolves.toEqual({
       workspaceRoot: "/work/game",
+      root: "/work/game/.arcue/reviews",
       folder: "/work/game/.arcue/reviews/Assets/Hero.fbx",
       assetPath: "Assets/Hero.fbx",
     });
@@ -26,6 +27,7 @@ describe("locateReview", () => {
   it("puts reviews of assets outside a repository in the app data folder, keyed by the absolute path", async () => {
     await expect(locateReview(platform, "/loose/Hero.fbx")).resolves.toEqual({
       workspaceRoot: null,
+      root: "/app-data/reviews",
       folder: "/app-data/reviews/loose/Hero.fbx",
       assetPath: "/loose/Hero.fbx",
     });
@@ -62,7 +64,12 @@ describe("parseReview", () => {
 });
 
 describe("loadReview and serializeReview", () => {
-  const location = { workspaceRoot: null, folder: "/app-data/reviews/work/Hero.fbx", assetPath: "/work/Hero.fbx" };
+  const location = {
+    workspaceRoot: null,
+    root: "/app-data/reviews",
+    folder: "/app-data/reviews/work/Hero.fbx",
+    assetPath: "/work/Hero.fbx",
+  };
 
   it("reads a saved review back with its text, taking the asset path from the location", async () => {
     const platform = new MemoryPlatform();

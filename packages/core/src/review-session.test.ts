@@ -3,7 +3,12 @@ import { MemoryPlatform } from "./memory-platform";
 import { ReviewSession } from "./review-session";
 import { emptyReview, reviewFilePath, serializeReview } from "./review-store";
 
-const location = { workspaceRoot: null, folder: "/app-data/reviews/work/Hero.fbx", assetPath: "/work/Hero.fbx" };
+const location = {
+  workspaceRoot: null,
+  root: "/app-data/reviews",
+  folder: "/app-data/reviews/work/Hero.fbx",
+  assetPath: "/work/Hero.fbx",
+};
 
 async function savedSession(): Promise<{ platform: MemoryPlatform; session: ReviewSession }> {
   const platform = new MemoryPlatform();

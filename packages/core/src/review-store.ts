@@ -12,6 +12,8 @@ export const ARCUE_FOLDER = ".arcue";
 export interface ReviewLocation {
   /** The git repository root, or null when the asset is outside any repository. */
   workspaceRoot: string | null;
+  /** The folder that holds every review folder: `.arcue/reviews` in the repository, or `reviews` in app data. */
+  root: string;
   /** The asset's review folder. */
   folder: string;
   /** The asset path stored in `review.json`: relative to the workspace root, or absolute outside a repository. */
@@ -25,11 +27,36 @@ export interface ReviewLocation {
 export async function locateReview(platform: Platform, assetPath: string): Promise<ReviewLocation> {
   const path = normalizePath(assetPath);
   const workspaceRoot = await platform.findWorkspaceRoot(path);
-  const relative = workspaceRoot === null ? null : pathInside(workspaceRoot, path);
-  if (workspaceRoot !== null && relative) {
-    return { workspaceRoot, folder: joinPath(workspaceRoot, ARCUE_FOLDER, "reviews", relative), assetPath: relative };
+  return (
+    (workspaceRoot === null ? null : reviewLocationIn(platform.appDataDir, workspaceRoot, path)) ??
+    reviewLocationIn(platform.appDataDir, null, path)
+  );
+}
+
+/**
+ * The review location of a model in a git repository, or in the app data folder for a null `workspaceRoot`. Null when
+ * the model is not inside that repository.
+ */
+export function reviewLocationIn(appDataDir: string, workspaceRoot: null, modelPath: string): ReviewLocation;
+export function reviewLocationIn(
+  appDataDir: string,
+  workspaceRoot: string | null,
+  modelPath: string,
+): ReviewLocation | null;
+export function reviewLocationIn(
+  appDataDir: string,
+  workspaceRoot: string | null,
+  modelPath: string,
+): ReviewLocation | null {
+  const path = normalizePath(modelPath);
+  if (workspaceRoot === null) {
+    const root = joinPath(appDataDir, "reviews");
+    return { workspaceRoot: null, root, folder: joinPath(root, rootless(path)), assetPath: path };
   }
-  return { workspaceRoot: null, folder: joinPath(platform.appDataDir, "reviews", rootless(path)), assetPath: path };
+  const relative = pathInside(workspaceRoot, path);
+  if (!relative) return null;
+  const root = joinPath(workspaceRoot, ARCUE_FOLDER, "reviews");
+  return { workspaceRoot, root, folder: joinPath(root, relative), assetPath: relative };
 }
 
 function rootless(path: string): string {
