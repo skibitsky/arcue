@@ -26,6 +26,7 @@ A local `docs/` folder, kept out of git, may hold `spec.md` for behavior, `archi
 | `packages/protocol` | zod schemas for commands, queries, events, `review.json` and `round.json`; `CoreClient`; the transport. |
 | `packages/import-fbx` | The FBX importer on ufbx compiled to WebAssembly, and the import worker's entry. |
 | `packages/core` | `Platform`, the command registry, and all review state. |
+| `packages/platform-node` | `NodePlatform` on Node's file system, and the worker_threads import worker for Node hosts. |
 | `packages/viewport` | The 3D view: three.js rendering, tools, picking, screenshots. |
 | `packages/ui` | Design tokens and fonts, and the panels, timeline and comment box. |
 | `apps/web`, `apps/desktop`, `apps/cli` | The browser host, the Electron app, the `arcue` command. |

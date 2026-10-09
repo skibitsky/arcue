@@ -4,8 +4,9 @@ import type { ListenerErrorHandler } from "@arcue/protocol";
 import { portEndpoint } from "@arcue/protocol";
 
 /**
- * Starts the bundled import worker in a worker_threads Worker. A Node Worker is not a port, so the worker gets one
- * port of a MessageChannel and the core keeps the other.
+ * Starts the import worker in a worker_threads Worker. `entry` is the host's bundle of
+ * `@arcue/platform-node/import-worker`, with `arcue-ufbx.wasm` copied beside it. A Node Worker is not a port, so the
+ * worker gets one port of a MessageChannel and the core keeps the other.
  */
 export function startNodeImportWorker(entry: string, onError: ListenerErrorHandler): ImportWorker {
   const worker = new Worker(entry, { name: "arcue-import" });

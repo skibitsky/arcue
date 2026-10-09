@@ -9,6 +9,7 @@ import { build } from "vite";
 export const appRoot = fileURLToPath(new URL("..", import.meta.url));
 export const dist = join(appRoot, "dist");
 export const DEV_SERVER_PORT = 5190;
+const require = createRequire(import.meta.url);
 
 /** A bundle for Node or Electron's main side: workspace packages are bundled, Electron and Node's modules are not. */
 function nodeBundle(entry: string, fileName: string, format: "es" | "cjs"): InlineConfig {
@@ -52,8 +53,8 @@ export async function buildProcesses(): Promise<void> {
   await build(nodeBundle("src/main/main.ts", "main.js", "es"));
   await build(nodeBundle("src/preload/preload.ts", "preload.cjs", "cjs"));
   await build(nodeBundle("src/core/core-process.ts", "core.js", "es"));
-  await build(nodeBundle("src/core/import-worker.ts", "import-worker.js", "es"));
-  const wasm = createRequire(import.meta.url).resolve("@arcue/import-fbx/arcue-ufbx.wasm");
+  await build(nodeBundle(require.resolve("@arcue/platform-node/import-worker"), "import-worker.js", "es"));
+  const wasm = require.resolve("@arcue/import-fbx/arcue-ufbx.wasm");
   await copyFile(wasm, join(dist, "arcue-ufbx.wasm"));
 }
 
