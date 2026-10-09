@@ -1,7 +1,7 @@
 import type {
   AlphaMode,
   Exporter,
-  ImportWarning,
+  ImportWarningSubjectKind,
   Interpolation,
   MaterialGroup,
   Mesh,
@@ -24,14 +24,38 @@ const PREAMBLE_BYTES = 16;
 
 type BlobRef = readonly [offset: number, count: number];
 
-interface WireNode {
+export interface WireNode {
   name: string;
   parent: number;
   kind: NodeKind;
   translation: Vec3;
   rotation: Quat;
   scale: Vec3;
+  /** The node's rotation as the file stores it, before unit and axis conversion. */
+  fileRotation: Quat;
+  /** The node's scale as the file stores it, before unit and axis conversion. */
+  fileScale: Vec3;
   mesh: number | null;
+}
+
+export type WireWarningCode =
+  | "too-many-uv-sets"
+  | "too-many-bones"
+  | "extra-skins"
+  | "unweighted-vertices"
+  | "inbetween-shapes"
+  | "bind-pose-mismatch"
+  | "clip-not-sampled"
+  | "left-handed-axes"
+  | "invalid-data";
+
+/** A problem the parser found. A "file" subject has no name; the importer adds the asset's. */
+export interface WireWarning {
+  code: WireWarningCode;
+  subjectKind: ImportWarningSubjectKind;
+  subject: string | null;
+  /** The parser's own description, such as ufbx's reason. */
+  detail: string | null;
 }
 
 interface WireMesh {
@@ -111,7 +135,7 @@ interface WireScene {
   fps: number;
   originalSpace: Space;
   conversion: SpaceConversion;
-  warnings: ImportWarning[];
+  warnings: WireWarning[];
 }
 
 /** A file path stored in the FBX, with the embedded image bytes when the file carries them. */
@@ -141,7 +165,7 @@ export interface ParsedFbx {
   fps: number;
   originalSpace: Space;
   conversion: SpaceConversion;
-  warnings: ImportWarning[];
+  warnings: WireWarning[];
 }
 
 /** The parser rejected the file; the message is ufbx's reason. */

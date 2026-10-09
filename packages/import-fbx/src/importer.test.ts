@@ -3,14 +3,19 @@ import type { SceneDescription } from "@arcue/scene";
 import { cleanClipName, collectTransferables, lastFrame } from "@arcue/scene";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  ARMATURE_SCALE_FBX,
   animatedFbx,
+  CENTIMETER_ROOT_SCALE_FBX,
   IN_BETWEEN_FBX,
   LEFT_HANDED_FBX,
   METAL_ROUGH_FBX,
   PARTLY_WEIGHTED_FBX,
   PHONG_SHININESS_FBX,
   PNG_SIGNATURE,
+  ROOT_ROTATION_FBX,
+  ROOT_SCALE_FBX,
   SHARED_GEOMETRY_FBX,
+  Y_UP_ROOT_ROTATION_FBX,
 } from "../test/ascii-fbx";
 import { posedWorldMatrices, restPoseError, skinnedSourceVertex } from "../test/geometry";
 import { importSample, manifest, readSample } from "../test/samples";
@@ -238,7 +243,12 @@ describe("handedness", () => {
     const scene = await importText("left.fbx", LEFT_HANDED_FBX);
     expect(scene.source.originalSpace.axes).toEqual({ right: "-X", up: "+Y", front: "+Z" });
     expect(scene.source.warnings).toEqual([
-      expect.objectContaining({ code: "other", message: expect.stringContaining("left-handed"), subject: null }),
+      {
+        code: "left-handed-axes",
+        severity: "warning",
+        subject: { kind: "file", name: "left.fbx" },
+        message: "Left-handed axes, mirrored along X",
+      },
     ]);
     expect(restPoseError(scene, 0)).toBeLessThan(1e-6);
   });
@@ -349,7 +359,12 @@ describe("animation", () => {
     const other = mesh?.sourceVertex.indexOf(1) ?? -1;
     expect(Array.from(target?.positions.subarray(other * 3, other * 3 + 3) ?? [])).toEqual([0, 0, 0]);
     expect(scene.source.warnings).toEqual([
-      expect.objectContaining({ code: "unsupported-feature", message: expect.stringContaining("In-between") }),
+      {
+        code: "inbetween-shapes",
+        severity: "warning",
+        subject: { kind: "node", name: "Tri" },
+        message: "In-between shape keys of Tri use their final shape",
+      },
     ]);
   });
 
@@ -413,13 +428,59 @@ describe("skinning", () => {
     expect(Array.from(mesh?.joints?.subarray(loose * 4, loose * 4 + 4) ?? [])).toEqual([1, 0, 0, 0]);
     expect(Array.from(mesh?.weights?.subarray(loose * 4, loose * 4 + 4) ?? [])).toEqual([1, 0, 0, 0]);
     expect(scene.source.warnings).toEqual([
-      expect.objectContaining({
-        code: "invalid-data",
-        message: expect.stringContaining("no skin weights"),
-        subject: "Tri",
-      }),
+      {
+        code: "unweighted-vertices",
+        severity: "warning",
+        subject: { kind: "node", name: "Tri" },
+        message: "Some vertices of Tri have no skin weights",
+      },
     ]);
     expect(restPoseError(scene, 0)).toBeLessThan(1e-6);
+  });
+});
+
+describe("export checks", () => {
+  it("warns about a root scaled by 100 in a meter file", async () => {
+    const scene = await importText("big.fbx", ROOT_SCALE_FBX);
+    expect(scene.source.warnings).toEqual([
+      {
+        code: "root-scale",
+        severity: "warning",
+        subject: { kind: "node", name: "Tri" },
+        message: "Root scale of 100 on Tri",
+      },
+    ]);
+  });
+
+  it("warns about an armature scaled by 0.01 below a root, but not about its bones", async () => {
+    const scene = await importText("rig.fbx", ARMATURE_SCALE_FBX);
+    expect(scene.nodes.find((node) => node.name === "Hips")?.kind).toBe("bone");
+    expect(scene.source.warnings).toEqual([
+      {
+        code: "root-scale",
+        severity: "warning",
+        subject: { kind: "node", name: "Armature" },
+        message: "Root scale of 0.01 on Armature",
+      },
+    ]);
+  });
+
+  it("warns about a -90° rotation about X on a root in a Z-up file", async () => {
+    const scene = await importText("lying.fbx", ROOT_ROTATION_FBX);
+    expect(scene.source.originalSpace.axes.up).toBe("+Z");
+    expect(scene.source.warnings).toEqual([
+      {
+        code: "root-rotation",
+        severity: "warning",
+        subject: { kind: "node", name: "Tri" },
+        message: "Root rotation of -90° about X on Tri",
+      },
+    ]);
+  });
+
+  it("accepts root transforms that only undo the file's units or axes", async () => {
+    expect((await importText("cm.fbx", CENTIMETER_ROOT_SCALE_FBX)).source.warnings).toEqual([]);
+    expect((await importText("blender.fbx", Y_UP_ROOT_ROTATION_FBX)).source.warnings).toEqual([]);
   });
 });
 

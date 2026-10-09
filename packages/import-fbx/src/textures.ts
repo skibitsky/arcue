@@ -1,5 +1,5 @@
 import type { ImportWarning, Texture } from "@arcue/scene";
-import { referencedFileCandidates } from "@arcue/scene";
+import { importWarning, parseStoredPath, referencedFileCandidates } from "@arcue/scene";
 import type { TextureFile } from "./decode";
 
 const SIGNATURES: readonly { mimeType: string; offset: number; bytes: readonly number[] }[] = [
@@ -65,8 +65,9 @@ export interface TextureResolver {
 
 /**
  * Turns the file's texture paths into scene textures on first use. Embedded images are used as they are; other
- * images are read through `readFile` from the paths `referencedFileCandidates` gives, and a missing one adds a
- * "missing-texture" warning.
+ * images are read through `readFile` from the paths `referencedFileCandidates` gives. A missing image adds
+ * "texture-not-found", and a file that stores only an absolute path from the exporting machine adds
+ * "texture-path-absolute" even when the image is found by name.
  */
 export function createTextureResolver(
   files: readonly TextureFile[],
@@ -79,8 +80,12 @@ export function createTextureResolver(
 
   const load = async (file: TextureFile): Promise<number | null> => {
     const storedPath = file.relative !== "" ? file.relative : file.absolute;
+    const subject = { kind: "texture", name: fileName(storedPath) } as const;
     let bytes = file.content;
     if (!bytes) {
+      if (parseStoredPath(file.relative).relative === null && parseStoredPath(file.absolute).absolute) {
+        warnings.push(importWarning("texture-path-absolute", subject, `Texture path is absolute: ${file.absolute}`));
+      }
       const candidates = new Set([
         ...referencedFileCandidates(file.relative, assetFileName),
         ...referencedFileCandidates(file.absolute, assetFileName),
@@ -91,11 +96,7 @@ export function createTextureResolver(
       }
     }
     if (!bytes) {
-      warnings.push({
-        code: "missing-texture",
-        message: `The texture "${storedPath}" was not found beside the asset or in its .fbm folder.`,
-        subject: storedPath,
-      });
+      warnings.push(importWarning("texture-not-found", subject, `Texture not found: ${subject.name}`));
       return null;
     }
     textures.push({ name: textureName(storedPath), mimeType: imageMimeType(bytes, storedPath), bytes });

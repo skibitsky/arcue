@@ -24,6 +24,7 @@ import { FbxParseError } from "./decode";
 import { parseFbx } from "./parser";
 import type { TextureResolver } from "./textures";
 import { createTextureResolver } from "./textures";
+import { parserWarnings, rootTransformWarnings } from "./warnings";
 
 function buildNodes(parsed: ParsedFbx): SceneNode[] {
   const paths = buildNodePaths(parsed.nodes);
@@ -119,7 +120,11 @@ async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<Sc
       fps: parsed.fps,
       originalSpace: parsed.originalSpace,
       conversion: parsed.conversion,
-      warnings: [...parsed.warnings, ...textures.warnings],
+      warnings: [
+        ...parserWarnings(parsed.warnings, request.fileName),
+        ...rootTransformWarnings(parsed.nodes, parsed.originalSpace),
+        ...textures.warnings,
+      ],
     },
     nodes: buildNodes(parsed),
     meshes,

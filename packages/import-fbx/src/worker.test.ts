@@ -64,7 +64,12 @@ describe("startFbxImportWorker", () => {
     expect(scene.textures).toEqual([]);
     expect(scene.materials[0]?.baseColorTexture).toBeNull();
     expect(scene.source.warnings).toEqual([
-      expect.objectContaining({ code: "missing-texture", subject: "textures/painted.png" }),
+      {
+        code: "texture-not-found",
+        severity: "error",
+        subject: { kind: "texture", name: "painted.png" },
+        message: "Texture not found: painted.png",
+      },
     ]);
   });
 

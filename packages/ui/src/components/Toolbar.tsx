@@ -126,7 +126,7 @@ function AssetInfo({ session }: { session: AssetSession }) {
           {scene && scene.source.warnings.length > 0 ? (
             <ul className="info-warnings" aria-label="Import warnings">
               {scene.source.warnings.map((warning) => (
-                <li key={`${warning.code}:${warning.subject ?? ""}:${warning.message}`}>
+                <li key={`${warning.code}:${warning.subject.kind}:${warning.subject.name}:${warning.message}`}>
                   <Icon name="alert" />
                   <span>{warning.message}</span>
                 </li>

@@ -23,12 +23,15 @@ export type {
   Exporter,
   ImportWarning,
   ImportWarningCode,
+  ImportWarningSeverity,
+  ImportWarningSubject,
+  ImportWarningSubjectKind,
   SourceFormat,
   SourceInfo,
   Space,
   SpaceConversion,
 } from "./source";
-export { SCENE_SPACE } from "./source";
+export { importWarning, importWarningSeverity, SCENE_SPACE } from "./source";
 export {
   frameCountFor,
   frameToSeconds,
