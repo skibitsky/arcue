@@ -286,4 +286,16 @@ describe("choose texture", () => {
     await test.core.idle();
     expect((await listed(test)).map((warning) => warning.id)).toContain(MISSING);
   });
+
+  it("offers no fix when the slot belongs to a material no mesh uses", async () => {
+    const orphan = importWarning(
+      "texture-not-found",
+      { kind: "texture", name: "moss.png" },
+      "Texture not found: moss.png",
+      undefined,
+      { uses: [{ material: "Moss", slot: "normal" }] },
+    );
+    const test = await setup({ [HERO]: fakeAsset({ ...spec, warnings: [orphan] }) });
+    expect((await listed(test)).find((warning) => warning.subject.name === "moss.png")?.fix).toBeNull();
+  });
 });

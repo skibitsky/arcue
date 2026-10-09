@@ -338,16 +338,14 @@ export class FakeCoreClient implements CoreClient {
     const listed = scene.source.warnings.map((warning): AssetWarning => {
       const id = warningId(warning);
       const comment = asset.review.comments.filter((entry) => entry.warning?.id === id).at(-1);
+      const use = warning.uses?.find((candidate) => scene.materials.some((entry) => entry.name === candidate.material));
       let fix: AssetWarning["fix"] = null;
       if (warning.subject.kind === "clip" && scene.clips.some((clip) => clip.name === warning.subject.name)) {
         fix = { kind: "show-clip", clip: warning.subject.name };
       } else if (warning.subject.kind === "file" && warning.file !== undefined) {
         fix = { kind: "retry" };
-      } else if (
-        (warning.code === "texture-not-found" || warning.code === "texture-path-absolute") &&
-        warning.uses?.[0]
-      ) {
-        fix = { kind: "choose-texture", material: warning.uses[0].material, slot: warning.uses[0].slot };
+      } else if ((warning.code === "texture-not-found" || warning.code === "texture-path-absolute") && use) {
+        fix = { kind: "choose-texture", material: use.material, slot: use.slot };
       } else if (warning.code === "texture-not-used" && warning.foundPath && untextured.length === 1) {
         fix = {
           kind: "use-as-base-color",
