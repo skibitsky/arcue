@@ -537,14 +537,20 @@ export class ArcueCore {
           loadedAt: this.#now(),
           exporter: exporterName(scene),
           meshes: meshesOf(scene).map((entry) => ({ mesh: entry.path, topology: entry.mesh.topology })),
+          hash: files.model.hash,
+          size: files.model.size,
         };
         if (files.versionFiles) record.files = files.versionFiles;
-        const versions = review.versions.some((version) => version.id === versionId)
-          ? review.versions
-          : [...review.versions, record];
+        const versions = withVersion(review.versions, record);
+        const guid = files.model.guid;
         const reanchorer = new Reanchorer(versions, versionId, scene);
         return {
-          next: { ...review, versions, comments: review.comments.map((comment) => reanchorer.reanchor(comment)) },
+          next: {
+            ...review,
+            asset: guid === undefined ? review.asset : { ...review.asset, guid },
+            versions,
+            comments: review.comments.map((comment) => reanchorer.reanchor(comment)),
+          },
           result: undefined,
           apply: () => {
             asset.session.history.mapComments((comment) => reanchorer.reanchor(comment));
@@ -1170,6 +1176,19 @@ export class ArcueCore {
 
 function replaceComment(review: ReviewFile, updated: Comment): ReviewFile {
   return { ...review, comments: review.comments.map((comment) => (comment.id === updated.id ? updated : comment)) };
+}
+
+/**
+ * The versions with the record added, or with the file identity filled in when an older build recorded the same
+ * version without it.
+ */
+function withVersion(versions: readonly AssetVersion[], record: AssetVersion): AssetVersion[] {
+  const known = versions.find((version) => version.id === record.id);
+  if (!known) return [...versions, record];
+  if (known.hash !== undefined) return [...versions];
+  const filled: AssetVersion = { ...known, hash: record.hash, size: record.size };
+  if (record.files) filled.files = record.files;
+  return versions.map((version) => (version === known ? filled : version));
 }
 
 /** How a composition names a model bone: by its name when the name finds it, else by its path. */

@@ -134,7 +134,7 @@ export class ReviewSession {
     }
     const external = parseReview(disk.text, this.#path);
     this.#diskHash = disk.hash;
-    this.#review = { ...external, asset: { path: this.#location.assetPath } };
+    this.#review = { ...external, asset: { ...external.asset, path: this.#location.assetPath } };
     this.history.clear();
     this.#changed(this.#review);
   }

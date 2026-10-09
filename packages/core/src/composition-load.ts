@@ -20,7 +20,8 @@ import {
 } from "@arcue/scene";
 import { hasExtension, isConventionAnimation, MODEL_EXTENSIONS, readComposition } from "./composition-file";
 import { createFileSearch } from "./file-search";
-import { versionIdOf } from "./hash";
+import { contentHash, versionIdOf, versionIdOfHash } from "./hash";
+import { readUnityGuid } from "./identity";
 import { insideWithoutLinks } from "./links";
 import { basename, dirname, joinPath, pathInside, relativePath, stemOf } from "./paths";
 import type { Platform } from "./platform";
@@ -35,6 +36,12 @@ export interface ReadFile {
   id: string | null;
   /** Why the file could not be read, as a warning names the problem, such as "File not found". */
   problem: string | null;
+  /** The full hash of the bytes, which finds the file again after a rename. */
+  hash?: string;
+  /** The size of the bytes, kept because an import may transfer them away. */
+  size?: number;
+  /** The GUID in the Unity `.meta` file beside the file. */
+  guid?: string;
 }
 
 export interface TextureRead extends ReadFile {
@@ -46,7 +53,7 @@ export interface TextureRead extends ReadFile {
 
 /** Everything a version of an asset is built from, read once, so the version id matches what gets parsed. */
 export interface AssetFiles {
-  model: ReadFile & { bytes: Uint8Array; id: string; modifiedMs: number };
+  model: ReadFile & { bytes: Uint8Array; id: string; hash: string; size: number; modifiedMs: number };
   /** The model's composition file, when there is one. */
   composition: { file: ReadFile & { id: string }; content: CompositionFile } | null;
   /** A composition file that could not be read, which the model loads without, and why. */
@@ -91,14 +98,12 @@ export async function readAssetFiles(
 ): Promise<AssetFiles> {
   const stat = await platform.stat(modelPath);
   if (stat?.kind !== "file") throw new ArcueError("not-found", `${modelPath} does not exist.`);
-  const modelBytes = await platform.readFile(modelPath);
   const folder = dirname(modelPath);
   const label = (path: string) => relativePath(folder, path) ?? path;
   const model = {
     path: modelPath,
     label: basename(modelPath),
-    bytes: modelBytes,
-    id: versionIdOf(modelBytes),
+    ...(await readIdentified(platform, modelPath)),
     modifiedMs: stat.modifiedMs,
     problem: null,
   };
@@ -147,14 +152,11 @@ export async function readAssetFiles(
 
   const textures: TextureRead[] = [];
   const search = createFileSearch(platform, modelPath, readRoot);
-  const images = new Map<string, Promise<{ bytes: Uint8Array; id: string } | null>>();
+  const images = new Map<string, Promise<Identified | null>>();
   const readImage = (path: string) => {
     let image = images.get(path);
     if (!image) {
-      image = platform.readFile(path).then(
-        (bytes) => ({ bytes, id: versionIdOf(bytes) }),
-        () => null,
-      );
+      image = readIdentified(platform, path).catch(() => null);
       images.set(path, image);
     }
     return image;
@@ -172,8 +174,7 @@ export async function readAssetFiles(
         written,
         path,
         label: label(path),
-        bytes: image?.bytes ?? null,
-        id: image?.id ?? null,
+        ...(image ?? { bytes: null, id: null }),
         problem: image ? null : "Texture not found",
       });
     }
@@ -196,7 +197,7 @@ export async function readAssetFiles(
   }
   const composed = listed.size > 1;
   const versionFiles = composed
-    ? [...listed.values()].flatMap((file) => (file.id === null ? [] : [{ file: file.label, id: file.id }]))
+    ? [...listed.values()].flatMap((file) => (file.id === null ? [] : [versionFile(file, file.id)]))
     : undefined;
   const versionId = composed
     ? versionIdOf(encoder.encode([...listed.values()].map((file) => `${file.label}\n${file.id ?? "-"}`).join("\n")))
@@ -216,15 +217,43 @@ export async function readAssetFiles(
   };
 }
 
+/** The problem of a member file that is not where the composition says, which a rename may explain. */
+export const MEMBER_NOT_FOUND = "File not found";
+
 async function readMember(platform: Platform, path: string, label: string, readRoot: string): Promise<ReadFile> {
   const missing = (problem: string): ReadFile => ({ path, label, bytes: null, id: null, problem });
   if (pathInside(readRoot, path) === null) return missing("File outside the workspace");
   if (!hasExtension(path, MODEL_EXTENSIONS)) return missing("Not a model file");
   if (!(await insideWithoutLinks(platform, readRoot, path))) return missing("File reached through a link");
   const stat = await platform.stat(path);
-  if (stat?.kind !== "file") return missing("File not found");
+  if (stat?.kind !== "file") return missing(MEMBER_NOT_FOUND);
+  return { path, label, ...(await readIdentified(platform, path)), problem: null };
+}
+
+interface Identified {
+  bytes: Uint8Array;
+  id: string;
+  hash: string;
+  size: number;
+  guid?: string;
+}
+
+/** A file's bytes with their short id, their full hash and the Unity GUID beside the file. */
+async function readIdentified(platform: Platform, path: string): Promise<Identified> {
   const bytes = await platform.readFile(path);
-  return { path, label, bytes, id: versionIdOf(bytes), problem: null };
+  const hash = contentHash(bytes);
+  const guid = await readUnityGuid(platform, path);
+  return { bytes, id: versionIdOfHash(hash), hash, size: bytes.byteLength, ...(guid === null ? {} : { guid }) };
+}
+
+function versionFile(file: ReadFile, id: string): VersionFile {
+  const entry: VersionFile = { file: file.label, id };
+  if (file.hash !== undefined && file.size !== undefined) {
+    entry.hash = file.hash;
+    entry.size = file.size;
+  }
+  if (file.guid !== undefined) entry.guid = file.guid;
+  return entry;
 }
 
 /** How many member files parse at once, each in its own import worker. */

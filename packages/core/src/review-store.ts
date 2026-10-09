@@ -119,7 +119,8 @@ export async function loadReview(
   if (stat === null) return { review: emptyReview(location.assetPath), text: null };
   if (stat.kind !== "file") throw new ArcueError("conflict", `${path} is not a plain file.`);
   const text = await platform.readText(path);
-  return { review: { ...parseReview(text, path), asset: { path: location.assetPath } }, text };
+  const review = parseReview(text, path);
+  return { review: { ...review, asset: { ...review.asset, path: location.assetPath } }, text };
 }
 
 /** The file text of a review, after checking it against the schema. */

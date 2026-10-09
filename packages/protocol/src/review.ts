@@ -99,6 +99,14 @@ export const meshTopologySchema = z.object({
   topology: topologyFingerprintSchema,
 });
 
+/** The full 64-bit hash of a file's bytes as 16 hex digits, which finds the file again after a rename. */
+export const contentHashSchema = z.string().regex(/^[0-9a-f]{16}$/);
+
+/** The GUID Unity gives an asset in its `.meta` file: 32 lowercase hex digits. */
+export const unityGuidSchema = z.string().regex(/^[0-9a-f]{32}$/);
+
+const fileSizeSchema = z.int().nonnegative();
+
 export const versionFileSchema = z.object({
   /**
    * Relative to the model's folder, as composition prefixes write it, such as "BugShells.fbx"; the composition file
@@ -107,6 +115,12 @@ export const versionFileSchema = z.object({
   file: z.string().min(1),
   /** Short hash of that file's bytes. */
   id: z.string().min(1),
+  /** Full hash of that file's bytes; absent for the composition file and in versions older builds recorded. */
+  hash: contentHashSchema.optional(),
+  /** The file's size in bytes, beside `hash`. */
+  size: fileSizeSchema.optional(),
+  /** The GUID in the Unity `.meta` file beside that file, when it has one. */
+  guid: unityGuidSchema.optional(),
 });
 
 export const assetVersionSchema = z.object({
@@ -120,6 +134,10 @@ export const assetVersionSchema = z.object({
   meshes: z.array(meshTopologySchema),
   /** For a composition, each file the version was built from, the model and the composition file first. */
   files: z.array(versionFileSchema).optional(),
+  /** Full hash of the model file's bytes; absent in versions older builds recorded. */
+  hash: contentHashSchema.optional(),
+  /** The model file's size in bytes, beside `hash`. */
+  size: fileSizeSchema.optional(),
 });
 
 export const roundSummarySchema = z.object({
@@ -143,6 +161,8 @@ export const reviewFileSchema = z
     asset: z.object({
       /** Relative to the workspace root, or absolute when the asset is outside a git repository. */
       path: z.string().min(1),
+      /** The GUID in the Unity `.meta` file beside the model, read on every load and kept when the file goes away. */
+      guid: unityGuidSchema.optional(),
     }),
     versions: z.array(assetVersionSchema),
     comments: z.array(commentSchema),
