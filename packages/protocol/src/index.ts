@@ -43,6 +43,15 @@ export type { EventName, EventPayload, Events } from "./events";
 export { events, isEventName } from "./events";
 export type { ImportReadFileInput, ImportReadFileOutput, ImportRunInput, ImportRunOutput } from "./import-worker";
 export { importReadFileInputSchema, importRequests, serveImportWorker } from "./import-worker";
+export type {
+  AssetInspection,
+  InspectedClip,
+  InspectedMaterial,
+  InspectedMesh,
+  InspectedTexture,
+  InspectedWarning,
+} from "./inspect";
+export { assetInspectionSchema } from "./inspect";
 export type { JsonSchema, JsonSchemaEntry } from "./json-schema";
 export { protocolJsonSchemas } from "./json-schema";
 export type { ListenerErrorHandler } from "./listener-errors";

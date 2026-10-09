@@ -3,6 +3,7 @@ import { z } from "zod";
 import { assetIdSchema, assetSummarySchema, bytesSchema, commentIdSchema } from "./assets";
 import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
+import { assetInspectionSchema } from "./inspect";
 import { reviewFileSchema } from "./review";
 import { settingsSchema } from "./settings";
 import { viewStateSchema } from "./view-state";
@@ -42,6 +43,12 @@ export const queries = {
     description: "Get the parsed scene of the asset version on screen, with that version's id.",
     input: z.object(assetRef),
     output: z.object({ version: z.string().min(1), scene: sceneDescriptionSchema }),
+  }),
+  "asset.inspect": query({
+    description:
+      "Import a file without opening it and summarize it: format, exporter, axes, height, meshes, bones, materials, textures, clips and warnings.",
+    input: z.object({ path: z.string().min(1) }),
+    output: assetInspectionSchema,
   }),
 } satisfies Record<string, QueryDefinition>;
 

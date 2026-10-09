@@ -533,5 +533,8 @@ export class FakeCoreClient implements CoreClient {
       if (!asset.seed || asset.summary.version === null) throw new ArcueError("not-found", "No scene is loaded.");
       return { version: asset.summary.version, scene: asset.seed.scene };
     },
+    "asset.inspect": () => {
+      throw new ArcueError("unavailable", "The catalog does not inspect files.");
+    },
   };
 }
