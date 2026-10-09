@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arcue viewport harness</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #121110;
+        color: #ede9e2;
+        font: 13px/1.4 system-ui, sans-serif;
+      }
+      body {
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+      #bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        padding: 6px 8px;
+        background: #22211f;
+      }
+      #bar button,
+      #bar select {
+        background: #2b2a27;
+        color: inherit;
+        border: 1px solid rgba(236, 228, 214, 0.15);
+        border-radius: 6px;
+        padding: 3px 8px;
+      }
+      #bar output {
+        margin-left: auto;
+        font-family: ui-monospace, monospace;
+      }
+      #view {
+        position: relative;
+        min-height: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <button type="button" data-tool="view">View</button>
+      <button type="button" data-tool="comment">Comment</button>
+      <button type="button" data-mode="lit">Lit</button>
+      <button type="button" data-mode="clay">Clay</button>
+      <button type="button" data-mode="wireframe">Wire</button>
+      <button type="button" id="skeleton">Skeleton</button>
+      <select id="model" aria-label="Model"></select>
+      <select id="clip" aria-label="Clip"></select>
+      <button type="button" id="play">Play</button>
+      <button type="button" id="frame">Frame</button>
+      <output id="status"></output>
+    </div>
+    <div id="view"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

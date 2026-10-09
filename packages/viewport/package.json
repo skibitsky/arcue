@@ -1,0 +1,27 @@
+{
+  "name": "@arcue/viewport",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p dev/tsconfig.json && tsc -p dev/tsconfig.worker.json",
+    "dev": "vite --config dev/vite.config.ts",
+    "verify": "node dev/verify.ts"
+  },
+  "dependencies": {
+    "@arcue/protocol": "workspace:*",
+    "@arcue/scene": "workspace:*",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@arcue/import-fbx": "workspace:*",
+    "@types/three": "^0.186.0",
+    "playwright": "~1.63.0",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
