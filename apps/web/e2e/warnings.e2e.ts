@@ -100,6 +100,9 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
   await expect(panel.getByRole("button", { name: /^Comment 1: Texture not found/ })).toBeVisible();
   await rows.filter({ hasText: "pebble-golem-extra.fbx was not found" }).hover();
   await expect(rows.filter({ hasText: "pebble-golem-extra.fbx" }).getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(
+    rows.filter({ hasText: "pebble-golem-extra.fbx" }).getByRole("button", { name: "Remove from view" }),
+  ).toBeVisible();
   await page.screenshot({ path: `${SHOTS}warnings-draft.png` });
 
   await rows.filter({ hasText: "Part not found: Helmet" }).hover();

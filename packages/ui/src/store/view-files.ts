@@ -88,9 +88,14 @@ export interface ClipGroup {
 }
 
 /**
- * The clips by the file they come from, the model's first. Files named "<model stem>@<clip>.fbx" beside the model
- * join by their name and are not in the composition file, so they cannot be removed.
+ * Whether removing an added file takes it out of the view. Files named "<model stem>@<clip>.fbx" beside the model join
+ * by their name and are not in the composition file, so they cannot be removed. `file` is relative to the model.
  */
+export function removableFromView(file: string, modelName: string): boolean {
+  return !(file === fileNameOf(file) && joinsByName(modelName, file));
+}
+
+/** The clips by the file they come from, the model's first. */
 export function clipGroups(clips: readonly Clip[], modelName: string): ClipGroup[] {
   const groups = new Map<string | null, Clip[]>([[null, []]]);
   for (const clip of clips) {
@@ -104,6 +109,6 @@ export function clipGroups(clips: readonly Clip[], modelName: string): ClipGroup
     .map(([file, group]) => ({
       file,
       clips: group,
-      removable: file !== null && !(file === fileNameOf(file) && joinsByName(modelName, file)),
+      removable: file !== null && removableFromView(file, modelName),
     }));
 }

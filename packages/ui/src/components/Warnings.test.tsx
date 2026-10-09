@@ -1,3 +1,5 @@
+import type { SceneDescription } from "@arcue/scene";
+import { importWarning } from "@arcue/scene";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -128,6 +130,35 @@ describe("import warnings in the status bar", () => {
     await user.click(screen.getByRole("textbox", { name: /comment/i }));
     await user.keyboard("{Control>}z{/Control}");
     expect(client.calls.some((call) => call.name === "review.undo")).toBe(false);
+  });
+
+  it("removes a member file that failed to load from the view", async () => {
+    const lost = (scene: SceneDescription): SceneDescription => ({
+      ...scene,
+      source: {
+        ...scene.source,
+        warnings: [
+          importWarning("file-not-found", { kind: "file", name: "lost.fbx" }, "lost.fbx was not found", "lost.fbx"),
+          importWarning(
+            "file-not-found",
+            { kind: "file", name: "StoneResonator@Idle.fbx" },
+            "StoneResonator@Idle.fbx was not found",
+            "StoneResonator@Idle.fbx",
+          ),
+        ],
+      },
+    });
+    const { client } = await renderStone(lost);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^lost\.fbx was not found/ }));
+    const [first, second] = rows() as [HTMLElement, HTMLElement];
+    expect(within(first).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(within(second).queryByRole("button", { name: "Remove from view" })).toBeNull();
+    await user.click(within(first).getByRole("button", { name: "Remove from view" }));
+    await act(() => flush());
+    expect(client.calls.find((call) => call.name === "composition.removeFile")?.input).toMatchObject({
+      file: STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "lost.fbx"),
+    });
   });
 
   it("chooses an image for the slot a missing texture names, through the host's open dialog", async () => {
