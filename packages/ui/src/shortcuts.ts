@@ -60,6 +60,11 @@ export function handleShortcut(event: KeyboardEvent, session: AssetSession): boo
     case "F":
       session.frameSelection();
       return true;
+    case "o":
+    case "O":
+      if (!session.outlineAvailable()) return false;
+      session.setOutlineOpen(!session.state.get().outlineOpen);
+      return true;
     case "Escape":
       session.escape();
       return true;

@@ -1,6 +1,13 @@
 import type { TimeSelection } from "@arcue/protocol";
-import type { SceneDescription, SpatialAnchor, TimeAnchor } from "@arcue/scene";
-import { cleanClipName, countInRanges, visibleMeshes } from "@arcue/scene";
+import type { PartView, SceneDescription, SpatialAnchor, TimeAnchor } from "@arcue/scene";
+import {
+  cleanClipName,
+  countInRanges,
+  defaultPartView,
+  isDefaultPartView,
+  viewBounds,
+  visibleMeshes,
+} from "@arcue/scene";
 
 const numberFormat = new Intl.NumberFormat("en-US");
 
@@ -74,15 +81,16 @@ export interface SceneStats {
   height: number;
 }
 
-/** Figures for what a default view draws: LOD0, without collision helpers. */
-export function sceneStats(scene: SceneDescription): SceneStats {
-  const visible = visibleMeshes(scene.parts);
+/** Figures for what a view draws, by default LOD0 without collision helpers. Height is 0 when it draws nothing. */
+export function sceneStats(scene: SceneDescription, view: PartView = defaultPartView()): SceneStats {
+  const visible = visibleMeshes(scene.parts, view);
   const triangles = scene.meshes.reduce(
     (sum, mesh, index) => (visible.has(index) ? sum + mesh.indices.length / 3 : sum),
     0,
   );
   const bones = scene.nodes.filter((node) => node.kind === "bone").length;
-  const height = scene.bounds.max[1] - scene.bounds.min[1];
+  const bounds = isDefaultPartView(view) ? scene.bounds : viewBounds(scene.meshes, scene.parts, view);
+  const height = bounds ? bounds.max[1] - bounds.min[1] : 0;
   return { triangles, bones, clips: scene.clips.length, height };
 }
 

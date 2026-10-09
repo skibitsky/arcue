@@ -149,6 +149,51 @@ const paths = {
       <path d="M12 9.5v4.2M12 16.8v.1" />
     </>
   ),
+  outline: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <path d="M9.5 4.5v15" />
+    </>
+  ),
+  layers: (
+    <>
+      <path d="M12 3.5l8.5 4.5L12 12.5 3.5 8z" />
+      <path d="M3.5 12L12 16.5 20.5 12" />
+      <path d="M3.5 16L12 20.5 20.5 16" />
+    </>
+  ),
+  eye: (
+    <>
+      <path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </>
+  ),
+  eyeOff: (
+    <>
+      <path d="M4 4l16 16" />
+      <path d="M9.9 5.8A9.7 9.7 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4M6.6 7.1C4 8.8 2.5 12 2.5 12s3.5 6.5 9.5 6.5c1.5 0 2.9-.4 4.1-1" />
+    </>
+  ),
+  link: (
+    <>
+      <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+      <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+    </>
+  ),
+  bone: (
+    <>
+      <path d="M8 16l8-8" />
+      <circle cx="6.2" cy="17.8" r="2.3" />
+      <circle cx="17.8" cy="6.2" r="2.3" />
+    </>
+  ),
+  mesh: <path d="M12 4.5l7.5 13h-15z" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6" />
+      <path d="M15.5 15.5L20 20" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

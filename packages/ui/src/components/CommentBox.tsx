@@ -1,9 +1,10 @@
 import type { KeyboardEvent } from "react";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { clipDisplayName, targetLabel, timeLabel } from "../format";
 import type { AssetSession, CommentBox as CommentBoxState } from "../store/asset-session";
 import { placeBox } from "../store/box-placement";
 import { useSelect } from "../store/observable";
+import { viewChip } from "../store/outline";
 import { Chip, fitHeight, IconButton, Tip } from "./controls";
 import { Icon } from "./Icon";
 
@@ -23,6 +24,12 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
   const textRef = useRef<HTMLTextAreaElement>(null);
   const scene = useSelect(session.state, (state) => state.scene);
   const queue = useSelect(session.state, (state) => state.review?.queue ?? null);
+  const parts = useSelect(session.state, (state) =>
+    box.mode === "new"
+      ? state.parts
+      : (state.review?.comments.find((entry) => entry.id === box.commentId)?.parts ?? null),
+  );
+  const view = useMemo(() => viewChip(scene, parts), [scene, parts]);
   const number =
     box.mode === "edit" && box.commentId && queue ? queue.indexOf(box.commentId) + 1 : (queue?.length ?? 0) + 1;
 
@@ -119,6 +126,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
         {...(placeLocked ? {} : { removeLabel: "Remove target", onRemove: () => removeAndFocus("target") })}
       />
     ) : null,
+    view ? <Chip key="view" icon="layers" label={view.label} tip={view.tip || undefined} /> : null,
     box.followUpRound !== null ? (
       box.mode === "reopen" ? (
         <Chip

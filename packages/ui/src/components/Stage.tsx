@@ -4,16 +4,20 @@ import type { AssetSession } from "../store/asset-session";
 import { useSelect } from "../store/observable";
 import { CommentBoxLayer } from "./CommentBox";
 import { Icon } from "./Icon";
+import { OutlineDrawer } from "./Outline";
 import { Toolbar } from "./Toolbar";
 
 export function Stage({ session, createViewport }: { session: AssetSession; createViewport: CreateViewport }) {
   return (
     <section className="stage">
       <Toolbar session={session} />
-      <div className="viewport-area">
-        <ViewportHost session={session} createViewport={createViewport} />
-        <ViewportStatus session={session} />
-        <CommentBoxLayer session={session} />
+      <div className="stage-row">
+        <OutlineDrawer session={session} />
+        <div className="viewport-area">
+          <ViewportHost session={session} createViewport={createViewport} />
+          <ViewportStatus session={session} />
+          <CommentBoxLayer session={session} />
+        </div>
       </div>
     </section>
   );
