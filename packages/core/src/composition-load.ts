@@ -3,8 +3,8 @@ import { ArcueError } from "@arcue/protocol";
 import type { CompositionMember, ImportWarning, SceneDescription, Texture, TextureSlot } from "@arcue/scene";
 import { composeScene, fileNameOf, imageMimeType, importWarning, splitMemberPath, TEXTURE_SLOTS } from "@arcue/scene";
 import { hasExtension, isConventionAnimation, MODEL_EXTENSIONS, readComposition } from "./composition-file";
+import { createFileSearch } from "./file-search";
 import { versionIdOf } from "./hash";
-import { readReferencedFile } from "./import";
 import { insideWithoutLinks } from "./links";
 import { basename, dirname, joinPath, pathInside, relativePath, stemOf } from "./paths";
 import type { Platform } from "./platform";
@@ -50,9 +50,9 @@ const encoder = new TextEncoder();
 
 /**
  * Reads the model, its composition file and every file the composition names, plus the "<stem>@<clip>.fbx" files
- * beside the model. Member files must be model files inside `readRoot` reached without symbolic links, and textures
- * pass the same checks as an importer's reads. A missing model or a broken composition file rejects; a missing
- * member or texture is recorded with its problem.
+ * beside the model. Member files must be model files inside `readRoot` reached without symbolic links. Textures are
+ * searched for like an importer's stale paths, starting from the path the composition writes. A missing model or a
+ * broken composition file rejects; a missing member or texture is recorded with its problem.
  */
 export async function readAssetFiles(
   platform: Platform,
@@ -111,12 +111,14 @@ export async function readAssetFiles(
   }
 
   const textures: TextureRead[] = [];
+  const search = createFileSearch(platform, compositionPath, readRoot);
   for (const [material, slots] of Object.entries(content?.materials ?? {})) {
     for (const slot of TEXTURE_SLOTS) {
       const written = slots[slot];
       if (written === undefined) continue;
-      const path = fromComposition(written);
-      const bytes = await readReferencedFile(platform, compositionPath, written, readRoot);
+      const found = await search.find(written);
+      const path = fromComposition(found?.path ?? written);
+      const bytes = found?.bytes ?? null;
       textures.push({
         material,
         slot,

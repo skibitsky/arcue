@@ -195,6 +195,21 @@ describe("opening a composition", () => {
     ]);
   });
 
+  it("finds an override texture that moved, as an importer finds a stale texture path", async () => {
+    const moved = `${FOLDER}/Textures/shell.PNG`;
+    const test = await setup({ [TEXTURE]: null, [moved]: pngBytes });
+    const { scene } = await sceneOf(test, test.assetId);
+    const material = scene.materials.find((entry) => entry.name === "Shell");
+    expect(scene.textures[material?.baseColorTexture?.texture ?? -1]).toMatchObject({
+      name: "shell",
+      storedPath: "../Textures/Shell.png",
+      foundPath: "Textures/shell.PNG",
+    });
+    expect(scene.source.warnings.map((warning) => warning.code)).toEqual(["animation-bones-missing"]);
+    const review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.versions[0]?.files?.map((file) => file.file)).toContain("Textures/shell.PNG");
+  });
+
   it("ignores a composition file that names another model", async () => {
     const test = await setup({ [SIDECAR]: JSON.stringify({ ...composition, model: "Other.fbx" }) });
     const { scene } = await sceneOf(test, test.assetId);
