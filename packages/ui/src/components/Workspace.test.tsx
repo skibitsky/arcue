@@ -334,7 +334,7 @@ describe("Workspace", () => {
       fireEvent.drop(view, { dataTransfer: { files: [new File(["x"], "Crate.fbx")], types: ["Files"] } });
       await flush();
     });
-    expect(store.state.get().dropPrompt?.models).toEqual(["/work/Crate.fbx"]);
+    expect(store.state.get().dropPrompt?.models).toEqual([{ path: "/work/Crate.fbx", role: null }]);
     const user = userEvent.setup();
     await user.click(screen.getByRole("menuitem", { name: "Add to view" }));
     await act(() => flush());

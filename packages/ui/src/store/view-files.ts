@@ -1,3 +1,4 @@
+import type { MemberRole } from "@arcue/protocol";
 import { IMAGE_FILE_EXTENSIONS, joinsByName } from "@arcue/protocol";
 import type { Clip, TextureSlot } from "@arcue/scene";
 import { fileNameOf } from "@arcue/scene";
@@ -25,8 +26,13 @@ export interface DropPrompt {
   x: number;
   y: number;
   files: readonly File[];
-  /** The dropped models as paths the core can read. */
-  models: readonly string[];
+  models: readonly DroppedModel[];
+}
+
+/** A dropped model as a path the core can read, with the role it takes in a view, when its inspection gave one. */
+export interface DroppedModel {
+  path: string;
+  role: Exclude<MemberRole, "attach"> | null;
 }
 
 export type DropChoice = "tab" | "view";

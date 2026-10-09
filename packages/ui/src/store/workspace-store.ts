@@ -17,7 +17,7 @@ import { fileNameOf, materialSlots, missingSlots } from "@arcue/scene";
 import type { SessionHost, ToastInput } from "./asset-session";
 import { AssetSession, messageOf, NEW_COMMENT_OVERLAY } from "./asset-session";
 import { Store } from "./observable";
-import type { DropChoice, DropPrompt, FileHost } from "./view-files";
+import type { DropChoice, DropPrompt, DroppedModel, FileHost } from "./view-files";
 import { besideModel, isImageFile, isModelFile, slotLabel, sortDropped } from "./view-files";
 
 export type TabEntry = { kind: "asset"; id: string } | { kind: "empty"; id: string };
@@ -511,11 +511,13 @@ export class WorkspaceStore {
     try {
       if (models.length > 0) {
         const placed = (await host.place(files, this.#assetPath(assetId))).filter(isModelFile);
-        if (await this.#animationsOnly(placed)) {
+        const roles = await this.#rolesOf(placed);
+        if (placed.length > 0 && roles.every((role) => role === "animation")) {
           for (const model of placed) await this.#addFile(assetId, model, "animation");
           return;
         }
-        this.state.patch({ dropPrompt: { assetId, x: at.x, y: at.y, files: [...files], models: placed } });
+        const models = placed.map((path, index) => ({ path, role: roles[index] ?? null }));
+        this.state.patch({ dropPrompt: { assetId, x: at.x, y: at.y, files: [...files], models } });
         return;
       }
       const [image] = images;
@@ -537,7 +539,7 @@ export class WorkspaceStore {
     }
     for (const model of prompt.models) {
       try {
-        await this.#addFile(prompt.assetId, model);
+        await this.#addFile(prompt.assetId, model.path, model.role ?? undefined);
       } catch (error) {
         this.notify({ message: messageOf(error), kind: "alert" });
       }
@@ -564,16 +566,17 @@ export class WorkspaceStore {
     this.notify({ message: `${fileNameOf(file)} on ${slotLabel(slot).toLowerCase()}`, kind: "info" });
   }
 
-  /** Whether every model holds clips and no meshes, so it joins the view as an animation file without asking. */
-  async #animationsOnly(models: readonly string[]): Promise<boolean> {
-    if (models.length === 0) return false;
+  /**
+   * The role each model takes in a view, read once here so adding it does not parse it again: "animation" for clips and
+   * no meshes, "set" for meshes, and null when the file cannot be inspected or holds neither.
+   */
+  async #rolesOf(models: readonly string[]): Promise<DroppedModel["role"][]> {
+    const roles: DroppedModel["role"][] = [];
     for (const path of models) {
       const inspection = await this.client.query("asset.inspect", { path }).catch(() => null);
-      if (!inspection) return false;
-      const role = memberRoleFor({ meshes: inspection.meshes.length, clips: inspection.clips.length });
-      if (role !== "animation") return false;
+      roles.push(inspection && memberRoleFor({ meshes: inspection.meshes.length, clips: inspection.clips.length }));
     }
-    return true;
+    return roles;
   }
 
   async #imageOnView(assetId: string, image: File): Promise<void> {
