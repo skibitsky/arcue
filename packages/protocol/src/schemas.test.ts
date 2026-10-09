@@ -353,6 +353,12 @@ describe("viewStateSchema", () => {
     const saved = { camera, clip: null, frame: 0, range: null, display: { mode: "lit", skeleton: false } };
     expect(viewStateSchema.parse(saved).parts).toEqual({ hidden: [], shown: [], isolated: null, lod: 0 });
   });
+
+  it("keeps the outline closed in a view state saved before the outline existed", () => {
+    const saved = { camera, clip: null, frame: 0, range: null, display: { mode: "lit", skeleton: false } };
+    expect(viewStateSchema.parse(saved).outlineOpen).toBe(false);
+    expect(viewStateSchema.parse({ ...saved, outlineOpen: true }).outlineOpen).toBe(true);
+  });
 });
 
 describe("command definitions", () => {

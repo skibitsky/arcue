@@ -206,6 +206,18 @@ export function withPartVisible(view: PartView, part: ScenePart, visible: boolea
   return { ...view, hidden: hidden.sort(), shown: shown.sort() };
 }
 
+/**
+ * The view without isolation that draws what the isolated view draws: the isolated part shown and every other part
+ * hidden, so showing or hiding one more part keeps the rest of what is on screen.
+ */
+export function isolationAsVisibility(parts: readonly ScenePart[], view: PartView): PartView {
+  if (view.isolated === null) return view;
+  if (!parts.some((part) => part.id === view.isolated)) return { ...view, isolated: null };
+  let next: PartView = { ...view, hidden: [], shown: [], isolated: null };
+  for (const part of parts) next = withPartVisible(next, part, part.id === view.isolated);
+  return next;
+}
+
 /** Every LOD level some part has, ascending. */
 export function lodLevels(parts: readonly ScenePart[]): number[] {
   const levels = new Set<number>();
@@ -213,9 +225,18 @@ export function lodLevels(parts: readonly ScenePart[]): number[] {
   return [...levels].sort((a, b) => a - b);
 }
 
+/** Rest-pose bounds of the meshes a view draws, or null when it draws none. */
+export function viewBounds(
+  meshes: readonly Pick<Mesh, "restPositions">[],
+  parts: readonly ScenePart[],
+  view: PartView,
+): Bounds | null {
+  const visible = visibleMeshes(parts, view);
+  const shown = meshes.filter((_, index) => visible.has(index));
+  return shown.length > 0 ? boundsOfPoints(shown.map((mesh) => mesh.restPositions)) : null;
+}
+
 /** Rest-pose bounds of the meshes a default view draws, or of every mesh when it draws none. */
 export function defaultViewBounds(meshes: readonly Pick<Mesh, "restPositions">[], parts: readonly ScenePart[]): Bounds {
-  const visible = visibleMeshes(parts);
-  const shown = meshes.filter((_, index) => visible.has(index));
-  return boundsOfPoints((shown.length > 0 ? shown : meshes).map((mesh) => mesh.restPositions));
+  return viewBounds(meshes, parts, defaultPartView()) ?? boundsOfPoints(meshes.map((mesh) => mesh.restPositions));
 }

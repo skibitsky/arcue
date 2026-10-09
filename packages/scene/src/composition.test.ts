@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Clip } from "./clip";
-import { composeScene, memberPath, splitMemberPath } from "./composition";
+import { composeScene, findNode, memberPath, splitMemberPath } from "./composition";
 import type { Material, Texture } from "./material";
 import type { Quat, Vec3 } from "./math";
 import type { Mesh } from "./mesh";
@@ -179,6 +179,19 @@ describe("member paths", () => {
   it("finds no file in the model's own paths, even where an escaped slash ends a name", () => {
     expect(splitMemberPath("Root/A\\//B")).toEqual({ file: null, path: "Root/A\\//B" });
     expect(splitMemberPath("Root/A\\\\/B")).toEqual({ file: null, path: "Root/A\\\\/B" });
+  });
+});
+
+describe("findNode", () => {
+  it("finds a node by its path, else by its name, preferring a bone or another node as asked", () => {
+    const twins = scene({
+      nodes: [{ name: "Armature" }, { name: "Body", parent: 0, kind: "bone" }, { name: "Body", parent: 0, mesh: {} }],
+    });
+    expect(findNode(twins.nodes, "Armature/Body", false)).toBe(1);
+    expect(findNode(twins.nodes, "Armature/Body#2", true)).toBe(2);
+    expect(findNode(twins.nodes, "Body", true)).toBe(1);
+    expect(findNode(twins.nodes, "Body", false)).toBe(2);
+    expect(findNode(twins.nodes, "Wing", true)).toBeNull();
   });
 });
 

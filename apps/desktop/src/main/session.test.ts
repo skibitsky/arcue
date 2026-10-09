@@ -32,6 +32,7 @@ const session: Session = {
               range: null,
               display: { mode: "lit", skeleton: false },
               parts: { hidden: ["Hero/Boulder2"], shown: [], isolated: null, lod: 1 },
+              outlineOpen: true,
             },
           },
           { path: "/work/Crate.fbx", view: null },
@@ -43,17 +44,17 @@ const session: Session = {
 };
 
 describe("the session file", () => {
-  it("saves and loads windows with their tabs, clips, frames, cameras and parts views", async () => {
+  it("saves and loads windows with their tabs, clips, frames, cameras, parts views and outlines", async () => {
     const path = join(folder, "session.json");
     await saveSession(path, session);
     await expect(loadSession(path)).resolves.toEqual(session);
   });
 
-  it("restores tabs saved before views had parts with the default parts view", async () => {
+  it("restores tabs saved before views had parts with the default parts view and a closed outline", async () => {
     const path = join(folder, "older.json");
     const tab = session.windows[0]?.tabs.tabs[0];
     if (!tab?.view) throw new Error("the fixture has a tab with a view");
-    const { parts: _parts, ...olderView } = tab.view;
+    const { parts: _parts, outlineOpen: _outlineOpen, ...olderView } = tab.view;
     const older = {
       ...session,
       windows: [{ ...session.windows[0], tabs: { tabs: [{ ...tab, view: olderView }], active: 0 } }],
@@ -61,6 +62,7 @@ describe("the session file", () => {
     writeFileSync(path, JSON.stringify(older));
     const loaded = await loadSession(path);
     expect(loaded.windows[0]?.tabs.tabs[0]?.view?.parts).toEqual({ hidden: [], shown: [], isolated: null, lod: 0 });
+    expect(loaded.windows[0]?.tabs.tabs[0]?.view?.outlineOpen).toBe(false);
   });
 
   it("starts empty when the file is missing or invalid", async () => {

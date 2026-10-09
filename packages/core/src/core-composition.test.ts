@@ -231,6 +231,7 @@ describe("reloading a composition", () => {
       range: null,
       display: { mode: "clay" as const, skeleton: false },
       parts: { hidden: [], shown: ["BugShells.fbx//Hero/ShellB"], isolated: null, lod: 0 },
+      outlineOpen: true,
     };
     await test.window.client.execute("view.reportState", { assetId, state });
     const parsedBefore = test.platform.parsed.length;
@@ -412,6 +413,49 @@ describe("composition commands", () => {
     await expect(remove("BugShells.fbx")).rejects.toMatchObject({ code: "not-found" });
     const { scene } = await sceneOf(test, test.assetId);
     expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs"]);
+  });
+
+  it("moves a file's entries onto another bone and off it, keeping them in place, through registry.execute", async () => {
+    const test = await setup();
+    const attach = (input: Omit<CommandInput<"composition.attachFile">, "assetId">) =>
+      test.core.registry.execute("composition.attachFile", { assetId: test.assetId, ...input });
+    await expect(attach({ file: "BugShells.fbx", bone: "Hero/Body/Leg" })).resolves.toEqual({ path: SIDECAR });
+    expect(await sidecar(test)).toMatchObject({
+      attach: [
+        { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
+        { file: "BugShells.fbx", node: "ShellB", bone: "Leg" },
+      ],
+    });
+    let { scene } = await sceneOf(test, test.assetId);
+    const parentOf = (path: string) => nodePath(scene, scene.nodes.find((node) => node.path === path)?.parent ?? -1);
+    expect(parentOf("BugShells.fbx//Hero/ShellA")).toBe("Hero/Body/Leg");
+
+    await attach({ file: "BugShells.fbx", node: "Hero/ShellB", bone: null });
+    expect(await sidecar(test)).toMatchObject({
+      attach: [
+        { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
+        { file: "BugShells.fbx", node: "ShellB" },
+      ],
+    });
+    ({ scene } = await sceneOf(test, test.assetId));
+    expect(parentOf("BugShells.fbx//Hero/ShellB")).toBeUndefined();
+    expect(parentOf("BugShells.fbx//Hero/ShellA")).toBe("Hero/Body/Leg");
+    expect(await sidecar(test)).toMatchObject({ hidden: ["BugShells.fbx//Hero/ShellB"] });
+  });
+
+  it("refuses bones the model lacks, files it does not attach and animation files, without writing", async () => {
+    const test = await setup();
+    const before = await test.platform.readText(SIDECAR);
+    const attach = (input: Omit<CommandInput<"composition.attachFile">, "assetId">) =>
+      test.core.registry.execute("composition.attachFile", { assetId: test.assetId, ...input });
+    await expect(attach({ file: "BugShells.fbx", bone: "Wing" })).rejects.toMatchObject({ code: "invalid-input" });
+    await expect(attach({ file: "Anim/BugTurn.fbx", bone: "Body" })).rejects.toMatchObject({ code: "invalid-input" });
+    await expect(attach({ file: "Other.fbx", bone: "Body" })).rejects.toMatchObject({ code: "not-found" });
+    await expect(attach({ file: "BugShells.fbx", node: "ShellC", bone: null })).rejects.toMatchObject({
+      code: "not-found",
+    });
+    await expect(attach({ file: "BugShells.fbx", bone: "" })).rejects.toMatchObject({ code: "invalid-input" });
+    await expect(test.platform.readText(SIDECAR)).resolves.toBe(before);
   });
 
   it("sets and clears a material's texture", async () => {

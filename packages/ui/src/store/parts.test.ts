@@ -1,8 +1,10 @@
+import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription, ScenePart } from "@arcue/scene";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fakeScene, STONE_RESONATOR } from "../../dev/sample-data";
 import { sceneStats } from "../format";
-import { flush, openStone, POINT } from "../test-helpers";
+import { composedStone, flush, openStone, POINT, stoneBone, TestViewport } from "../test-helpers";
+import { outlineRows, outlineTree } from "./outline";
 
 const defaultView = { hidden: [], shown: [], isolated: null, lod: 0 };
 
@@ -67,6 +69,68 @@ describe("parts", () => {
     session.selectComment(created.id);
     expect(session.state.get().parts).toEqual({ ...defaultView, lod: 1 });
     expect(viewport.parts).toEqual({ ...defaultView, lod: 1 });
+  });
+
+  it("keeps what is on screen when a part is shown or hidden during an isolation, and Escape ends one", async () => {
+    const { client, session, viewport, assetId } = await openStone({ scene: withParts });
+    await client.execute("view.isolatePart", { assetId, part: "Boulder2" });
+    await client.execute("view.setPartVisible", { assetId, part: "UCX_Stone", visible: true });
+    expect(viewport.parts).toEqual({ hidden: ["StoneResonator"], shown: ["UCX_Stone"], isolated: null, lod: 0 });
+    session.selectComment("c7");
+    session.isolatePart("Boulder2");
+    session.escape();
+    expect(session.state.get().selection).toBeNull();
+    expect(session.state.get().parts.isolated).toBe("Boulder2");
+    session.escape();
+    expect(session.state.get().parts).toEqual(defaultView);
+  });
+
+  it("opens the outline through its view command, reports it and restores it when the tab comes back", async () => {
+    const { client, store, session, timers, assetId } = await openStone({ scene: composedStone() });
+    expect(session.outlineAvailable()).toBe(true);
+    await client.execute("view.setOutlineOpen", { assetId, open: true });
+    expect(session.state.get().outlineOpen).toBe(true);
+    timers.advance(400);
+    await flush();
+    const reported = client.calls.filter((call) => call.name === "view.reportState").at(-1);
+    expect(reported?.input).toMatchObject({ state: { outlineOpen: true } });
+
+    expect(store.releaseAsset(assetId)?.outlineOpen).toBe(true);
+    await client.execute("asset.open", { path: session.state.get().summary.path });
+    const again = store.session(assetId);
+    if (!again) throw new Error("The tab came back.");
+    again.attachViewport(new TestViewport(), document.createElement("div"));
+    await flush();
+    expect(again.state.get().outlineOpen).toBe(true);
+  });
+
+  it("has no outline for a model with one part", async () => {
+    const { session } = await openStone();
+    expect(session.outlineAvailable()).toBe(false);
+  });
+
+  it("attaches and detaches an added file through composition.attachFile, by path, place by place", async () => {
+    const { client, session, store } = await openStone({ scene: composedStone({ split: true }) });
+    const scene = session.state.get().scene;
+    if (!scene) throw new Error("The scene loaded.");
+    const rows = outlineRows(outlineTree(scene, "StoneResonator.fbx", "all"));
+    const [onBone1] = rows.flatMap((row) => (row.item.kind === "file" ? [row.item] : []));
+    if (!onBone1) throw new Error("The file has a row.");
+    await session.attachFile(onBone1, stoneBone(scene, "Bone_7"));
+    await session.attachFile({ ...onBone1, nodes: null }, null);
+    const folder = "/work/iza/Assets/Art/Characters/StoneResonator/Models";
+    expect(client.calls.filter((call) => call.name === "composition.attachFile").map((call) => call.input)).toEqual([
+      {
+        assetId: session.assetId,
+        file: `${folder}/beetle-shells.fbx`,
+        node: "ShellRound",
+        bone: "StoneResonator/Armature/Bone_1/Bone_7",
+      },
+      { assetId: session.assetId, file: `${folder}/beetle-shells.fbx`, bone: null },
+    ]);
+    vi.spyOn(client, "execute").mockRejectedValueOnce(new ArcueError("conflict", "The composition file is broken."));
+    await session.attachFile(onBone1, null);
+    expect(store.state.get().toast).toMatchObject({ kind: "alert", message: "The composition file is broken." });
   });
 
   it("counts the triangles of what a default view draws", () => {

@@ -2,7 +2,7 @@ export type { CameraAnchor, IndexRange, RegionAnchor, SpatialAnchor, SurfaceAnch
 export type { Clip, Interpolation, Track, TrackProperty } from "./clip";
 export { cleanClipName, clipNames, displayNames, UNNAMED_CLIP } from "./clip";
 export type { Composition, CompositionAttachment, CompositionMember, TextureSlot } from "./composition";
-export { composeScene, MEMBER_SEPARATOR, memberPath, splitMemberPath, TEXTURE_SLOTS } from "./composition";
+export { composeScene, findNode, MEMBER_SEPARATOR, memberPath, splitMemberPath, TEXTURE_SLOTS } from "./composition";
 export type { TopologyFingerprint, TopologyInput } from "./fingerprint";
 export { sameTopology, topologyFingerprint } from "./fingerprint";
 export type { Barycentric, NearestVertex, SurfacePoint } from "./geometry";
@@ -22,11 +22,13 @@ export {
   defaultViewBounds,
   describeParts,
   isDefaultPartView,
+  isolationAsVisibility,
   levelFor,
   lodLevels,
   partRoleOf,
   partShown,
   shownByDefault,
+  viewBounds,
   visibleMeshes,
   withPartVisible,
 } from "./parts";

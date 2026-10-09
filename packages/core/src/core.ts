@@ -22,8 +22,8 @@ import {
   viewStateSchema,
   withTransfer,
 } from "@arcue/protocol";
-import type { SceneDescription } from "@arcue/scene";
-import { splitMemberPath } from "@arcue/scene";
+import type { SceneDescription, SceneNode } from "@arcue/scene";
+import { findNode, splitMemberPath } from "@arcue/scene";
 import {
   compositionPathFor,
   hasExtension,
@@ -33,6 +33,7 @@ import {
   MODEL_EXTENSIONS,
   readComposition,
   serializeComposition,
+  withAttachBone,
   withMember,
   withoutMember,
   withTexture,
@@ -182,6 +183,7 @@ export class ArcueCore {
       registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")),
       registry.handleCommand("composition.addFile", (args) => this.#addCompositionFile(args)),
       registry.handleCommand("composition.removeFile", (args) => this.#removeCompositionFile(args)),
+      registry.handleCommand("composition.attachFile", (args) => this.#attachCompositionFile(args)),
       registry.handleCommand("material.setTexture", (args) => this.#setMaterialTexture(args)),
       registry.handleCommand("settings.set", (args) => this.#settings.update(args)),
       registry.handleCommand("view.reportState", (args, context) => {
@@ -679,6 +681,40 @@ export class ArcueCore {
     });
   }
 
+  /**
+   * Moves an added file's attached entries onto a bone of the model, written by its name when the name finds it, or
+   * off their bone. A node picks the entry whose node names the same node of the file.
+   */
+  async #attachCompositionFile(args: CommandArgs<"composition.attachFile">): Promise<{ path: string }> {
+    const asset = this.#asset(args.assetId);
+    const path = this.#resolveCompositionPath(asset, args.file);
+    const model = asset.imported.get(asset.path)?.scene;
+    let bone: string | undefined;
+    if (args.bone !== null) {
+      bone = model ? boneReference(model.nodes, args.bone) : args.bone;
+      if (bone === undefined) throw new ArcueError("invalid-input", `${asset.name} has no bone "${args.bone}".`);
+    }
+    const member = asset.imported.get(path)?.scene;
+    const wanted = args.node;
+    const sameNode = (written: string | undefined): boolean => {
+      if (wanted === undefined) return true;
+      if (written === undefined) return false;
+      if (written === wanted) return true;
+      if (!member) return false;
+      const index = findNode(member.nodes, written, false);
+      return index !== null && index === findNode(member.nodes, wanted, false);
+    };
+    return this.#editComposition(asset, (composition, same) => {
+      const moved = withAttachBone(composition, same(path), sameNode, bone);
+      if (moved) return moved;
+      if ((composition.animations ?? []).some(same(path))) {
+        throw new ArcueError("invalid-input", `${args.file} is an animation file, so it has nothing to attach.`);
+      }
+      const what = wanted === undefined ? args.file : `Node ${wanted} of ${args.file}`;
+      throw new ArcueError("not-found", `${what} is not attached or set in the composition.`);
+    });
+  }
+
   async #setMaterialTexture(args: CommandArgs<"material.setTexture">): Promise<{ path: string }> {
     const asset = this.#asset(args.assetId);
     if (!asset.loaded().scene.materials.some((material) => material.name === args.material)) {
@@ -950,6 +986,14 @@ export class ArcueCore {
 
 function replaceComment(review: ReviewFile, updated: Comment): ReviewFile {
   return { ...review, comments: review.comments.map((comment) => (comment.id === updated.id ? updated : comment)) };
+}
+
+/** How a composition names a model bone: by its name when the name finds it, else by its path. */
+function boneReference(nodes: readonly SceneNode[], given: string): string | undefined {
+  const index = findNode(nodes, given, true);
+  const node = index === null ? undefined : nodes[index];
+  if (!node) return undefined;
+  return findNode(nodes, node.name, true) === index ? node.name : node.path;
 }
 
 function sameStat(a: FileStat | null, b: FileStat | null): boolean {
