@@ -1,7 +1,7 @@
 import type { PartView, QueryOutput, TimeSelection } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { Clip, Mesh, SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { decodeRanges, isDefaultPartView, lastFrame, lodLevels, rangesWithin, shownByDefault } from "@arcue/scene";
+import { decodeRanges, isDefaultPartView, knownPartView, lastFrame, rangesWithin, shownByDefault } from "@arcue/scene";
 import { round5 } from "./coordinates";
 
 export interface MeshAtPath {
@@ -115,14 +115,7 @@ export function nameInPath(path: string): string {
  */
 export function storedPartView(scene: SceneDescription, view: PartView | undefined): PartView | undefined {
   if (!view) return undefined;
-  const ids = new Set(scene.parts.map((part) => part.id));
-  const known = (list: readonly string[]) => [...new Set(list.filter((id) => ids.has(id)))].sort();
-  const stored: PartView = {
-    hidden: known(view.hidden),
-    shown: known(view.shown),
-    isolated: view.isolated !== null && ids.has(view.isolated) ? view.isolated : null,
-    lod: Math.min(view.lod, lodLevels(scene.parts).at(-1) ?? 0),
-  };
+  const stored = knownPartView(scene.parts, view);
   return isDefaultPartView(stored) ? undefined : stored;
 }
 

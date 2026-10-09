@@ -272,6 +272,25 @@ describe("viewChip", () => {
     });
   });
 
+  it("says no parts, without a count, when a view hides every part", () => {
+    const none = view({ hidden: ["StoneResonator/StoneResonator", "beetle-shells.fbx//ShellRound"] });
+    expect(viewChip(scene, none)).toEqual({
+      label: "No parts",
+      tip: "Hidden: StoneResonator, ShellRound, ShellSpiked",
+    });
+    expect(
+      viewChip(lodStone(stone), view({ lod: 1, hidden: ["StoneResonator/StoneResonator", "StoneResonator/Pebble"] })),
+    ).toMatchObject({ label: "LOD1 · No parts" });
+  });
+
+  it("ignores parts the scene no longer has", () => {
+    expect(viewChip(scene, view({ hidden: ["gone.fbx//Blade"] }))).toBeNull();
+    expect(viewChip(scene, view({ isolated: "gone.fbx//Blade", hidden: ["beetle-shells.fbx//ShellRound"] }))).toEqual({
+      label: "StoneResonator",
+      tip: "Hidden: ShellRound, ShellSpiked",
+    });
+  });
+
   it("names the LOD with its triangles", () => {
     expect(viewChip(lodStone(stone), view({ lod: 1 }))).toEqual({ label: "LOD1", tip: "LOD1 · 5,560 tris" });
     expect(viewChip(lodStone(stone), view({ lod: 2, hidden: ["StoneResonator/Pebble"] }))).toEqual({

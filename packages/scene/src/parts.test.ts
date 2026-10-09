@@ -7,6 +7,7 @@ import {
   describeParts,
   isDefaultPartView,
   isolationAsVisibility,
+  knownPartView,
   levelFor,
   lodLevels,
   partRoleOf,
@@ -217,6 +218,16 @@ describe("part views", () => {
     expect(visibleMeshes(parts, kept)).toEqual(visibleMeshes(parts, isolated));
     expect(isolationAsVisibility(parts, { ...defaultPartView(), isolated: "Gone" })).toEqual(defaultPartView());
     expect(isolationAsVisibility(parts, kept)).toBe(kept);
+  });
+
+  it("keeps only the parts and levels the scene has", () => {
+    const stale = { hidden: ["Gone", "Boulder2", "Boulder2"], shown: ["UCX_Body", "Old"], isolated: "Old", lod: 7 };
+    expect(knownPartView(parts, stale)).toEqual({ hidden: ["Boulder2"], shown: ["UCX_Body"], isolated: null, lod: 3 });
+    expect(knownPartView(parts, { ...defaultPartView(), isolated: "Boulder2", lod: 1 })).toEqual({
+      ...defaultPartView(),
+      isolated: "Boulder2",
+      lod: 1,
+    });
   });
 
   it("bounds what a view draws, and nothing when it draws nothing", () => {

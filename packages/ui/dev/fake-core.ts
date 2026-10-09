@@ -149,8 +149,8 @@ export class FakeCoreClient implements CoreClient {
     return structuredClone(await handler(parsed.data as QueryArgs<Name>));
   }
 
-  /** Simulates a new export of the file: the asset reloads with a new version. */
-  async simulateExport(assetId: string, options: { fail?: string } = {}): Promise<void> {
+  /** Simulates a new export of the file: the asset reloads with a new version, and with `scene` when given. */
+  async simulateExport(assetId: string, options: { fail?: string; scene?: SceneDescription } = {}): Promise<void> {
     const asset = this.#asset(assetId);
     this.#setSummary(asset, { status: "loading", error: null });
     await this.#delay();
@@ -158,6 +158,7 @@ export class FakeCoreClient implements CoreClient {
       this.#setSummary(asset, { status: "failed", error: options.fail });
       return;
     }
+    if (options.scene && asset.seed) asset.seed = { ...asset.seed, scene: options.scene };
     const version = Math.random().toString(16).slice(2, 9);
     const now = this.#now().toISOString();
     asset.review = {

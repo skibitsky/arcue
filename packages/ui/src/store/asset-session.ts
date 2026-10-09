@@ -18,6 +18,7 @@ import {
   defaultPartView,
   frameToSeconds,
   isolationAsVisibility,
+  knownPartView,
   lastFrame,
   lodLevels,
   secondsToFrame,
@@ -347,6 +348,7 @@ export class AssetSession {
       this.#applyInitialView(viewport, scene);
     } else {
       this.#reconcileClip(scene, viewport);
+      this.#reconcileParts(scene);
     }
     this.state.patch({ viewportReady: true });
     viewport.setHighlight(this.#highlightedMeshes());
@@ -392,6 +394,12 @@ export class AssetSession {
     this.setRange(range && range.start < lastFrame(current) ? { start: range.start, end: range.end } : null);
   }
 
+  /** After a reload the parts view forgets parts and levels the new scene does not have. */
+  #reconcileParts(scene: SceneDescription): void {
+    const { parts } = this.state.get();
+    if (!samePartView(knownPartView(scene.parts, parts), parts)) this.setPartView(parts);
+  }
+
   clipInfo(clip: string | null = this.state.get().clip): Clip | null {
     if (clip === null) return null;
     return this.state.get().scene?.clips.find((candidate) => candidate.name === clip) ?? null;
@@ -433,7 +441,10 @@ export class AssetSession {
     this.#scheduleReport();
   }
 
-  setPartView(parts: PartView): void {
+  /** Shows a parts view, without the parts and levels the scene on screen does not have. */
+  setPartView(view: PartView): void {
+    const scene = this.state.get().scene;
+    const parts = scene ? knownPartView(scene.parts, view) : view;
     this.state.patch({ parts });
     this.#viewport?.setPartView(parts);
     this.#scheduleReport();
@@ -655,7 +666,7 @@ export class AssetSession {
   /** Shows the parts a comment was made with; a comment that stores none was made in the default view. */
   #restoreParts(comment: Comment): void {
     const parts = comment.parts ?? defaultPartView();
-    if (JSON.stringify(parts) !== JSON.stringify(this.state.get().parts)) this.setPartView(parts);
+    if (!samePartView(parts, this.state.get().parts)) this.setPartView(parts);
   }
 
   deselect(): void {
@@ -1272,6 +1283,10 @@ export function sameTime(a: TimeSelection, b: TimeAnchor | TimeSelection): boole
   if (a.kind === "frame" && b.kind === "frame") return a.clip === b.clip && a.frame === b.frame;
   if (a.kind === "range" && b.kind === "range") return a.clip === b.clip && a.start === b.start && a.end === b.end;
   return a.kind === "none";
+}
+
+function samePartView(a: PartView, b: PartView): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export function messageOf(error: unknown): string {

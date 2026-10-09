@@ -1,5 +1,13 @@
 import type { PartView, SceneDescription, ScenePart } from "@arcue/scene";
-import { isDefaultPartView, lodLevels, partShown, shownByDefault, splitMemberPath, visibleMeshes } from "@arcue/scene";
+import {
+  isDefaultPartView,
+  knownPartView,
+  lodLevels,
+  partShown,
+  shownByDefault,
+  splitMemberPath,
+  visibleMeshes,
+} from "@arcue/scene";
 import { formatCount } from "../format";
 
 /**
@@ -298,8 +306,10 @@ export interface ViewChip {
  * The chip for a comment's parts view, or null for the default view. It names the visible parts when there are two
  * or fewer, otherwise "3 of 5 parts", and its tip lists what was hidden. Collision helpers count only when shown.
  */
-export function viewChip(scene: SceneDescription | null, view: PartView | null | undefined): ViewChip | null {
-  if (!scene || !view || isDefaultPartView(view)) return null;
+export function viewChip(scene: SceneDescription | null, stored: PartView | null | undefined): ViewChip | null {
+  if (!scene || !stored) return null;
+  const view = knownPartView(scene.parts, stored);
+  if (isDefaultPartView(view)) return null;
   const drawable = scene.parts.filter((part) => part.role !== "socket" && part.levels.length > 0);
   const visible = drawable.filter((part) => partShown(scene.parts, view, part));
   const counted = drawable.filter((part) => part.role === "model" || visible.includes(part));
@@ -311,7 +321,8 @@ export function viewChip(scene: SceneDescription | null, view: PartView | null |
   }
   if (visibilityChanged(view)) {
     if (visible.length === counted.length) label.push("All parts");
-    else if (visible.length > 0 && visible.length <= 2) label.push(visible.map((part) => part.name).join(", "));
+    else if (visible.length === 0) label.push("No parts");
+    else if (visible.length <= 2) label.push(visible.map((part) => part.name).join(", "));
     else label.push(`${visible.length} of ${counted.length} parts`);
     const hidden = counted.filter((part) => !visible.includes(part));
     const extra = visible.filter((part) => !shownByDefault(part));

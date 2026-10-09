@@ -3,7 +3,7 @@ import type { SceneDescription, ScenePart } from "@arcue/scene";
 import { describe, expect, it, vi } from "vitest";
 import { fakeScene, STONE_RESONATOR } from "../../dev/sample-data";
 import { sceneStats } from "../format";
-import { composedStone, flush, openStone, POINT, stoneBone, TestViewport } from "../test-helpers";
+import { composedStone, flush, lodStone, openStone, POINT, stoneBone, TestViewport } from "../test-helpers";
 import { outlineRows, outlineTree } from "./outline";
 
 const defaultView = { hidden: [], shown: [], isolated: null, lod: 0 };
@@ -104,12 +104,44 @@ describe("parts", () => {
     expect(again.state.get().outlineOpen).toBe(true);
   });
 
+  it("forgets parts and levels a new export no longer has, so no dot or chip stays on for them", async () => {
+    const { client, session, viewport, assetId } = await openStone({ scene: composedStone() });
+    session.setPartVisible("StoneResonator/StoneResonator", false);
+    session.isolatePart("beetle-shells.fbx//ShellRound");
+    await client.simulateExport(assetId, { scene: lodStone(fakeScene(STONE_RESONATOR)) });
+    await flush(10);
+    expect(session.state.get().parts).toEqual({ ...defaultView, hidden: ["StoneResonator/StoneResonator"] });
+    session.setPartVisible("StoneResonator/StoneResonator", true);
+    session.setLod(2);
+    await client.simulateExport(assetId, { scene: fakeScene(STONE_RESONATOR) });
+    await flush(10);
+    expect(session.state.get().parts).toEqual(defaultView);
+    expect(viewport.parts).toEqual(defaultView);
+  });
+
+  it("restores a saved view without the parts the scene does not have", async () => {
+    const { client, store, session, assetId } = await openStone({ scene: composedStone() });
+    session.setPartVisible("beetle-shells.fbx//ShellRound", false);
+    const saved = store.releaseAsset(assetId);
+    if (!saved) throw new Error("The tab had a view.");
+    await client.execute("view.reportState", {
+      assetId,
+      state: { ...saved, parts: { ...saved.parts, hidden: [...saved.parts.hidden, "gone.fbx//Blade"], lod: 3 } },
+    });
+    await client.execute("asset.open", { path: session.state.get().summary.path });
+    const again = store.session(assetId);
+    if (!again) throw new Error("The tab came back.");
+    again.attachViewport(new TestViewport(), document.createElement("div"));
+    await flush();
+    expect(again.state.get().parts).toEqual({ ...defaultView, hidden: ["beetle-shells.fbx//ShellRound"] });
+  });
+
   it("has no outline for a model with one part", async () => {
     const { session } = await openStone();
     expect(session.outlineAvailable()).toBe(false);
   });
 
-  it("attaches and detaches an added file through composition.attachFile, by path, place by place", async () => {
+  it("attaches and detaches an added file through one composition.attachFile per move, by path", async () => {
     const { client, session, store } = await openStone({ scene: composedStone({ split: true }) });
     const scene = session.state.get().scene;
     if (!scene) throw new Error("The scene loaded.");
