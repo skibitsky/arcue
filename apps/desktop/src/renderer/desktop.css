@@ -1,0 +1,24 @@
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* Under 760 px the Workspace stacks the comments panel below the stage and grows taller than the window. */
+@media (max-width: 760px) {
+  #app {
+    overflow-y: auto;
+  }
+}
+
+/* The strip takes dropped tabs in its gaps too, which a window drag region would swallow. */
+.tab-list {
+  -webkit-app-region: no-drag;
+}
+
+.mac-lights {
+  flex: none;
+  width: 64px;
+}
