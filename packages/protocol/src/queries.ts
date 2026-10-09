@@ -3,6 +3,7 @@ import { z } from "zod";
 import { assetIdSchema, assetSummarySchema, bytesSchema, commentIdSchema } from "./assets";
 import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
+import { assetInspectionSchema } from "./inspect";
 import { reviewFileSchema } from "./review";
 import { settingsSchema } from "./settings";
 import { partIdSchema, viewStateSchema } from "./view-state";
@@ -59,6 +60,12 @@ export const queries = {
         }),
       ),
     }),
+  }),
+  "asset.inspect": query({
+    description:
+      "Import a file without opening it and summarize it: format, exporter, axes, height, meshes, bones, materials, textures, clips and warnings.",
+    input: z.object({ path: z.string().min(1) }),
+    output: assetInspectionSchema,
   }),
 } satisfies Record<string, QueryDefinition>;
 

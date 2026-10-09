@@ -185,6 +185,21 @@ afterAll(async () => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
+describe("arcue inspect", () => {
+  it("summarizes a sample without starting the app", async () => {
+    const inspected = await run(process.execPath, [cli, "inspect", "--json", "samples/pebble-golem.fbx"], {
+      cwd: workDir,
+      env: { ...process.env, ARCUE_USER_DATA: userData },
+    });
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      file: { path: golem },
+      bones: 27,
+      meshes: [{ name: "PebbleGolem", skinned: true }],
+    });
+    expect(bridgeInfo().pid).toBe(0);
+  });
+});
+
 describe("the desktop app", () => {
   it("opens a sample from its window and renders it in the 3D view", async () => {
     const electron = await launch();

@@ -17,6 +17,9 @@
     "vitest": "catalog:"
   },
   "dependencies": {
+    "@arcue/core": "workspace:*",
+    "@arcue/import-fbx": "workspace:*",
+    "@arcue/platform-node": "workspace:*",
     "@arcue/protocol": "workspace:*"
   }
 }

@@ -558,5 +558,8 @@ export class FakeCoreClient implements CoreClient {
         })),
       };
     },
+    "asset.inspect": () => {
+      throw new ArcueError("unavailable", "The catalog does not inspect files.");
+    },
   };
 }

@@ -14,7 +14,7 @@ A local `docs/` folder, kept out of git, may hold `spec.md` for behavior, `archi
 | `pnpm lint` | Biome lint and format check. `pnpm format` fixes what it can. |
 | `pnpm test` | Runs every test. `pnpm test --project @arcue/core` runs one package. |
 | `pnpm --filter @arcue/web test:e2e` | Builds the web host and runs its Playwright tests. Run `pnpm --filter @arcue/web exec playwright install chromium` once first. |
-| `pnpm --filter @arcue/cli build` | Builds the `arcue` command into `apps/cli/dist/arcue.js`. |
+| `pnpm --filter @arcue/cli build` | Builds the `arcue` command and its import worker into `apps/cli/dist/`. |
 | `pnpm --filter @arcue/desktop dev` | Runs the desktop app with its windows on a Vite dev server. |
 | `pnpm --filter @arcue/desktop test:e2e` | Builds the desktop app and the `arcue` command, then drives the built app with Playwright. |
 
@@ -26,6 +26,7 @@ A local `docs/` folder, kept out of git, may hold `spec.md` for behavior, `archi
 | `packages/protocol` | zod schemas for commands, queries, events, `review.json` and `round.json`; `CoreClient`; the transport. |
 | `packages/import-fbx` | The FBX importer on ufbx compiled to WebAssembly, and the import worker's entry. |
 | `packages/core` | `Platform`, the command registry, and all review state. |
+| `packages/platform-node` | `NodePlatform` on Node's file system, and the worker_threads import worker for Node hosts. |
 | `packages/viewport` | The 3D view: three.js rendering, tools, picking, screenshots. |
 | `packages/ui` | Design tokens and fonts, and the panels, timeline and comment box. |
 | `apps/web`, `apps/desktop`, `apps/cli` | The browser host, the Electron app, the `arcue` command. |

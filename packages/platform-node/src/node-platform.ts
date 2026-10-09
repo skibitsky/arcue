@@ -9,7 +9,7 @@ import type { PathStyle } from "./native-paths";
 import { hostPathStyle, toNativePath } from "./native-paths";
 
 export interface NodePlatformOptions {
-  /** Where review data goes for assets outside a git repository; the desktop app passes a folder in its user data. */
+  /** Holds settings, and review data for assets outside a git repository, such as the desktop app's user data. */
   appDataDir: string;
   startImportWorker: () => ImportWorker;
   /** Writes text to the system clipboard. Without it, `writeClipboard` rejects and the window writes the text. */

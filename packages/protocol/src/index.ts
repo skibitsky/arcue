@@ -66,6 +66,15 @@ export {
   importRequests,
   serveImportWorker,
 } from "./import-worker";
+export type {
+  AssetInspection,
+  InspectedClip,
+  InspectedMaterial,
+  InspectedMesh,
+  InspectedTexture,
+  InspectedWarning,
+} from "./inspect";
+export { assetInspectionSchema } from "./inspect";
 export type { JsonSchema, JsonSchemaEntry } from "./json-schema";
 export { protocolJsonSchemas } from "./json-schema";
 export type { ListenerErrorHandler } from "./listener-errors";

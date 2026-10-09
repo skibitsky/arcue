@@ -1,4 +1,5 @@
 import type {
+  AssetInspection,
   AssetVersion,
   CommandArgs,
   CommandName,
@@ -41,6 +42,7 @@ import { buildAssetScene, readAssetFiles } from "./composition-load";
 import { readableImageExtensions } from "./file-search";
 import { applySnapshot, editBetween } from "./history";
 import { importAsset } from "./import";
+import { exporterName, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
 import { findComment, OpenAsset } from "./open-asset";
 import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
@@ -207,6 +209,7 @@ export class ArcueCore {
       registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()),
       registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })),
       registry.handleQuery("settings.get", () => this.#settings.current),
+      registry.handleQuery("asset.inspect", (args) => this.#track(this.#inspect(args.path))),
       registry.handleQuery("comment.screenshot", (args) => {
         const asset = this.#asset(args.assetId);
         const comment = findComment(asset.session.review, args.commentId);
@@ -387,6 +390,18 @@ export class ArcueCore {
         );
       }
     }
+  }
+
+  /** Parses a file in its own import worker, as opening it would, without opening a tab or touching review data. */
+  async #inspect(given: string): Promise<AssetInspection> {
+    const path = normalizePath(given);
+    const stat = await this.#platform.stat(path);
+    if (!stat) throw new ArcueError("not-found", `${path} does not exist.`);
+    if (stat.kind !== "file") throw new ArcueError("invalid-input", `${path} is not an asset file.`);
+    const bytes = await this.#platform.readFile(path);
+    const size = bytes.byteLength;
+    const scene = await importAsset(this.#platform, path, bytes, { timeoutMs: this.#importTimeoutMs });
+    return inspectScene(scene, { path, bytes: size });
   }
 
   #close(assetId: string): Promise<void> {
@@ -927,12 +942,6 @@ function replaceComment(review: ReviewFile, updated: Comment): ReviewFile {
 function sameStat(a: FileStat | null, b: FileStat | null): boolean {
   if (a === null || b === null) return a === b;
   return a.kind === b.kind && a.size === b.size && a.modifiedMs === b.modifiedMs;
-}
-
-function exporterName(scene: SceneDescription): string | null {
-  const exporter = scene.source.exporter;
-  if (!exporter) return null;
-  return [exporter.name, exporter.version].filter((part) => part !== null && part !== "").join(" ");
 }
 
 function assetIdOf(args: unknown): string {

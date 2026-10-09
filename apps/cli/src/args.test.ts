@@ -21,6 +21,15 @@ describe("parseArgs", () => {
     expect(parseArgs(["open", "a b/Hero.fbx"])).toEqual({ command: "open", path: "a b/Hero.fbx" });
   });
 
+  it("parses inspect with and without --json", () => {
+    expect(parseArgs(["inspect", "Hero.fbx"])).toEqual({ command: "inspect", path: "Hero.fbx", json: false });
+    expect(parseArgs(["inspect", "--json", "a b/Hero.fbx"])).toEqual({
+      command: "inspect",
+      path: "a b/Hero.fbx",
+      json: true,
+    });
+  });
+
   it("parses status and help", () => {
     expect(parseArgs(["status"])).toEqual({ command: "status" });
     expect(parseArgs([])).toEqual({ command: "help" });
@@ -36,5 +45,9 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["open", "a.fbx", "--speed", "2"])).toThrow('Unknown option "--speed"');
     expect(() => parseArgs(["close"])).toThrow('Unknown command "close"');
     expect(() => parseArgs(["status", "now"])).toThrow("takes no arguments");
+    expect(() => parseArgs(["inspect"])).toThrow("needs a file");
+    expect(() => parseArgs(["inspect", "--json"])).toThrow("needs a file");
+    expect(() => parseArgs(["inspect", "a.fbx", "b.fbx"])).toThrow("takes one file");
+    expect(() => parseArgs(["inspect", "a.fbx", "--frame", "1"])).toThrow('Unknown option "--frame"');
   });
 });

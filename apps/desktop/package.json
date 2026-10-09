@@ -15,6 +15,7 @@
   "dependencies": {
     "@arcue/core": "workspace:*",
     "@arcue/import-fbx": "workspace:*",
+    "@arcue/platform-node": "workspace:*",
     "@arcue/protocol": "workspace:*",
     "@arcue/scene": "workspace:*",
     "@arcue/ui": "workspace:*",
