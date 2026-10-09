@@ -503,11 +503,10 @@ export class AssetSession {
     const folder = summary.path.slice(0, summary.path.lastIndexOf("/") + 1);
     const input = { assetId: this.assetId, file: `${folder}${file.file}`, bone: path };
     try {
-      if (file.nodes === null) {
-        await this.#client.execute("composition.attachFile", input);
-      } else {
-        for (const node of file.nodes) await this.#client.execute("composition.attachFile", { ...input, node });
-      }
+      await this.#client.execute(
+        "composition.attachFile",
+        file.nodes === null ? input : { ...input, nodes: [...file.nodes] },
+      );
     } catch (error) {
       this.#host.notify({ message: messageOf(error), kind: "alert" });
     }

@@ -172,13 +172,15 @@ export const commands = {
   }),
   "composition.attachFile": command({
     description:
-      "Attach a file of the asset's composition to a bone of the model, or detach it with a null bone, which leaves it in place as a set piece. Without node every attached entry of the file moves; with node only the entry for that node. Saves the change in the composition file. Undo with review.undo.",
+      "Attach a file of the asset's composition to a bone of the model, or detach it with a null bone, which leaves it in place as a set piece. Without node or nodes every attached entry of the file moves; with them only the entries for those nodes, in one edit. Saves the change in the composition file. Undo with review.undo.",
     runsIn: "core",
     input: z.object({
       ...assetRef,
       file: compositionMemberSchema,
       /** A node's name or path in the file, naming one of the file's entries. */
       node: z.string().min(1).optional(),
+      /** Several nodes' names or paths in the file, each naming one of the file's entries; joins `node`. */
+      nodes: z.array(z.string().min(1)).min(1).optional(),
       /** A bone's name or path in the model, or null for a set piece. */
       bone: z.string().min(1).nullable(),
     }),

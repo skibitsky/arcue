@@ -149,14 +149,17 @@ describe("parts", () => {
     const [onBone1] = rows.flatMap((row) => (row.item.kind === "file" ? [row.item] : []));
     if (!onBone1) throw new Error("The file has a row.");
     await session.attachFile(onBone1, stoneBone(scene, "Bone_7"));
+    await session.attachFile({ ...onBone1, nodes: ["ShellRound", "ShellSpiked"] }, stoneBone(scene, "Bone_7"));
     await session.attachFile({ ...onBone1, nodes: null }, null);
     const folder = "/work/iza/Assets/Art/Characters/StoneResonator/Models";
+    const bone7 = "StoneResonator/Armature/Bone_1/Bone_7";
     expect(client.calls.filter((call) => call.name === "composition.attachFile").map((call) => call.input)).toEqual([
+      { assetId: session.assetId, file: `${folder}/beetle-shells.fbx`, nodes: ["ShellRound"], bone: bone7 },
       {
         assetId: session.assetId,
         file: `${folder}/beetle-shells.fbx`,
-        node: "ShellRound",
-        bone: "StoneResonator/Armature/Bone_1/Bone_7",
+        nodes: ["ShellRound", "ShellSpiked"],
+        bone: bone7,
       },
       { assetId: session.assetId, file: `${folder}/beetle-shells.fbx`, bone: null },
     ]);
