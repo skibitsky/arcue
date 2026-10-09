@@ -106,6 +106,46 @@ describe("warning.list", () => {
     ]);
   });
 
+  it("moves Choose texture to the next slot a missing texture leaves empty, and clears it once every slot is set", async () => {
+    const skin = importWarning(
+      "texture-not-found",
+      { kind: "texture", name: "Skin.png" },
+      "Texture not found: Skin.png",
+      undefined,
+      {
+        materials: ["Body", "Head"],
+        uses: [
+          { material: "Body", slot: "baseColor" },
+          { material: "Head", slot: "baseColor" },
+        ],
+      },
+    );
+    const test = await setup({
+      [HERO]: fakeAsset({
+        ...spec,
+        meshes: [
+          { name: "Body", grid: 3, material: 0 },
+          { name: "Head", grid: 3, material: 1 },
+        ],
+        materials: ["Body", "Head"],
+        warnings: [skin],
+      }),
+    });
+    const skinFix = async () => (await listed(test)).find((warning) => warning.subject.name === "Skin.png")?.fix;
+    const setTexture = (material: string) =>
+      test.window.client.execute("material.setTexture", {
+        assetId: test.assetId,
+        material,
+        slot: "baseColor",
+        file: TEXTURE,
+      });
+    await expect(skinFix()).resolves.toEqual({ kind: "choose-texture", material: "Body", slot: "baseColor" });
+    await setTexture("Body");
+    await expect(skinFix()).resolves.toEqual({ kind: "choose-texture", material: "Head", slot: "baseColor" });
+    await setTexture("Head");
+    await expect(skinFix()).resolves.toBeUndefined();
+  });
+
   it("offers no base color when more than one material lacks one", async () => {
     const test = await setup({ [HERO]: fakeAsset({ ...spec, materials: ["Body", "Eyes"] }) });
     expect((await listed(test)).find((warning) => warning.id === UNUSED)?.fix).toBeNull();

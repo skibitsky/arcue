@@ -63,7 +63,9 @@ function fixFor(warning: ImportWarning, scene: SceneDescription, assetPath: stri
     return { kind: "retry" };
   }
   const use = (warning.uses ?? []).find((candidate) =>
-    scene.materials.some((material) => material.name === candidate.material),
+    scene.materials.some(
+      (material) => material.name === candidate.material && material.textureOverrides?.[candidate.slot]?.found !== true,
+    ),
   );
   if ((warning.code === "texture-not-found" || warning.code === "texture-path-absolute") && use) {
     return { kind: "choose-texture", material: use.material, slot: use.slot };

@@ -879,10 +879,23 @@ describe("undoing composition edits", () => {
     await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
     await expect(steps.text()).resolves.toBe(changed);
     expect(test.platform.writes.slice(writes)).toEqual([]);
+  });
 
-    await test.platform.remove(SIDECAR);
+  it("drops a composition step that conflicts, so the next undo reaches the edits before it", async () => {
+    const test = await plain();
+    const steps = history(test);
+    const { version } = await sceneOf(test, test.assetId);
+    await test.window.client.execute("comment.create", looseComment(test.assetId, "The legs are too thin.", version));
+    await steps.add("BugShells.fbx");
+    const changed = JSON.stringify({ version: 1, model: "Bug.fbx", animations: ["Anim/BugTurn.fbx"] });
+    await test.platform.writeFile(SIDECAR, changed);
     await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
-    await expect(steps.text()).resolves.toBeNull();
+    await expect(steps.undo()).resolves.toEqual({ changed: true });
+    const review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.queue).toEqual([]);
+    await expect(steps.text()).resolves.toBe(changed);
+    await expect(steps.redo()).resolves.toEqual({ changed: true });
+    await expect(steps.redo()).resolves.toEqual({ changed: false });
   });
 
   it("refuses a redo when the file changed since the undo", async () => {

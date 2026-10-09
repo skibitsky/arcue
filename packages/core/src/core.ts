@@ -1046,7 +1046,8 @@ export class ArcueCore {
 
   /**
    * Steps the asset's history back or forward. It runs in line with composition edits, so a composition step and an
-   * edit never interleave, and reloads the asset after a composition step.
+   * edit never interleave, and reloads the asset after a composition step. A composition step whose file changed since
+   * then rejects with conflict and leaves the history, so the next step reaches the edits behind it.
    */
   #undo(assetId: string, direction: "undo" | "redo"): Promise<{ changed: boolean }> {
     const asset = this.#asset(assetId);
@@ -1057,7 +1058,12 @@ export class ArcueCore {
         if (!edit) return { next: null, result: { changed: false, reload: false } };
         const apply = () => (direction === "undo" ? history.undone() : history.redone());
         if (edit.kind === "composition") {
-          await this.#restoreComposition(asset, edit, direction);
+          try {
+            await this.#restoreComposition(asset, edit, direction);
+          } catch (error) {
+            if (error instanceof ArcueError && error.code === "conflict") history.drop(direction);
+            throw error;
+          }
           return { next: null, result: { changed: true, reload: true }, apply };
         }
         return {

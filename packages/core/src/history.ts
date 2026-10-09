@@ -87,6 +87,11 @@ export class ReviewHistory {
     if (edit) this.#undo.push(edit);
   }
 
+  /** Forgets the latest edit to undo or redo, which can no longer be applied, so the edits behind it stay reachable. */
+  drop(direction: "undo" | "redo"): void {
+    (direction === "undo" ? this.#undo : this.#redo).pop();
+  }
+
   clear(): void {
     this.#undo = [];
     this.#redo = [];
