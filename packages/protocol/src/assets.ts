@@ -19,6 +19,8 @@ export const assetSummarySchema = z.object({
   version: z.string().nullable(),
   /** Why the latest load failed; the previous version stays on screen. */
   error: z.string().nullable(),
+  /** Absolute path of the composition file applied to the asset, when there is one. */
+  composition: z.string().min(1).optional(),
 });
 
 export type AssetStatus = z.output<typeof assetStatusSchema>;

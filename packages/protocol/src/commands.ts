@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { cameraAnchorSchema, frameRangeSchema, indexSchema, spatialAnchorSchema, timeSelectionSchema } from "./anchors";
 import { assetIdSchema, bytesSchema, commentIdSchema } from "./assets";
+import { textureSlotSchema } from "./composition";
 import { computedContextSchema } from "./context";
 import type { CommandDefinition } from "./definitions";
 import { command } from "./definitions";
@@ -13,11 +14,17 @@ const commentTextSchema = z.string().trim().min(1);
 /** A clip's name in the file, such as "Armature|Charge". */
 const clipNameSchema = z.string().min(1);
 const versionIdSchema = z.string().min(1);
+/** An absolute path, or one relative to the asset's composition file. */
+const compositionMemberSchema = z.string().min(1);
+const compositionOutput = z.object({
+  /** The composition file the command wrote. */
+  path: z.string().min(1),
+});
 
 export const commands = {
   "asset.open": command({
     description:
-      "Open an asset in a tab, or focus its tab when it is already open. Optionally show a clip, by its name in the file, and a frame.",
+      'Open an asset in a tab, or focus its tab when it is already open. A ".arcue" composition file opens its model with the files it lists. Optionally show a clip, by its name in the file, and a frame.',
     runsIn: "core",
     input: z.object({
       path: z.string().min(1),
@@ -35,7 +42,8 @@ export const commands = {
     output: z.void(),
   }),
   "asset.reload": command({
-    description: "Parse the asset file again and swap in the new version. The previous version stays if parsing fails.",
+    description:
+      "Parse the asset file and its composition's files again and swap in the new version. The previous version stays if parsing fails.",
     runsIn: "core",
     input: z.object(assetRef),
     output: z.object({ version: z.string() }),
@@ -109,6 +117,50 @@ export const commands = {
       prompt: z.string(),
       copiedToClipboard: z.boolean(),
     }),
+  }),
+  "composition.addFile": command({
+    description:
+      "Load another file into the asset's view and save it in the asset's composition file, which is created beside the model when there is none. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place. Adding a file again with the same node replaces its entry.",
+    runsIn: "core",
+    input: z
+      .object({
+        ...assetRef,
+        file: compositionMemberSchema,
+        role: z.enum(["animation", "attach", "set"]),
+        /** A node's name or path in the file, for "attach" and "set". Without it the whole file comes along. */
+        node: z.string().min(1).optional(),
+        /** The model's bone that an "attach" file follows. */
+        bone: z.string().min(1).optional(),
+      })
+      .refine((input) => (input.role === "attach") === (input.bone !== undefined), {
+        message: 'An "attach" file needs a bone, and only it takes one.',
+        path: ["bone"],
+      })
+      .refine((input) => input.role !== "animation" || input.node === undefined, {
+        message: "An animation file takes no node.",
+        path: ["node"],
+      }),
+    output: compositionOutput,
+  }),
+  "composition.removeFile": command({
+    description:
+      'Remove a file from the asset\'s view and from its composition file. Files named "<model>@<clip>.fbx" beside the model join by their name and cannot be removed this way.',
+    runsIn: "core",
+    input: z.object({ ...assetRef, file: compositionMemberSchema }),
+    output: compositionOutput,
+  }),
+  "material.setTexture": command({
+    description:
+      "Show a texture in a material slot of the asset, in place of what the model's file says, and save it in the composition file. A null file removes the override.",
+    runsIn: "core",
+    input: z.object({
+      ...assetRef,
+      /** The material's name in the file. */
+      material: z.string().min(1),
+      slot: textureSlotSchema,
+      file: compositionMemberSchema.nullable(),
+    }),
+    output: compositionOutput,
   }),
   "settings.set": command({
     description: "Change app settings. Fields left out keep their values. Returns the settings now in effect.",

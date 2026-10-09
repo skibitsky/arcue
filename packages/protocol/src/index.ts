@@ -28,6 +28,16 @@ export {
 export type { ConnectionState, CoreClient, Unsubscribe } from "./client";
 export type { CommandArgs, CommandInput, CommandName, CommandOutput, Commands } from "./commands";
 export { commands, isCommandName } from "./commands";
+export type { CompositionAttach, CompositionFile, MaterialTextures, TextureSlotName } from "./composition";
+export {
+  COMPOSITION_EXTENSION,
+  COMPOSITION_VERSION,
+  compositionAttachSchema,
+  compositionFileSchema,
+  materialTexturesSchema,
+  relativeFileSchema,
+  textureSlotSchema,
+} from "./composition";
 export type { BoneShare, CommentContext, ComputedContext, JointPosition } from "./context";
 export {
   boneShareSchema,
@@ -58,6 +68,7 @@ export type {
   MeshTopology,
   ReviewFile,
   RoundSummary,
+  VersionFile,
 } from "./review";
 export {
   anchorStateSchema,
@@ -68,6 +79,7 @@ export {
   meshTopologySchema,
   reviewFileSchema,
   roundSummarySchema,
+  versionFileSchema,
 } from "./review";
 export type { RoundComment, RoundData } from "./round";
 export { roundCommentSchema, roundDataSchema } from "./round";

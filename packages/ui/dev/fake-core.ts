@@ -289,6 +289,11 @@ export class FakeCoreClient implements CoreClient {
     return { assetId };
   }
 
+  /** The fake keeps no files; composition edits only name the file they would write. */
+  #compositionPath(assetId: string): string {
+    return this.#asset(assetId).summary.path.replace(/\.[^./]*$/, ".arcue");
+  }
+
   #buildPrompt(asset: FakeAsset, round: number, comments: Comment[]): string {
     const lines = [
       `3D review · round ${round} · ${comments.length} comment${comments.length === 1 ? "" : "s"}`,
@@ -481,6 +486,9 @@ export class FakeCoreClient implements CoreClient {
       this.#emit("round.copied", { assetId, round });
       return { round, prompt, copiedToClipboard: this.#options.coreClipboard ?? false };
     },
+    "composition.addFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
+    "composition.removeFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
+    "material.setTexture": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "settings.set": (args) => {
       this.#settings = { ...this.#settings, ...args };
       return structuredClone(this.#settings);
