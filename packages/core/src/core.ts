@@ -760,6 +760,8 @@ export class ArcueCore {
       asset.stabilityCheck++;
       asset.relocate(path, location);
       asset.missing = false;
+      asset.status = "loading";
+      asset.error = null;
       asset.candidates = [];
       asset.earlier = [];
       this.#watchAsset(asset);

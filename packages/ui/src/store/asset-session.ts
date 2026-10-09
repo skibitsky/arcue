@@ -7,6 +7,7 @@ import type {
   DisplayMode,
   FrameRange,
   PartView,
+  ReviewCandidate,
   ReviewFile,
   TimeSelection,
   ViewState,
@@ -117,6 +118,8 @@ export interface SessionState {
   warnings: readonly AssetWarning[];
   /** The subject the 3D view tints, as when pointing at a warning. */
   highlight: WarningSubject | null;
+  /** An earlier review the core offers to continue, until the person continues, dismisses it or closes the tab. */
+  offer: ReviewCandidate | null;
 }
 
 export interface TimeState {
@@ -158,6 +161,7 @@ export class AssetSession {
   readonly #thumbnailAttempts = new Map<string, number>();
   #copying = false;
   #warningSequence = 0;
+  #offerDismissed = false;
   #disposed = false;
 
   constructor(summary: AssetSummary, host: SessionHost) {
@@ -185,6 +189,7 @@ export class AssetSession {
       added: null,
       warnings: [],
       highlight: null,
+      offer: null,
     });
   }
 
@@ -205,13 +210,16 @@ export class AssetSession {
     const { client } = this.#host;
     const reviewSequence = this.#reviewSequence;
     const initial = !this.#initialViewApplied && this.#savedView === null;
-    const [review, savedView, list] = await Promise.all([
+    const [review, savedView, list, candidates] = await Promise.all([
       client.query("review.get", { assetId: this.assetId }).catch(() => null),
       initial ? client.query("viewState.get", { assetId: this.assetId }).catch(() => null) : Promise.resolve(null),
       client.query("asset.list", {}).catch(() => null),
+      client.query("review.candidates", { assetId: this.assetId }).catch(() => null),
     ]);
     if (this.#disposed) return true;
     if (savedView && !this.#initialViewApplied) this.#savedView = savedView;
+    if (savedView?.relinkOfferDismissed) this.#offerDismissed = true;
+    if (candidates) this.setOffer(candidates.candidates[0] ?? null);
     if (review && reviewSequence === this.#reviewSequence) this.setReview(review);
     const summary = list?.assets.find((asset) => asset.assetId === this.assetId);
     if (summary) this.setSummary(summary);
@@ -221,8 +229,32 @@ export class AssetSession {
   }
 
   setSummary(summary: AssetSummary): void {
+    const previous = this.state.get().summary;
     this.state.patch({ summary });
+    if (previous.error !== summary.error) void this.refreshWarnings();
     void this.#loadScene();
+  }
+
+  /** Shows the core's offer to continue an earlier review, unless the person dismissed one in this tab; null hides it. */
+  setOffer(offer: ReviewCandidate | null): void {
+    this.state.patch({ offer: this.#offerDismissed ? null : offer });
+  }
+
+  /** Moves the offered review onto this asset. */
+  async continueReview(): Promise<void> {
+    const { offer } = this.state.get();
+    if (!offer) return;
+    await this.#run(async () => {
+      await this.#client.execute("review.relink", { assetId: this.assetId, from: offer.path });
+      this.setOffer(null);
+    });
+  }
+
+  /** Hides the offer for good in this tab; the view state remembers it across window reloads and moves. */
+  dismissOffer(): void {
+    this.#offerDismissed = true;
+    this.setOffer(null);
+    void this.reportState();
   }
 
   setReview(review: ReviewFile): void {
@@ -1065,18 +1097,23 @@ export class AssetSession {
 
   /**
    * Runs the warning's quick fix: shows its clip, loads the files again, or uses the texture as the base color.
-   * Choosing a texture needs the host's open dialog, so `WorkspaceStore.chooseTexture` runs that one.
+   * Choosing a texture or a model needs the host's open dialog, so `WorkspaceStore` runs those.
    */
   async fixWarning(warning: AssetWarning): Promise<void> {
     const fix = warning.fix;
     if (fix?.kind === "show-clip") {
       this.setClip(fix.clip);
     } else if (fix?.kind === "retry") {
-      await this.#run(() => this.#client.execute("asset.reload", { assetId: this.assetId }));
+      await this.reload();
     } else if (fix?.kind === "use-as-base-color") {
       const input = { assetId: this.assetId, material: fix.material, slot: "baseColor" as const, file: fix.file };
       await this.#run(() => this.#client.execute("material.setTexture", input));
     }
+  }
+
+  /** Reads the asset's files again, as the Retry fix asks. */
+  async reload(): Promise<void> {
+    await this.#run(() => this.#client.execute("asset.reload", { assetId: this.assetId }));
   }
 
   async dismissWarning(warningId: string): Promise<void> {
@@ -1251,6 +1288,7 @@ export class AssetSession {
       display: { mode: displayMode, skeleton },
       parts,
       outlineOpen,
+      ...(this.#offerDismissed ? { relinkOfferDismissed: true } : {}),
     };
   }
 

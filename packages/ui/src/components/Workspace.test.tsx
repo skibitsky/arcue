@@ -383,3 +383,53 @@ describe("Workspace", () => {
     expect(discarded).toEqual([["Crate.fbx"]]);
   });
 });
+
+describe("an earlier review of a renamed file", () => {
+  const candidate = {
+    path: STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "StoneStriker.fbx"),
+    comments: 3,
+    lastLoadedAt: "2026-10-08T14:00:00.000Z",
+    match: "structure" as const,
+  };
+
+  it("offers it at the bottom of the 3D view with Continue and a close button, until one is used", async () => {
+    const { client, session } = await renderStone();
+    await act(async () => {
+      client.simulateOffer(session.assetId, candidate);
+      await flush();
+    });
+    const offer = screen.getByText("Looks like StoneStriker.fbx, renamed.").closest(".offer") as HTMLElement;
+    expect(offer.closest(".viewport-area")).not.toBeNull();
+    expect(within(offer).getByRole("button", { name: "Continue" })).toBeTruthy();
+    const user = userEvent.setup();
+    await user.click(within(offer).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("Looks like StoneStriker.fbx, renamed.")).toBeNull();
+    expect(client.calls.some((call) => call.name === "review.relink")).toBe(false);
+  });
+
+  it("continues the review from the offer", async () => {
+    const { client, session } = await renderStone();
+    await act(async () => {
+      client.simulateOffer(session.assetId, candidate);
+      await flush();
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await act(() => flush());
+    expect(client.calls.find((call) => call.name === "review.relink")?.input).toEqual({
+      assetId: session.assetId,
+      from: candidate.path,
+    });
+    expect(screen.queryByText("Looks like StoneStriker.fbx, renamed.")).toBeNull();
+  });
+
+  it("retitles the tab and shows a toast when the file was renamed while open", async () => {
+    const { client, session } = await renderStone();
+    await act(async () => {
+      client.simulateRename(session.assetId, STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Resonator.fbx"));
+      await flush();
+    });
+    expect(screen.getByRole("tab", { name: "Resonator.fbx" })).toBeTruthy();
+    expect(document.querySelector(".toast")?.textContent).toBe("Continued the review of StoneResonator.fbx");
+  });
+});

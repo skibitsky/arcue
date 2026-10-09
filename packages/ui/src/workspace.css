@@ -763,6 +763,38 @@
   }
 }
 
+.offer {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-16);
+  z-index: 4;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  max-width: calc(100% - 24px);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-16);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface-tooltip);
+  box-shadow: var(--shadow-pop);
+  font-weight: var(--weight-medium);
+}
+
+.offer-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.offer .btn {
+  height: 26px;
+  margin-left: var(--space-6);
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-full);
+}
+
 .box-layer {
   position: absolute;
   inset: 0;

@@ -1,3 +1,4 @@
+import { fileNameOf } from "@arcue/scene";
 import type { CreateViewport } from "@arcue/viewport";
 import { DropdownMenu } from "radix-ui";
 import type { DragEvent } from "react";
@@ -6,6 +7,7 @@ import type { AssetSession } from "../store/asset-session";
 import { useSelect } from "../store/observable";
 import type { WorkspaceStore } from "../store/workspace-store";
 import { CommentBoxLayer } from "./CommentBox";
+import { IconButton } from "./controls";
 import { Icon } from "./Icon";
 import { OutlineDrawer } from "./Outline";
 import { Toolbar } from "./Toolbar";
@@ -54,11 +56,27 @@ export function Stage({
         >
           <ViewportHost session={session} createViewport={createViewport} />
           <ViewportStatus session={session} />
+          <RelinkOffer session={session} />
           <CommentBoxLayer session={session} />
           <DropMenu store={store} assetId={session.assetId} />
         </section>
       </div>
     </section>
+  );
+}
+
+/** The core's offer to continue the review of an earlier file, which stays until it is taken or dismissed. */
+function RelinkOffer({ session }: { session: AssetSession }) {
+  const offer = useSelect(session.state, (state) => state.offer);
+  if (!offer) return null;
+  return (
+    <div className="offer" role="status">
+      <span className="offer-text">Looks like {fileNameOf(offer.path)}, renamed.</span>
+      <button type="button" className="btn" onClick={() => void session.continueReview()}>
+        Continue
+      </button>
+      <IconButton small icon="x" label="Dismiss" onClick={() => session.dismissOffer()} />
+    </div>
   );
 }
 

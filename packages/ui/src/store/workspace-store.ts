@@ -154,6 +154,8 @@ export class WorkspaceStore {
         this.#summaries.delete(assetId);
       }),
       client.subscribe("review.changed", ({ assetId, review }) => this.#sessions.get(assetId)?.setReview(review)),
+      client.subscribe("review.relinked", ({ assetId, from, automatic }) => this.#onRelinked(assetId, from, automatic)),
+      client.subscribe("review.offered", ({ assetId, candidate }) => this.#sessions.get(assetId)?.setOffer(candidate)),
       client.onConnectionChange((connection) => this.#onConnection(connection)),
     ];
     this.#stop = () => {
@@ -188,6 +190,14 @@ export class WorkspaceStore {
         if (!(await session.refresh())) this.#removeAsset(session.assetId);
       }),
     );
+  }
+
+  /** An asset took over an earlier review. A relink nobody asked for gets a toast that names the earlier file. */
+  #onRelinked(assetId: string, from: string, automatic: boolean): void {
+    const session = this.#sessions.get(assetId);
+    if (!session) return;
+    session.setOffer(null);
+    if (automatic) this.notify({ message: `Continued the review of ${fileNameOf(from)}`, kind: "info" });
   }
 
   #onSummary(asset: AssetSummary): void {
@@ -457,6 +467,18 @@ export class WorkspaceStore {
     try {
       const [image] = (await host.pick("image", this.#assetPath(assetId))).filter(isImageFile);
       if (image) await this.#setTexture(assetId, material, slot, image);
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
+  /** Opens the host's dialog for a model file and points the asset, whose model is gone, at the picked one. */
+  async chooseModel(assetId: string): Promise<void> {
+    const host = this.#files;
+    if (!host) return;
+    try {
+      const [model] = (await host.pick("model", this.#assetPath(assetId))).filter(isModelFile);
+      if (model) await this.client.execute("asset.relink", { assetId, path: model });
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
     }

@@ -186,6 +186,47 @@ describe("import warnings in the status bar", () => {
     });
   });
 
+  it("offers Choose file and Retry for a model whose file is gone, and relinks to the picked file", async () => {
+    const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "StoneStriker.fbx");
+    const files: FileHost = { pick: vi.fn(async () => [picked]), place: async () => [], open: () => {} };
+    const { client } = await renderStone((scene) => scene, files);
+    const [asset] = (await client.query("asset.list", {})).assets;
+    await act(async () => {
+      client.simulateMissing(asset?.assetId ?? "");
+      await flush();
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^Model not found: StoneResonator\.fbx/ }));
+    const [row] = rows();
+    expect(within(row as HTMLElement).getByText("File · StoneResonator.fbx")).toBeTruthy();
+    await user.click(within(row as HTMLElement).getByRole("button", { name: "Retry" }));
+    expect(client.calls.some((call) => call.name === "asset.reload")).toBe(true);
+
+    await user.click(within(row as HTMLElement).getByRole("button", { name: "Choose file" }));
+    await act(() => flush());
+    expect(files.pick).toHaveBeenCalledWith("model", STONE_RESONATOR_PATH);
+    expect(client.calls.find((call) => call.name === "asset.relink")?.input).toEqual({
+      assetId: asset?.assetId,
+      path: picked,
+    });
+    expect(screen.getByRole("tab", { name: "StoneStriker.fbx" })).toBeTruthy();
+    expect(document.querySelector(".sb-warn")).toBeNull();
+  });
+
+  it("offers no Choose file without a host to pick models from", async () => {
+    const { client } = await renderStone((scene) => scene);
+    const [asset] = (await client.query("asset.list", {})).assets;
+    await act(async () => {
+      client.simulateMissing(asset?.assetId ?? "");
+      await flush();
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^Model not found/ }));
+    const [row] = rows();
+    expect(within(row as HTMLElement).queryByRole("button", { name: "Choose file" })).toBeNull();
+    expect(within(row as HTMLElement).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   it("offers no Choose texture without a host to pick images from", async () => {
     await renderStone();
     const user = userEvent.setup();

@@ -111,10 +111,12 @@ function WarningRow({
   modelName: string;
 }) {
   const number = draftNumber(review, warning.commentId);
-  const fix = warning.fix?.kind === "choose-texture" && !store.canAddFiles ? null : warning.fix;
+  const picksFile = warning.fix?.kind === "choose-texture" || warning.fix?.kind === "choose-model";
+  const fix = picksFile && !store.canAddFiles ? null : warning.fix;
   const removable = warning.fix?.kind === "retry" ? removableMember(warning, modelName) : null;
   const runFix = () => {
     if (fix?.kind === "choose-texture") void store.chooseTexture(session.assetId, fix.material, fix.slot);
+    else if (fix?.kind === "choose-model") void store.chooseModel(session.assetId);
     else void session.fixWarning(warning);
   };
   const message = <span className="warn-msg">{warning.message}</span>;
@@ -132,6 +134,11 @@ function WarningRow({
           {fix ? (
             <button type="button" className="warn-fix warn-hover" onClick={runFix}>
               {fixLabels[fix.kind]}
+            </button>
+          ) : null}
+          {warning.code === "model-not-found" ? (
+            <button type="button" className="warn-fix warn-hover" onClick={() => void session.reload()}>
+              Retry
             </button>
           ) : null}
           {removable !== null ? (

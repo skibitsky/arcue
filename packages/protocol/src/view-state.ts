@@ -32,6 +32,8 @@ export const viewStateSchema = z.object({
   parts: partViewSchema.default(() => ({ hidden: [], shown: [], isolated: null, lod: 0 })),
   /** The outline drawer is open. It shows only for models with parts or added files to list. */
   outlineOpen: z.boolean().default(false),
+  /** The person dismissed the offer to continue an earlier review, so the tab never offers one again. */
+  relinkOfferDismissed: z.boolean().optional(),
 });
 
 export type DisplayMode = z.output<typeof displayModeSchema>;

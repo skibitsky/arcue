@@ -246,3 +246,81 @@ describe("view state and settings", () => {
     expect(client.calls.at(-1)).toEqual({ name: "settings.set", input: { coordinates: "z-up-blender" } });
   });
 });
+
+describe("continuing an earlier review", () => {
+  const earlier = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "StoneStriker.fbx");
+  const candidate = {
+    path: earlier,
+    comments: 3,
+    lastLoadedAt: "2026-10-08T14:00:00.000Z",
+    match: "structure" as const,
+  };
+
+  it("shows one short toast naming the earlier file when the core continues a review by itself", async () => {
+    const { client, store, session, timers } = await openStone();
+    const renamed = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Resonator.fbx");
+    client.simulateRename(session.assetId, renamed);
+    await flush();
+    expect(session.state.get().summary).toMatchObject({ path: renamed, name: "Resonator.fbx" });
+    expect(store.state.get().toast).toMatchObject({
+      message: "Continued the review of StoneResonator.fbx",
+      kind: "info",
+    });
+    timers.advance(3200);
+    expect(store.state.get().toast).toBeNull();
+  });
+
+  it("keeps an offer until it is taken, which moves the review without a toast", async () => {
+    const { client, store, session, timers } = await openStone();
+    client.simulateOffer(session.assetId, candidate);
+    await flush();
+    expect(session.state.get().offer).toEqual(candidate);
+    timers.advance(60_000);
+    expect(session.state.get().offer).toEqual(candidate);
+
+    await session.continueReview();
+    await flush();
+    expect(client.calls.find((call) => call.name === "review.relink")?.input).toEqual({
+      assetId: session.assetId,
+      from: earlier,
+    });
+    expect(session.state.get().offer).toBeNull();
+    expect(store.state.get().toast).toBeNull();
+  });
+
+  it("shows the offer a tab's asset already has when the tab opens", async () => {
+    const { client, store, session } = await openStone();
+    client.simulateOffer(session.assetId, candidate);
+    await flush();
+    store.releaseAsset(session.assetId);
+    store.showAsset({ assetId: session.assetId });
+    await flush();
+    expect(store.session(session.assetId)?.state.get().offer).toEqual(candidate);
+  });
+
+  it("remembers a dismissal in the tab's view state, so the tab asks only once", async () => {
+    const { client, store, session } = await openStone();
+    client.simulateOffer(session.assetId, candidate);
+    await flush();
+    session.dismissOffer();
+    await flush();
+    expect(session.state.get().offer).toBeNull();
+    const report = client.calls.filter((call) => call.name === "view.reportState").at(-1);
+    expect(report?.input).toMatchObject({ state: { relinkOfferDismissed: true } });
+
+    client.simulateOffer(session.assetId, candidate);
+    await session.refresh();
+    await flush();
+    expect(session.state.get().offer).toBeNull();
+
+    const released = store.releaseAsset(session.assetId);
+    await client.execute("view.reportState", { assetId: session.assetId, state: released ?? fail() });
+    store.showAsset({ assetId: session.assetId });
+    await flush();
+    expect(store.session(session.assetId)?.state.get().offer).toBeNull();
+  });
+});
+
+function fail(): never {
+  throw new Error("The tab had no view to release.");
+}

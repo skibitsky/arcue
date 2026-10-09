@@ -16,6 +16,7 @@ import type {
   QueryInput,
   QueryName,
   QueryOutput,
+  ReviewCandidate,
   ReviewFile,
   Settings,
   TimeSelection,
@@ -23,7 +24,14 @@ import type {
 } from "@arcue/protocol";
 import { ArcueError, COMPOSITION_FILE_NAME, commands, queries, reviewFileSchema, warningId } from "@arcue/protocol";
 import type { SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { countInRanges, isDefaultPartView, materialSlots, shownByDefault } from "@arcue/scene";
+import {
+  countInRanges,
+  fileNameOf,
+  importWarning,
+  isDefaultPartView,
+  materialSlots,
+  shownByDefault,
+} from "@arcue/scene";
 
 export interface FakeAssetSeed {
   scene: SceneDescription;
@@ -54,6 +62,10 @@ interface FakeAsset {
   /** Reviews before each undoable edit, newest last, and those undo took back. */
   undo: ReviewFile[];
   redo: ReviewFile[];
+  /** Earlier reviews the core offers, best first. */
+  candidates: ReviewCandidate[];
+  /** The model's file is gone and was not followed. */
+  missing: boolean;
 }
 
 /** The commands review.undo takes back, as the core's history records them. */
@@ -197,6 +209,33 @@ export class FakeCoreClient implements CoreClient {
     this.#emitReview(asset);
   }
 
+  /** Simulates the core finding an earlier review that only the meshes match, and offering it. */
+  simulateOffer(assetId: string, candidate: ReviewCandidate): void {
+    this.#asset(assetId).candidates = [candidate];
+    this.#emit("review.offered", { assetId, candidate });
+  }
+
+  /** Simulates the model's file being renamed while open, and the core following it to `path`. */
+  simulateRename(assetId: string, path: string): void {
+    const asset = this.#asset(assetId);
+    const from = asset.summary.path;
+    this.#follow(asset, path);
+    this.#emit("review.relinked", { assetId, from, automatic: true });
+  }
+
+  /** Simulates the model's file going away with no file to follow, which the core reports as model-not-found. */
+  simulateMissing(assetId: string): void {
+    const asset = this.#asset(assetId);
+    asset.missing = true;
+    this.#setSummary(asset, { status: "failed", error: `Model not found: ${asset.summary.name}` });
+  }
+
+  #follow(asset: FakeAsset, path: string): void {
+    asset.missing = false;
+    asset.candidates = [];
+    this.#setSummary(asset, { path, name: fileNameOf(path), status: "ready", error: null });
+  }
+
   /** As the core does, a time or target must be picked on the version on screen. */
   #pickedOn(asset: FakeAsset, version: string): void {
     const current = asset.summary.version;
@@ -305,6 +344,8 @@ export class FakeCoreClient implements CoreClient {
       viewState: null,
       undo: [],
       redo: [],
+      candidates: [],
+      missing: false,
     };
     this.#assets.set(assetId, asset);
     await show(assetId);
@@ -358,6 +399,21 @@ export class FakeCoreClient implements CoreClient {
 
   /** The seed scene's warnings as the core lists them: errors first, with ids, dismissals, comments and fixes. */
   #warnings(asset: FakeAsset): AssetWarning[] {
+    const missing = asset.missing ? [this.#modelNotFound(asset)] : [];
+    return [...missing, ...this.#importWarnings(asset)];
+  }
+
+  #modelNotFound(asset: FakeAsset): AssetWarning {
+    const { name, path } = asset.summary;
+    const warning = importWarning("model-not-found", { kind: "file", name }, `Model not found: ${name}`, undefined, {
+      detail: `${path} was removed or renamed.`,
+    });
+    const id = warningId(warning);
+    const dismissed = (asset.review.dismissedWarnings ?? []).includes(id);
+    return { id, ...warning, dismissed, commentId: null, fix: { kind: "choose-model" } };
+  }
+
+  #importWarnings(asset: FakeAsset): AssetWarning[] {
     const scene = asset.seed?.scene;
     if (!scene || asset.summary.version === null) return [];
     const dismissed = new Set(asset.review.dismissedWarnings ?? []);
@@ -423,6 +479,11 @@ export class FakeCoreClient implements CoreClient {
       this.#emit("asset.closed", { assetId });
     },
     "asset.reload": async ({ assetId }) => {
+      const asset = this.#asset(assetId);
+      if (asset.missing) {
+        this.#setSummary(asset, { status: "failed", error: `${asset.summary.path} does not exist.` });
+        throw new ArcueError("not-found", `${asset.summary.path} does not exist.`);
+      }
       await this.simulateExport(assetId);
       return { version: this.#asset(assetId).summary.version ?? "" };
     },
@@ -640,13 +701,20 @@ export class FakeCoreClient implements CoreClient {
     },
     "review.undo": ({ assetId }) => this.#step(this.#asset(assetId), "undo"),
     "review.redo": ({ assetId }) => this.#step(this.#asset(assetId), "redo"),
-    "asset.relink": ({ assetId }) => {
-      this.#asset(assetId);
-      throw new ArcueError("conflict", "The fake core never loses a model file.");
+    "asset.relink": ({ assetId, path }) => {
+      const asset = this.#asset(assetId);
+      if (!asset.missing) throw new ArcueError("conflict", `${asset.summary.name} still exists.`);
+      const from = asset.summary.path;
+      this.#follow(asset, path);
+      this.#emit("review.relinked", { assetId, from, automatic: false });
     },
-    "review.relink": ({ assetId }) => {
-      this.#asset(assetId);
-      throw new ArcueError("not-found", "The fake core keeps no earlier reviews.");
+    "review.relink": ({ assetId, from }) => {
+      const asset = this.#asset(assetId);
+      if (!asset.candidates.some((candidate) => candidate.path === from)) {
+        throw new ArcueError("not-found", `${from} has no review to move.`);
+      }
+      asset.candidates = [];
+      this.#emit("review.relinked", { assetId, from, automatic: false });
     },
     "view.reportState": ({ assetId, state }) => {
       this.#asset(assetId).viewState = state;
@@ -683,10 +751,7 @@ export class FakeCoreClient implements CoreClient {
     "asset.list": () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) }),
     "review.get": ({ assetId }) => this.#asset(assetId).review,
     "viewState.get": ({ assetId }) => this.#asset(assetId).viewState,
-    "review.candidates": ({ assetId }) => {
-      this.#asset(assetId);
-      return { candidates: [] };
-    },
+    "review.candidates": ({ assetId }) => ({ candidates: this.#asset(assetId).candidates }),
     "comment.screenshot": async ({ assetId, commentId }) => {
       const asset = this.#asset(assetId);
       const comment = this.#comment(asset, commentId);
