@@ -1,7 +1,7 @@
 import type { PartView, QueryOutput, TimeSelection } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { Clip, Mesh, SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { decodeRanges, isDefaultPartView, lastFrame, lodLevels, rangesWithin } from "@arcue/scene";
+import { decodeRanges, isDefaultPartView, lastFrame, lodLevels, rangesWithin, shownByDefault } from "@arcue/scene";
 import { round5 } from "./coordinates";
 
 export interface MeshAtPath {
@@ -133,6 +133,7 @@ export function partsOf(scene: SceneDescription): QueryOutput<"scene.parts">["pa
     id: part.id,
     name: part.name,
     role: part.role,
+    shownByDefault: shownByDefault(part),
     levels: part.levels.map(({ level, meshes }) => ({
       level,
       meshes: meshes.flatMap((index) => paths.get(index)?.path ?? []),

@@ -21,7 +21,7 @@ import type {
 } from "@arcue/protocol";
 import { ArcueError, commands, queries, reviewFileSchema } from "@arcue/protocol";
 import type { SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { countInRanges, isDefaultPartView } from "@arcue/scene";
+import { countInRanges, isDefaultPartView, shownByDefault } from "@arcue/scene";
 
 export interface FakeAssetSeed {
   scene: SceneDescription;
@@ -548,7 +548,15 @@ export class FakeCoreClient implements CoreClient {
     "scene.parts": ({ assetId }) => {
       const asset = this.#asset(assetId);
       if (!asset.seed) throw new ArcueError("not-found", "No scene is loaded.");
-      return { parts: asset.seed.scene.parts.map(({ id, name, role }) => ({ id, name, role, levels: [] })) };
+      return {
+        parts: asset.seed.scene.parts.map((part) => ({
+          id: part.id,
+          name: part.name,
+          role: part.role,
+          shownByDefault: shownByDefault(part),
+          levels: [],
+        })),
+      };
     },
   };
 }

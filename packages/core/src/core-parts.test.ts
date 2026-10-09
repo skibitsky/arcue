@@ -36,6 +36,7 @@ describe("parts", () => {
         id: "Hero/Body_LOD0",
         name: "Body",
         role: "model",
+        shownByDefault: true,
         levels: [
           { level: 0, meshes: ["Hero/Body_LOD0"], triangles: 8 },
           { level: 1, meshes: ["Hero/Body_LOD1"], triangles: 2 },
@@ -45,12 +46,14 @@ describe("parts", () => {
         id: "Hero/UCX_Body",
         name: "UCX_Body",
         role: "collision",
+        shownByDefault: false,
         levels: [{ level: 0, meshes: ["Hero/UCX_Body"], triangles: 2 }],
       },
       {
         id: "Hero/Boulder2",
         name: "Boulder2",
         role: "model",
+        shownByDefault: true,
         levels: [{ level: 0, meshes: ["Hero/Boulder2"], triangles: 2 }],
       },
     ]);

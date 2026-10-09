@@ -132,10 +132,10 @@ describe("opening a composition", () => {
       "../Textures/Shell.png",
     ]);
     const { parts } = await test.core.client.query("scene.parts", { assetId });
-    expect(parts.map((part) => part.levels[0]?.meshes)).toEqual([
-      ["Hero/Legs"],
-      ["BugShells.fbx//Hero/ShellA"],
-      ["BugShells.fbx//Hero/ShellB"],
+    expect(parts.map((part) => [part.levels[0]?.meshes, part.shownByDefault])).toEqual([
+      [["Hero/Legs"], true],
+      [["BugShells.fbx//Hero/ShellA"], true],
+      [["BugShells.fbx//Hero/ShellB"], false],
     ]);
   });
 
