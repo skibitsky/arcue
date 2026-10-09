@@ -100,7 +100,7 @@ export function commentWarning(warning: AssetWarning): CommentWarning {
 export function warningPrompt(assetPath: string, warnings: readonly AssetWarning[]): string {
   const listed = warnings.filter((warning) => !warning.dismissed);
   if (listed.length === 0) return `${assetPath} has no import warnings.`;
-  const lines = [`Fix these import warnings in ${assetPath}, then export it again.`];
+  const lines = [`Fix these import warnings for ${assetPath}.`];
   listed.forEach((warning, index) => {
     const parts = [warning.message, subjectLabel(warning)];
     if (warning.detail !== undefined) parts.push(warning.detail);

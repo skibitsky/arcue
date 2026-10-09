@@ -75,7 +75,7 @@ describe("import warnings in the session", () => {
     const copiedContext = await openStone({ scene: withWarnings });
     await copiedContext.session.copyWarnings();
     expect(copiedContext.copied[0]?.split("\n")[0]).toBe(
-      "Fix these import warnings in /work/iza/Assets/Art/Characters/StoneResonator/Models/StoneResonator.fbx, then export it again.",
+      "Fix these import warnings for /work/iza/Assets/Art/Characters/StoneResonator/Models/StoneResonator.fbx.",
     );
     expect(copiedContext.store.state.get().toast?.message).toBe("Copied 4 warnings");
 

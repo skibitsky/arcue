@@ -284,7 +284,7 @@ describe("warning.prompt", () => {
     const { prompt } = await test.core.client.query("warning.prompt", { assetId: test.assetId });
     expect(prompt).toBe(
       [
-        `Fix these import warnings in ${HERO}, then export it again.`,
+        `Fix these import warnings for ${HERO}.`,
         '1. Texture not found: Eyes.png · texture "Eyes.png" · Stored path: C:/art/Eyes.png',
         '2. Root scale x100: Hero · node "Hero"',
         '3. Texture not used: Body_BaseColor.png · texture "Body_BaseColor.png" · Stored path: Textures/Body_BaseColor.png, found at Textures/Body_BaseColor.png',

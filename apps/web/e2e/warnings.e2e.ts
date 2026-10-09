@@ -113,9 +113,7 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
   await list.getByRole("button", { name: "Copy as prompt" }).click();
   await expect(page.getByText("Copied 4 warnings")).toBeVisible();
   const prompt = await page.evaluate(() => navigator.clipboard.readText());
-  expect(prompt.split("\n")[0]).toBe(
-    "Fix these import warnings in /files/pebble-golem/pebble-golem.fbx, then export it again.",
-  );
+  expect(prompt.split("\n")[0]).toBe("Fix these import warnings for /files/pebble-golem/pebble-golem.fbx.");
   expect(prompt).toContain("Texture not found: Stone_BaseColor.png");
   expect(prompt).not.toContain("Helmet");
 

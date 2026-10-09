@@ -744,7 +744,7 @@ export class FakeCoreClient implements CoreClient {
     "warning.prompt": ({ assetId }) => {
       const asset = this.#asset(assetId);
       const listed = this.#warnings(asset).filter((warning) => !warning.dismissed);
-      const lines = [`Fix these import warnings in ${asset.summary.path}, then export it again.`];
+      const lines = [`Fix these import warnings for ${asset.summary.path}.`];
       listed.forEach((warning, index) => {
         const subject = `${warning.subject.kind} "${warning.subject.name}"`;
         lines.push(`${index + 1}. ${[warning.message, subject, warning.detail].filter(Boolean).join(" · ")}`);
