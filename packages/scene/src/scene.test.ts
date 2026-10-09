@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Importer } from "./importer";
-import { findImporter, referencedFileCandidates } from "./importer";
+import { findImporter, parseStoredPath, referencedFileCandidates } from "./importer";
 import { boundsOfPoints } from "./math";
 import type { SceneDescription } from "./scene";
 import { collectTransferables } from "./scene";
@@ -106,5 +106,29 @@ describe("referencedFileCandidates", () => {
 
   it("returns nothing for an empty path", () => {
     expect(referencedFileCandidates("", "Rock.fbx")).toEqual([]);
+  });
+});
+
+describe("parseStoredPath", () => {
+  it("keeps a relative path with forward slashes", () => {
+    expect(parseStoredPath("textures\\rock.png")).toEqual({
+      name: "rock.png",
+      relative: "textures/rock.png",
+      absolute: false,
+    });
+  });
+
+  it("marks paths from the exporting machine as absolute", () => {
+    expect(parseStoredPath("C:\\Users\\artist\\rock.png")).toEqual({
+      name: "rock.png",
+      relative: null,
+      absolute: true,
+    });
+    expect(parseStoredPath("/home/artist/rock.png")).toEqual({ name: "rock.png", relative: null, absolute: true });
+    expect(parseStoredPath("\\\\server\\share\\rock.png").absolute).toBe(true);
+  });
+
+  it("returns no name and no relative path for an empty path", () => {
+    expect(parseStoredPath("")).toEqual({ name: "", relative: null, absolute: false });
   });
 });

@@ -41,8 +41,20 @@ export type { ArcueErrorOptions, ErrorCode, ValidationIssue, WireError } from ".
 export { ArcueError, fromWireError, toWireError } from "./errors";
 export type { EventName, EventPayload, Events } from "./events";
 export { events, isEventName } from "./events";
-export type { ImportReadFileInput, ImportReadFileOutput, ImportRunInput, ImportRunOutput } from "./import-worker";
-export { importReadFileInputSchema, importRequests, serveImportWorker } from "./import-worker";
+export type {
+  ImportFindFileInput,
+  ImportFindFileOutput,
+  ImportReadFileInput,
+  ImportReadFileOutput,
+  ImportRunInput,
+  ImportRunOutput,
+} from "./import-worker";
+export {
+  importFindFileInputSchema,
+  importReadFileInputSchema,
+  importRequests,
+  serveImportWorker,
+} from "./import-worker";
 export type { JsonSchema, JsonSchemaEntry } from "./json-schema";
 export { protocolJsonSchemas } from "./json-schema";
 export type { ListenerErrorHandler } from "./listener-errors";

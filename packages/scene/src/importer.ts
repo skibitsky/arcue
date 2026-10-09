@@ -1,6 +1,13 @@
 import type { SceneDescription } from "./scene";
 import type { SourceFormat } from "./source";
 
+/** An image found for a path stored in an asset. */
+export interface FoundFile {
+  /** Where it was found, relative to the asset's folder with "/" separators, such as "../Textures/Rock.png". */
+  path: string;
+  bytes: Uint8Array;
+}
+
 export interface ImportRequest {
   fileName: string;
   bytes: Uint8Array;
@@ -39,4 +46,21 @@ export function referencedFileCandidates(storedPath: string, assetFileName: stri
   const candidates = absolute || slashed === "" ? [] : [slashed];
   if (name !== "") candidates.push(name, `${stem}.fbm/${name}`);
   return [...new Set(candidates)];
+}
+
+export interface StoredPath {
+  /** The file name, such as "Rock_BaseColor.png"; empty when the path ends in a separator or is empty. */
+  name: string;
+  /** The path with "/" separators when it is relative, or null when it is absolute or empty. */
+  relative: string | null;
+  /** True for a path from the exporting machine, such as "C:/Users/artist/rock.png" or "/home/artist/rock.png". */
+  absolute: boolean;
+}
+
+/** Splits a file path stored in an asset, written with either separator. */
+export function parseStoredPath(storedPath: string): StoredPath {
+  const slashed = storedPath.replaceAll("\\", "/");
+  const name = slashed.slice(slashed.lastIndexOf("/") + 1);
+  const absolute = slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed);
+  return { name, relative: absolute || slashed === "" ? null : slashed, absolute };
 }
