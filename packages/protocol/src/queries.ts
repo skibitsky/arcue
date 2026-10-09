@@ -3,6 +3,7 @@ import { z } from "zod";
 import { assetIdSchema, assetSummarySchema, bytesSchema, commentIdSchema } from "./assets";
 import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
+import { assetWarningSchema } from "./import-warning";
 import { assetInspectionSchema } from "./inspect";
 import { partSummarySchema } from "./parts";
 import { reviewFileSchema } from "./review";
@@ -50,6 +51,18 @@ export const queries = {
       'List the parts of the asset version on screen: meshes, LOD groups with their levels, collision helpers and sockets, with the triangles of each level. Parts from another file of a composition have ids like "Shells.fbx//Boulder1".',
     input: z.object(assetRef),
     output: z.object({ parts: z.array(partSummarySchema) }),
+  }),
+  "warning.list": query({
+    description:
+      "List the import warnings of the asset version on screen, errors first, each with its id, whether it was dismissed, the comment made from it and the command that fixes it.",
+    input: z.object(assetRef),
+    output: z.object({ warnings: z.array(assetWarningSchema) }),
+  }),
+  "warning.prompt": query({
+    description:
+      "Get a prompt that asks a coding agent to fix the asset's import warnings that are not dismissed: one instruction line, then one numbered entry per warning.",
+    input: z.object(assetRef),
+    output: z.object({ prompt: z.string() }),
   }),
   "asset.inspect": query({
     description:

@@ -51,7 +51,17 @@ export type { ArcueErrorOptions, ErrorCode, ValidationIssue, WireError } from ".
 export { ArcueError, fromWireError, toWireError } from "./errors";
 export type { EventName, EventPayload, Events } from "./events";
 export { events, isEventName } from "./events";
-export { importWarningSchema } from "./import-warning";
+export type { AssetWarning, CommentWarning, WarningFix, WarningSubject } from "./import-warning";
+export {
+  assetWarningSchema,
+  commentWarningSchema,
+  importWarningCodeSchema,
+  importWarningSchema,
+  warningFixSchema,
+  warningId,
+  warningIdSchema,
+  warningSubjectSchema,
+} from "./import-warning";
 export type {
   ImportFindFileInput,
   ImportFindFileOutput,

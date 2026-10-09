@@ -1,9 +1,10 @@
 import type { Comment, ReviewFile } from "@arcue/protocol";
 
-/** The comments one edit touched, null where a comment did not exist, and the whole queue. */
+/** The comments one edit touched, null where a comment did not exist, the whole queue and the dismissed warnings. */
 export interface ReviewSnapshot {
   comments: ReadonlyMap<string, Comment | null>;
   queue: readonly string[];
+  dismissedWarnings: readonly string[];
 }
 
 export interface ReviewEdit {
@@ -16,11 +17,15 @@ export function editBetween(before: ReviewFile, after: ReviewFile, ids: readonly
   const snapshot = (review: ReviewFile): ReviewSnapshot => ({
     comments: new Map(ids.map((id) => [id, review.comments.find((comment) => comment.id === id) ?? null])),
     queue: [...review.queue],
+    dismissedWarnings: [...(review.dismissedWarnings ?? [])],
   });
   return { before: snapshot(before), after: snapshot(after) };
 }
 
-/** Puts the snapshot's comments and queue into the review, keeping comments in the order of their numbers. */
+/**
+ * Puts the snapshot's comments, queue and dismissed warnings into the review, keeping comments in the order of their
+ * numbers.
+ */
 export function applySnapshot(review: ReviewFile, snapshot: ReviewSnapshot): ReviewFile {
   const byId = new Map(review.comments.map((comment) => [comment.id, comment]));
   for (const [id, comment] of snapshot.comments) {
@@ -28,7 +33,13 @@ export function applySnapshot(review: ReviewFile, snapshot: ReviewSnapshot): Rev
     else byId.delete(id);
   }
   const comments = [...byId.values()].sort((a, b) => commentNumber(a.id) - commentNumber(b.id));
-  return { ...review, comments, queue: [...snapshot.queue] };
+  return withDismissedWarnings({ ...review, comments, queue: [...snapshot.queue] }, snapshot.dismissedWarnings);
+}
+
+/** The review with these dismissed warnings; none leaves the field out of `review.json`. */
+export function withDismissedWarnings(review: ReviewFile, ids: readonly string[]): ReviewFile {
+  const { dismissedWarnings: _previous, ...rest } = review;
+  return ids.length === 0 ? rest : { ...rest, dismissedWarnings: [...ids] };
 }
 
 function commentNumber(id: string): number {
@@ -86,6 +97,7 @@ export class ReviewHistory {
   mapComments(map: (comment: Comment) => Comment): void {
     const mapSnapshot = (snapshot: ReviewSnapshot): ReviewSnapshot => ({
       queue: snapshot.queue,
+      dismissedWarnings: snapshot.dismissedWarnings,
       comments: new Map([...snapshot.comments].map(([id, comment]) => [id, comment && map(comment)])),
     });
     const mapEdit = (edit: ReviewEdit): ReviewEdit => ({

@@ -101,6 +101,7 @@ function roundComment(comment: Comment, number: number, scene: SceneDescription,
     anchorVersion: comment.target ? comment.anchorVersion : null,
     earlierMessages,
     ...(comment.parts ? { parts: comment.parts } : {}),
+    ...(comment.warning ? { warning: comment.warning } : {}),
   } satisfies RoundComment;
 }
 

@@ -5,6 +5,7 @@ import { textureSlotSchema } from "./composition";
 import { computedContextSchema } from "./context";
 import type { CommandDefinition } from "./definitions";
 import { command } from "./definitions";
+import { warningIdSchema, warningSubjectSchema } from "./import-warning";
 import { settingsSchema } from "./settings";
 import { displayModeSchema, partIdSchema, partViewSchema, viewStateSchema } from "./view-state";
 
@@ -106,6 +107,26 @@ export const commands = {
     description: "Return a sent or resolved comment to the queue with a follow-up message.",
     runsIn: "core",
     input: z.object({ ...commentRef, text: commentTextSchema }),
+    output: z.void(),
+  }),
+  "comment.createFromWarning": command({
+    description:
+      "Add a draft comment about an import warning, by its id from warning.list. Its text starts as the warning's message, and the prompt names the warning and its subject.",
+    runsIn: "core",
+    input: z.object({ ...assetRef, warningId: warningIdSchema }),
+    output: z.object({ commentId: commentIdSchema }),
+  }),
+  "warning.dismiss": command({
+    description:
+      "Dismiss an import warning on this asset, by its id from warning.list. It stays dismissed across reloads; review.undo brings it back.",
+    runsIn: "core",
+    input: z.object({ ...assetRef, warningId: warningIdSchema }),
+    output: z.void(),
+  }),
+  "warning.dismissAll": command({
+    description: "Dismiss every import warning warning.list shows for the asset. review.undo brings them back.",
+    runsIn: "core",
+    input: z.object(assetRef),
     output: z.void(),
   }),
   "round.copy": command({
@@ -296,6 +317,13 @@ export const commands = {
     description: "Show a LOD level. A part without that level shows its nearest lower one.",
     runsIn: "view",
     input: z.object({ ...assetRef, level: indexSchema }),
+    output: z.void(),
+  }),
+  "view.highlightSubject": command({
+    description:
+      "Tint what an import warning is about in the 3D view: a material's meshes, the meshes of the materials that use a texture, a node's meshes, or a file's meshes. Null clears the tint.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, subject: warningSubjectSchema.nullable() }),
     output: z.void(),
   }),
   "view.selectComment": command({

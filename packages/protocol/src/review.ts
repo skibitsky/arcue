@@ -9,6 +9,7 @@ import {
 } from "./anchors";
 import { commentIdSchema } from "./assets";
 import { commentContextSchema } from "./context";
+import { commentWarningSchema, warningIdSchema } from "./import-warning";
 import { partViewSchema } from "./view-state";
 
 const timestampSchema = z.iso.datetime();
@@ -59,6 +60,8 @@ export const commentSchema = z
     reopenedFrom: z.enum(["sent", "resolved"]).nullable(),
     /** The parts the view showed when the comment was made, present only when that differs from the default view. */
     parts: partViewSchema.optional(),
+    /** The import warning the comment was made from, if any. */
+    warning: commentWarningSchema.optional(),
   })
   .refine((comment) => comment.anchorRestPositions.length === anchoredVertexCount(comment.target), {
     message: "There must be one rest position per anchored vertex.",
@@ -139,6 +142,8 @@ export const reviewFileSchema = z
     queue: z.array(commentIdSchema),
     rounds: z.array(roundSummarySchema),
     nextCommentNumber: z.int().positive(),
+    /** Import warnings dismissed on this asset, by id; absent when none is. */
+    dismissedWarnings: z.array(warningIdSchema).optional(),
   })
   .superRefine((review, ctx) => {
     const issue = (message: string, path: (string | number)[]) => ctx.addIssue({ code: "custom", message, path });

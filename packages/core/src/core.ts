@@ -1,6 +1,7 @@
 import type {
   AssetInspection,
   AssetVersion,
+  AssetWarning,
   CommandArgs,
   CommandName,
   CommandOutput,
@@ -40,7 +41,7 @@ import {
 import type { AssetFiles, ReadFile } from "./composition-load";
 import { buildAssetScene, readAssetFiles } from "./composition-load";
 import { readableImageExtensions } from "./file-search";
-import { applySnapshot, editBetween } from "./history";
+import { applySnapshot, editBetween, withDismissedWarnings } from "./history";
 import { importAsset } from "./import";
 import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
@@ -55,12 +56,21 @@ import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
 import { loadReview, locateReview, reviewFilePath } from "./review-store";
 import { buildRoundData } from "./round-data";
-import { anchorRestPositions, checkTarget, meshesOf, partsOf, resolveTime, storedPartView } from "./scene-lookup";
+import {
+  anchorRestPositions,
+  checkTarget,
+  findClip,
+  meshesOf,
+  partsOf,
+  resolveTime,
+  storedPartView,
+} from "./scene-lookup";
 import { readScreenshot, UNSENT_SCREENSHOT_NAME } from "./screenshots";
 import { Serial } from "./serial";
 import type { ServeOptions } from "./serve";
 import { serveEndpoint } from "./serve";
 import { SettingsStore } from "./settings";
+import { commentWarning, findWarning, frontCamera, listWarnings, warningPrompt } from "./warnings";
 import { WindowRegistry } from "./windows";
 
 export interface ArcueCoreOptions {
@@ -177,6 +187,9 @@ export class ArcueCore {
       registry.handleCommand("comment.delete", (args) => this.#deleteComment(args)),
       registry.handleCommand("comment.resolve", (args) => this.#resolveComment(args)),
       registry.handleCommand("comment.reopen", (args) => this.#reopenComment(args)),
+      registry.handleCommand("comment.createFromWarning", (args) => this.#createFromWarning(args)),
+      registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])),
+      registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)),
       registry.handleCommand("round.copy", (args) => this.#copyRound(args.assetId)),
       registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")),
       registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")),
@@ -209,6 +222,11 @@ export class ArcueCore {
       registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()),
       registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })),
       registry.handleQuery("settings.get", () => this.#settings.current),
+      registry.handleQuery("warning.list", (args) => ({ warnings: this.#warnings(this.#asset(args.assetId)) })),
+      registry.handleQuery("warning.prompt", (args) => {
+        const asset = this.#asset(args.assetId);
+        return { prompt: warningPrompt(asset.path, this.#warnings(asset)) };
+      }),
       registry.handleQuery("asset.inspect", (args) => this.#track(this.#inspect(args.path))),
       registry.handleQuery("comment.screenshot", (args) => {
         const asset = this.#asset(args.assetId);
@@ -830,6 +848,73 @@ export class ArcueCore {
       });
       const next = { ...reopened, queue: [...reopened.queue, comment.id] };
       return { next, result: undefined, edit: editBetween(review, next, [comment.id]) };
+    });
+  }
+
+  /** The import warnings of the version on screen; none before the first version loads. */
+  #warnings(asset: OpenAsset, review: ReviewFile = asset.session.review): AssetWarning[] {
+    return asset.scene ? listWarnings(asset.scene, review, asset.path) : [];
+  }
+
+  /** Dismisses the listed warnings, or every warning not dismissed yet for null, as one undoable edit. */
+  #dismissWarnings(assetId: string, ids: readonly string[] | null): Promise<void> {
+    const asset = this.#asset(assetId);
+    return asset.session.run((review) => {
+      const warnings = this.#warnings(asset, review);
+      const chosen =
+        ids === null
+          ? warnings.filter((warning) => !warning.dismissed).map((warning) => warning.id)
+          : ids.map((id) => findWarning(warnings, id).id);
+      const current = review.dismissedWarnings ?? [];
+      const added = chosen.filter((id) => !current.includes(id));
+      if (added.length === 0) return { next: null, result: undefined };
+      const next = withDismissedWarnings(review, [...current, ...added]);
+      return { next, result: undefined, edit: editBetween(review, next, []) };
+    });
+  }
+
+  /**
+   * Adds a draft about an import warning, without a surface target, from the view the window last reported. A clip's
+   * warning is made at the clip's first frame. While a draft made from the warning is queued, returns that draft.
+   */
+  #createFromWarning(
+    args: CommandArgs<"comment.createFromWarning">,
+  ): Promise<CommandOutput<"comment.createFromWarning">> {
+    const asset = this.#asset(args.assetId);
+    return asset.session.run((review) => {
+      const { scene, version } = asset.loaded();
+      const warning = findWarning(listWarnings(scene, review, asset.path), args.warningId);
+      const queued = review.comments.find((comment) => comment.id === warning.commentId && comment.status === "draft");
+      if (queued) return { next: null, result: { commentId: queued.id } };
+      const id = `c${review.nextCommentNumber}`;
+      const now = this.#now();
+      const clip = warning.subject.kind === "clip" ? findClip(scene, warning.subject.name) : null;
+      const comment: Comment = {
+        id,
+        text: warning.message,
+        status: "draft",
+        createdAt: now,
+        updatedAt: now,
+        madeOnVersion: version,
+        time: clip ? { kind: "frame", clip: clip.name, clipDisplayName: clip.displayName, frame: 0 } : { kind: "none" },
+        target: null,
+        anchorVersion: version,
+        anchorRestPositions: [],
+        camera: asset.viewState?.camera ?? frontCamera(scene),
+        context: { vertexCount: 0, bones: [], centroid: null, joints: [], viewLabel: "", screenshot: null },
+        anchorState: "exact",
+        followUps: [],
+        rounds: [],
+        reopenedFrom: null,
+        warning: commentWarning(warning),
+      };
+      const next: ReviewFile = {
+        ...review,
+        comments: [...review.comments, comment],
+        queue: [...review.queue, id],
+        nextCommentNumber: review.nextCommentNumber + 1,
+      };
+      return { next, result: { commentId: id }, edit: editBetween(review, next, [id]) };
     });
   }
 
