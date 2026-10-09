@@ -50,6 +50,8 @@ export type {
   SpaceConversion,
 } from "./source";
 export { importWarning, importWarningSeverity, SCENE_SPACE } from "./source";
+export type { SubjectRef } from "./subject";
+export { subjectMeshes } from "./subject";
 export {
   frameCountFor,
   frameToSeconds,
