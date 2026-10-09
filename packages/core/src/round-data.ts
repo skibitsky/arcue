@@ -18,15 +18,16 @@ export interface RoundInput {
 
 /** Builds `round.json` for the queued comments. Positions follow the coordinate convention. */
 export function buildRoundData({ round, review, version, scene, comments, convention }: RoundInput): RoundData {
-  const exporter = review.versions.find((entry) => entry.id === version)?.exporter ?? null;
+  const record = review.versions.find((entry) => entry.id === version);
   const data: RoundData = {
     round,
     asset: {
       path: review.asset.path,
       version,
-      exporter,
+      exporter: record?.exporter ?? null,
       fps: scene.source.fps,
       space: { units: "m", up: upAxisOf(convention), handedness: "right" },
+      ...(record?.files ? { files: record.files } : {}),
     },
     comments: comments.map((comment, index) => roundComment(comment, index + 1, scene, convention)),
   };

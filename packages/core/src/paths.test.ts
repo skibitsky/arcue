@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { basename, dirname, findGitRoot, joinPath, normalizePath, pathInside } from "./paths";
+import { basename, dirname, findGitRoot, joinPath, normalizePath, pathInside, relativePath, stemOf } from "./paths";
 
 describe("normalizePath", () => {
   it("resolves dots and repeated and trailing slashes", () => {
@@ -75,5 +75,19 @@ describe("findGitRoot", () => {
 
   it("returns null outside any repository", async () => {
     await expect(findGitRoot("/downloads/Hero.fbx", exists)).resolves.toBeNull();
+  });
+});
+
+describe("relativePath", () => {
+  it("climbs out of the folder where the path leaves it", () => {
+    expect(relativePath("/work/game/Models", "/work/game/Models/Shells.fbx")).toBe("Shells.fbx");
+    expect(relativePath("/work/game/Models", "/work/game/Textures/Rock.png")).toBe("../Textures/Rock.png");
+    expect(relativePath("/work/game/Models", "/work/game/Models")).toBe("");
+    expect(relativePath("C:/work", "D:/work/Rock.png")).toBeNull();
+  });
+
+  it("names a file without its last extension", () => {
+    expect(stemOf("/work/Hero.v2.fbx")).toBe("Hero.v2");
+    expect(stemOf("/work/.fbx")).toBe(".fbx");
   });
 });

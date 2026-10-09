@@ -5,7 +5,8 @@ export type Command =
 
 export const USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>]
-      Opens an asset in the running Arcue app, starting the app when it is not running.
+      Opens an asset in the running Arcue app, starting the app when it is not running. A .arcue composition
+      file opens its model with the files it lists.
       --clip names a clip by its name in the file, such as "Armature|Walk"; --frame is a whole frame number from 0.
   arcue status
       Reports whether Arcue is running and which assets it has open. Exits with 1 when it is not running.

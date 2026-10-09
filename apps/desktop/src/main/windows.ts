@@ -3,6 +3,7 @@ import { BrowserWindow, dialog, ipcMain, screen } from "electron";
 import type { MenuCommand, WindowInit, WindowTabs } from "../shared/ipc";
 import { channels, tabDragEndSchema, windowTabsSchema } from "../shared/ipc";
 import type { Log } from "../shared/log";
+import { ASSET_EXTENSIONS } from "./args";
 import type { CoreHost } from "./core-host";
 import { isAppUrl } from "./security";
 import type { Bounds, SavedWindow, Session } from "./session";
@@ -271,7 +272,7 @@ export class WindowManager {
     const options: Electron.OpenDialogOptions = {
       title: "Open an asset",
       properties: ["openFile", "multiSelections"],
-      filters: [{ name: "FBX", extensions: ["fbx"] }],
+      filters: [{ name: "Models", extensions: ASSET_EXTENSIONS.map((extension) => extension.slice(1)) }],
     };
     const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
     return result.canceled ? [] : result.filePaths;

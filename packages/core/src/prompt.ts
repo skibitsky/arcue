@@ -26,11 +26,21 @@ export function renderPrompt({ data, assetPath, roundFolder, exportedAt, partNam
     `3D review · round ${data.round} · ${count} ${count === 1 ? "comment" : "comments"}`,
     `Asset: ${assetPath}`,
     `Version ${data.asset.version}, exported ${exportedAt}`,
+    ...compositionLine(data),
     `Data and screenshots: ${roundFolder.endsWith("/") ? roundFolder : `${roundFolder}/`}`,
     `Meters, right-handed, ${up}. Frames count from each clip's first frame (0) at ${formatNumber(data.asset.fps)} fps.`,
     "Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.",
   ].join("\n");
   return [header, ...data.comments.map((comment) => renderComment(comment, partNames))].join("\n\n");
+}
+
+/** The other files of a composition, which the prompt names once so their prefixed mesh paths make sense. */
+function compositionLine(data: RoundData): string[] {
+  const others = (data.asset.files ?? []).slice(1).map((file) => file.file);
+  if (others.length === 0) return [];
+  return [
+    `Also loaded, relative to the model's folder: ${others.join(", ")}. Meshes from those files are named "<file>//<node path>".`,
+  ];
 }
 
 function renderComment(comment: RoundComment, partNames: ReadonlyMap<string, string>): string {
