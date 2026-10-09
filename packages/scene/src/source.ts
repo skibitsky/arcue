@@ -35,6 +35,7 @@ export interface Exporter {
 export type ImportWarningCode =
   | "texture-not-found"
   | "texture-path-absolute"
+  | "texture-not-used"
   | "root-scale"
   | "root-rotation"
   | "too-many-uv-sets"
@@ -70,12 +71,21 @@ export interface ImportWarning {
   message: string;
   /** The composition's file the warning comes from, relative to the model's folder; absent for the model's file. */
   file?: string;
+  /** Facts for people and agents beyond the message, such as the path the file stores for a texture. */
+  detail?: string;
+  /** For a texture subject: the materials that use the texture, by name. */
+  materials?: string[];
+  /** For a texture subject: where the image was found, relative to the folder of the file the warning comes from. */
+  foundPath?: string;
 }
+
+export type ImportWarningExtra = Pick<ImportWarning, "detail" | "materials" | "foundPath">;
 
 /** An "error" means the preview is missing something the file meant to show. */
 export const importWarningSeverity: Readonly<Record<ImportWarningCode, ImportWarningSeverity>> = {
   "texture-not-found": "error",
   "texture-path-absolute": "warning",
+  "texture-not-used": "warning",
   "root-scale": "warning",
   "root-rotation": "warning",
   "too-many-uv-sets": "warning",
@@ -98,9 +108,13 @@ export function importWarning(
   subject: ImportWarningSubject,
   message: string,
   file?: string,
+  extra: ImportWarningExtra = {},
 ): ImportWarning {
   const warning: ImportWarning = { code, severity: importWarningSeverity[code], subject, message };
   if (file !== undefined) warning.file = file;
+  if (extra.detail !== undefined) warning.detail = extra.detail;
+  if (extra.materials !== undefined && extra.materials.length > 0) warning.materials = [...extra.materials];
+  if (extra.foundPath !== undefined) warning.foundPath = extra.foundPath;
   return warning;
 }
 

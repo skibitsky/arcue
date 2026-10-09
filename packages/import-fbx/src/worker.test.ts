@@ -79,6 +79,8 @@ describe("startFbxImportWorker", () => {
         severity: "error",
         subject: { kind: "texture", name: "painted.png" },
         message: "Texture not found: painted.png",
+        detail: "Stored path: textures/painted.png",
+        materials: ["Painted"],
       },
     ]);
   });

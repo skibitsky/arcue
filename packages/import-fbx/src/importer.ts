@@ -60,7 +60,7 @@ async function buildMaterials(
   for (const [index, material] of materials.entries()) {
     const ref = async (wire: WireTextureRef | null | undefined): Promise<TextureRef | null> => {
       if (!wire) return null;
-      const texture = await textures.resolve(wire.file);
+      const texture = await textures.resolve(wire.file, material.name);
       if (texture === null) return null;
       return {
         texture,
@@ -127,7 +127,7 @@ async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<Sc
       warnings: [
         ...parserWarnings(parsed.warnings, request.fileName),
         ...rootTransformWarnings(parsed.nodes, parsed.originalSpace),
-        ...textures.warnings,
+        ...(await textures.warnings()),
       ],
     },
     nodes,

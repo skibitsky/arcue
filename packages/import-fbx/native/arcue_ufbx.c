@@ -692,8 +692,21 @@ static void write_materials(Context *ctx) {
 	json_close(json, "]");
 }
 
+static bool *texture_files_linked(const ufbx_scene *scene) {
+	bool *linked = (bool *)alloc_zeroed(scene->texture_files.count, sizeof(bool));
+	for (size_t m = 0; m < scene->materials.count; m++) {
+		const ufbx_material *material = scene->materials.data[m];
+		for (size_t t = 0; t < material->textures.count; t++) {
+			int64_t file = texture_file_of(material->textures.data[t].texture);
+			if (file >= 0 && (size_t)file < scene->texture_files.count) linked[file] = true;
+		}
+	}
+	return linked;
+}
+
 static void write_texture_files(Context *ctx) {
 	Json *json = &ctx->json;
+	bool *linked = texture_files_linked(ctx->scene);
 	json_key(json, "textureFiles");
 	json_open(json, "[");
 	for (size_t i = 0; i < ctx->scene->texture_files.count; i++) {
@@ -703,6 +716,8 @@ static void write_texture_files(Context *ctx) {
 		json_string(json, file->relative_filename);
 		json_key(json, "absolute");
 		json_string(json, file->absolute_filename);
+		json_key(json, "linked");
+		json_bool(json, linked[i] || ctx->texture_file_used[i]);
 		json_key(json, "content");
 		if (ctx->texture_file_used[i] && file->content.size > 0) {
 			json_blob(json, blob_write(ctx, file->content.data, 1, file->content.size));
@@ -712,6 +727,7 @@ static void write_texture_files(Context *ctx) {
 		json_close(json, "}");
 	}
 	json_close(json, "]");
+	free(linked);
 }
 
 typedef struct {

@@ -219,6 +219,7 @@ export async function buildAssetScene(
           { kind: "texture", name },
           `Texture not found: ${name}`,
           files.composition?.file.label,
+          { detail: `Stored path: ${texture.written}`, materials: [texture.material] },
         ),
       );
       continue;
@@ -233,7 +234,7 @@ export async function buildAssetScene(
   }
   const member = (path: string) => scenes.get(path);
   const unloaded = new Set([...files.members.values()].flatMap((file) => (scenes.has(file.path) ? [] : [file.label])));
-  return composeScene(model, {
+  const scene = composeScene(model, {
     animations: files.animations.flatMap((path) => member(path) ?? []),
     attach: files.attach.flatMap(({ path, node, bone }) => {
       const found = member(path);
@@ -243,4 +244,19 @@ export async function buildAssetScene(
     hidden: files.hidden.filter((id) => !unloaded.has(splitMemberPath(id).file ?? "")),
     warnings,
   });
+  return withoutOverriddenTextures(scene, files.textures);
+}
+
+/** Drops "texture-not-used" for a model texture whose image the composition already puts into a material slot. */
+function withoutOverriddenTextures(scene: SceneDescription, textures: readonly TextureRead[]): SceneDescription {
+  const shown = new Set(textures.flatMap((texture) => (texture.bytes ? [texture.label] : [])));
+  const kept = scene.source.warnings.filter(
+    (warning) =>
+      warning.code !== "texture-not-used" ||
+      warning.file !== undefined ||
+      warning.foundPath === undefined ||
+      !shown.has(warning.foundPath),
+  );
+  if (kept.length === scene.source.warnings.length) return scene;
+  return { ...scene, source: { ...scene.source, warnings: kept } };
 }

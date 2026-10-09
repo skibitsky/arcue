@@ -107,6 +107,8 @@ export interface WireMaterial {
 interface WireTextureFile {
   relative: string;
   absolute: string;
+  /** Some material of the file links the texture, in any of its properties. */
+  linked: boolean;
   content: BlobRef | null;
 }
 
@@ -144,6 +146,8 @@ interface WireScene {
 export interface TextureFile {
   relative: string;
   absolute: string;
+  /** Some material of the file links the texture, in any of its properties. */
+  linked: boolean;
   content: Uint8Array | null;
 }
 
@@ -302,6 +306,7 @@ export function readResult(heap: Uint8Array, pointer: number): ParsedFbx {
     textureFiles: scene.textureFiles.map((file) => ({
       relative: file.relative,
       absolute: file.absolute,
+      linked: file.linked,
       content: file.content ? blobs.u8(file.content) : null,
     })),
     clips: scene.clips.map((clip) => readClip(clip, blobs)),

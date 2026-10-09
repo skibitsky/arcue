@@ -40,6 +40,7 @@ export type {
   Exporter,
   ImportWarning,
   ImportWarningCode,
+  ImportWarningExtra,
   ImportWarningSeverity,
   ImportWarningSubject,
   ImportWarningSubjectKind,
