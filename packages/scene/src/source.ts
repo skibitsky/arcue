@@ -50,6 +50,7 @@ export type ImportWarningCode =
   | "invalid-data"
   | "animation-bones-missing"
   | "file-not-found"
+  | "composition-not-loaded"
   | "node-not-found"
   | "material-not-found";
 
@@ -121,6 +122,7 @@ export const importWarningSeverity: Readonly<Record<ImportWarningCode, ImportWar
   "invalid-data": "warning",
   "animation-bones-missing": "warning",
   "file-not-found": "error",
+  "composition-not-loaded": "error",
   "node-not-found": "error",
   "material-not-found": "warning",
 };

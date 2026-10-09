@@ -331,9 +331,10 @@ describe("a composition file that cannot be read", () => {
       const { warnings } = await test.core.client.query("warning.list", { assetId: test.assetId });
       expect(warnings).toEqual([
         expect.objectContaining({
-          code: "invalid-data",
+          code: "composition-not-loaded",
+          severity: "error",
           subject: { kind: "file", name: "Bug.arcue" },
-          message: "Composition could not be read: Bug.arcue",
+          message: "Could not load: Bug.arcue",
           file: "Bug.arcue",
           detail: "Bug.arcue is not valid JSON.",
           fix: { kind: "retry" },
@@ -352,10 +353,10 @@ describe("a composition file that cannot be read", () => {
     const test = await setup({ [SIDECAR]: null, [`${SIDECAR}/notes.txt`]: "notes" });
     const { scene } = await sceneOf(test, test.assetId);
     expect(scene.source.warnings.map((warning) => [warning.code, warning.detail])).toEqual([
-      ["invalid-data", "Bug.arcue is not a plain file."],
+      ["composition-not-loaded", "Bug.arcue is not a plain file."],
     ]);
     const inspection = await test.core.client.query("asset.inspect", { path: MODEL });
-    expect(inspection.warnings.map((warning) => warning.message)).toEqual(["Composition could not be read: Bug.arcue"]);
+    expect(inspection.warnings.map((warning) => warning.message)).toEqual(["Could not load: Bug.arcue"]);
   });
 });
 

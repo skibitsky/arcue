@@ -187,7 +187,7 @@ export async function readAssetFiles(
           label: unreadComposition.label,
           bytes: null,
           id: versionIdOf(encoder.encode(unreadComposition.reason)),
-          problem: "Composition could not be read",
+          problem: "Could not load",
         },
       ]
     : [];
@@ -255,7 +255,7 @@ export async function buildAssetScene(
   if (files.unreadComposition) {
     const { label, reason } = files.unreadComposition;
     warnings.push(
-      importWarning("invalid-data", { kind: "file", name: label }, `Composition could not be read: ${label}`, label, {
+      importWarning("composition-not-loaded", { kind: "file", name: label }, `Could not load: ${label}`, label, {
         detail: reason,
       }),
     );

@@ -92,7 +92,7 @@ function subjectText(warning: AssetWarning): string {
 /** The member file a warning is about, when removing it takes it out of the view. */
 function removableMember(warning: AssetWarning, modelName: string): string | null {
   const { file } = warning;
-  if (file === undefined || warning.subject.kind !== "file") return null;
+  if (file === undefined || warning.subject.kind !== "file" || warning.code === "composition-not-loaded") return null;
   return removableFromView(file, modelName) ? file : null;
 }
 

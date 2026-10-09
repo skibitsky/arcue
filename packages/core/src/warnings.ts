@@ -58,7 +58,7 @@ function fixFor(warning: ImportWarning, scene: SceneDescription, assetPath: stri
   if (
     subject.kind === "file" &&
     warning.file !== undefined &&
-    (warning.code === "file-not-found" || warning.code === "invalid-data")
+    (warning.code === "file-not-found" || warning.code === "invalid-data" || warning.code === "composition-not-loaded")
   ) {
     return { kind: "retry" };
   }

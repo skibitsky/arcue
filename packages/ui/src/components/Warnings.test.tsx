@@ -132,7 +132,7 @@ describe("import warnings in the status bar", () => {
     expect(client.calls.some((call) => call.name === "review.undo")).toBe(false);
   });
 
-  it("removes a member file that failed to load from the view", async () => {
+  it("removes a member file that failed to load from the view, but never the composition file", async () => {
     const lost = (scene: SceneDescription): SceneDescription => ({
       ...scene,
       source: {
@@ -145,15 +145,23 @@ describe("import warnings in the status bar", () => {
             "File not found: StoneResonator@Idle.fbx",
             "StoneResonator@Idle.fbx",
           ),
+          importWarning(
+            "composition-not-loaded",
+            { kind: "file", name: "StoneResonator.arcue" },
+            "Could not load: StoneResonator.arcue",
+            "StoneResonator.arcue",
+          ),
         ],
       },
     });
     const { client } = await renderStone(lost);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /^File not found: lost\.fbx/ }));
-    const [first, second] = rows() as [HTMLElement, HTMLElement];
+    const [first, second, composition] = rows() as [HTMLElement, HTMLElement, HTMLElement];
     expect(within(first).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(within(second).queryByRole("button", { name: "Remove from view" })).toBeNull();
+    expect(within(composition).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(within(composition).queryByRole("button", { name: "Remove from view" })).toBeNull();
     await user.click(within(first).getByRole("button", { name: "Remove from view" }));
     await act(() => flush());
     expect(client.calls.find((call) => call.name === "composition.removeFile")?.input).toMatchObject({
