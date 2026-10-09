@@ -5,9 +5,9 @@ import { round5 } from "./coordinates";
 import { basename } from "./paths";
 import { meshesOf, partsOf } from "./scene-lookup";
 
-type TextureSlot = { [Key in keyof Material]-?: Material[Key] extends TextureRef | null ? Key : never }[keyof Material];
+type TextureKey = { [Key in keyof Material]-?: Material[Key] extends TextureRef | null ? Key : never }[keyof Material];
 
-const TEXTURE_SLOTS: Record<TextureSlot, string> = {
+const TEXTURE_KEY_SLOTS: Record<TextureKey, string> = {
   baseColorTexture: "baseColor",
   metallicRoughnessTexture: "metallicRoughness",
   roughnessTexture: "roughness",
@@ -70,7 +70,7 @@ export function inspectScene(scene: SceneDescription, file: InspectedFiles): Ass
 
 function inspectMaterial(scene: SceneDescription, material: Material): InspectedMaterial {
   const textures: InspectedMaterial["textures"] = [];
-  for (const [key, slot] of Object.entries(TEXTURE_SLOTS) as [TextureSlot, string][]) {
+  for (const [key, slot] of Object.entries(TEXTURE_KEY_SLOTS) as [TextureKey, string][]) {
     const ref = material[key];
     const texture = ref ? scene.textures[ref.texture] : undefined;
     if (texture) textures.push({ slot, texture: texture.name });

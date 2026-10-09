@@ -1,7 +1,7 @@
 import type { FoundFile } from "@arcue/scene";
 import { parseStoredPath } from "@arcue/scene";
 import { insideWithoutLinks } from "./links";
-import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
+import { dirname, joinPath, normalizePath, pathInside, relativePath, stemOf } from "./paths";
 import type { DirectoryEntry, EntryKind, Platform } from "./platform";
 
 /** Extensions of the files an import worker may read, such as external textures. */
@@ -39,7 +39,7 @@ export interface FileSearch {
 export function createFileSearch(platform: Platform, assetPath: string, readRoot: string): FileSearch {
   const root = normalizePath(readRoot);
   const assetFolder = dirname(assetPath);
-  const stem = basename(assetPath).replace(/\.[^.]*$/, "");
+  const stem = stemOf(assetPath);
   const listings = new Map<string, Promise<DirectoryEntry[]>>();
   const found = new Map<string, Promise<string | null>>();
 
