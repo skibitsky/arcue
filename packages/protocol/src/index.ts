@@ -70,15 +70,17 @@ export type {
   AssetInspection,
   InspectedClip,
   InspectedMaterial,
+  InspectedMember,
   InspectedMesh,
   InspectedTexture,
-  InspectedWarning,
 } from "./inspect";
 export { assetInspectionSchema } from "./inspect";
 export type { JsonSchema, JsonSchemaEntry } from "./json-schema";
 export { protocolJsonSchemas } from "./json-schema";
 export type { ListenerErrorHandler } from "./listener-errors";
 export { reportListenerError } from "./listener-errors";
+export type { PartSummary } from "./parts";
+export { partSummarySchema } from "./parts";
 export type { Queries, QueryArgs, QueryInput, QueryName, QueryOutput } from "./queries";
 export { isQueryName, queries, sceneDescriptionSchema } from "./queries";
 export type {

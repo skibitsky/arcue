@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { importWarningSchema } from "./import-warning";
+import { partSummarySchema } from "./parts";
 
 const countSchema = z.number().int().nonnegative();
 
@@ -42,10 +44,12 @@ export const inspectedClipSchema = z.object({
   duration: z.number().nonnegative(),
 });
 
-export const inspectedWarningSchema = z.object({
-  code: z.string(),
-  message: z.string(),
-  subject: z.string().nullable(),
+export const inspectedMemberSchema = z.object({
+  /** Relative to the model's folder, with "/" separators. */
+  file: z.string(),
+  /** How the file joins the model: its clips, nodes on a bone, nodes in place, or a material's texture. */
+  role: z.enum(["animation", "attach", "set", "texture"]),
+  found: z.boolean(),
 });
 
 /** What `asset.inspect` reports about a file, all plain JSON. */
@@ -67,17 +71,23 @@ export const assetInspectionSchema = z.object({
   /** Height of the rest pose in meters, 0 for a file without meshes. */
   height: z.number().nonnegative(),
   meshes: z.array(inspectedMeshSchema),
+  /** Every mesh in exactly one part; LOD groups, collision helpers and sockets are parts with their own roles. */
+  parts: z.array(partSummarySchema),
   triangles: countSchema,
   bones: countSchema,
   materials: z.array(inspectedMaterialSchema),
   textures: z.array(inspectedTextureSchema),
   clips: z.array(inspectedClipSchema),
-  warnings: z.array(inspectedWarningSchema),
+  /** The composition file applied to the model, absolute with "/" separators, or null when none applies. */
+  composition: z.string().nullable(),
+  /** The other files the model is composed with: the composition's and "<model>@<clip>" animation files. */
+  members: z.array(inspectedMemberSchema),
+  warnings: z.array(importWarningSchema),
 });
 
 export type InspectedMesh = z.output<typeof inspectedMeshSchema>;
 export type InspectedMaterial = z.output<typeof inspectedMaterialSchema>;
 export type InspectedTexture = z.output<typeof inspectedTextureSchema>;
 export type InspectedClip = z.output<typeof inspectedClipSchema>;
-export type InspectedWarning = z.output<typeof inspectedWarningSchema>;
+export type InspectedMember = z.output<typeof inspectedMemberSchema>;
 export type AssetInspection = z.output<typeof assetInspectionSchema>;

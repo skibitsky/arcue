@@ -167,7 +167,7 @@ describe("arcue inspect", () => {
 });
 
 describe("formatInspection", () => {
-  it("shows units, textures, other clip rates and warnings only when the file has them", () => {
+  it("shows units, textures, parts, other clip rates, composition files and problems only when the file has them", () => {
     const inspection: AssetInspection = {
       file: { path: "/work/Rock.fbx", name: "Rock.fbx", bytes: 10 },
       format: "fbx",
@@ -176,8 +176,46 @@ describe("formatInspection", () => {
       upAxis: "+Z",
       unitMeters: 0.01,
       height: 1.23456,
-      meshes: [{ name: "Rock", path: "Rock", triangles: 1, vertices: 3, skinned: false }],
-      triangles: 1,
+      meshes: [
+        { name: "Rock_LOD0", path: "Rock_LOD0", triangles: 1, vertices: 3, skinned: false },
+        { name: "Rock_LOD1", path: "Rock_LOD1", triangles: 1, vertices: 3, skinned: false },
+        { name: "UCX_Rock", path: "UCX_Rock", triangles: 1, vertices: 3, skinned: false },
+      ],
+      parts: [
+        {
+          id: "Rock_LOD0",
+          name: "Rock",
+          role: "model",
+          shownByDefault: true,
+          levels: [
+            { level: 0, meshes: ["Rock_LOD0"], triangles: 1 },
+            { level: 1, meshes: ["Rock_LOD1"], triangles: 1 },
+          ],
+        },
+        {
+          id: "UCX_Rock",
+          name: "UCX_Rock",
+          role: "collision",
+          shownByDefault: false,
+          levels: [{ level: 0, meshes: ["UCX_Rock"], triangles: 1 }],
+        },
+        { id: "SOCKET_Top", name: "SOCKET_Top", role: "socket", shownByDefault: false, levels: [] },
+        {
+          id: "Moss.fbx//Moss",
+          name: "Moss",
+          role: "model",
+          shownByDefault: false,
+          levels: [{ level: 0, meshes: ["Moss.fbx//Moss"], triangles: 1 }],
+        },
+        {
+          id: "Pebble",
+          name: "Pebble",
+          role: "model",
+          shownByDefault: true,
+          levels: [{ level: 0, meshes: ["Pebble"], triangles: 1 }],
+        },
+      ],
+      triangles: 3,
       bones: 0,
       materials: [
         {
@@ -190,20 +228,49 @@ describe("formatInspection", () => {
       ],
       textures: [{ name: "Textures/Moss.png", found: false, mimeType: null }],
       clips: [{ name: "Roll", displayName: "Roll", frames: 1, fps: 30, duration: 0 }],
-      warnings: [{ code: "missing-texture", message: 'The texture "Textures/Moss.png" was not found.', subject: null }],
+      composition: "/work/Rock.arcue",
+      members: [
+        { file: "Moss.fbx", role: "set", found: true },
+        { file: "Rock@Roll.fbx", role: "animation", found: true },
+      ],
+      warnings: [
+        {
+          code: "texture-not-found",
+          severity: "error",
+          subject: { kind: "texture", name: "Moss.png" },
+          message: "Texture not found: Moss.png",
+        },
+        {
+          code: "material-not-found",
+          severity: "warning",
+          subject: { kind: "material", name: "Lichen" },
+          message: "Material not used by any mesh: Lichen",
+          file: "Rock.arcue",
+        },
+      ],
     };
     expect(formatInspection(inspection)).toBe(
       [
-        "File        /work/Rock.fbx",
-        "Format      FBX",
-        "Frame rate  24 fps",
-        "Up axis     +Z",
-        "Unit        0.01 m",
-        "Height      1.235 m",
-        "Meshes      Rock  1 triangle",
-        "Materials   Stone  base color Stone_BaseColor, normal Stone_Normal",
-        "Clips       Roll  1 frame at 30 fps",
-        'Warnings    The texture "Textures/Moss.png" was not found.',
+        "File         /work/Rock.fbx",
+        "Format       FBX",
+        "Frame rate   24 fps",
+        "Up axis      +Z",
+        "Unit         0.01 m",
+        "Height       1.235 m",
+        "Meshes       Rock_LOD0  1 triangle",
+        "             Rock_LOD1  1 triangle",
+        "             UCX_Rock   1 triangle",
+        "Parts        Rock        LOD 0, 1",
+        "             UCX_Rock    collision",
+        "             SOCKET_Top  socket",
+        "             Moss        hidden",
+        "Materials    Stone  base color Stone_BaseColor, normal Stone_Normal",
+        "Clips        Roll  1 frame at 30 fps",
+        "Composition  /work/Rock.arcue",
+        "Files        Moss.fbx       set",
+        "             Rock@Roll.fbx  animation",
+        "Errors       Texture not found: Moss.png",
+        "Warnings     Material not used by any mesh: Lichen (Rock.arcue)",
         "",
       ].join("\n"),
     );

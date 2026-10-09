@@ -1,8 +1,9 @@
-import type { AssetInspection, InspectedMaterial, InspectedTexture } from "@arcue/protocol";
+import type { AssetInspection, InspectedMaterial, InspectedMember, InspectedTexture } from "@arcue/protocol";
 import type { Material, SceneDescription, TextureRef } from "@arcue/scene";
+import type { AssetFiles } from "./composition-load";
 import { round5 } from "./coordinates";
 import { basename } from "./paths";
-import { meshesOf } from "./scene-lookup";
+import { meshesOf, partsOf } from "./scene-lookup";
 
 type TextureSlot = { [Key in keyof Material]-?: Material[Key] extends TextureRef | null ? Key : never }[keyof Material];
 
@@ -22,8 +23,16 @@ export function exporterName(scene: SceneDescription): string | null {
   return [exporter.name, exporter.version].filter((part) => part !== null && part !== "").join(" ");
 }
 
+export interface InspectedFiles {
+  path: string;
+  bytes: number;
+  /** The composition file applied to the model, or null. */
+  composition: string | null;
+  members: InspectedMember[];
+}
+
 /** A plain JSON summary of an imported file, for `asset.inspect`. */
-export function inspectScene(scene: SceneDescription, file: { path: string; bytes: number }): AssetInspection {
+export function inspectScene(scene: SceneDescription, file: InspectedFiles): AssetInspection {
   const { source } = scene;
   const meshes = meshesOf(scene).map(({ name, path, mesh }) => ({
     name,
@@ -41,6 +50,7 @@ export function inspectScene(scene: SceneDescription, file: { path: string; byte
     unitMeters: source.originalSpace.unitMeters,
     height: round5(scene.bounds.max[1] - scene.bounds.min[1]),
     meshes,
+    parts: partsOf(scene),
     triangles: meshes.reduce((sum, mesh) => sum + mesh.triangles, 0),
     bones: scene.nodes.filter((node) => node.kind === "bone").length,
     materials: scene.materials.map((material) => inspectMaterial(scene, material)),
@@ -52,7 +62,9 @@ export function inspectScene(scene: SceneDescription, file: { path: string; byte
       fps: clip.fps,
       duration: round5(clip.duration),
     })),
-    warnings: source.warnings.map(({ code, message, subject }) => ({ code, message, subject: subject.name })),
+    composition: file.composition,
+    members: file.members,
+    warnings: source.warnings,
   };
 }
 
@@ -74,4 +86,24 @@ function inspectTextures(scene: SceneDescription): InspectedTexture[] {
     if (warning.code === "texture-not-found") missing.add(warning.subject.name);
   }
   return [...found, ...[...missing].map((name) => ({ name, found: false, mimeType: null }))];
+}
+
+/** The files besides the model that a version was read from, once per file and role. */
+export function inspectMembers(files: AssetFiles): InspectedMember[] {
+  const members = new Map<string, InspectedMember>();
+  const add = (label: string, role: InspectedMember["role"], found: boolean) => {
+    const key = `${role}\n${label}`;
+    if (!members.has(key)) members.set(key, { file: label, role, found });
+  };
+  const member = (path: string) => files.members.get(path);
+  for (const path of files.animations) {
+    const read = member(path);
+    if (read) add(read.label, "animation", read.bytes !== null);
+  }
+  for (const { path, bone } of files.attach) {
+    const read = member(path);
+    if (read) add(read.label, bone === null ? "set" : "attach", read.bytes !== null);
+  }
+  for (const texture of files.textures) add(texture.label, "texture", texture.bytes !== null);
+  return [...members.values()];
 }

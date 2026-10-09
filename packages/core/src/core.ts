@@ -42,7 +42,7 @@ import { buildAssetScene, readAssetFiles } from "./composition-load";
 import { readableImageExtensions } from "./file-search";
 import { applySnapshot, editBetween } from "./history";
 import { importAsset } from "./import";
-import { exporterName, inspectScene } from "./inspect";
+import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
 import { findComment, OpenAsset } from "./open-asset";
 import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
@@ -392,16 +392,29 @@ export class ArcueCore {
     }
   }
 
-  /** Parses a file in its own import worker, as opening it would, without opening a tab or touching review data. */
+  /**
+   * Parses a file in its own import worker, composed with its composition's files as opening it would be, without
+   * opening a tab or touching review data. A composition path inspects the model it names.
+   */
   async #inspect(given: string): Promise<AssetInspection> {
     const path = normalizePath(given);
     const stat = await this.#platform.stat(path);
     if (!stat) throw new ArcueError("not-found", `${path} does not exist.`);
     if (stat.kind !== "file") throw new ArcueError("invalid-input", `${path} is not an asset file.`);
-    const bytes = await this.#platform.readFile(path);
-    const size = bytes.byteLength;
-    const scene = await importAsset(this.#platform, path, bytes, { timeoutMs: this.#importTimeoutMs });
-    return inspectScene(scene, { path, bytes: size });
+    const composition = isCompositionPath(path);
+    const model = composition ? await this.#modelOf(path) : path;
+    const readRoot = (await this.#platform.findWorkspaceRoot(model)) ?? dirname(model);
+    const files = await readAssetFiles(this.#platform, model, composition ? path : compositionPathFor(model), readRoot);
+    const bytes = files.model.bytes.byteLength;
+    const scene = await buildAssetScene(files, (file) =>
+      importAsset(this.#platform, file.path, file.bytes, { readRoot, timeoutMs: this.#importTimeoutMs }),
+    );
+    return inspectScene(scene, {
+      path: model,
+      bytes,
+      composition: files.composition?.file.path ?? null,
+      members: inspectMembers(files),
+    });
   }
 
   #close(assetId: string): Promise<void> {

@@ -10,7 +10,8 @@ export const USAGE = `Usage:
       file opens its model with the files it lists.
       --clip names a clip by its name in the file, such as "Armature|Walk"; --frame is a whole frame number from 0.
   arcue inspect <file> [--json]
-      Imports a file without the app and summarizes its meshes, bones, materials, clips and warnings.
+      Imports a file without the app and summarizes its meshes, parts, bones, materials, clips and warnings. A model
+      is composed with its .arcue composition file, and a .arcue file inspects the model it names.
       --json prints the full result for scripts and agents. Exits with 1 when the file cannot be read or parsed.
   arcue status
       Reports whether Arcue is running and which assets it has open. Exits with 1 when it is not running.

@@ -4,9 +4,10 @@ import { assetIdSchema, assetSummarySchema, bytesSchema, commentIdSchema } from 
 import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
 import { assetInspectionSchema } from "./inspect";
+import { partSummarySchema } from "./parts";
 import { reviewFileSchema } from "./review";
 import { settingsSchema } from "./settings";
-import { partIdSchema, viewStateSchema } from "./view-state";
+import { viewStateSchema } from "./view-state";
 
 const assetRef = { assetId: assetIdSchema };
 
@@ -48,22 +49,11 @@ export const queries = {
     description:
       'List the parts of the asset version on screen: meshes, LOD groups with their levels, collision helpers and sockets, with the triangles of each level. Parts from another file of a composition have ids like "Shells.fbx//Boulder1".',
     input: z.object(assetRef),
-    output: z.object({
-      parts: z.array(
-        z.object({
-          id: partIdSchema,
-          name: z.string(),
-          role: z.enum(["model", "collision", "socket"]),
-          /** False for collision helpers, sockets and parts a composition hides; view state lists changes from it. */
-          shownByDefault: z.boolean(),
-          levels: z.array(z.object({ level: z.int().nonnegative(), meshes: z.array(z.string()), triangles: z.int() })),
-        }),
-      ),
-    }),
+    output: z.object({ parts: z.array(partSummarySchema) }),
   }),
   "asset.inspect": query({
     description:
-      "Import a file without opening it and summarize it: format, exporter, axes, height, meshes, bones, materials, textures, clips and warnings.",
+      "Import a file without opening it and summarize it: format, exporter, axes, height, meshes, parts, bones, materials, textures, clips and warnings. A model is composed with its composition file as opening it would be; a .arcue path inspects the model it names.",
     input: z.object({ path: z.string().min(1) }),
     output: assetInspectionSchema,
   }),

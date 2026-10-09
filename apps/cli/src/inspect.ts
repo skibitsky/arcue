@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { ArcueCore } from "@arcue/core";
 import { fromNativePath, NodePlatform, startNodeImportWorker } from "@arcue/platform-node";
-import type { AssetInspection, ListenerErrorHandler } from "@arcue/protocol";
+import type { AssetInspection, ListenerErrorHandler, PartSummary } from "@arcue/protocol";
 
 /** The import worker the build writes beside `arcue.js`. */
 export const bundledImportWorker = fileURLToPath(new URL("./import-worker.js", import.meta.url));
@@ -51,6 +51,10 @@ export function formatInspection(inspection: AssetInspection): string {
       ]),
     ),
   );
+  add(
+    "Parts",
+    columns(inspection.parts.flatMap((part) => (partDetail(part) === "" ? [] : [[part.name, partDetail(part)]]))),
+  );
   if (inspection.bones > 0) add("Bones", [String(inspection.bones)]);
   add(
     "Materials",
@@ -70,15 +74,34 @@ export function formatInspection(inspection: AssetInspection): string {
       ]),
     ),
   );
-  add(
-    "Warnings",
-    inspection.warnings.map((warning) => warning.message),
-  );
+  if (inspection.composition !== null) add("Composition", [inspection.composition]);
+  add("Files", columns(inspection.members.map((member) => [member.file, member.role])));
+  const problems = (severity: string) =>
+    inspection.warnings.flatMap((warning) =>
+      warning.severity !== severity
+        ? []
+        : [
+            warning.file && warning.file !== warning.subject.name
+              ? `${warning.message} (${warning.file})`
+              : warning.message,
+          ],
+    );
+  add("Errors", problems("error"));
+  add("Warnings", problems("warning"));
   const width = Math.max(...rows.map(([label]) => label.length)) + 2;
   return `${rows
     .flatMap(([label, lines]) => lines.map((line, index) => `${(index === 0 ? label : "").padEnd(width)}${line}`))
     .map((line) => line.trimEnd())
     .join("\n")}\n`;
+}
+
+/** What sets a part apart from a plain mesh: its LOD levels, its role, or being hidden by default. */
+function partDetail(part: PartSummary): string {
+  const details: string[] = [];
+  if (part.levels.length > 1) details.push(`LOD ${part.levels.map((entry) => entry.level).join(", ")}`);
+  if (part.role !== "model") details.push(part.role);
+  else if (!part.shownByDefault) details.push("hidden");
+  return details.join(", ");
 }
 
 function columns(rows: [string, string][]): string[] {

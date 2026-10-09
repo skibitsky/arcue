@@ -1,4 +1,4 @@
-import type { EventName } from "@arcue/protocol";
+import type { EventName, PartSummary } from "@arcue/protocol";
 import { createMemoryChannel, createPeer, createRemoteClient } from "@arcue/protocol";
 import type { Material, SceneDescription, SceneNode } from "@arcue/scene";
 import { importWarning } from "@arcue/scene";
@@ -66,9 +66,15 @@ function texturedScene(): SceneDescription {
   return scene;
 }
 
+const plain = { composition: null, members: [] };
+
+function part(id: string, name: string, levels: PartSummary["levels"]): PartSummary {
+  return { id, name, role: "model", shownByDefault: true, levels };
+}
+
 describe("inspectScene", () => {
   it("summarizes the file, meshes, materials, textures, clips and warnings as plain data", () => {
-    const inspection = inspectScene(texturedScene(), { path: "/work/Assets/Golem.fbx", bytes: 1234 });
+    const inspection = inspectScene(texturedScene(), { ...plain, path: "/work/Assets/Golem.fbx", bytes: 1234 });
     expect(inspection).toEqual({
       file: { path: "/work/Assets/Golem.fbx", name: "Golem.fbx", bytes: 1234 },
       format: "fbx",
@@ -81,6 +87,10 @@ describe("inspectScene", () => {
         { name: "Body", path: "Hero/Body", triangles: 8, vertices: 9, skinned: false },
         { name: "Head", path: "Hero/Head", triangles: 2, vertices: 4, skinned: false },
       ],
+      parts: [
+        part("Hero/Body", "Body", [{ level: 0, meshes: ["Hero/Body"], triangles: 8 }]),
+        part("Hero/Head", "Head", [{ level: 0, meshes: ["Hero/Head"], triangles: 2 }]),
+      ],
       triangles: 10,
       bones: 0,
       materials: [
@@ -92,11 +102,9 @@ describe("inspectScene", () => {
         { name: "Stone_Normal.png", found: false, mimeType: null },
       ],
       clips: [{ name: "Armature|Walk", displayName: "Walk", frames: 25, fps: 24, duration: 1 }],
-      warnings: [
-        { code: "texture-not-found", message: "Texture not found: Stone_Normal.png", subject: "Stone_Normal.png" },
-        { code: "texture-not-found", message: "Texture not found: Stone_Normal.png", subject: "Stone_Normal.png" },
-        { code: "extra-skins", message: "Extra skins on Curve", subject: "Curve" },
-      ],
+      composition: null,
+      members: [],
+      warnings: texturedScene().source.warnings,
     });
     expect(JSON.parse(JSON.stringify(inspection))).toEqual(inspection);
   });
@@ -116,14 +124,14 @@ describe("inspectScene", () => {
       mesh: null,
     });
     scene.nodes.push(bone("Root", "Hero/Root", 0), bone("Spine", "Hero/Root/Spine", 2));
-    const inspection = inspectScene(scene, { path: "/work/Rig.fbx", bytes: 1 });
+    const inspection = inspectScene(scene, { ...plain, path: "/work/Rig.fbx", bytes: 1 });
     expect(inspection.bones).toBe(2);
     expect(inspection.meshes[0]?.skinned).toBe(true);
   });
 
   it("reports a file without meshes or an exporter", () => {
     const scene = fakeScene({ meshes: [], exporter: null });
-    expect(inspectScene(scene, { path: "/work/Empty.fbx", bytes: 0 })).toMatchObject({
+    expect(inspectScene(scene, { ...plain, path: "/work/Empty.fbx", bytes: 0 })).toMatchObject({
       exporter: null,
       height: 0,
       meshes: [],
@@ -185,6 +193,50 @@ describe("asset.inspect", () => {
     });
     const inspection = await test.core.client.query("asset.inspect", { path: HERO });
     expect(inspection.textures).toEqual([{ name: "../Textures/Body.png", found: true, mimeType: "image/png" }]);
+  });
+
+  it("composes a model with its composition, as opening it would, from the model or the composition file", async () => {
+    const art = "/work/game/Assets/Art";
+    const test = await startTestCore({
+      ...heroFiles({
+        ...heroSpec,
+        meshes: [...heroSpec.meshes, { name: "UCX_Body", grid: 2 }],
+        bones: [{ name: "Spine" }],
+        materials: ["Skin"],
+      }),
+      [`${art}/Hero.arcue`]: JSON.stringify({
+        version: 1,
+        model: "Hero.fbx",
+        attach: [{ file: "Shield.fbx", bone: "Spine" }, { file: "Gone.fbx" }],
+        materials: { Skin: { baseColor: "Skin.png" } },
+      }),
+      [`${art}/Shield.fbx`]: fakeAsset({ meshes: [{ name: "Shield", grid: 2 }] }),
+      [`${art}/Hero@Idle.fbx`]: fakeAsset({ meshes: [], clips: [{ name: "Armature|Idle", frames: 11 }] }),
+    });
+    const fromModel = await test.core.client.query("asset.inspect", { path: HERO });
+    const fromComposition = await test.core.client.query("asset.inspect", { path: `${art}/Hero.arcue` });
+    expect(fromComposition).toEqual(fromModel);
+    expect(fromModel.file.path).toBe(HERO);
+    expect(fromModel.composition).toBe(`${art}/Hero.arcue`);
+    expect(fromModel.members).toEqual([
+      { file: "Hero@Idle.fbx", role: "animation", found: true },
+      { file: "Shield.fbx", role: "attach", found: true },
+      { file: "Gone.fbx", role: "set", found: false },
+      { file: "Skin.png", role: "texture", found: false },
+    ]);
+    expect(fromModel.parts.map((part) => [part.id, part.role, part.shownByDefault])).toEqual([
+      ["Hero/Body", "model", true],
+      ["Hero/UCX_Body", "collision", false],
+      ["Shield.fbx//Hero/Shield", "model", true],
+    ]);
+    expect(fromModel.clips.map((clip) => clip.name)).toContain("Armature|Idle");
+    expect(
+      fromModel.warnings.map((warning) => [warning.code, warning.severity, warning.subject, warning.file]),
+    ).toEqual([
+      ["file-not-found", "error", { kind: "file", name: "Gone.fbx" }, "Gone.fbx"],
+      ["texture-not-found", "error", { kind: "texture", name: "Skin.png" }, "Hero.arcue"],
+    ]);
+    expect(test.platform.writes).toEqual([]);
   });
 
   it("rejects a missing file, a folder and a file the importer cannot parse", async () => {
