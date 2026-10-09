@@ -1,6 +1,6 @@
 import type { CompositionFile } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
-import { openedFilePath, openedModelFolder, partitionFiles, planOpen, samplePath } from "./files";
+import { besideAsset, openedFilePath, openedModelFolder, partitionFiles, planOpen, samplePath } from "./files";
 
 describe("partitionFiles", () => {
   it("opens FBX and composition files, keeps image files as textures, and ignores the rest", () => {
@@ -65,5 +65,13 @@ describe("virtual paths", () => {
     expect(openedFilePath("Villain.fbx", "BaseColor.png")).toBe("/files/Villain/BaseColor.png");
     expect(openedFilePath("a/b\\c.fbx")).toBe("/files/a_b_c/a_b_c.fbx");
     expect(openedModelFolder(".fbx")).toBe("/files/.fbx");
+  });
+});
+
+describe("besideAsset", () => {
+  it("puts an added file in the model's folder, and refuses one with the model's name", () => {
+    expect(besideAsset("/samples/beetle.fbx", "beetle-turn.fbx")).toBe("/samples/beetle-turn.fbx");
+    expect(besideAsset("/files/Hero/Hero.fbx", "a/b.png")).toBe("/files/Hero/a_b.png");
+    expect(() => besideAsset("/files/Hero/Hero.fbx", "Hero.fbx")).toThrow("Hero.fbx is the model itself.");
   });
 });

@@ -46,6 +46,7 @@ const bridge: DesktopBridge = {
   windowReady: () => ipcRenderer.send(channels.windowReady),
   reportTabs: (tabs: WindowTabs) => ipcRenderer.send(channels.reportTabs, tabs),
   openDialog: async () => openDialogResultSchema.parse(await ipcRenderer.invoke(channels.openDialog)),
+  pickFiles: async (kind) => openDialogResultSchema.parse(await ipcRenderer.invoke(channels.pickFiles, kind)),
   onOpenPaths: (listener) => on(channels.openPaths, openPathsSchema, ({ paths }) => listener(paths)),
   onAdoptTab: (listener) => on(channels.adoptTab, adoptTabSchema, ({ assetId }) => listener(assetId)),
   pathForFile: (file) => webUtils.getPathForFile(file),

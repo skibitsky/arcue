@@ -149,6 +149,26 @@ const paths = {
       <path d="M12 9.5v4.2M12 16.8v.1" />
     </>
   ),
+  image: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <circle cx="9" cy="10" r="1.8" />
+      <path d="M20.5 16l-5-5-9 8.5" />
+    </>
+  ),
+  layers: (
+    <>
+      <path d="M12 3.5l8.5 4.5L12 12.5 3.5 8z" />
+      <path d="M3.5 12L12 16.5 20.5 12" />
+      <path d="M3.5 16L12 20.5 20.5 16" />
+    </>
+  ),
+  tab: (
+    <>
+      <rect x="3.5" y="5.5" width="17" height="14" rx="2.5" />
+      <path d="M3.5 9.5h17M12 12.5v4.5M9.8 14.8h4.4" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

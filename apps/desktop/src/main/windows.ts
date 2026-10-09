@@ -1,7 +1,8 @@
+import { IMAGE_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { IpcMainEvent, IpcMainInvokeEvent, Rectangle, WebContents } from "electron";
 import { BrowserWindow, dialog, ipcMain, screen } from "electron";
-import type { MenuCommand, WindowInit, WindowTabs } from "../shared/ipc";
-import { channels, tabDragEndSchema, windowTabsSchema } from "../shared/ipc";
+import type { FileKind, MenuCommand, WindowInit, WindowTabs } from "../shared/ipc";
+import { channels, fileKindSchema, tabDragEndSchema, windowTabsSchema } from "../shared/ipc";
 import type { Log } from "../shared/log";
 import { ASSET_EXTENSIONS } from "./args";
 import type { CoreHost } from "./core-host";
@@ -27,6 +28,8 @@ interface CreateOptions {
 }
 
 const DEFAULT_SIZE = { width: 1440, height: 900 };
+const MODEL_FILTER = { name: "Models", extensions: ["fbx"] };
+const IMAGE_FILTER = { name: "Images", extensions: IMAGE_FILE_EXTENSIONS.map((extension) => extension.slice(1)) };
 const CLOSE_TIMEOUT_MS = 5000;
 const CASCADE = 28;
 
@@ -269,11 +272,24 @@ export class WindowManager {
   }
 
   async #pickFiles(parent: BrowserWindow | null): Promise<string[]> {
-    const options: Electron.OpenDialogOptions = {
+    return this.#showOpenDialog(parent, {
       title: "Open an asset",
       properties: ["openFile", "multiSelections"],
       filters: [{ name: "Models", extensions: ASSET_EXTENSIONS.map((extension) => extension.slice(1)) }],
-    };
+    });
+  }
+
+  /** The open dialog for files to add to a view: FBX models, or one image for a texture slot. */
+  #pickViewFiles(parent: BrowserWindow, kind: FileKind): Promise<string[]> {
+    return this.#showOpenDialog(
+      parent,
+      kind === "model"
+        ? { title: "Add to view", properties: ["openFile", "multiSelections"], filters: [MODEL_FILTER] }
+        : { title: "Choose a texture", properties: ["openFile"], filters: [IMAGE_FILTER] },
+    );
+  }
+
+  async #showOpenDialog(parent: BrowserWindow | null, options: Electron.OpenDialogOptions): Promise<string[]> {
     const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
     return result.canceled ? [] : result.filePaths;
   }
@@ -322,6 +338,11 @@ export class WindowManager {
     ipcMain.handle(channels.openDialog, async (event) => {
       const entry = this.#sender(event);
       return entry ? this.#pickFiles(entry.window) : [];
+    });
+    ipcMain.handle(channels.pickFiles, async (event, payload: unknown) => {
+      const entry = this.#sender(event);
+      const kind = fileKindSchema.safeParse(payload);
+      return entry && kind.success ? this.#pickViewFiles(entry.window, kind.data) : [];
     });
     ipcMain.on(channels.tabDragEnd, (event, payload: unknown) => {
       const entry = this.#sender(event);

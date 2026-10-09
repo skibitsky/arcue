@@ -97,6 +97,7 @@ class FakeDesktop {
       this.reports.push(tabs);
     },
     openDialog: async () => [],
+    pickFiles: async () => [],
     onOpenPaths: () => () => undefined,
     onAdoptTab: () => () => undefined,
     pathForFile: () => "",

@@ -7,13 +7,18 @@ import type {
   CoordinateConvention,
   CoreClient,
   IncomingRequest,
+  MemberRole,
   Settings,
   ViewState,
 } from "@arcue/protocol";
-import { ArcueError, commands, isCommandName, withTransfer } from "@arcue/protocol";
+import { ArcueError, commands, isCommandName, memberRoleFor, withTransfer } from "@arcue/protocol";
+import type { TextureSlot } from "@arcue/scene";
+import { fileNameOf, materialSlots, missingSlots } from "@arcue/scene";
 import type { SessionHost, ToastInput } from "./asset-session";
 import { AssetSession, messageOf, NEW_COMMENT_OVERLAY } from "./asset-session";
 import { Store } from "./observable";
+import type { DropChoice, DropPrompt, FileHost } from "./view-files";
+import { besideModel, isImageFile, isModelFile, slotLabel, sortDropped } from "./view-files";
 
 export type TabEntry = { kind: "asset"; id: string } | { kind: "empty"; id: string };
 
@@ -34,6 +39,8 @@ export interface WorkspaceState {
   connection: ConnectionState;
   /** Null until the core answers, or when it has no settings. */
   settings: Settings | null;
+  /** A model dropped on a model's tab, waiting for "New tab" or "Add to view". */
+  dropPrompt: DropPrompt | null;
 }
 
 export interface WorkspaceStoreOptions {
@@ -41,6 +48,8 @@ export interface WorkspaceStoreOptions {
   /** Writes text to the clipboard when the core could not. Defaults to the browser's clipboard. */
   writeClipboard?: (text: string) => Promise<void>;
   setTimer?: (delayMs: number, callback: () => void) => () => void;
+  /** The host's open dialog and dropped files. Without it the window adds no files to a view. */
+  files?: FileHost;
 }
 
 /** The commands with runsIn "view", which the core routes to the window that shows the asset. */
@@ -94,6 +103,7 @@ export class WorkspaceStore {
   readonly #setTimer: (delayMs: number, callback: () => void) => () => void;
   readonly #writeClipboard: (text: string) => Promise<void>;
   readonly #host: SessionHost;
+  readonly #files: FileHost | null;
   #nextEmptyTab = 1;
   #nextToast = 1;
   #cancelToast: (() => void) | null = null;
@@ -103,6 +113,7 @@ export class WorkspaceStore {
     this.client = options.client;
     this.#setTimer = options.setTimer ?? defaultTimer;
     this.#writeClipboard = options.writeClipboard ?? browserClipboard;
+    this.#files = options.files ?? null;
     this.state = new Store<WorkspaceState>({
       tabs: [],
       active: null,
@@ -110,6 +121,7 @@ export class WorkspaceStore {
       copySheet: null,
       connection: options.client.connectionState,
       settings: null,
+      dropPrompt: null,
     });
     this.#host = {
       client: this.client,
@@ -245,12 +257,16 @@ export class WorkspaceStore {
   }
 
   #removeTab(id: string): void {
-    const { tabs, active } = this.state.get();
+    const { tabs, active, dropPrompt } = this.state.get();
     const index = tabs.findIndex((tab) => tab.id === id);
     if (index === -1) return;
     const remaining = tabs.filter((tab) => tab.id !== id);
     const neighbor = remaining[Math.min(index, remaining.length - 1)]?.id ?? null;
-    this.state.patch({ tabs: remaining, active: active === id ? neighbor : active });
+    this.state.patch({
+      tabs: remaining,
+      active: active === id ? neighbor : active,
+      dropPrompt: dropPrompt?.assetId === id ? null : dropPrompt,
+    });
   }
 
   async openPath(path: string): Promise<void> {
@@ -411,6 +427,164 @@ export class WorkspaceStore {
 
   closeCopySheet(): void {
     this.state.patch({ copySheet: null });
+  }
+
+  /** Whether the host lets the window pick and drop files into a view. */
+  get canAddFiles(): boolean {
+    return this.#files !== null;
+  }
+
+  /** Opens the host's dialog for model files and adds each picked one to the asset's view. */
+  async addFileToView(assetId: string): Promise<void> {
+    const host = this.#files;
+    if (!host) return;
+    try {
+      const picked = await host.pick("model", this.#assetPath(assetId));
+      const models = picked.filter(isModelFile);
+      if (picked.length > 0 && models.length === 0) throw new ArcueError("invalid-input", "Choose an FBX file.");
+      for (const model of models) await this.#addFile(assetId, model);
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
+  /** Opens the host's dialog for images and shows the picked one in a material's slot. */
+  async chooseTexture(assetId: string, material: string, slot: TextureSlot): Promise<void> {
+    const host = this.#files;
+    if (!host) return;
+    try {
+      const [image] = (await host.pick("image", this.#assetPath(assetId))).filter(isImageFile);
+      if (image) await this.#setTexture(assetId, material, slot, image);
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
+  /** Shows an image dropped on a material's slot in that slot. */
+  async dropTexture(assetId: string, material: string, slot: TextureSlot, files: readonly File[]): Promise<void> {
+    const host = this.#files;
+    if (!host) return;
+    try {
+      const [image] = sortDropped(files).images;
+      if (!image) throw new ArcueError("invalid-input", "Drop an image.");
+      const [path] = await host.place([image], this.#assetPath(assetId));
+      if (path) await this.#setTexture(assetId, material, slot, path);
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
+  /** Takes the composition's texture out of a slot, so the model's own texture shows again. */
+  async restoreTexture(assetId: string, material: string, slot: TextureSlot): Promise<void> {
+    try {
+      await this.client.execute("material.setTexture", { assetId, material, slot, file: null });
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
+  /** Takes a file out of the asset's view and its composition file. `file` is relative to the model's folder. */
+  async removeFileFromView(assetId: string, file: string): Promise<void> {
+    try {
+      await this.client.execute("composition.removeFile", {
+        assetId,
+        file: besideModel(this.#assetPath(assetId), file),
+      });
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
+  /**
+   * Files dropped on an asset's 3D view at a point. Animation-only models join the view at once; other models ask
+   * "New tab" or "Add to view" there. An image goes to the only slot whose texture is missing.
+   */
+  async dropOnView(assetId: string, files: readonly File[], at: { x: number; y: number }): Promise<void> {
+    const host = this.#files;
+    if (!host) return;
+    const { models, images } = sortDropped(files);
+    try {
+      if (models.length > 0) {
+        const placed = (await host.place(files, this.#assetPath(assetId))).filter(isModelFile);
+        if (await this.#animationsOnly(placed)) {
+          for (const model of placed) await this.#addFile(assetId, model, "animation");
+          return;
+        }
+        this.state.patch({ dropPrompt: { assetId, x: at.x, y: at.y, files: [...files], models: placed } });
+        return;
+      }
+      const [image] = images;
+      if (!image) throw new ArcueError("invalid-input", "Drop an FBX file or an image.");
+      await this.#imageOnView(assetId, image);
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
+  /** Answers the drop prompt: opens the dropped files in new tabs, or adds the models to the view. */
+  async answerDrop(choice: DropChoice): Promise<void> {
+    const prompt = this.state.get().dropPrompt;
+    if (!prompt) return;
+    this.state.patch({ dropPrompt: null });
+    if (choice === "tab") {
+      this.#files?.open(prompt.files);
+      return;
+    }
+    for (const model of prompt.models) {
+      try {
+        await this.#addFile(prompt.assetId, model);
+      } catch (error) {
+        this.notify({ message: messageOf(error), kind: "alert" });
+      }
+    }
+  }
+
+  dismissDrop(): void {
+    this.state.patch({ dropPrompt: null });
+  }
+
+  #assetPath(assetId: string): string {
+    const path = this.#sessions.get(assetId)?.state.get().summary.path || this.#summaries.get(assetId)?.path;
+    if (!path) throw new ArcueError("unavailable", "The asset is still opening.");
+    return path;
+  }
+
+  async #addFile(assetId: string, file: string, role?: MemberRole): Promise<void> {
+    await this.client.execute("composition.addFile", { assetId, file, ...(role ? { role } : {}) });
+    this.notify({ message: `Added ${fileNameOf(file)}`, kind: "info" });
+  }
+
+  async #setTexture(assetId: string, material: string, slot: TextureSlot, file: string): Promise<void> {
+    await this.client.execute("material.setTexture", { assetId, material, slot, file });
+    this.notify({ message: `${fileNameOf(file)} on ${slotLabel(slot).toLowerCase()}`, kind: "info" });
+  }
+
+  /** Whether every model holds clips and no meshes, so it joins the view as an animation file without asking. */
+  async #animationsOnly(models: readonly string[]): Promise<boolean> {
+    if (models.length === 0) return false;
+    for (const path of models) {
+      const inspection = await this.client.query("asset.inspect", { path }).catch(() => null);
+      if (!inspection) return false;
+      const role = memberRoleFor({ meshes: inspection.meshes.length, clips: inspection.clips.length });
+      if (role !== "animation") return false;
+    }
+    return true;
+  }
+
+  async #imageOnView(assetId: string, image: File): Promise<void> {
+    const scene = this.#sessions.get(assetId)?.state.get().scene;
+    if (!scene) throw new ArcueError("unavailable", "The model is still loading.");
+    const missing = missingSlots(materialSlots(scene));
+    const [only] = missing;
+    if (!only || missing.length > 1) {
+      this.notify({
+        message: only ? `${missing.length} textures are missing. Drop on one in asset info.` : "No texture is missing.",
+        kind: "info",
+      });
+      return;
+    }
+    const [path] = (await this.#files?.place([image], this.#assetPath(assetId))) ?? [];
+    if (path) await this.#setTexture(assetId, only.material, only.slot.slot, path);
   }
 
   /** Tells the core this window has focus, so new assets open here. */

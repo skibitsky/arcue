@@ -10,6 +10,7 @@ export const channels = {
   windowReady: "arcue:window-ready",
   reportTabs: "arcue:report-tabs",
   openDialog: "arcue:open-dialog",
+  pickFiles: "arcue:pick-files",
   openPaths: "arcue:open-paths",
   adoptTab: "arcue:adopt-tab",
   tabDragEnd: "arcue:tab-drag-end",
@@ -53,10 +54,14 @@ export const menuCommandSchema = z.enum(["new-tab", "close-tab"]);
 
 export const openDialogResultSchema = z.array(pathSchema);
 
+/** What the open dialog offers when a file is added to a view: models, or images for a texture slot. */
+export const fileKindSchema = z.enum(["model", "image"]);
+
 export type SavedTab = z.output<typeof savedTabSchema>;
 export type WindowTabs = z.output<typeof windowTabsSchema>;
 export type WindowInit = z.output<typeof windowInitSchema>;
 export type MenuCommand = z.output<typeof menuCommandSchema>;
+export type FileKind = z.output<typeof fileKindSchema>;
 
 /** What the preload exposes to the page as `window.arcueDesktop`. */
 export interface DesktopBridge {
@@ -69,6 +74,8 @@ export interface DesktopBridge {
   windowReady(): void;
   reportTabs(tabs: WindowTabs): void;
   openDialog(): Promise<string[]>;
+  /** Shows the open dialog for files to add to a view: several models, or one image. */
+  pickFiles(kind: FileKind): Promise<string[]>;
   onOpenPaths(listener: (paths: string[]) => void): () => void;
   /** Asks this window to take an asset's tab from the window that shows it. */
   onAdoptTab(listener: (assetId: string) => void): () => void;
