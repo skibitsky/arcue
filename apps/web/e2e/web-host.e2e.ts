@@ -44,21 +44,22 @@ test("opens every sample from the gallery with its clips", async ({ page }) => {
     await readyAsset(page, tab);
 
     const clips = clipsOf[sample.id] ?? [];
-    const clipButton = page.locator(".timeline").getByRole("button", { name: /^Clip: / });
-    await expect(clipButton).toBeEnabled();
-    await clipButton.click();
-    const menu = page.getByRole("menu");
-    await expect(menu.getByRole("menuitemradio", { name: /Rest pose/ })).toBeVisible();
-    for (const clip of clips) await expect(menu.getByRole("menuitemradio", { name: new RegExp(clip) })).toBeVisible();
-    await page.keyboard.press("Escape");
-
     if (clips.length > 0) {
+      const clipButton = page.locator(".timeline").getByRole("button", { name: /^Clip: / });
+      await expect(clipButton).toBeEnabled();
+      await clipButton.click();
+      const menu = page.getByRole("menu");
+      await expect(menu.getByRole("menuitemradio", { name: /Rest pose/ })).toBeVisible();
+      for (const clip of clips) await expect(menu.getByRole("menuitemradio", { name: new RegExp(clip) })).toBeVisible();
+      await page.keyboard.press("Escape");
+
       const last = clips.includes("Walk") ? "Walk" : (clips[0] ?? "");
       await clipButton.click();
       await page.getByRole("menuitemradio", { name: new RegExp(last) }).click();
       await expect(page.getByRole("img", { name: /^Frame 0 of \d+$/ })).toBeVisible();
     } else {
-      await expect(page.getByRole("img", { name: "Rest pose" })).toBeVisible();
+      await expect(page.locator(".ws:not([hidden]) .sb-stats")).toBeVisible();
+      await expect(page.locator(".ws:not([hidden]) .timeline")).toHaveCount(0);
     }
     await page.screenshot({ path: `${SHOTS}sample-${sample.id}.png` });
   }

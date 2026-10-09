@@ -34,7 +34,7 @@ describe("Workspace", () => {
     await renderStone();
     const drafts = screen.getByRole("list", { name: "Drafts" });
     expect(within(drafts).getAllByRole("listitem")).toHaveLength(3);
-    expect(screen.getByText("3 drafts")).toBeTruthy();
+    expect(screen.queryByText("3 drafts")).toBeNull();
     expect(screen.getByRole("button", { name: /Copy prompt/ }).textContent).toContain("3");
     expect(screen.getByText("Round 3")).toBeTruthy();
     expect(screen.getByText("Yesterday 18:40")).toBeTruthy();
@@ -78,9 +78,7 @@ describe("Workspace", () => {
     const { session, viewport } = await renderStone();
     const user = userEvent.setup();
     await user.keyboard("c");
-    expect(
-      screen.getByRole("button", { name: "Comment: click to pin, drag to paint" }).getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Comment" }).getAttribute("aria-pressed")).toBe("true");
     expect(viewport()?.tool).toBe("comment");
     await user.keyboard("]");
     expect(session.state.get().brushSize).toBe(26);
@@ -123,6 +121,8 @@ describe("Workspace", () => {
       await session.copyPrompt();
       await flush();
     });
+    expect(screen.queryByRole("list", { name: "Drafts" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Copy prompt/ }).textContent).toBe("Copy prompt");
     const user = userEvent.setup();
     const resolve = screen.getAllByRole("button", { name: "Mark resolved" });
     expect(resolve).toHaveLength(3);
@@ -204,9 +204,9 @@ describe("Workspace", () => {
     const { session } = await renderStone();
     act(() => session.reopen("c5"));
     const box = screen.getByRole("form", { name: /^Comment/ });
-    expect(within(box).queryByRole("button", { name: /Remove the time/ })).toBeNull();
-    expect(within(box).queryByRole("button", { name: "Remove the surface target" })).toBeNull();
-    expect(within(box).getByRole("button", { name: "Remove the link to the earlier comment" })).toBeTruthy();
+    expect(within(box).queryByRole("button", { name: "Remove time" })).toBeNull();
+    expect(within(box).queryByRole("button", { name: "Remove target" })).toBeNull();
+    expect(within(box).getByRole("button", { name: "Remove follow-up" })).toBeTruthy();
   });
 
   it("keeps the 3D view when the host passes a new viewport factory", async () => {

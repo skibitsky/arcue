@@ -95,7 +95,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
         {...(placeLocked
           ? {}
           : {
-              removeLabel: "Remove the time. The comment then applies to the model itself.",
+              removeLabel: "Remove time",
               onRemove: () => removeAndFocus("time"),
             })}
       />
@@ -108,7 +108,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
         icon="alert"
         tone="alert"
         label="Model changed · pick again"
-        removeLabel="Comment without a surface target instead"
+        removeLabel="Remove target"
         onRemove={() => removeAndFocus("target")}
       />
     ) : box.target ? (
@@ -116,7 +116,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
         key="target"
         icon={box.target.kind === "region" ? "region" : "pin"}
         label={targetLabel(box.target, box.targetBone)}
-        {...(placeLocked ? {} : { removeLabel: "Remove the surface target", onRemove: () => removeAndFocus("target") })}
+        {...(placeLocked ? {} : { removeLabel: "Remove target", onRemove: () => removeAndFocus("target") })}
       />
     ) : null,
     box.followUpRound !== null ? (
@@ -125,7 +125,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
           key="follow"
           icon="follow"
           label={`Follow-up · round ${box.followUpRound}`}
-          removeLabel="Remove the link to the earlier comment"
+          removeLabel="Remove follow-up"
           onRemove={() => removeAndFocus("followUp")}
         />
       ) : (
@@ -148,7 +148,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
     >
       <div className="cbox-top">
         <span className="cbox-n">{number}</span>
-        <div className="cbox-chips">{chips.length > 0 ? chips : <Chip label="No anchor" />}</div>
+        {chips.length > 0 ? <div className="cbox-chips">{chips}</div> : null}
       </div>
       <textarea
         ref={textRef}

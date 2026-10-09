@@ -172,7 +172,7 @@ test("a click pins, a drag paints in feedback blue, and a copied round names the
 }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const canvas = await openWalk(page);
-  await page.getByRole("button", { name: /^Comment: / }).click();
+  await page.getByRole("button", { name: "Comment", exact: true }).click();
 
   await placePin(page, canvas, "Round the shoulder plate.");
   await page.mouse.move(5, 5);
@@ -250,7 +250,7 @@ test("a lane drag selects a range in feedback blue, and a resolved comment turns
   expect(rangeStyle.edges).toContain(blue);
   await page.screenshot({ path: `${SHOTS}timeline-range.png` });
 
-  await page.getByRole("button", { name: /^Comment: / }).click();
+  await page.getByRole("button", { name: "Comment", exact: true }).click();
   await page.locator(".arcue-vp-canvas").click({ position: { x: 560, y: 320 } });
   const commentBox = page.getByRole("form", { name: "Comment 1" });
   await commentBox.getByRole("textbox", { name: "Comment text" }).fill("Slow the step down.");

@@ -1,7 +1,7 @@
 import type { Comment } from "@arcue/protocol";
 import type { KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { clipDisplayName, formatWhen, modShortcut, plural, targetLabel, timeLabel } from "../format";
+import { clipDisplayName, formatWhen, modShortcut, targetLabel, timeLabel } from "../format";
 import type { AssetSession } from "../store/asset-session";
 import type { HistoryItem } from "../store/history";
 import { currentMessage, historyRounds, pendingFollowUp, queuedComments, roundSummaryText } from "../store/history";
@@ -17,7 +17,6 @@ export function CommentsPanel({ session, now }: { session: AssetSession; now: ()
     <aside className="panel" aria-label="Comments">
       <div className="panel-head">
         <span className="panel-title">Comments</span>
-        <span className="panel-count">{queue.length > 0 ? plural(queue.length, "draft") : ""}</span>
       </div>
       <div className="panel-body">
         {queue.length > 0 ? (
@@ -26,12 +25,7 @@ export function CommentsPanel({ session, now }: { session: AssetSession; now: ()
               <QueueItem key={comment.id} session={session} comment={comment} number={index + 1} />
             ))}
           </ol>
-        ) : (
-          <div className="queue-empty">
-            <b>No drafts</b>
-            <span>Press C, then click the model to pin or drag to paint.</span>
-          </div>
-        )}
+        ) : null}
         {rounds.length > 0 ? (
           <>
             <div className="sec-label">History</div>
@@ -116,7 +110,8 @@ function QueueItem({ session, comment, number }: { session: AssetSession; commen
 }
 
 const statusIcons = { sent: "sent", resolved: "check", reopened: "reopen" } as const;
-const statusNotes = { sent: "Sent", resolved: "", reopened: "Reopened" } as const;
+const statusNames = { sent: "Sent", resolved: "Resolved", reopened: "Reopened" } as const;
+const statusNotes = { sent: "", resolved: "", reopened: "Reopened" } as const;
 
 function HistoryList({
   session,
@@ -176,7 +171,7 @@ function HistoryRow({ session, item, round }: { session: AssetSession; item: His
   const note = statusNotes[item.status];
   return (
     <li className={`hi is-${item.status}${selected ? " is-selected" : ""}`}>
-      <span className="hi-ic">
+      <span className="hi-ic" role="img" aria-label={statusNames[item.status]}>
         <Icon name={statusIcons[item.status]} />
       </span>
       <button
@@ -275,11 +270,11 @@ function NoteField({ session }: { session: AssetSession }) {
 
 function CopyPromptButton({ session, count }: { session: AssetSession; count: number }) {
   return (
-    <Tip label="Copy all drafts as one prompt" shortcut={modShortcut("C", { shift: true })}>
+    <Tip label="Copy prompt" shortcut={modShortcut("C", { shift: true })}>
       <button type="button" className="primary" disabled={count === 0} onClick={() => void session.copyPrompt()}>
         <Icon name="copy" />
         <span>Copy prompt</span>
-        <span className="badge">{count}</span>
+        {count > 0 ? <span className="badge">{count}</span> : null}
       </button>
     </Tip>
   );
