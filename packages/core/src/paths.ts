@@ -71,14 +71,24 @@ export function pathInside(root: string, path: string): string | null {
   return target.startsWith(prefix) ? target.slice(prefix.length) : null;
 }
 
-/** The path from folder `from` to `to` with "/" separators, such as "../Textures/Rock.png". Both share a root. */
-export function relativePath(from: string, to: string): string {
+/**
+ * The path of `path` seen from the folder `from`, with ".." where it leaves that folder, such as "../Textures/Rock.png".
+ * Null when the two have different roots.
+ */
+export function relativePath(from: string, path: string): string | null {
   const base = split(from);
-  const target = split(to);
-  if (base.root !== target.root) throw new ArcueError("invalid-input", `"${to}" is on another drive than "${from}".`);
+  const target = split(path);
+  if (base.root !== target.root) return null;
   let common = 0;
   while (common < base.parts.length && base.parts[common] === target.parts[common]) common++;
   return [...base.parts.slice(common).map(() => ".."), ...target.parts.slice(common)].join("/");
+}
+
+/** The file name without its last extension: "Hero" for "/work/Hero.fbx". */
+export function stemOf(path: string): string {
+  const name = basename(path);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
 }
 
 /** Walks up from `path` to the nearest folder that contains ".git", a folder or a worktree's file. */

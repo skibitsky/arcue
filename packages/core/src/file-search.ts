@@ -99,8 +99,9 @@ export function createFileSearch(platform: Platform, assetPath: string, readRoot
       }
       const file = await path;
       if (file === null) return null;
-      const bytes = await platform.readFile(file).catch(() => null);
-      return bytes && { path: relativePath(assetFolder, file), bytes };
+      const relative = relativePath(assetFolder, file);
+      const bytes = relative === null ? null : await platform.readFile(file).catch(() => null);
+      return relative !== null && bytes ? { path: relative, bytes } : null;
     },
   };
 }

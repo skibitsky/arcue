@@ -13,4 +13,5 @@ export const importWarningSchema: z.ZodType<ImportWarning> = z.object({
     name: z.string(),
   }),
   message: z.string().min(1),
+  file: z.string().min(1).optional(),
 });

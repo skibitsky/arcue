@@ -23,6 +23,7 @@ const state: ViewState = {
   frame: 34,
   range: null,
   display: { mode: "clay", skeleton: true },
+  parts: { hidden: ["Hero/Body"], shown: [], isolated: null, lod: 0 },
 };
 
 describe("view commands", () => {

@@ -47,6 +47,7 @@ function emptyScene(textureNames: string[]): SceneDescription {
       foundPath: name,
     })),
     clips: [],
+    parts: [],
     bounds: { min: [0, 0, 0], max: [0, 0, 0] },
   };
 }

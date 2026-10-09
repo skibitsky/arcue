@@ -1,4 +1,5 @@
-import type { BoneShare, RoundComment, RoundData } from "@arcue/protocol";
+import type { BoneShare, PartView, RoundComment, RoundData } from "@arcue/protocol";
+import { nameInPath } from "./scene-lookup";
 
 export interface PromptInput {
   data: RoundData;
@@ -8,29 +9,44 @@ export interface PromptInput {
   roundFolder: string;
   /** When the version's file was written, as the reader's clock shows it, such as "14:02". */
   exportedAt: string;
+  /** People's names of the parts by id; a part missing here is named after the last node in its id. */
+  partNames?: ReadonlyMap<string, string>;
 }
 
 /** A region lists its bones down to this share of its skin weight. */
 const LISTED_BONE_SHARE = 0.05;
 const LISTED_BONES = 4;
+const LISTED_PARTS = 3;
 
 /** Renders a round as the Markdown prompt for coding agents, in the format of the example in the spec. */
-export function renderPrompt({ data, assetPath, roundFolder, exportedAt }: PromptInput): string {
+export function renderPrompt({ data, assetPath, roundFolder, exportedAt, partNames = new Map() }: PromptInput): string {
   const count = data.comments.length;
   const up = data.asset.space.up === "+Z" ? "Z up as in Blender" : "Y up";
   const header = [
     `3D review · round ${data.round} · ${count} ${count === 1 ? "comment" : "comments"}`,
     `Asset: ${assetPath}`,
     `Version ${data.asset.version}, exported ${exportedAt}`,
+    ...compositionLine(data),
     `Data and screenshots: ${roundFolder.endsWith("/") ? roundFolder : `${roundFolder}/`}`,
     `Meters, right-handed, ${up}. Frames count from each clip's first frame (0) at ${formatNumber(data.asset.fps)} fps.`,
     "Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.",
   ].join("\n");
-  return [header, ...data.comments.map(renderComment)].join("\n\n");
+  return [header, ...data.comments.map((comment) => renderComment(comment, partNames))].join("\n\n");
 }
 
-function renderComment(comment: RoundComment): string {
+/** The other files of a composition, which the prompt names once so their prefixed mesh paths make sense. */
+function compositionLine(data: RoundData): string[] {
+  const others = (data.asset.files ?? []).slice(1).map((file) => file.file);
+  if (others.length === 0) return [];
+  return [
+    `Also loaded, relative to the model's folder: ${others.join(", ")}. Meshes from those files are named "<file>//<node path>".`,
+  ];
+}
+
+function renderComment(comment: RoundComment, partNames: ReadonlyMap<string, string>): string {
   const headline = [timeLabel(comment), targetLabel(comment)];
+  const parts = comment.parts ? partsLabel(comment.parts, partNames) : null;
+  if (parts) headline.push(parts);
   if (comment.anchorState === "detached" && comment.anchorVersion !== null) {
     headline.push(
       `detached: its vertex numbers refer to version ${comment.anchorVersion}, so match it by its rest positions`,
@@ -71,6 +87,24 @@ function viewLine(comment: RoundComment): string | null {
   if (comment.screenshot !== null)
     parts.push(parts.length > 0 ? `screenshot: ${comment.screenshot}` : `Screenshot: ${comment.screenshot}`);
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** One short clause for a view that differs from the default, such as "LOD1, Boulder2 hidden". */
+function partsLabel(view: PartView, names: ReadonlyMap<string, string>): string | null {
+  const name = (id: string) => names.get(id) ?? nameInPath(id);
+  const list = (ids: readonly string[]) => {
+    const listed = ids.slice(0, LISTED_PARTS).map(name).join(", ");
+    return ids.length > LISTED_PARTS ? `${listed} and ${ids.length - LISTED_PARTS} more` : listed;
+  };
+  const clauses: string[] = [];
+  if (view.lod > 0) clauses.push(`LOD${view.lod}`);
+  if (view.isolated !== null) {
+    clauses.push(`${name(view.isolated)} isolated`);
+  } else {
+    if (view.hidden.length > 0) clauses.push(`${list(view.hidden)} hidden`);
+    if (view.shown.length > 0) clauses.push(`${list(view.shown)} shown`);
+  }
+  return clauses.length > 0 ? clauses.join(", ") : null;
 }
 
 function strongest(bones: readonly BoneShare[]): BoneShare | null {

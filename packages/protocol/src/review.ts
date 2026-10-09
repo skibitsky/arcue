@@ -9,6 +9,7 @@ import {
 } from "./anchors";
 import { commentIdSchema } from "./assets";
 import { commentContextSchema } from "./context";
+import { partViewSchema } from "./view-state";
 
 const timestampSchema = z.iso.datetime();
 const roundNumberSchema = z.int().positive();
@@ -56,6 +57,8 @@ export const commentSchema = z
      * draft drops the follow-up and restores this status. Null otherwise.
      */
     reopenedFrom: z.enum(["sent", "resolved"]).nullable(),
+    /** The parts the view showed when the comment was made, present only when that differs from the default view. */
+    parts: partViewSchema.optional(),
   })
   .refine((comment) => comment.anchorRestPositions.length === anchoredVertexCount(comment.target), {
     message: "There must be one rest position per anchored vertex.",
@@ -92,14 +95,24 @@ export const meshTopologySchema = z.object({
   topology: topologyFingerprintSchema,
 });
 
+export const versionFileSchema = z.object({
+  /** Relative to the model's folder, as composition prefixes write it: "BugShells.fbx", or "Bug.arcue". */
+  file: z.string().min(1),
+  /** Short hash of that file's bytes. */
+  id: z.string().min(1),
+});
+
 export const assetVersionSchema = z.object({
-  /** Short hash of the file's bytes, such as "3f9a2c1". */
+  /** Short hash of the file's bytes, such as "3f9a2c1", or of the files of a composition. */
   id: z.string().min(1),
   fileModifiedAt: timestampSchema,
   loadedAt: timestampSchema,
   /** Exporter as the file names it, such as "Blender 5.2 FBX". */
   exporter: z.string().nullable(),
+  /** Every mesh with its topology; a mesh from another file of a composition has that file as a prefix. */
   meshes: z.array(meshTopologySchema),
+  /** For a composition, each file the version was built from, the model and the composition file first. */
+  files: z.array(versionFileSchema).optional(),
 });
 
 export const roundSummarySchema = z.object({
@@ -162,6 +175,7 @@ export type AnchorState = z.output<typeof anchorStateSchema>;
 export type FollowUp = z.output<typeof followUpSchema>;
 export type Comment = z.output<typeof commentSchema>;
 export type MeshTopology = z.output<typeof meshTopologySchema>;
+export type VersionFile = z.output<typeof versionFileSchema>;
 export type AssetVersion = z.output<typeof assetVersionSchema>;
 export type RoundSummary = z.output<typeof roundSummarySchema>;
 export type ReviewFile = z.output<typeof reviewFileSchema>;

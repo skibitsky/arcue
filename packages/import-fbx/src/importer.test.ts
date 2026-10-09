@@ -10,6 +10,7 @@ import {
   EXTERNAL_TEXTURE_FBX,
   IN_BETWEEN_FBX,
   LEFT_HANDED_FBX,
+  LOD_FBX,
   METAL_ROUGH_FBX,
   PARTLY_WEIGHTED_FBX,
   PHONG_SHININESS_FBX,
@@ -145,6 +146,12 @@ describe.each(manifest.files)("$file", (expected) => {
       expect(scene.nodes.filter((node) => node.kind === "bone")).toHaveLength(0);
       return;
     }
+    const bones = scene.nodes.filter((node) => node.kind === "bone");
+    expect(bones.map((node) => node.name).sort()).toEqual([...armature.bone_names].sort());
+    if (!expected.meshes.some((mesh) => mesh.skinned)) {
+      expect(scene.skeletons).toHaveLength(0);
+      return;
+    }
     expect(scene.skeletons).toHaveLength(1);
     const skeleton = scene.skeletons[0];
     const jointNames = skeleton?.joints.map((joint) => scene.nodes[joint]?.name) ?? [];
@@ -158,9 +165,11 @@ describe.each(manifest.files)("$file", (expected) => {
     expect(scene.nodes[root?.parent ?? -1]?.name).toBe(armature.name);
     expect(scene.nodes.filter((node) => node.kind === "bone")).toHaveLength(armature.bone_count);
     for (const node of scene.nodes) expect(node.parent).toBeLessThan(scene.nodes.indexOf(node));
-    expect(scene.nodes.find((node) => node.name === "Hand.R")?.path).toBe(
-      "Armature/Hips/Spine/Chest/Shoulder.R/UpperArm.R/Forearm.R/Hand.R",
-    );
+    if (armature.bone_names.includes("Hand.R")) {
+      expect(scene.nodes.find((node) => node.name === "Hand.R")?.path).toBe(
+        "Armature/Hips/Spine/Chest/Shoulder.R/UpperArm.R/Forearm.R/Hand.R",
+      );
+    }
   });
 
   it("makes one clip per take with the file's names, frame range and key density", () => {
@@ -281,6 +290,52 @@ describe("shared geometry", () => {
     ]);
     expect(scene.meshes[1]?.positions.subarray(0, 3)).toEqual(Float32Array.of(0, 1, 0));
     for (const mesh of scene.meshes.keys()) expect(restPoseError(scene, mesh)).toBeLessThan(1e-6);
+  });
+});
+
+describe("parts", () => {
+  it("groups LOD levels, hides the collision helper and bounds only what a default view draws", async () => {
+    const scene = await importText("lods.fbx", LOD_FBX);
+    const meshIndex = (name: string) => scene.meshes.findIndex((mesh) => mesh.name === name);
+    expect(scene.parts).toEqual([
+      {
+        id: "Body_LOD0",
+        name: "Body",
+        role: "model",
+        node: scene.nodes.findIndex((node) => node.name === "Body_LOD0"),
+        levels: [
+          { level: 0, meshes: [meshIndex("Body_LOD0")] },
+          { level: 1, meshes: [meshIndex("Body_LOD1")] },
+        ],
+      },
+      {
+        id: "UCX_Body",
+        name: "UCX_Body",
+        role: "collision",
+        node: scene.nodes.findIndex((node) => node.name === "UCX_Body"),
+        levels: [{ level: 0, meshes: [meshIndex("UCX_Body")] }],
+      },
+      {
+        id: "Rock",
+        name: "Rock",
+        role: "model",
+        node: scene.nodes.findIndex((node) => node.name === "Rock"),
+        levels: [
+          { level: 0, meshes: [meshIndex("RockHigh")] },
+          { level: 1, meshes: [meshIndex("RockLow")] },
+        ],
+      },
+    ]);
+    expect(scene.bounds.min[0]).toBeCloseTo(0, 5);
+    expect(scene.bounds.max[0]).toBeCloseTo(6, 5);
+  });
+
+  it("makes one part per mesh in a file without roles", async () => {
+    const scene = await importText("shared.fbx", SHARED_GEOMETRY_FBX);
+    expect(scene.parts.map((part) => [part.id, part.role, part.levels.length])).toEqual([
+      ["Left", "model", 1],
+      ["Right", "model", 1],
+    ]);
   });
 });
 

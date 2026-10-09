@@ -1,9 +1,9 @@
-import type { CoreClient, Peer } from "@arcue/protocol";
-import { createPeer, createRemoteClient, portEndpoint } from "@arcue/protocol";
+import type { CompositionFile, CoreClient, Peer } from "@arcue/protocol";
+import { compositionFileSchema, createPeer, createRemoteClient, portEndpoint } from "@arcue/protocol";
 import type { SampleAsset, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore } from "@arcue/ui";
 import type { SampleInfo } from "./files";
-import { openedFilePath, partitionFiles, samplePath } from "./files";
+import { openedFilePath, partitionFiles, planOpen, samplePath } from "./files";
 import type {
   ImportWorkerFailed,
   SeedFile,
@@ -18,6 +18,16 @@ const RELOAD_HINT = "reload the page to get the current version.";
 /** A script that fails to load fires a plain "error" event; an uncaught error inside a running worker fires an ErrorEvent. */
 function isLoadFailure(event: Event): boolean {
   return !(event instanceof ErrorEvent);
+}
+
+/** A picked composition file's content, or null when it is not one, which the core then reports when opening it. */
+async function readComposition(file: File): Promise<CompositionFile | null> {
+  try {
+    const parsed = compositionFileSchema.safeParse(JSON.parse(await file.text()));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface OpenAt {
@@ -97,22 +107,28 @@ export class WebHost {
     return assetId;
   }
 
-  /** Writes each model into its own folder with a copy of the textures picked with it, then opens every model. */
+  /**
+   * Writes each model or composition file into its own folder with copies of the files picked with it, then opens
+   * them. A composition file brings the models and textures it needs; see `planOpen`.
+   */
   async openFiles(files: readonly File[]): Promise<string[]> {
-    const { models, textures } = partitionFiles(files);
+    const { models, compositions } = partitionFiles(files);
     if (models.length === 0) throw new Error("Choose an .fbx file. Its textures can come along with it.");
+    const contents = new Map<File, CompositionFile | null>();
+    for (const composition of compositions) contents.set(composition, await readComposition(composition));
+    const plans = planOpen(files, contents);
     const seeds = await Promise.all(
-      models.flatMap((model) =>
-        [...textures, model].map(async (file) => ({
-          path: openedFilePath(model.name, file.name),
+      plans.flatMap((plan) =>
+        plan.files.map(async (file) => ({
+          path: openedFilePath(plan.open.name, file.name),
           bytes: new Uint8Array(await file.arrayBuffer()),
         })),
       ),
     );
     await this.#seed(seeds);
     const opened: string[] = [];
-    for (const model of models) {
-      const { assetId } = await this.client.execute("asset.open", { path: openedFilePath(model.name) });
+    for (const plan of plans) {
+      const { assetId } = await this.client.execute("asset.open", { path: openedFilePath(plan.open.name) });
       opened.push(assetId);
     }
     return opened;
@@ -139,11 +155,18 @@ export class WebHost {
     this.#importWorkers.delete(id);
   }
 
+  /** Downloads the sample's files, a composition's members with it, and writes them beside each other. */
   async #seedSample(sample: SampleAsset): Promise<void> {
     const file = sample.path.slice(sample.path.lastIndexOf("/") + 1);
-    const response = await fetch(`${this.#baseUrl}samples/${encodeURIComponent(file)}`);
-    if (!response.ok) throw new Error(`Could not download ${file} (${response.status}).`);
-    await this.#seed([{ path: sample.path, bytes: new Uint8Array(await response.arrayBuffer()) }]);
+    const files = this.#sampleInfo.find((info) => info.file === file)?.files ?? [file];
+    const seeds = await Promise.all(
+      files.map(async (name) => {
+        const response = await fetch(`${this.#baseUrl}samples/${encodeURIComponent(name)}`);
+        if (!response.ok) throw new Error(`Could not download ${name} (${response.status}).`);
+        return { path: samplePath(name), bytes: new Uint8Array(await response.arrayBuffer()) };
+      }),
+    );
+    await this.#seed(seeds);
   }
 
   async #seed(files: SeedFile[]): Promise<void> {

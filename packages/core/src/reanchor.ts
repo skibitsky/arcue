@@ -1,6 +1,13 @@
 import type { AssetVersion, Comment } from "@arcue/protocol";
 import type { RegionAnchor, SceneDescription, SpatialAnchor, SurfaceAnchor } from "@arcue/scene";
-import { closestSurfacePoint, encodeRanges, nearestVertex, sameTopology, sourceIndices } from "@arcue/scene";
+import {
+  closestSurfacePoint,
+  encodeRanges,
+  nearestVertex,
+  sameTopology,
+  sourceIndices,
+  splitMemberPath,
+} from "@arcue/scene";
 import type { MeshAtPath } from "./scene-lookup";
 import { anchorRestPositions, meshesOf, modelSize, weightedPoint } from "./scene-lookup";
 
@@ -12,6 +19,7 @@ export const DETACH_SHARE = 0.02;
  * comment's `anchorVersion` keeps its vertex and triangle numbers exactly. Otherwise the stored rest positions are
  * mapped onto the new rest pose: a pin to the closest surface point, and a region vertex by vertex to the nearest
  * vertices, tinting the new triangles whose corners all mapped, or failing that the triangles that touch them. A target with no surface within `DETACH_SHARE` of the model's size is detached and keeps its old anchor.
+ * In a composition a target moves only onto meshes of its own file, so each file re-anchors on its own.
  */
 export class Reanchorer {
   readonly #versions: ReadonlyMap<string, AssetVersion>;
@@ -35,7 +43,10 @@ export class Reanchorer {
     if (samePath && previous && sameTopology(previous.topology, samePath.mesh.topology)) {
       return this.#anchored(comment, samePath, target, "exact");
     }
-    const candidates = samePath ? [samePath] : this.#meshes;
+    const file = splitMemberPath(target.mesh).file;
+    const candidates = samePath
+      ? [samePath]
+      : this.#meshes.filter((entry) => splitMemberPath(entry.path).file === file);
     const moved =
       target.kind === "surface" ? this.#movePin(comment, target, candidates) : this.#moveRegion(comment, candidates);
     if (!moved) return { ...comment, anchorState: "detached" };

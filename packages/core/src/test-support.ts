@@ -4,6 +4,7 @@ import type {
   CameraAnchor,
   Clip,
   Importer,
+  Material,
   Mesh,
   SceneDescription,
   SceneNode,
@@ -11,9 +12,10 @@ import type {
   Vec3,
 } from "@arcue/scene";
 import {
-  boundsOfPoints,
   buildNodePaths,
   clipNames,
+  defaultViewBounds,
+  describeParts,
   displayNames,
   SCENE_SPACE,
   topologyFingerprint,
@@ -22,6 +24,7 @@ import type { ArcueCoreOptions } from "./core";
 import { ArcueCore } from "./core";
 import { versionIdOf } from "./hash";
 import { ManualClock } from "./manual-clock";
+import type { MemoryPlatformOptions } from "./memory-platform";
 import { MemoryPlatform } from "./memory-platform";
 
 /** A square grid of `grid` × `grid` vertices on the XY plane, `size` meters wide, from `offset`. */
@@ -32,12 +35,28 @@ export interface FakeMesh {
   offset?: Vec3;
   /** Splits each cell along the other diagonal, which changes the topology but not the vertices. */
   flip?: boolean;
+  /** The bone the mesh's node hangs under, by name; the root by default. */
+  parent?: string;
+  /** Skins the mesh to these bones, by name. */
+  skin?: string[];
+  /** Index into the spec's materials. */
+  material?: number;
+}
+
+/** A bone under the root or another bone, by name. */
+export interface FakeBone {
+  name: string;
+  parent?: string;
+  at?: Vec3;
 }
 
 /** What the fake importer reads from a file: the file's text is this object as JSON. */
 export interface FakeAssetSpec {
   meshes: FakeMesh[];
-  clips?: { name: string; frames: number; fps?: number }[];
+  bones?: FakeBone[];
+  materials?: string[];
+  /** Each clip turns the bones it names, by name. */
+  clips?: { name: string; frames: number; fps?: number; bones?: string[] }[];
   fps?: number;
   exporter?: { name: string; version: string | null } | null;
   /** Makes the import fail with this message. */
@@ -68,35 +87,69 @@ export const fakeImporter: Importer = {
 
 export function fakeScene(spec: FakeAssetSpec): SceneDescription {
   const fps = spec.fps ?? 30;
-  const rawNodes = [{ name: "Hero", parent: -1 }, ...spec.meshes.map((mesh) => ({ name: mesh.name, parent: 0 }))];
+  const bones = spec.bones ?? [];
+  const names = ["Hero", ...bones.map((bone) => bone.name)];
+  const indexOf = (name: string | undefined) => (name === undefined ? 0 : Math.max(0, names.indexOf(name)));
+  const rawNodes = [
+    { name: "Hero", parent: -1 },
+    ...bones.map((bone) => ({ name: bone.name, parent: indexOf(bone.parent) })),
+    ...spec.meshes.map((mesh) => ({ name: mesh.name, parent: indexOf(mesh.parent) })),
+  ];
   const paths = buildNodePaths(rawNodes);
-  const meshes = spec.meshes.map(gridMesh);
-  const nodes: SceneNode[] = rawNodes.map((node, index) => ({
-    name: node.name,
-    path: paths[index] ?? node.name,
-    parent: node.parent,
-    kind: index === 0 ? "empty" : "mesh",
-    translation: [0, 0, 0],
-    rotation: [0, 0, 0, 1],
-    scale: [1, 1, 1],
-    mesh: index === 0 ? null : index - 1,
-  }));
+  const skeletons: SceneDescription["skeletons"] = [];
+  const meshes = spec.meshes.map((entry) => {
+    const mesh = gridMesh(entry);
+    if (entry.material !== undefined)
+      mesh.groups = [{ start: 0, triangleCount: mesh.indices.length / 3, material: entry.material }];
+    if (entry.skin) {
+      skeletons.push({
+        joints: entry.skin.map(indexOf),
+        inverseBindMatrices: new Float32Array(16 * entry.skin.length),
+      });
+      const vertices = mesh.positions.length / 3;
+      mesh.skeleton = skeletons.length - 1;
+      mesh.bindMatrix = Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+      mesh.joints = new Uint16Array(vertices * 4);
+      mesh.weights = new Float32Array(vertices * 4).map((_, at) => (at % 4 === 0 ? 1 : 0));
+    }
+    return mesh;
+  });
+  const nodes: SceneNode[] = rawNodes.map((node, index) => {
+    const bone = index > 0 && index <= bones.length ? bones[index - 1] : undefined;
+    return {
+      name: node.name,
+      path: paths[index] ?? node.name,
+      parent: node.parent,
+      kind: index === 0 ? "empty" : bone ? "bone" : "mesh",
+      translation: bone?.at ?? [0, 0, 0],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      mesh: index > bones.length ? index - bones.length - 1 : null,
+    };
+  });
   const rawClips = spec.clips ?? [];
-  const names = clipNames(rawClips.map((clip) => clip.name));
-  const display = displayNames(names);
+  const clipIds = clipNames(rawClips.map((clip) => clip.name));
+  const display = displayNames(clipIds);
   const clips: Clip[] = rawClips.map((clip, index) => {
     const clipFps = clip.fps ?? fps;
     return {
-      name: names[index] ?? clip.name,
+      name: clipIds[index] ?? clip.name,
       displayName: display[index] ?? clip.name,
       fps: clipFps,
       duration: (clip.frames - 1) / clipFps,
       frameCount: clip.frames,
-      tracks: [],
+      tracks: (clip.bones ?? []).map((name) => ({
+        node: indexOf(name),
+        property: "rotation",
+        interpolation: "linear",
+        times: Float32Array.of(0, (clip.frames - 1) / clipFps),
+        values: Float32Array.of(0, 0, 0, 1, 0, 1, 0, 0),
+      })),
       keyTimes: new Float32Array(),
       keyedEveryFrame: false,
     };
   });
+  const parts = describeParts(nodes);
   return {
     source: {
       format: "fbx",
@@ -108,11 +161,33 @@ export function fakeScene(spec: FakeAssetSpec): SceneDescription {
     },
     nodes,
     meshes,
-    skeletons: [],
-    materials: [],
+    skeletons,
+    materials: (spec.materials ?? []).map(fakeMaterial),
     textures: [],
     clips,
-    bounds: boundsOfPoints(meshes.map((mesh) => mesh.restPositions)),
+    parts,
+    bounds: defaultViewBounds(meshes, parts),
+  };
+}
+
+function fakeMaterial(name: string): Material {
+  return {
+    name,
+    baseColor: [0.8, 0.8, 0.8, 1],
+    baseColorTexture: null,
+    metallic: 0,
+    roughness: 0.5,
+    metallicRoughnessTexture: null,
+    roughnessTexture: null,
+    metalnessTexture: null,
+    normalTexture: null,
+    normalScale: 1,
+    occlusionTexture: null,
+    emissive: [0, 0, 0],
+    emissiveTexture: null,
+    alphaMode: "opaque",
+    alphaCutoff: 0.5,
+    doubleSided: false,
   };
 }
 
@@ -198,7 +273,24 @@ export class FakeWindow {
  */
 export class RecordingPlatform extends MemoryPlatform {
   readonly writes: { path: string; atomic: boolean }[] = [];
+  /** The file names the import workers parsed, in order. */
+  readonly parsed: string[];
   fail: ((operation: "write" | "remove", path: string) => boolean) | null = null;
+
+  constructor(options: MemoryPlatformOptions = {}) {
+    const parsed: string[] = [];
+    super({
+      ...options,
+      importers: options.importers?.map((importer) => ({
+        ...importer,
+        import: (request) => {
+          parsed.push(request.fileName);
+          return importer.import(request);
+        },
+      })),
+    });
+    this.parsed = parsed;
+  }
 
   override async writeFile(path: string, data: Uint8Array | string): Promise<void> {
     this.#check("write", path);

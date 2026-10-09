@@ -1,7 +1,7 @@
 import type { AssetStatus, AssetSummary, Comment, ReviewFile, ViewState } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
-import { basename } from "./paths";
+import { basename, dirname } from "./paths";
 import type { ReviewSession } from "./review-session";
 import type { ReviewLocation } from "./review-store";
 import { Serial } from "./serial";
@@ -11,8 +11,12 @@ export class OpenAsset {
   readonly id: string;
   /** Normalized absolute path of the asset file. */
   readonly path: string;
+  /** The composition file the asset reads: the one it was opened through, or "<model stem>.arcue" beside it. */
+  readonly compositionPath: string;
   readonly location: ReviewLocation;
   readonly session: ReviewSession;
+  /** The composition file applied to the version on screen, or null for a plain model. */
+  composition: string | null = null;
   status: AssetStatus = "loading";
   version: string | null = null;
   scene: SceneDescription | null = null;
@@ -26,14 +30,26 @@ export class OpenAsset {
   /** Serializes parses of the file. */
   readonly loads = new Serial();
   readonly stopWatching: (() => void)[] = [];
+  /** Watchers of the composition file and the files it names, by path. */
+  readonly compositionWatchers = new Map<string, () => void>();
+  /** Parsed files by path with the id of the bytes they came from, so a reload parses only what changed. */
+  readonly imported = new Map<string, { id: string; scene: SceneDescription }>();
+  /** Serializes edits of the composition file. */
+  readonly compositionEdits = new Serial();
   cancelStabilityCheck: () => void = () => undefined;
   stabilityCheck = 0;
 
-  constructor(id: string, path: string, location: ReviewLocation, session: ReviewSession) {
+  constructor(id: string, path: string, location: ReviewLocation, session: ReviewSession, compositionPath: string) {
     this.id = id;
     this.path = path;
     this.location = location;
     this.session = session;
+    this.compositionPath = compositionPath;
+  }
+
+  /** The folder the asset's files may be read from: its git repository, or the model's folder outside one. */
+  get readRoot(): string {
+    return this.location.workspaceRoot ?? dirname(this.path);
   }
 
   get name(): string {
@@ -41,7 +57,7 @@ export class OpenAsset {
   }
 
   get summary(): AssetSummary {
-    return {
+    const summary: AssetSummary = {
       assetId: this.id,
       path: this.path,
       name: this.name,
@@ -49,6 +65,8 @@ export class OpenAsset {
       version: this.version,
       error: this.error,
     };
+    if (this.composition !== null) summary.composition = this.composition;
+    return summary;
   }
 
   loaded(): { scene: SceneDescription; version: string } {

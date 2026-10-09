@@ -5,13 +5,14 @@ import type {
   CoreClient,
   DisplayMode,
   FrameRange,
+  PartView,
   ReviewFile,
   TimeSelection,
   ViewState,
 } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { CameraAnchor, Clip, SceneDescription, SpatialAnchor, TimeAnchor } from "@arcue/scene";
-import { frameToSeconds, lastFrame, secondsToFrame } from "@arcue/scene";
+import { defaultPartView, frameToSeconds, lastFrame, lodLevels, secondsToFrame, withPartVisible } from "@arcue/scene";
 import type { CommentOverlay, ScreenPosition, ToolId, Viewport } from "@arcue/viewport";
 import { plural } from "../format";
 import { currentMessage, lastRound, pendingFollowUp, queuedComments } from "./history";
@@ -84,6 +85,8 @@ export interface SessionState {
   tool: ToolId;
   displayMode: DisplayMode;
   skeleton: boolean;
+  /** Which parts the view draws: hidden and shown parts, an isolated part and the LOD level. */
+  parts: PartView;
   brushSize: number;
   clip: string | null;
   loop: boolean;
@@ -148,6 +151,7 @@ export class AssetSession {
       tool: "view",
       displayMode: "lit",
       skeleton: false,
+      parts: defaultPartView(),
       brushSize: 22,
       clip: null,
       loop: true,
@@ -259,10 +263,11 @@ export class AssetSession {
     this.#container = container;
     this.#sceneOnViewport = null;
     this.#overlayKey = [];
-    const { tool, displayMode, skeleton, brushSize, speed, loop } = this.state.get();
+    const { tool, displayMode, skeleton, parts, brushSize, speed, loop } = this.state.get();
     viewport.setTool(tool);
     viewport.setDisplayMode(displayMode);
     viewport.setSkeletonVisible(skeleton);
+    viewport.setPartView(parts);
     viewport.setBrushSize(brushSize);
     viewport.setSpeed(speed);
     viewport.setLoop(loop);
@@ -328,6 +333,7 @@ export class AssetSession {
       viewport.setCamera(saved.camera, { animate: false });
       this.setDisplayMode(saved.display.mode);
       this.setSkeleton(saved.display.skeleton);
+      this.setPartView(saved.parts);
     }
     const exists = (clip: string | null | undefined) => clip == null || scene.clips.some((c) => c.name === clip);
     if (pending && exists(pending.clip)) {
@@ -395,6 +401,40 @@ export class AssetSession {
     this.state.patch({ skeleton });
     this.#viewport?.setSkeletonVisible(skeleton);
     this.#scheduleReport();
+  }
+
+  setPartView(parts: PartView): void {
+    this.state.patch({ parts });
+    this.#viewport?.setPartView(parts);
+    this.#scheduleReport();
+  }
+
+  #part(id: string) {
+    const scene = this.state.get().scene;
+    if (!scene) throw new ArcueError("unavailable", "The model is not loaded yet.");
+    const part = scene.parts.find((candidate) => candidate.id === id);
+    if (!part) throw new ArcueError("not-found", `The model has no part "${id}".`);
+    return part;
+  }
+
+  /** Shows or hides a part by its id; an unknown id is refused. */
+  setPartVisible(id: string, visible: boolean): void {
+    this.setPartView(withPartVisible(this.state.get().parts, this.#part(id), visible));
+  }
+
+  /** Shows only one part, or every part again for null. */
+  isolatePart(id: string | null): void {
+    if (id !== null) this.#part(id);
+    this.setPartView({ ...this.state.get().parts, isolated: id });
+  }
+
+  setLod(level: number): void {
+    const scene = this.state.get().scene;
+    if (!scene) throw new ArcueError("unavailable", "The model is not loaded yet.");
+    const highest = lodLevels(scene.parts).at(-1) ?? 0;
+    if (level > highest)
+      throw new ArcueError("invalid-input", `The model has no LOD${level}; its highest is LOD${highest}.`);
+    this.setPartView({ ...this.state.get().parts, lod: level });
   }
 
   setBrushSize(size: number): void {
@@ -539,10 +579,17 @@ export class AssetSession {
     if (!sameBox && this.#refuseToClose()) return "refused";
     this.#jumpTo(comment.time);
     this.#viewport?.setCamera(comment.camera, { animate: true });
+    this.#restoreParts(comment);
     const nextBox = sameBox ? box : comment.status === "draft" ? this.#editBox(comment) : null;
     this.state.patch({ selection: id, box: nextBox });
     this.#syncOverlays();
     return "selected";
+  }
+
+  /** Shows the parts a comment was made with; a comment that stores none was made in the default view. */
+  #restoreParts(comment: Comment): void {
+    const parts = comment.parts ?? defaultPartView();
+    if (JSON.stringify(parts) !== JSON.stringify(this.state.get().parts)) this.setPartView(parts);
   }
 
   deselect(): void {
@@ -704,6 +751,7 @@ export class AssetSession {
     if (this.#refuseToClose()) return;
     this.#jumpTo(comment.time);
     this.#viewport?.setCamera(comment.camera, { animate: true });
+    this.#restoreParts(comment);
     const box = this.#newBox({
       mode: "reopen",
       commentId,
@@ -765,6 +813,7 @@ export class AssetSession {
       time,
       target,
       ...capture,
+      parts: this.state.get().parts,
       version: this.#versionFor(target, anchorVersion),
     });
     return commentId;
@@ -793,6 +842,7 @@ export class AssetSession {
       ...(timeChanged || targetChanged
         ? {
             ...(await this.#capture(box.time, box.target)),
+            parts: this.state.get().parts,
             version: this.#versionFor(targetChanged ? box.target : null, box.anchorVersion),
           }
         : {}),
@@ -1013,13 +1063,14 @@ export class AssetSession {
   viewState(): ViewState | null {
     const viewport = this.#viewport;
     if (!viewport || !this.#initialViewApplied) return null;
-    const { clip, range, displayMode, skeleton } = this.state.get();
+    const { clip, range, displayMode, skeleton, parts } = this.state.get();
     return {
       camera: viewport.getCamera(),
       clip,
       frame: this.currentFrame(),
       range,
       display: { mode: displayMode, skeleton },
+      parts,
     };
   }
 

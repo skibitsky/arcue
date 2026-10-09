@@ -630,6 +630,304 @@
       }
     },
     {
+      "file": "beetle.fbx",
+      "description": "Legs and rig of the modular beetle: one skinned mesh, 13 bones, a 30-frame walk.",
+      "size_bytes": 234236,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": true,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0,
+        "bake_anim_use_all_bones": true,
+        "bake_anim_use_nla_strips": false,
+        "bake_anim_use_all_actions": true,
+        "bake_anim_force_startend_keying": true,
+        "bake_anim_step": 1.0,
+        "bake_anim_simplify_factor": 0.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "Legs",
+          "control_points": 1986,
+          "polygons": 3920,
+          "triangles": 3920,
+          "materials": [
+            "LegStone"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": true
+        }
+      ],
+      "armature": {
+        "name": "Armature",
+        "bone_count": 13,
+        "bone_names": [
+          "Body",
+          "Thigh.FL",
+          "Shin.FL",
+          "Thigh.FR",
+          "Shin.FR",
+          "Thigh.ML",
+          "Shin.ML",
+          "Thigh.MR",
+          "Shin.MR",
+          "Thigh.BL",
+          "Shin.BL",
+          "Thigh.BR",
+          "Shin.BR"
+        ],
+        "root_bone": "Body"
+      },
+      "clips": [
+        {
+          "take_name": "Armature|Walk",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 30,
+          "duration_seconds": 1.0,
+          "keys_on_every_frame": true,
+          "curve_count": 126,
+          "total_keys": 3906,
+          "keys_per_curve_min": 31,
+          "keys_per_curve_max": 31,
+          "keyed_frames_union": 31,
+          "max_key_offset_ticks": 1
+        }
+      ],
+      "blender_import_action_names": [
+        "Armature|Armature|Walk"
+      ],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.257,
+          0.0,
+          -0.1527
+        ],
+        "max": [
+          0.2566,
+          0.2131,
+          0.1522
+        ]
+      }
+    },
+    {
+      "file": "beetle-shells.fbx",
+      "description": "Two alternative beetle shells, unrigged, modelled in the rest pose over the Body bone.",
+      "size_bytes": 70684,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": false,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "ShellRound",
+          "control_points": 642,
+          "polygons": 1280,
+          "triangles": 1280,
+          "materials": [
+            "Shell"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": false
+        },
+        {
+          "name": "ShellSpiked",
+          "control_points": 754,
+          "polygons": 1350,
+          "triangles": 1476,
+          "materials": [
+            "Shell",
+            "Spike"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": false
+        }
+      ],
+      "armature": null,
+      "clips": [],
+      "blender_import_action_names": [],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.1539,
+          0.16,
+          -0.1989
+        ],
+        "max": [
+          0.1509,
+          0.3369,
+          0.1804
+        ]
+      }
+    },
+    {
+      "file": "beetle-turn.fbx",
+      "description": "Animation only: the beetle's armature with one 40-frame turn and no mesh.",
+      "size_bytes": 130316,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": true,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0,
+        "bake_anim_use_all_bones": true,
+        "bake_anim_use_nla_strips": false,
+        "bake_anim_use_all_actions": true,
+        "bake_anim_force_startend_keying": true,
+        "bake_anim_step": 1.0,
+        "bake_anim_simplify_factor": 0.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [],
+      "armature": {
+        "name": "Armature",
+        "bone_count": 13,
+        "bone_names": [
+          "Body",
+          "Thigh.FL",
+          "Shin.FL",
+          "Thigh.FR",
+          "Shin.FR",
+          "Thigh.ML",
+          "Shin.ML",
+          "Thigh.MR",
+          "Shin.MR",
+          "Thigh.BL",
+          "Shin.BL",
+          "Thigh.BR",
+          "Shin.BR"
+        ],
+        "root_bone": "Body"
+      },
+      "clips": [
+        {
+          "take_name": "Armature|Turn",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 40,
+          "duration_seconds": 1.333333,
+          "keys_on_every_frame": true,
+          "curve_count": 126,
+          "total_keys": 5166,
+          "keys_per_curve_min": 41,
+          "keys_per_curve_max": 41,
+          "keyed_frames_union": 41,
+          "max_key_offset_ticks": 1
+        }
+      ],
+      "blender_import_action_names": [
+        "Armature|Armature|Turn"
+      ],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
       "file": "zup-centimeters.fbx",
       "description": "Axis and unit conversion: a 15 cm mushroom exported with Z up and centimeter units (vertex positions are in centimeters, UnitScaleFactor 1).",
       "size_bytes": 32668,
@@ -703,6 +1001,18 @@
           0.075
         ]
       }
+    }
+  ],
+  "compositions": [
+    {
+      "file": "beetle.arcue",
+      "model": "beetle.fbx",
+      "description": "Modular beetle in three files: legs with the rig and a walk, two alternative shells on the Body bone, the second hidden, and an animation-only file with a turn.",
+      "files": [
+        "beetle.fbx",
+        "beetle-shells.fbx",
+        "beetle-turn.fbx"
+      ]
     }
   ]
 }

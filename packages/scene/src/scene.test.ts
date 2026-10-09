@@ -52,6 +52,7 @@ function sceneWithSharedBuffer(): { scene: SceneDescription; shared: ArrayBuffer
       },
     ],
     clips: [],
+    parts: [],
     bounds: { min: [0, 0, 0], max: [0, 0, 0] },
   };
   return { scene, shared };

@@ -2,7 +2,8 @@ import { z } from "zod";
 import { indexRangesSchema, indexSchema, vec3Schema } from "./anchors";
 import { commentIdSchema } from "./assets";
 import { boneShareSchema, jointPositionSchema } from "./context";
-import { anchorStateSchema } from "./review";
+import { anchorStateSchema, versionFileSchema } from "./review";
+import { partViewSchema } from "./view-state";
 
 /** `posed` is null when the 3D view did not compute the target's position at the comment's time. */
 const restAndPosedSchema = z.object({ rest: vec3Schema, posed: vec3Schema.nullable() });
@@ -81,6 +82,8 @@ export const roundCommentSchema = z.object({
   anchorVersion: z.string().min(1).nullable(),
   /** Earlier messages on a reopened comment, with the round each was sent in. */
   earlierMessages: z.array(z.object({ round: z.int().positive(), text: z.string() })).default([]),
+  /** The parts the view showed, by part id. Absent for the default view: LOD0, collision helpers hidden. */
+  parts: partViewSchema.optional(),
 });
 
 /** `round.json`: the full data behind one copied prompt. Agents read it; it never changes once written. */
@@ -96,6 +99,8 @@ export const roundDataSchema = z.object({
       up: z.enum(["+X", "-X", "+Y", "-Y", "+Z", "-Z"]),
       handedness: z.enum(["right", "left"]),
     }),
+    /** For a composition, each file of the version with its own version. Mesh paths from other files start with one. */
+    files: z.array(versionFileSchema).optional(),
   }),
   comments: z.array(roundCommentSchema),
 });

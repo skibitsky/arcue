@@ -1,5 +1,5 @@
 import type { ComputedContext, TimeSelection } from "@arcue/protocol";
-import type { CameraAnchor, SceneDescription, SpatialAnchor, SurfaceAnchor } from "@arcue/scene";
+import type { CameraAnchor, PartView, SceneDescription, SpatialAnchor, SurfaceAnchor } from "@arcue/scene";
 import type {
   CommentOverlay,
   PlaybackRange,
@@ -35,6 +35,7 @@ export class TestViewport implements Viewport {
   brush = 0;
   displayMode = "lit";
   skeleton = false;
+  parts: PartView | null = null;
   camera: CameraAnchor = { position: [0, 1, 4], target: [0, 1, 0], up: [0, 1, 0], fov: 30 };
   overlays: readonly CommentOverlay[] = [];
   screenshots: ScreenshotOptions[] = [];
@@ -67,6 +68,9 @@ export class TestViewport implements Viewport {
   }
   setSkeletonVisible(visible: boolean) {
     this.skeleton = visible;
+  }
+  setPartView(view: PartView) {
+    this.parts = structuredClone(view);
   }
   setTool(tool: ToolId) {
     this.tool = tool;
@@ -146,18 +150,26 @@ export class ManualTimers {
   }
 }
 
-export function stoneCatalog(path: string) {
+type SceneChange = (scene: SceneDescription) => SceneDescription;
+
+export function stoneCatalog(path: string, change: SceneChange = (scene) => scene) {
   if (path !== STONE_RESONATOR_PATH) return null;
-  return { scene: fakeScene(STONE_RESONATOR), review: stoneResonatorReview(NOW), version: STONE_VERSION };
+  return { scene: change(fakeScene(STONE_RESONATOR)), review: stoneResonatorReview(NOW), version: STONE_VERSION };
 }
 
 export async function flush(times = 6): Promise<void> {
   for (let index = 0; index < times; index++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-export function setup(options: { clipboard?: "ok" | "blocked" } = {}) {
+interface SetupOptions {
+  clipboard?: "ok" | "blocked";
+  /** Changes the Stone Resonator's scene before the fake core serves it. */
+  scene?: SceneChange;
+}
+
+export function setup(options: SetupOptions = {}) {
   const timers = new ManualTimers();
-  const client = new FakeCoreClient({ catalog: stoneCatalog, now: () => NOW });
+  const client = new FakeCoreClient({ catalog: (path) => stoneCatalog(path, options.scene), now: () => NOW });
   const copied: string[] = [];
   const store = createWorkspaceStore({
     client,
@@ -173,7 +185,7 @@ export function setup(options: { clipboard?: "ok" | "blocked" } = {}) {
 }
 
 /** Opens the Stone Resonator at Charge frame 34 with a test viewport attached. */
-export async function openStone(options: { clipboard?: "ok" | "blocked" } = {}) {
+export async function openStone(options: SetupOptions = {}) {
   const context = setup(options);
   const { assetId } = await context.client.execute("asset.open", {
     path: STONE_RESONATOR_PATH,

@@ -147,6 +147,7 @@ export function stripScene(): SceneDescription {
         keyedEveryFrame: false,
       },
     ],
+    parts: [{ id: "Strip", name: "Strip", role: "model", node: 4, levels: [{ level: 0, meshes: [0] }] }],
     bounds: { min: [-0.1, 0, 0], max: [0.1, 2, 0] },
   };
 }

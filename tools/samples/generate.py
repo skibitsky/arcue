@@ -520,21 +520,21 @@ def pose_hit(f):
 GOLEM_CLIPS = [("Idle", 60, pose_idle), ("Walk", 30, pose_walk), ("Wave", 45, pose_wave), ("Hit", 15, pose_hit)]
 
 
-def bake_clip(arm, name, frames, pose_fn):
+def bake_clip(arm, name, frames, pose_fn, root="Hips"):
     action = bpy.data.actions.new(name)
     arm.animation_data.action = action
     rest = {b.name: b.matrix_local.to_quaternion() for b in arm.data.bones}
     for f in range(frames + 1):
-        rotations, hips_offset = pose_fn(f)
+        rotations, root_offset = pose_fn(f)
         for pb in arm.pose.bones:
             q = Quaternion()
             for axis, degrees in rotations.get(pb.name, ()):
                 q = Quaternion(axis, math.radians(degrees)) @ q
             pb.rotation_quaternion = rest[pb.name].inverted() @ q @ rest[pb.name]
             pb.keyframe_insert("rotation_quaternion", frame=f, group=pb.name)
-        hips = arm.pose.bones["Hips"]
-        hips.location = rest["Hips"].inverted() @ hips_offset
-        hips.keyframe_insert("location", frame=f, group="Hips")
+        root_bone = arm.pose.bones[root]
+        root_bone.location = rest[root].inverted() @ root_offset
+        root_bone.keyframe_insert("location", frame=f, group=root)
     action.use_frame_range = True
     action.frame_start = 0
     action.frame_end = frames
@@ -768,6 +768,198 @@ def build_mushroom():
     return obj
 
 
+# ---------------------------------------------------------------- modular beetle
+
+# A creature spread over three files, as game pipelines split one asset: legs with the rig and a walk, two
+# alternative shells modelled in the rest pose over the Body bone, and an animation-only file with one more clip.
+# beetle.arcue puts them back together.
+
+BEETLE_LEG_ROWS = [("F", -0.08), ("M", 0.0), ("B", 0.08)]
+BEETLE_SIDES = [("L", 1), ("R", -1)]
+BEETLE_TRIPOD = {"FL", "MR", "BL"}
+
+
+def beetle_bone_table():
+    table = [("Body", (0, 0, 0.17), (0, -0.12, 0.17), None, False)]
+    for row, y in BEETLE_LEG_ROWS:
+        for side, sx in BEETLE_SIDES:
+            leg = row + side
+            table.append(("Thigh." + leg, (sx * 0.07, y, 0.16), (sx * 0.17, y * 1.4, 0.2), "Body", False))
+            table.append(("Shin." + leg, (sx * 0.17, y * 1.4, 0.2), (sx * 0.25, y * 1.8, 0.0), "Thigh." + leg, True))
+    return table
+
+
+def build_beetle_armature():
+    data = bpy.data.armatures.new("Armature")
+    arm = bpy.data.objects.new("Armature", data)
+    bpy.context.scene.collection.objects.link(arm)
+    activate(arm)
+    bpy.ops.object.mode_set(mode="EDIT")
+    for name, head, tail, parent, connected in beetle_bone_table():
+        eb = data.edit_bones.new(name)
+        eb.head, eb.tail = head, tail
+        eb.roll = 0.0
+        eb.use_deform = True
+        if parent:
+            eb.parent = data.edit_bones[parent]
+            eb.use_connect = connected
+    bpy.ops.object.mode_set(mode="OBJECT")
+    arm.animation_data_create()
+    for pb in arm.pose.bones:
+        pb.rotation_mode = "QUATERNION"
+    return arm
+
+
+def build_beetle_legs(arm):
+    """Capsules along each leg bone and a flat belly, each part weighted fully to its own bone."""
+    bm = bmesh.new()
+    owners = []
+    seed = iter(range(200, 400))
+
+    def add(bone, build):
+        start = len(bm.verts)
+        build()
+        owners.append((bone, start, len(bm.verts)))
+
+    add("Body", lambda: add_lumpy_ellipsoid(bm, (0, 0, 0.15), (0.1, 0.15, 0.04), lump=0.006, seed=next(seed),
+                                            subdivisions=2))
+    for name, head, tail, _parent, _connected in beetle_bone_table()[1:]:
+        radius = 0.022 if name.startswith("Thigh") else 0.016
+        add(name, lambda h=head, t=tail, r=radius: add_capsule(bm, h, t, r, 0.003, next(seed), overlap=0.012))
+    for v in bm.verts:
+        v.co.z = max(v.co.z, 0.0)
+    stone = make_material("LegStone", (0.24, 0.22, 0.2), roughness=0.85)
+    obj = object_from_bmesh("Legs", bm, (stone,))
+    obj.data.shade_smooth()
+    for bone, start, end in owners:
+        group = obj.vertex_groups.new(name=bone)
+        group.add(list(range(start, end)), 1.0, "REPLACE")
+    for other in bpy.context.view_layer.objects:
+        other.select_set(False)
+    obj.select_set(True)
+    arm.select_set(True)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.parent_set(type="ARMATURE")
+    return obj
+
+
+def beetle_leg_pose(p, lift_amount):
+    """Tripod gait: one tripod swings forward with its feet lifted while the other pushes back on the ground."""
+    pose = {}
+    for row, _y in BEETLE_LEG_ROWS:
+        for side, sx in BEETLE_SIDES:
+            leg = row + side
+            phase = p if leg in BEETLE_TRIPOD else p + math.pi
+            swing = math.sin(phase)
+            lift = max(0.0, math.cos(phase)) * lift_amount
+            pose["Thigh." + leg] = [(Z, sx * 16.0 * swing), (Y, -sx * lift)]
+            pose["Shin." + leg] = [(Y, sx * lift * 0.6)]
+    return pose
+
+
+def pose_beetle_walk(f):
+    p = 2 * math.pi * f / 30
+    pose = beetle_leg_pose(p, 22.0)
+    pose["Body"] = [(Z, 5.0 * math.sin(p)), (Y, 6.0 * math.sin(2 * p))]
+    return pose, Vector((0.0, 0.0, 0.012 * math.cos(2 * p) - 0.012))
+
+
+def pose_beetle_turn(f):
+    t = smoothstep(0, 40, f)
+    p = 2 * math.pi * f / 20
+    pose = beetle_leg_pose(p, 18.0 * math.sin(math.pi * t))
+    pose["Body"] = [(Z, 90.0 * t)]
+    return pose, Vector((0.0, 0.0, 0.0))
+
+
+def build_beetle(with_legs, clip):
+    scene = reset_scene()
+    arm = build_beetle_armature()
+    if with_legs:
+        build_beetle_legs(arm)
+    name, frames, pose_fn = clip
+    arm.animation_data.action = bake_clip(arm, name, frames, pose_fn, root="Body")
+    scene.frame_start, scene.frame_end = 0, frames
+    scene.frame_set(0)
+    return arm
+
+
+def shell_dome(bm, seed):
+    add_lumpy_ellipsoid(bm, (0, 0.01, 0.2), (0.15, 0.19, 0.085), lump=0.008, seed=seed, subdivisions=4)
+    for v in bm.verts:
+        if v.co.z < 0.16:
+            v.co.z = 0.16
+
+
+def build_beetle_shells():
+    reset_scene()
+    shell = make_material("Shell", (0.16, 0.24, 0.17), roughness=0.45)
+    spike = make_material("Spike", (0.55, 0.46, 0.3), roughness=0.7)
+
+    bm = bmesh.new()
+    shell_dome(bm, 301)
+    round_shell = object_from_bmesh("ShellRound", bm, (shell,))
+    round_shell.data.shade_smooth()
+
+    bm = bmesh.new()
+    shell_dome(bm, 302)
+    for v in bm.verts:
+        v.co.z += 0.005
+    for index, (x, y) in enumerate([(0.0, -0.08), (0.0, 0.02), (0.0, 0.11), (0.08, -0.02), (-0.08, -0.02),
+                                    (0.07, 0.08), (-0.07, 0.08)]):
+        z = 0.2 + 0.085 * math.sqrt(max(0.0, 1 - (x / 0.15) ** 2 - ((y - 0.01) / 0.19) ** 2))
+        cone = bmesh.new()
+        bmesh.ops.create_cone(cone, cap_ends=True, cap_tris=False, segments=8, radius1=0.018, radius2=0.002,
+                              depth=0.06, calc_uvs=False)
+        bmesh.ops.translate(cone, vec=(x, y, z + 0.022), verts=cone.verts)
+        for face in cone.faces:
+            face.material_index = 1
+        merge_into(bm, cone)
+    spiked = object_from_bmesh("ShellSpiked", bm, (shell, spike))
+    spiked.data.shade_smooth()
+    return round_shell
+
+
+BEETLE_COMPOSITION = dict(
+    version=1,
+    model="beetle.fbx",
+    animations=["beetle-turn.fbx"],
+    attach=[
+        dict(file="beetle-shells.fbx", node="ShellRound", bone="Body"),
+        dict(file="beetle-shells.fbx", node="ShellSpiked", bone="Body"),
+    ],
+    hidden=["beetle-shells.fbx//ShellSpiked"],
+)
+
+BEETLE_SET = dict(
+    file="beetle.arcue",
+    model="beetle.fbx",
+    description="Modular beetle in three files: legs with the rig and a walk, two alternative shells on the Body "
+                "bone, the second hidden, and an animation-only file with a turn.",
+    files=["beetle.fbx", "beetle-shells.fbx", "beetle-turn.fbx"],
+)
+
+
+def write_beetle_composition():
+    with open(os.path.join(OUT_DIR, BEETLE_SET["file"]), "w", encoding="utf-8") as fh:
+        json.dump(BEETLE_COMPOSITION, fh, indent=2)
+        fh.write("\n")
+
+
+def beetle_export_settings(object_types):
+    return dict(
+        UNITY_EXPORT,
+        object_types=object_types,
+        bake_anim=True,
+        bake_anim_use_all_bones=True,
+        bake_anim_use_nla_strips=False,
+        bake_anim_use_all_actions=True,
+        bake_anim_force_startend_keying=True,
+        bake_anim_step=1.0,
+        bake_anim_simplify_factor=0.0,
+    )
+
+
 # ---------------------------------------------------------------- samples
 
 SAMPLES = [
@@ -804,6 +996,21 @@ SAMPLES = [
         export=dict(UNITY_EXPORT, path_mode="COPY", embed_textures=True),
     ),
     dict(
+        name="beetle",
+        description="Legs and rig of the modular beetle: one skinned mesh, 13 bones, a 30-frame walk.",
+        export=beetle_export_settings({"ARMATURE", "MESH"}),
+    ),
+    dict(
+        name="beetle-shells",
+        description="Two alternative beetle shells, unrigged, modelled in the rest pose over the Body bone.",
+        export=dict(UNITY_EXPORT, object_types={"MESH"}),
+    ),
+    dict(
+        name="beetle-turn",
+        description="Animation only: the beetle's armature with one 40-frame turn and no mesh.",
+        export=beetle_export_settings({"ARMATURE"}),
+    ),
+    dict(
         name="zup-centimeters",
         description="Axis and unit conversion: a 15 cm mushroom exported with Z up and centimeter units "
                     "(vertex positions are in centimeters, UnitScaleFactor 1).",
@@ -822,6 +1029,12 @@ def build(name, texture_dir):
         build_blob()
     elif name == "textured-rock":
         build_textured_rock(texture_dir)
+    elif name == "beetle":
+        build_beetle(True, ("Walk", 30, pose_beetle_walk))
+    elif name == "beetle-shells":
+        build_beetle_shells()
+    elif name == "beetle-turn":
+        build_beetle(False, ("Turn", 40, pose_beetle_turn))
     elif name == "zup-centimeters":
         build_mushroom()
     else:
@@ -1016,8 +1229,8 @@ def measure_blender_import(path):
         armatures=armatures,
         actions=sorted(a.name for a in bpy.data.actions),
         images=images,
-        bounds_min=[round(c, 4) + 0.0 for c in lo],
-        bounds_max=[round(c, 4) + 0.0 for c in hi],
+        bounds_min=[round(c, 4) + 0.0 for c in lo] if meshes else [0.0, 0.0, 0.0],
+        bounds_max=[round(c, 4) + 0.0 for c in hi] if meshes else [0.0, 0.0, 0.0],
     )
 
 
@@ -1095,6 +1308,8 @@ def main():
                 print("Building %s" % sample["name"])
                 build(sample["name"], texture_dir)
                 export_fbx(os.path.join(OUT_DIR, sample["name"] + ".fbx"), export_settings(sample))
+        if only is None or "beetle" in only:
+            write_beetle_composition()
     if do_manifest:
         entries = [describe(s) for s in SAMPLES]
         manifest = dict(
@@ -1118,6 +1333,7 @@ def main():
                 "rest_bounds_m is measured in a Y-up frame after unit conversion; the models face +Z there.",
             ],
             files=entries,
+            compositions=[BEETLE_SET],
         )
         with open(os.path.join(OUT_DIR, "manifest.json"), "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=2, sort_keys=False)

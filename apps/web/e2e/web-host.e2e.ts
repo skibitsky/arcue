@@ -6,6 +6,7 @@ import { readSampleEntries } from "../samples-plugin.ts";
 
 interface ArcueGlobal {
   client: CoreClient;
+  store: { session(assetId: string): { addTextComment(text: string): Promise<boolean> } | null };
   openSample(id: string, at?: { clip?: string; frame?: number }): Promise<string>;
 }
 
@@ -15,6 +16,7 @@ const clipsOf: Record<string, string[]> = {
   "pebble-golem": ["Hit", "Idle", "Walk", "Wave"],
   "pebble-golem-sparse": ["Hit", "Idle", "Walk", "Wave"],
   blob: ["Bounce"],
+  beetle: ["Turn", "Walk"],
 };
 
 async function readyAsset(page: Page, file: string): Promise<{ assetId: string; version: string }> {
@@ -37,8 +39,9 @@ test("opens every sample from the gallery with its clips", async ({ page }) => {
   for (const [index, sample] of samples.entries()) {
     if (index > 0) await page.getByRole("button", { name: "New tab" }).click();
     await page.getByRole("button", { name: new RegExp(`^${sample.file.replace(/\./g, "\\.")}`) }).click();
-    await expect(page.getByRole("tab", { name: sample.file })).toHaveAttribute("aria-selected", "true");
-    await readyAsset(page, sample.file);
+    const tab = sample.model ?? sample.file;
+    await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+    await readyAsset(page, tab);
 
     const clips = clipsOf[sample.id] ?? [];
     const clipButton = page.locator(".timeline").getByRole("button", { name: /^Clip: / });
@@ -60,6 +63,47 @@ test("opens every sample from the gallery with its clips", async ({ page }) => {
     await page.screenshot({ path: `${SHOTS}sample-${sample.id}.png` });
   }
   await expect(page.getByRole("tab")).toHaveCount(samples.length);
+});
+
+test("opens the modular beetle: its shells ride the Body bone, the spiked one hidden, with the turn's clip", async ({
+  page,
+}) => {
+  await page.goto("/?sample=beetle&clip=Armature%7CTurn&frame=20");
+  await expect(page.getByRole("tab", { name: "beetle.fbx" })).toBeVisible();
+  const { assetId } = await readyAsset(page, "beetle.fbx");
+  await expect(page.getByRole("button", { name: "Clip: Turn" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Frame 20 of 40" })).toBeVisible();
+  const loaded = await page.evaluate(async (id) => {
+    const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+    const { assets } = await client.query("asset.list", {});
+    const { scene, version } = await client.query("scene.get", { assetId: id });
+    const review = await client.query("review.get", { assetId: id });
+    const shell = scene.nodes.find((node) => node.path === "beetle-shells.fbx//ShellRound");
+    return {
+      composition: assets.find((asset) => asset.assetId === id)?.composition,
+      parts: scene.parts.map((part) => [part.id, part.hiddenByDefault === true]),
+      clips: scene.clips.map((clip) => [clip.name, clip.file ?? null]),
+      warnings: scene.source.warnings,
+      shellParent: scene.nodes[shell?.parent ?? -1]?.name,
+      files: review.versions.find((entry) => entry.id === version)?.files?.map((file) => file.file),
+    };
+  }, assetId);
+  expect(loaded).toEqual({
+    composition: "/samples/beetle.arcue",
+    parts: [
+      ["Legs", false],
+      ["beetle-shells.fbx//ShellRound", false],
+      ["beetle-shells.fbx//ShellSpiked", true],
+    ],
+    clips: [
+      ["Armature|Walk", null],
+      ["Armature|Turn", "beetle-turn.fbx"],
+    ],
+    warnings: [],
+    shellParent: "Body",
+    files: ["beetle.fbx", "beetle.arcue", "beetle-turn.fbx", "beetle-shells.fbx"],
+  });
+  await page.screenshot({ path: `${SHOTS}sample-beetle-turn.png` });
 });
 
 test("a deep link opens a sample at a clip and frame", async ({ page }) => {
@@ -106,6 +150,45 @@ test("copies a round with a comment made through window.arcue", async ({ page, c
   await page.screenshot({ path: `${SHOTS}copied-round.png` });
 });
 
+test("hides a part through view commands, keeps it in the view state and names it in the prompt", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/?sample=pebble-golem");
+  const { assetId } = await readyAsset(page, "pebble-golem.fbx");
+  const result = await page.evaluate(async (assetId) => {
+    const { client, store } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+    const { parts } = await client.query("scene.parts", { assetId });
+    const part = parts[0];
+    if (!part) throw new Error("The golem has no parts.");
+    for (let tries = 0; ; tries++) {
+      try {
+        await client.execute("view.setPartVisible", { assetId, part: part.id, visible: false });
+        break;
+      } catch (error) {
+        if (tries > 100) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    let reported = await client.query("viewState.get", { assetId });
+    for (let tries = 0; tries < 100 && !reported?.parts.hidden.includes(part.id); tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      reported = await client.query("viewState.get", { assetId });
+    }
+    await store.session(assetId)?.addTextComment("The hidden part leaves a gap.");
+    const review = await client.query("review.get", { assetId });
+    return { part, reported: reported?.parts ?? null, stored: review.comments.at(-1)?.parts ?? null };
+  }, assetId);
+  expect(result.part.role).toBe("model");
+  expect(result.reported).toEqual({ hidden: [result.part.id], shown: [], isolated: null, lod: 0 });
+  expect(result.stored).toEqual(result.reported);
+  await page.getByRole("button", { name: /Copy prompt/ }).click();
+  await expect(page.getByText("Copied 1 comment as round 1")).toBeVisible();
+  const prompt = await page.evaluate(() => navigator.clipboard.readText());
+  expect(prompt).toContain(`· no surface target · ${result.part.name} hidden\n`);
+});
+
 test("shows the prompt in a sheet when the browser blocks the clipboard", async ({ page }) => {
   await page.addInitScript(() => {
     navigator.clipboard.writeText = () => Promise.reject(new DOMException("Blocked", "NotAllowedError"));
@@ -143,6 +226,54 @@ test("opens a picked file and a dropped file", async ({ page }) => {
     return assets.find((asset) => asset.assetId === id)?.path;
   }, assetId);
   expect(path).toBe("/files/Blob Export/Blob Export.fbx");
+});
+
+test("opens a composition picked or dropped together with its files", async ({ page }) => {
+  const beetle = ["beetle.arcue", "beetle.fbx", "beetle-shells.fbx", "beetle-turn.fbx"];
+  const composed = (id: string) =>
+    page.evaluate(async (assetId) => {
+      const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+      const { assets } = await client.query("asset.list", {});
+      const { scene } = await client.query("scene.get", { assetId });
+      const asset = assets.find((entry) => entry.assetId === assetId);
+      return {
+        path: asset?.path,
+        composition: asset?.composition,
+        parts: scene.parts.length,
+        clips: scene.clips.length,
+      };
+    }, id);
+
+  await page.goto("/");
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Open a file" }).click();
+  await (await chooser).setFiles(
+    beetle.map((file) => fileURLToPath(new URL(`../../../samples/${file}`, import.meta.url))),
+  );
+  await expect(page.getByRole("tab", { name: "beetle.fbx" })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(1);
+  const picked = await readyAsset(page, "beetle.fbx");
+  expect(await composed(picked.assetId)).toEqual({
+    path: "/files/beetle/beetle.fbx",
+    composition: "/files/beetle/beetle.arcue",
+    parts: 3,
+    clips: 2,
+  });
+
+  await page.evaluate(async (id) => {
+    const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+    await client.execute("asset.close", { assetId: id });
+  }, picked.assetId);
+  const drop = await page.evaluateHandle(async (files) => {
+    const transfer = new DataTransfer();
+    for (const name of files)
+      transfer.items.add(new File([await (await fetch(`samples/${name}`)).arrayBuffer()], name));
+    return transfer;
+  }, beetle);
+  await page.dispatchEvent("section.empty", "drop", { dataTransfer: drop });
+  await expect(page.getByRole("tab", { name: "beetle.fbx" })).toBeVisible();
+  const dropped = await readyAsset(page, "beetle.fbx");
+  expect(await composed(dropped.assetId)).toMatchObject({ composition: "/files/beetle/beetle.arcue", parts: 3 });
 });
 
 test("fails an import at once when the import worker cannot load", async ({ page }) => {

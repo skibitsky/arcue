@@ -1,7 +1,7 @@
-import type { TimeSelection } from "@arcue/protocol";
+import type { PartView, QueryOutput, TimeSelection } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { Clip, Mesh, SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { decodeRanges, lastFrame, rangesWithin } from "@arcue/scene";
+import { decodeRanges, isDefaultPartView, lastFrame, lodLevels, rangesWithin, shownByDefault } from "@arcue/scene";
 import { round5 } from "./coordinates";
 
 export interface MeshAtPath {
@@ -101,4 +101,43 @@ export function weightedPoint(positions: readonly Vec3[], weights: readonly [num
     point[2] += position[2] * weight;
   });
   return point;
+}
+
+/** The last name in a node path, without escapes or a "#n" repeat number. */
+export function nameInPath(path: string): string {
+  const segments = path.split(/(?<!\\)\//);
+  return (segments.at(-1) ?? path).replace(/#\d+$/, "").replace(/\\(.)/g, "$1");
+}
+
+/**
+ * A parts view as a comment stores it: parts the scene does not have dropped, ids sorted once each, and the LOD no
+ * higher than the scene's highest level. Undefined for the default view.
+ */
+export function storedPartView(scene: SceneDescription, view: PartView | undefined): PartView | undefined {
+  if (!view) return undefined;
+  const ids = new Set(scene.parts.map((part) => part.id));
+  const known = (list: readonly string[]) => [...new Set(list.filter((id) => ids.has(id)))].sort();
+  const stored: PartView = {
+    hidden: known(view.hidden),
+    shown: known(view.shown),
+    isolated: view.isolated !== null && ids.has(view.isolated) ? view.isolated : null,
+    lod: Math.min(view.lod, lodLevels(scene.parts).at(-1) ?? 0),
+  };
+  return isDefaultPartView(stored) ? undefined : stored;
+}
+
+/** The scene's parts with the node path and triangle count of each level, as `scene.parts` answers. */
+export function partsOf(scene: SceneDescription): QueryOutput<"scene.parts">["parts"] {
+  const paths = new Map(meshesOf(scene).map((entry) => [entry.index, entry]));
+  return scene.parts.map((part) => ({
+    id: part.id,
+    name: part.name,
+    role: part.role,
+    shownByDefault: shownByDefault(part),
+    levels: part.levels.map(({ level, meshes }) => ({
+      level,
+      meshes: meshes.flatMap((index) => paths.get(index)?.path ?? []),
+      triangles: meshes.reduce((sum, index) => sum + (paths.get(index)?.mesh.indices.length ?? 0) / 3, 0),
+    })),
+  }));
 }

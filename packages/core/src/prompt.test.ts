@@ -220,4 +220,33 @@ Vertex numbers follow the file's vertex order, which is Blender's order for Blen
          "Pinch this vertex in.""
     `);
   });
+
+  it("lists at most three hidden or shown parts and names parts it was not given by their last node", () => {
+    const data: RoundData = {
+      ...specRound,
+      comments: [
+        comment({
+          id: "c1",
+          number: 1,
+          text: "Gaps between the rocks.",
+          parts: {
+            hidden: ["Rocks/Boulder1", "Rocks/Boulder2", "Rocks/Boulder3", "Rocks/Boulder4", "Rocks/Boulder5"],
+            shown: ["Rocks/UCX_Rocks#2"],
+            isolated: null,
+            lod: 2,
+          },
+        }),
+      ],
+    };
+    const prompt = renderPrompt({
+      data,
+      assetPath: "/work/Rocks.fbx",
+      roundFolder: "/work/rounds/round-4",
+      exportedAt: "14:02",
+      partNames: new Map([["Rocks/Boulder1", "Boulder1"]]),
+    });
+    expect(prompt.split("\n\n")[1]?.split("\n")[0]).toBe(
+      "1. Rest pose · no surface target · LOD2, Boulder1, Boulder2, Boulder3 and 2 more hidden, UCX_Rocks shown",
+    );
+  });
 });

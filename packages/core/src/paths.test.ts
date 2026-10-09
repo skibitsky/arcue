@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { basename, dirname, findGitRoot, joinPath, normalizePath, pathInside, relativePath } from "./paths";
+import { basename, dirname, findGitRoot, joinPath, normalizePath, pathInside, relativePath, stemOf } from "./paths";
 
 describe("normalizePath", () => {
   it("resolves dots and repeated and trailing slashes", () => {
@@ -82,11 +82,19 @@ describe("relativePath", () => {
   it("climbs out of the folder and back down", () => {
     expect(relativePath("/repo/Assets/Models", "/repo/Assets/Textures/Rock.png")).toBe("../Textures/Rock.png");
     expect(relativePath("/repo/Assets/Models", "/repo/Assets/Models/Rock.fbm/a.png")).toBe("Rock.fbm/a.png");
+    expect(relativePath("/work/game/Models", "/work/game/Models/Shells.fbx")).toBe("Shells.fbx");
     expect(relativePath("C:/repo/a/b", "C:/repo/x.png")).toBe("../../x.png");
     expect(relativePath("/repo", "/repo")).toBe("");
   });
 
-  it("rejects paths on different roots", () => {
-    expect(() => relativePath("C:/repo", "D:/repo/x.png")).toThrow(/another drive/);
+  it("is null for paths on different roots", () => {
+    expect(relativePath("C:/work", "D:/work/Rock.png")).toBeNull();
+  });
+});
+
+describe("stemOf", () => {
+  it("names a file without its last extension", () => {
+    expect(stemOf("/work/Hero.v2.fbx")).toBe("Hero.v2");
+    expect(stemOf("/work/.fbx")).toBe(".fbx");
   });
 });

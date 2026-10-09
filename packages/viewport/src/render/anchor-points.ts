@@ -26,10 +26,10 @@ export interface ResolvedRegion {
 
 export type ResolvedAnchor = ResolvedSurface | ResolvedRegion;
 
-/** Matches an anchor to the scene on screen, or null when its mesh or vertices are not in it. */
+/** Matches an anchor to the scene on screen, or null when its mesh is hidden or its mesh or vertices are not in it. */
 export function resolveAnchor(model: Model, anchor: SpatialAnchor): ResolvedAnchor | null {
   const runtime = model.meshByPath.get(anchor.mesh);
-  if (!runtime) return null;
+  if (!runtime?.visible) return null;
   try {
     return anchor.kind === "surface" ? resolveSurface(runtime, anchor) : resolveRegion(runtime, anchor);
   } catch {

@@ -21,7 +21,7 @@ import type {
 } from "@arcue/protocol";
 import { ArcueError, commands, queries, reviewFileSchema } from "@arcue/protocol";
 import type { SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { countInRanges } from "@arcue/scene";
+import { countInRanges, isDefaultPartView, shownByDefault } from "@arcue/scene";
 
 export interface FakeAssetSeed {
   scene: SceneDescription;
@@ -289,6 +289,11 @@ export class FakeCoreClient implements CoreClient {
     return { assetId };
   }
 
+  /** The fake keeps no files; composition edits only name the file they would write. */
+  #compositionPath(assetId: string): string {
+    return this.#asset(assetId).summary.path.replace(/\.[^./]*$/, ".arcue");
+  }
+
   #buildPrompt(asset: FakeAsset, round: number, comments: Comment[]): string {
     const lines = [
       `3D review · round ${round} · ${comments.length} comment${comments.length === 1 ? "" : "s"}`,
@@ -353,6 +358,7 @@ export class FakeCoreClient implements CoreClient {
         followUps: [],
         rounds: [],
         reopenedFrom: null,
+        ...(args.parts && !isDefaultPartView(args.parts) ? { parts: args.parts } : {}),
       };
       asset.screenshots.set(id, args.screenshot);
       asset.review = {
@@ -480,6 +486,9 @@ export class FakeCoreClient implements CoreClient {
       this.#emit("round.copied", { assetId, round });
       return { round, prompt, copiedToClipboard: this.#options.coreClipboard ?? false };
     },
+    "composition.addFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
+    "composition.removeFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
+    "material.setTexture": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "settings.set": (args) => {
       this.#settings = { ...this.#settings, ...args };
       return structuredClone(this.#settings);
@@ -507,6 +516,9 @@ export class FakeCoreClient implements CoreClient {
     "view.frame": () => {},
     "view.setDisplayMode": () => {},
     "view.setSkeleton": () => {},
+    "view.setPartVisible": () => {},
+    "view.isolatePart": () => {},
+    "view.setLod": () => {},
     "view.selectComment": () => {},
     "view.screenshot": () => ({ png: new Uint8Array() }),
   };
@@ -532,6 +544,19 @@ export class FakeCoreClient implements CoreClient {
       const asset = this.#asset(assetId);
       if (!asset.seed || asset.summary.version === null) throw new ArcueError("not-found", "No scene is loaded.");
       return { version: asset.summary.version, scene: asset.seed.scene };
+    },
+    "scene.parts": ({ assetId }) => {
+      const asset = this.#asset(assetId);
+      if (!asset.seed) throw new ArcueError("not-found", "No scene is loaded.");
+      return {
+        parts: asset.seed.scene.parts.map((part) => ({
+          id: part.id,
+          name: part.name,
+          role: part.role,
+          shownByDefault: shownByDefault(part),
+          levels: [],
+        })),
+      };
     },
   };
 }

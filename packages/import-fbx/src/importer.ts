@@ -10,9 +10,10 @@ import type {
   TextureRef,
 } from "@arcue/scene";
 import {
-  boundsOfPoints,
   buildNodePaths,
   clipNames,
+  defaultViewBounds,
+  describeParts,
   displayNames,
   frameCountFor,
   isKeyedEveryFrame,
@@ -113,6 +114,9 @@ async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<Sc
   const meshes: Mesh[] = parsed.meshes.map((mesh) => ({ ...mesh, topology: topologyFingerprint(mesh) }));
   const textures = createTextureResolver(parsed.textureFiles, request.findFile);
   const materials = await buildMaterials(parsed.materials, meshes, textures);
+  const nodes = buildNodes(parsed);
+  const lodGroups = new Set(parsed.nodes.flatMap((node, index) => (node.lodGroup ? [index] : [])));
+  const parts = describeParts(nodes, lodGroups);
   return {
     source: {
       format: "fbx",
@@ -126,13 +130,14 @@ async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<Sc
         ...textures.warnings,
       ],
     },
-    nodes: buildNodes(parsed),
+    nodes,
     meshes,
     skeletons: parsed.skeletons,
     materials,
     textures: textures.textures,
     clips: buildClips(parsed.clips, parsed.fps),
-    bounds: boundsOfPoints(meshes.map((mesh) => mesh.restPositions)),
+    parts,
+    bounds: defaultViewBounds(meshes, parts),
   };
 }
 

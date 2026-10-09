@@ -1,11 +1,12 @@
 import type { DisplayMode } from "@arcue/protocol";
 import type { RegionAnchor, SceneDescription, SurfaceAnchor } from "@arcue/scene";
+import { buildNodePaths, defaultViewBounds, describeParts } from "@arcue/scene";
 import type { CommentOverlay, ScreenshotOptions, ToolId, Viewport } from "../src/index";
 import { createViewport } from "../src/index";
 import { buildCreature } from "./creature";
 import { albedoSpread, changedShare, modelPixels } from "./pixels";
 import type { SampleName } from "./samples";
-import { importSample, isSampleName, SAMPLES } from "./samples";
+import { importBeetle, importSample, isSampleName, SAMPLES } from "./samples";
 import type { TextureAgreement } from "./texture-check";
 import { textureAgreement } from "./texture-check";
 
@@ -32,6 +33,8 @@ export interface Harness {
   buildCreature(skin: boolean): SceneDescription;
   /** Imports a sample FBX file through the FBX importer, shows it framed in the rest pose and makes it `scene`. */
   loadSample(name: SampleName): Promise<SceneDescription>;
+  /** Imports the modular beetle's files, composes them as `beetle.arcue` says, and shows the result. */
+  loadBeetle(): Promise<SceneDescription>;
   /** Shows a scene, framed in the rest pose, and makes it `scene`. */
   showScene(scene: SceneDescription): Promise<void>;
   modelPixels(shot: string, background: string): Promise<number>;
@@ -39,6 +42,36 @@ export interface Harness {
   changedShare(first: string, second: string): Promise<number>;
   /** How well the first mesh's base color texture matches the view, for a textured `scene`. */
   textureAgreement(): Promise<TextureAgreement>;
+  /**
+   * The scene with its first mesh renamed "<name>_LOD0", a copy "<name>_LOD1" `offset` meters along +X and a copy
+   * "UCX_<name>" `offset` meters along -X, all siblings.
+   */
+  withLods(scene: SceneDescription, offset: number): SceneDescription;
+}
+
+function withLods(scene: SceneDescription, offset: number): SceneDescription {
+  const index = scene.nodes.findIndex((node) => node.mesh !== null);
+  const node = scene.nodes[index];
+  const mesh = node?.mesh === null || !node ? undefined : scene.meshes[node.mesh];
+  if (!node || !mesh) return scene;
+  const copy = (name: string, dx: number) => {
+    const restPositions = mesh.restPositions.map((value, at) => (at % 3 === 0 ? value + dx : value));
+    const meshIndex = scene.meshes.length + (dx > 0 ? 0 : 1);
+    const [x, y, z] = node.translation;
+    return {
+      node: { ...node, name, translation: [x + dx, y, z] as [number, number, number], mesh: meshIndex },
+      mesh: { ...mesh, name, restPositions },
+    };
+  };
+  const lod1 = copy(`${node.name}_LOD1`, offset);
+  const collision = copy(`UCX_${node.name}`, -offset);
+  const named = scene.nodes.map((entry, at) => (at === index ? { ...entry, name: `${entry.name}_LOD0` } : entry));
+  const nodes = [...named, lod1.node, collision.node];
+  const paths = buildNodePaths(nodes);
+  const withPaths = nodes.map((entry, at) => ({ ...entry, path: paths[at] ?? entry.path }));
+  const meshes = [...scene.meshes, lod1.mesh, collision.mesh];
+  const parts = describeParts(withPaths);
+  return { ...scene, nodes: withPaths, meshes, parts, bounds: defaultViewBounds(meshes, parts) };
 }
 
 declare global {
@@ -46,6 +79,8 @@ declare global {
     harness?: Harness;
   }
 }
+
+const BEETLE = "beetle";
 
 let drawCount = 0;
 for (const name of ["drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced"] as const) {
@@ -215,12 +250,21 @@ async function main(): Promise<void> {
     show(`${name}.fbx`);
     return scene;
   };
+  const loadBeetle = async () => {
+    if (modelSelect instanceof HTMLSelectElement) modelSelect.value = BEETLE;
+    show("importing beetle.arcue");
+    const scene = await importBeetle();
+    await showScene(scene);
+    show("beetle.arcue");
+    return scene;
+  };
   if (modelSelect instanceof HTMLSelectElement) {
     modelSelect.append(new Option("Creature", ""));
     for (const name of Object.keys(SAMPLES)) modelSelect.append(new Option(`${name}.fbx`, name));
+    modelSelect.append(new Option("beetle.arcue", BEETLE));
     modelSelect.addEventListener("change", () => {
       const name = modelSelect.value;
-      void (isSampleName(name) ? loadSample(name) : showScene(creature));
+      void (name === BEETLE ? loadBeetle() : isSampleName(name) ? loadSample(name) : showScene(creature));
     });
   }
   let playing = false;
@@ -258,14 +302,18 @@ async function main(): Promise<void> {
     },
     buildCreature: (skin) => buildCreature(skin ? textures : { skin: null, badge: null }, detail),
     loadSample,
+    loadBeetle,
     showScene,
     modelPixels,
     albedoSpread,
     changedShare,
     textureAgreement: () => textureAgreement(viewport, window.harness?.scene ?? creature),
+    withLods,
   };
   const requested = new URLSearchParams(location.search).get("model") ?? "";
-  if (isSampleName(requested)) {
+  if (requested === BEETLE) {
+    await loadBeetle();
+  } else if (isSampleName(requested)) {
     await loadSample(requested);
   } else {
     await viewport.setScene(creature);

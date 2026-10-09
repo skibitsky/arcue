@@ -45,7 +45,11 @@ export type ImportWarningCode =
   | "bind-pose-mismatch"
   | "clip-not-sampled"
   | "left-handed-axes"
-  | "invalid-data";
+  | "invalid-data"
+  | "animation-bones-missing"
+  | "file-not-found"
+  | "node-not-found"
+  | "material-not-found";
 
 export type ImportWarningSeverity = "warning" | "error";
 
@@ -53,7 +57,7 @@ export type ImportWarningSubjectKind = "texture" | "material" | "node" | "clip" 
 
 export interface ImportWarningSubject {
   kind: ImportWarningSubjectKind;
-  /** The texture's file name, the material's, node's or clip's name in the file, or the asset's file name. */
+  /** The texture's file name, the material's, node's or clip's name, a node path or part id, or a file's name. */
   name: string;
 }
 
@@ -64,6 +68,8 @@ export interface ImportWarning {
   subject: ImportWarningSubject;
   /** Short and plain, for people. */
   message: string;
+  /** The composition's file the warning comes from, relative to the model's folder; absent for the model's file. */
+  file?: string;
 }
 
 /** An "error" means the preview is missing something the file meant to show. */
@@ -81,10 +87,21 @@ export const importWarningSeverity: Readonly<Record<ImportWarningCode, ImportWar
   "clip-not-sampled": "error",
   "left-handed-axes": "warning",
   "invalid-data": "warning",
+  "animation-bones-missing": "warning",
+  "file-not-found": "error",
+  "node-not-found": "error",
+  "material-not-found": "warning",
 };
 
-export function importWarning(code: ImportWarningCode, subject: ImportWarningSubject, message: string): ImportWarning {
-  return { code, severity: importWarningSeverity[code], subject, message };
+export function importWarning(
+  code: ImportWarningCode,
+  subject: ImportWarningSubject,
+  message: string,
+  file?: string,
+): ImportWarning {
+  const warning: ImportWarning = { code, severity: importWarningSeverity[code], subject, message };
+  if (file !== undefined) warning.file = file;
+  return warning;
 }
 
 export interface SourceInfo {

@@ -57,6 +57,9 @@ export const VIEW_COMMANDS = [
   "view.frame",
   "view.setDisplayMode",
   "view.setSkeleton",
+  "view.setPartVisible",
+  "view.isolatePart",
+  "view.setLod",
   "view.selectComment",
   "view.screenshot",
 ] as const satisfies readonly CommandName[];
@@ -344,6 +347,9 @@ export class WorkspaceStore {
     "view.frame": ({ assetId, commentId }) => this.#require(assetId).frameComment(commentId),
     "view.setDisplayMode": ({ assetId, mode }) => this.#require(assetId).setDisplayMode(mode),
     "view.setSkeleton": ({ assetId, visible }) => this.#require(assetId).setSkeleton(visible),
+    "view.setPartVisible": ({ assetId, part, visible }) => this.#require(assetId).setPartVisible(part, visible),
+    "view.isolatePart": ({ assetId, part }) => this.#require(assetId).isolatePart(part),
+    "view.setLod": ({ assetId, level }) => this.#require(assetId).setLod(level),
     "view.selectComment": ({ assetId, commentId }) => {
       const session = this.#require(assetId);
       if (commentId === null && session.hasUnsavedBox()) {

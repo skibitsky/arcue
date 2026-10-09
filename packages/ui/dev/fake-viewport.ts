@@ -571,6 +571,8 @@ export class FakeViewport implements Viewport {
     this.#requestRender();
   }
 
+  setPartView(): void {}
+
   setTool(tool: ToolId): void {
     this.#tool = tool;
     this.#canvas.dataset.tool = tool;

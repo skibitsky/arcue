@@ -192,6 +192,44 @@ export const SHARED_GEOMETRY_FBX = asciiFbx(
 	C: "OO",3000,2001`,
 );
 
+function triangleModel(id: number, name: string, x: number, type = "Mesh"): string {
+  return `	Model: ${id}, "Model::${name}", "${type}" {
+		Version: 232
+		Properties70:  {
+			P: "Lcl Translation", "Lcl Translation", "", "A",${x},0,0
+		}
+	}`;
+}
+
+/**
+ * The triangle as "Body_LOD0" at the origin, "Body_LOD1" 2 m along +X and the collision helper "UCX_Body" 2 m along
+ * -X, and an FBX LOD group "Rock" 5 m along +X whose children "RockHigh" and "RockLow" are its two levels.
+ */
+export const LOD_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${triangleModel(2000, "Body_LOD0", 0)}
+${triangleModel(2001, "Body_LOD1", 2)}
+${triangleModel(2002, "UCX_Body", -2)}
+	NodeAttribute: 9000, "NodeAttribute::Rock", "LodGroup" {
+		TypeFlags: "LodGroup"
+	}
+${triangleModel(9001, "Rock", 5, "LodGroup")}
+${triangleModel(2003, "RockHigh", 0)}
+${triangleModel(2004, "RockLow", 0)}`,
+  `	C: "OO",2000,0
+	C: "OO",2001,0
+	C: "OO",2002,0
+	C: "OO",9001,0
+	C: "OO",9000,9001
+	C: "OO",2003,9001
+	C: "OO",2004,9001
+	C: "OO",1000,2000
+	C: "OO",1000,2001
+	C: "OO",1000,2002
+	C: "OO",1000,2003
+	C: "OO",1000,2004`,
+);
+
 interface TakeOptions {
   /** The take's range in frames at 30 fps, or null for a take without LocalStart and LocalStop. */
   range: [start: number, stop: number] | null;
