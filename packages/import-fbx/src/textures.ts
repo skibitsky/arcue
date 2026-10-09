@@ -1,5 +1,5 @@
-import type { FoundFile, ImportWarning, ImportWarningSubject, Texture } from "@arcue/scene";
-import { fileNameOf, imageMimeType, importWarning, parseStoredPath } from "@arcue/scene";
+import type { FoundFile, ImportWarning, ImportWarningSubject, Texture, TextureSlot, TextureUse } from "@arcue/scene";
+import { describeTextureUses, fileNameOf, imageMimeType, importWarning, parseStoredPath } from "@arcue/scene";
 import type { TextureFile } from "./decode";
 
 function textureName(path: string): string {
@@ -9,8 +9,11 @@ function textureName(path: string): string {
 }
 
 export interface TextureResolver {
-  /** Index into `textures` for the texture file a material uses, or null when its image could not be found. */
-  resolve(file: number, material: string): Promise<number | null>;
+  /**
+   * Index into `textures` for the texture file a material uses, or null when its image could not be found. `slot`
+   * names the slot when a composition file can set it.
+   */
+  resolve(file: number, material: string, slot?: TextureSlot): Promise<number | null>;
   /** The path the file stores for the texture file, relative when it has one. */
   storedPath(file: number): string;
   readonly textures: Texture[];
@@ -47,6 +50,7 @@ export function createTextureResolver(
   const textures: Texture[] = [];
   const problems: Problem[] = [];
   const users = new Map<number, Set<string>>();
+  const uses = new Map<number, TextureUse[]>();
   const resolved = new Map<number, Promise<number | null>>();
 
   const find = async (file: TextureFile): Promise<FoundFile | null> => {
@@ -119,12 +123,15 @@ export function createTextureResolver(
       const file = files[index];
       return file ? storedPathOf(file) : "";
     },
-    resolve(index, material) {
+    resolve(index, material, slot) {
       const file = files[index];
       if (!file) return Promise.resolve(null);
       const materials = users.get(index) ?? new Set();
       materials.add(material);
       users.set(index, materials);
+      const slots = uses.get(index) ?? [];
+      if (slot && !slots.some((use) => use.material === material && use.slot === slot)) slots.push({ material, slot });
+      uses.set(index, slots);
       let texture = resolved.get(index);
       if (!texture) {
         texture = load(file, index);
@@ -133,12 +140,14 @@ export function createTextureResolver(
       return texture;
     },
     async warnings() {
-      const warnings = problems.map((problem) =>
-        importWarning(problem.code, problem.subject, problem.message, undefined, {
-          detail: problem.detail,
+      const warnings = problems.map((problem) => {
+        const used = uses.get(problem.file) ?? [];
+        return importWarning(problem.code, problem.subject, problem.message, undefined, {
+          detail: used.length > 0 ? `${problem.detail}, used as ${describeTextureUses(used)}` : problem.detail,
           materials: [...(users.get(problem.file) ?? [])],
-        }),
-      );
+          uses: used,
+        });
+      });
       for (const [index, file] of files.entries()) {
         if (!file.linked && !resolved.has(index)) warnings.push(await unusedWarning(file));
       }

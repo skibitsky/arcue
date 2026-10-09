@@ -32,6 +32,7 @@ const warnings: ImportWarning[] = [
   importWarning("texture-not-found", { kind: "texture", name: "Eyes.png" }, "Texture not found: Eyes.png", undefined, {
     detail: "Stored path: C:/art/Eyes.png",
     materials: ["Body"],
+    uses: [{ material: "Body", slot: "baseColor" }],
   }),
   importWarning("clip-not-sampled", { kind: "clip", name: "Armature|Run" }, "Clip Armature|Run could not be sampled"),
 ];
@@ -74,9 +75,10 @@ describe("warning.list", () => {
         message: "Texture not found: Eyes.png",
         detail: "Stored path: C:/art/Eyes.png",
         materials: ["Body"],
+        uses: [{ material: "Body", slot: "baseColor" }],
         dismissed: false,
         commentId: null,
-        fix: null,
+        fix: { kind: "choose-texture", material: "Body", slot: "baseColor" },
       },
       expect.objectContaining({
         id: CLIP,
@@ -264,5 +266,24 @@ describe("use as base color", () => {
     });
     await test.core.idle();
     expect((await listed(test)).map((warning) => warning.id)).not.toContain(UNUSED);
+  });
+});
+
+describe("choose texture", () => {
+  it("names the slot of a missing texture, and an image chosen for that slot clears the warning", async () => {
+    const test = await setup({ "/work/game/Assets/Art/Eyes.png": "png" });
+    const fix = (await listed(test)).find((warning) => warning.id === MISSING)?.fix;
+    if (fix?.kind !== "choose-texture") throw new Error("Expected the choose texture fix.");
+    await test.window.client.execute("material.setTexture", {
+      assetId: test.assetId,
+      material: fix.material,
+      slot: fix.slot,
+      file: "/work/game/Assets/Art/Eyes.png",
+    });
+    await test.core.idle();
+    expect((await listed(test)).map((warning) => warning.id)).not.toContain(MISSING);
+    await test.window.client.execute("review.undo", { assetId: test.assetId });
+    await test.core.idle();
+    expect((await listed(test)).map((warning) => warning.id)).toContain(MISSING);
   });
 });

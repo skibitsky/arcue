@@ -1,3 +1,4 @@
+import type { TextureSlot } from "./material";
 import type { Quat } from "./math";
 
 export type SourceFormat = "fbx" | "gltf" | "glb";
@@ -77,9 +78,30 @@ export interface ImportWarning {
   materials?: string[];
   /** For a texture subject: where the image was found, relative to the folder of the file the warning comes from. */
   foundPath?: string;
+  /** For a texture subject: the material slots that use the texture and that a composition file can set. */
+  uses?: TextureUse[];
 }
 
-export type ImportWarningExtra = Pick<ImportWarning, "detail" | "materials" | "foundPath">;
+/** A material's texture slot that uses a texture. */
+export interface TextureUse {
+  material: string;
+  slot: TextureSlot;
+}
+
+const SLOT_NAMES: Readonly<Record<TextureSlot, string>> = {
+  baseColor: "base color",
+  normal: "normal",
+  roughness: "roughness",
+  metalness: "metalness",
+  emissive: "emissive",
+};
+
+/** The uses for a warning's detail, such as "base color of Stone, normal of Rock". */
+export function describeTextureUses(uses: readonly TextureUse[]): string {
+  return uses.map((use) => `${SLOT_NAMES[use.slot]} of ${use.material}`).join(", ");
+}
+
+export type ImportWarningExtra = Pick<ImportWarning, "detail" | "materials" | "foundPath" | "uses">;
 
 /** An "error" means the preview is missing something the file meant to show. */
 export const importWarningSeverity: Readonly<Record<ImportWarningCode, ImportWarningSeverity>> = {
@@ -115,6 +137,7 @@ export function importWarning(
   if (extra.detail !== undefined) warning.detail = extra.detail;
   if (extra.materials !== undefined && extra.materials.length > 0) warning.materials = [...extra.materials];
   if (extra.foundPath !== undefined) warning.foundPath = extra.foundPath;
+  if (extra.uses !== undefined && extra.uses.length > 0) warning.uses = extra.uses.map((use) => ({ ...use }));
   return warning;
 }
 

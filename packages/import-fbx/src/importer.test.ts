@@ -579,8 +579,9 @@ describe("export checks", () => {
         severity: "warning",
         subject: { kind: "texture", name: "StoneStriker-BaseColor.png" },
         message: "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
-        detail: "Stored path: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
+        detail: "Stored path: /private/tmp/striker-staging/StoneStriker-BaseColor.png, used as base color of Stone",
         materials: ["Stone"],
+        uses: [{ material: "Stone", slot: "baseColor" }],
       },
     ]);
   });
@@ -614,8 +615,9 @@ describe("export checks", () => {
         severity: "error",
         subject: { kind: "texture", name: "painted.png" },
         message: "Texture not found: painted.png",
-        detail: "Stored path: textures/painted.png",
+        detail: "Stored path: textures/painted.png, used as base color of Painted",
         materials: ["Painted"],
+        uses: [{ material: "Painted", slot: "baseColor" }],
       },
     ]);
     expect(scene.materials[0]?.missingTextures).toEqual({ baseColor: "textures/painted.png" });

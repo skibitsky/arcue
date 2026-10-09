@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AssetSession } from "../store/asset-session";
 import { listedWarnings } from "../store/asset-session";
 import { useSelect } from "../store/observable";
+import type { WorkspaceStore } from "../store/workspace-store";
 import { IconButton, Tip } from "./controls";
 import { Icon } from "./Icon";
 
@@ -12,10 +13,11 @@ const fixLabels: Record<WarningFix["kind"], string> = {
   "show-clip": "Show clip",
   retry: "Retry",
   "use-as-base-color": "Use as base color",
+  "choose-texture": "Choose texture",
 };
 
 /** The status bar's import warnings: the first message and a count, opening the list above. Absent without any. */
-export function WarningsStatus({ session }: { session: AssetSession }) {
+export function WarningsStatus({ store, session }: { store: WorkspaceStore; session: AssetSession }) {
   const all = useSelect(session.state, (state) => state.warnings);
   const review = useSelect(session.state, (state) => state.review);
   const warnings = useMemo(() => listedWarnings({ warnings: all }), [all]);
@@ -58,7 +60,7 @@ export function WarningsStatus({ session }: { session: AssetSession }) {
           </div>
           <ul className="warn-list">
             {warnings.map((warning) => (
-              <WarningRow key={warning.id} session={session} warning={warning} review={review} />
+              <WarningRow key={warning.id} store={store} session={session} warning={warning} review={review} />
             ))}
           </ul>
         </Popover.Content>
@@ -79,15 +81,22 @@ function subjectText(warning: AssetWarning): string {
 }
 
 function WarningRow({
+  store,
   session,
   warning,
   review,
 }: {
+  store: WorkspaceStore;
   session: AssetSession;
   warning: AssetWarning;
   review: ReviewFile | null;
 }) {
   const number = draftNumber(review, warning.commentId);
+  const fix = warning.fix?.kind === "choose-texture" && !store.canAddFiles ? null : warning.fix;
+  const runFix = () => {
+    if (fix?.kind === "choose-texture") void store.chooseTexture(session.assetId, fix.material, fix.slot);
+    else void session.fixWarning(warning);
+  };
   const message = <span className="warn-msg">{warning.message}</span>;
   return (
     <li
@@ -100,9 +109,9 @@ function WarningRow({
       <div className="warn-sub">
         <span className="warn-subject">{subjectText(warning)}</span>
         <span className="warn-actions">
-          {warning.fix ? (
-            <button type="button" className="warn-fix warn-hover" onClick={() => void session.fixWarning(warning)}>
-              {fixLabels[warning.fix.kind]}
+          {fix ? (
+            <button type="button" className="warn-fix warn-hover" onClick={runFix}>
+              {fixLabels[fix.kind]}
             </button>
           ) : null}
           {number !== null ? (

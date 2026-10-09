@@ -2,6 +2,7 @@ import type { ImportWarning, ImportWarningCode } from "@arcue/scene";
 import { importWarningSeverity } from "@arcue/scene";
 import { z } from "zod";
 import { commentIdSchema } from "./assets";
+import { textureSlotSchema } from "./composition";
 
 const codes = Object.keys(importWarningSeverity) as [ImportWarningCode, ...ImportWarningCode[]];
 
@@ -23,6 +24,7 @@ const importWarningShape = {
   detail: z.string().min(1).optional(),
   materials: z.array(z.string()).optional(),
   foundPath: z.string().min(1).optional(),
+  uses: z.array(z.object({ material: z.string(), slot: textureSlotSchema })).optional(),
 };
 
 /** A problem the importer found in the file, as `SourceInfo.warnings` lists it. */
@@ -31,7 +33,10 @@ export const importWarningSchema: z.ZodType<ImportWarning> = z.object(importWarn
 /** A warning's id: its code, subject and file, so it stays the same across versions and a dismissal sticks. */
 export const warningIdSchema = z.string().min(1);
 
-/** The command that fixes a warning: `view.setClip`, `asset.reload` or `material.setTexture` on the base color. */
+/**
+ * The command that fixes a warning: `view.setClip`, `asset.reload`, `material.setTexture` on the base color, or
+ * `material.setTexture` on the slot with an image the person chooses.
+ */
 export const warningFixSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("show-clip"), clip: z.string().min(1) }),
   z.object({ kind: z.literal("retry") }),
@@ -41,6 +46,7 @@ export const warningFixSchema = z.discriminatedUnion("kind", [
     /** The image, relative to the asset's composition file. */
     file: z.string().min(1),
   }),
+  z.object({ kind: z.literal("choose-texture"), material: z.string().min(1), slot: textureSlotSchema }),
 ]);
 
 /** An import warning of the version on screen, with its id and what the review recorded about it. */

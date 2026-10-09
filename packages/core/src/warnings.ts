@@ -53,6 +53,10 @@ function fixFor(warning: ImportWarning, scene: SceneDescription, assetPath: stri
   ) {
     return { kind: "retry" };
   }
+  const [use] = warning.uses ?? [];
+  if ((warning.code === "texture-not-found" || warning.code === "texture-path-absolute") && use) {
+    return { kind: "choose-texture", material: use.material, slot: use.slot };
+  }
   if (warning.code === "texture-not-used" && warning.foundPath !== undefined && warning.file === undefined) {
     const untextured = scene.materials.filter((material) => material.baseColorTexture === null);
     const [material] = untextured;

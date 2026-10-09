@@ -112,7 +112,7 @@ export function StatusBar({
           {watch.text}
         </span>
       </Tip>
-      <WarningsStatus session={session} />
+      <WarningsStatus store={store} session={session} />
       <span className="grow" />
       <CoordinatesMenu store={store} />
       {stats ? (

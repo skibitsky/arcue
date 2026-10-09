@@ -1,7 +1,15 @@
 import type { CompositionFile, VersionFile } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { CompositionMember, CompositionTexture, ImportWarning, SceneDescription, TextureSlot } from "@arcue/scene";
-import { composeScene, fileNameOf, imageMimeType, importWarning, splitMemberPath, TEXTURE_SLOTS } from "@arcue/scene";
+import {
+  composeScene,
+  describeTextureUses,
+  fileNameOf,
+  imageMimeType,
+  importWarning,
+  splitMemberPath,
+  TEXTURE_SLOTS,
+} from "@arcue/scene";
 import { hasExtension, isConventionAnimation, MODEL_EXTENSIONS, readComposition } from "./composition-file";
 import { createFileSearch } from "./file-search";
 import { versionIdOf } from "./hash";
@@ -212,6 +220,7 @@ export async function buildAssetScene(
     materials[texture.material] = slots;
     if (texture.bytes === null) {
       slots[texture.slot] = { path: texture.written, texture: null };
+      const use = { material: texture.material, slot: texture.slot };
       const name = fileNameOf(texture.written);
       warnings.push(
         importWarning(
@@ -219,7 +228,11 @@ export async function buildAssetScene(
           { kind: "texture", name },
           `Texture not found: ${name}`,
           files.composition?.file.label,
-          { detail: `Stored path: ${texture.written}`, materials: [texture.material] },
+          {
+            detail: `Stored path: ${texture.written}, used as ${describeTextureUses([use])}`,
+            materials: [texture.material],
+            uses: [use],
+          },
         ),
       );
       continue;
@@ -250,16 +263,23 @@ export async function buildAssetScene(
   return withoutOverriddenTextures(scene, files.textures);
 }
 
-/** Drops "texture-not-used" for a model texture whose image the composition already puts into a material slot. */
+/**
+ * Drops the model's texture warnings that the composition already fixes: "texture-not-used" for a texture whose image
+ * it puts into a material slot, and "texture-not-found" or "texture-path-absolute" for a texture whose every slot it
+ * fills with an image that was found.
+ */
 function withoutOverriddenTextures(scene: SceneDescription, textures: readonly TextureRead[]): SceneDescription {
-  const shown = new Set(textures.flatMap((texture) => (texture.bytes ? [texture.label] : [])));
-  const kept = scene.source.warnings.filter(
-    (warning) =>
-      warning.code !== "texture-not-used" ||
-      warning.file !== undefined ||
-      warning.foundPath === undefined ||
-      !shown.has(warning.foundPath),
-  );
+  const found = textures.filter((texture) => texture.bytes !== null);
+  const shown = new Set(found.map((texture) => texture.label));
+  const filled = new Set(found.map((texture) => `${texture.material}\n${texture.slot}`));
+  const fixed = (warning: ImportWarning): boolean => {
+    if (warning.file !== undefined) return false;
+    if (warning.code === "texture-not-used") return warning.foundPath !== undefined && shown.has(warning.foundPath);
+    if (warning.code !== "texture-not-found" && warning.code !== "texture-path-absolute") return false;
+    const uses = warning.uses ?? [];
+    return uses.length > 0 && uses.every((use) => filled.has(`${use.material}\n${use.slot}`));
+  };
+  const kept = scene.source.warnings.filter((warning) => !fixed(warning));
   if (kept.length === scene.source.warnings.length) return scene;
   return { ...scene, source: { ...scene.source, warnings: kept } };
 }

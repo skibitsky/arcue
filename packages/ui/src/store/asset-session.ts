@@ -1053,7 +1053,10 @@ export class AssetSession {
     this.highlightSubject(warning ? subjectOf(warning) : null);
   }
 
-  /** Runs the warning's quick fix: shows its clip, loads the files again, or uses the texture as the base color. */
+  /**
+   * Runs the warning's quick fix: shows its clip, loads the files again, or uses the texture as the base color.
+   * Choosing a texture needs the host's open dialog, so `WorkspaceStore.chooseTexture` runs that one.
+   */
   async fixWarning(warning: AssetWarning): Promise<void> {
     const fix = warning.fix;
     if (fix?.kind === "show-clip") {

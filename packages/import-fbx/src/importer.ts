@@ -62,7 +62,7 @@ async function buildMaterials(
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
     const ref = async (wire: WireTextureRef | null | undefined, slot?: TextureSlot): Promise<TextureRef | null> => {
       if (!wire) return null;
-      const texture = await textures.resolve(wire.file, material.name);
+      const texture = await textures.resolve(wire.file, material.name, slot);
       if (texture === null) {
         if (slot) missingTextures[slot] = textures.storedPath(wire.file);
         return null;

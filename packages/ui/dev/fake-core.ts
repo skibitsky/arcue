@@ -343,6 +343,11 @@ export class FakeCoreClient implements CoreClient {
         fix = { kind: "show-clip", clip: warning.subject.name };
       } else if (warning.subject.kind === "file" && warning.file !== undefined) {
         fix = { kind: "retry" };
+      } else if (
+        (warning.code === "texture-not-found" || warning.code === "texture-path-absolute") &&
+        warning.uses?.[0]
+      ) {
+        fix = { kind: "choose-texture", material: warning.uses[0].material, slot: warning.uses[0].slot };
       } else if (warning.code === "texture-not-used" && warning.foundPath && untextured.length === 1) {
         fix = {
           kind: "use-as-base-color",

@@ -62,8 +62,9 @@ export type {
   SourceInfo,
   Space,
   SpaceConversion,
+  TextureUse,
 } from "./source";
-export { importWarning, importWarningSeverity, SCENE_SPACE } from "./source";
+export { describeTextureUses, importWarning, importWarningSeverity, SCENE_SPACE } from "./source";
 export type { SubjectRef } from "./subject";
 export { subjectMeshes } from "./subject";
 export {

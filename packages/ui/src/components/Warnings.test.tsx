@@ -1,12 +1,13 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
+import type { FileHost } from "../store/view-files";
 import { flush, NOW, setup, TestViewport, withWarnings } from "../test-helpers";
 import { Workspace } from "./Workspace";
 
-async function renderStone(scene = withWarnings) {
-  const context = setup({ scene });
+async function renderStone(scene = withWarnings, files?: FileHost) {
+  const context = setup({ scene, ...(files ? { files } : {}) });
   const viewport = new TestViewport();
   render(<Workspace store={context.store} createViewport={() => viewport} now={() => NOW} />);
   await act(async () => {
@@ -86,5 +87,30 @@ describe("import warnings in the status bar", () => {
     await act(() => flush());
     expect(document.querySelector(".sb-warn")).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Import warnings" })).toBeNull();
+  });
+
+  it("chooses an image for the slot a missing texture names, through the host's open dialog", async () => {
+    const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Eyes.png");
+    const files: FileHost = { pick: vi.fn(async () => [picked]), place: async () => [], open: () => {} };
+    const { client } = await renderStone(withWarnings, files);
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    const row = rows().find((item) => item.textContent?.includes("Eyes.png")) as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: "Choose texture" }));
+    await act(() => flush());
+    expect(files.pick).toHaveBeenCalledWith("image", STONE_RESONATOR_PATH);
+    expect(client.calls.find((call) => call.name === "material.setTexture")?.input).toMatchObject({
+      material: "Stone",
+      slot: "baseColor",
+      file: picked,
+    });
+  });
+
+  it("offers no Choose texture without a host to pick images from", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    const row = rows().find((item) => item.textContent?.includes("Eyes.png")) as HTMLElement;
+    expect(within(row).queryByRole("button", { name: "Choose texture" })).toBeNull();
   });
 });

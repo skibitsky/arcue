@@ -388,8 +388,9 @@ export function withWarnings(scene: SceneDescription): SceneDescription {
           "Texture not found: Eyes.png",
           undefined,
           {
-            detail: "Stored path: C:/art/Eyes.png",
+            detail: "Stored path: C:/art/Eyes.png, used as base color of Stone",
             materials: ["Stone"],
+            uses: [{ material: "Stone", slot: "baseColor" }],
           },
         ),
       ],
