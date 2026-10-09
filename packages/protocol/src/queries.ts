@@ -7,6 +7,7 @@ import { query } from "./definitions";
 import { assetWarningSchema } from "./import-warning";
 import { assetInspectionSchema } from "./inspect";
 import { partSummarySchema } from "./parts";
+import { reviewCandidateSchema } from "./relink";
 import { reviewFileSchema } from "./review";
 import { settingsSchema } from "./settings";
 import { viewStateSchema } from "./view-state";
@@ -42,6 +43,12 @@ export const queries = {
     description: "Get an asset's review data: comments, queue, rounds and versions.",
     input: z.object(assetRef),
     output: reviewFileSchema,
+  }),
+  "review.candidates": query({
+    description:
+      "List earlier reviews that may belong to the asset because its file was renamed or moved, best first: the model each was made for, which is gone, its comment count, when it last loaded, and whether the bytes, the Unity GUID or only the meshes match. Arcue looks for them when it opens a file that has no review yet, and moves a single review with the same bytes or GUID by itself. review.relink moves one onto the asset.",
+    input: z.object(assetRef),
+    output: z.object({ candidates: z.array(reviewCandidateSchema) }),
   }),
   "viewState.get": query({
     description: "Get the view state a window last reported for an asset, or null before the first report.",

@@ -198,8 +198,7 @@ describe("asset.open and an unresponsive window", () => {
     const test = await startTestCore(heroFiles());
     test.window.respond = () => new Promise(() => undefined);
     const opening = test.window.client.execute("asset.open", { path: HERO });
-    await flush();
-    await test.core.idle();
+    while (test.window.requests.length === 0) await flush();
     test.clock.advance(10_000);
     await expect(opening).rejects.toMatchObject({ code: "unavailable" });
     await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });

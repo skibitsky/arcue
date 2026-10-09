@@ -109,6 +109,8 @@ export type { PartSummary } from "./parts";
 export { partSummarySchema } from "./parts";
 export type { Queries, QueryArgs, QueryInput, QueryName, QueryOutput } from "./queries";
 export { isQueryName, materialSlotSchema, materialSlotsSchema, queries, sceneDescriptionSchema } from "./queries";
+export type { RelinkMatch, ReviewCandidate } from "./relink";
+export { relinkMatchSchema, reviewCandidateSchema } from "./relink";
 export type {
   AnchorState,
   AssetVersion,
@@ -125,10 +127,12 @@ export {
   assetVersionSchema,
   commentSchema,
   commentStatusSchema,
+  contentHashSchema,
   followUpSchema,
   meshTopologySchema,
   reviewFileSchema,
   roundSummarySchema,
+  unityGuidSchema,
   versionFileSchema,
 } from "./review";
 export type { RoundComment, RoundData } from "./round";

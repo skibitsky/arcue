@@ -1,7 +1,8 @@
-import type { AssetStatus, AssetSummary, Comment, ReviewFile, ViewState } from "@arcue/protocol";
+import type { AssetStatus, AssetSummary, Comment, ReviewCandidate, ReviewFile, ViewState } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
 import { basename, dirname } from "./paths";
+import type { EarlierReview } from "./relink";
 import type { ReviewSession } from "./review-session";
 import type { ReviewLocation } from "./review-store";
 import { compositionFilePath } from "./review-store";
@@ -16,6 +17,10 @@ export class OpenAsset {
   readonly compositionPath: string;
   readonly location: ReviewLocation;
   readonly session: ReviewSession;
+  /** Earlier reviews that may belong to the asset, best first, as `review.candidates` lists them. */
+  candidates: ReviewCandidate[] = [];
+  /** Earlier reviews to compare the meshes of the first version with, until it loads. */
+  earlier: EarlierReview[] = [];
   /** The composition file applied to the version on screen, or null for a plain model. */
   composition: string | null = null;
   status: AssetStatus = "loading";

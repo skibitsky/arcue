@@ -640,6 +640,10 @@ export class FakeCoreClient implements CoreClient {
     },
     "review.undo": ({ assetId }) => this.#step(this.#asset(assetId), "undo"),
     "review.redo": ({ assetId }) => this.#step(this.#asset(assetId), "redo"),
+    "review.relink": ({ assetId }) => {
+      this.#asset(assetId);
+      throw new ArcueError("not-found", "The fake core keeps no earlier reviews.");
+    },
     "view.reportState": ({ assetId, state }) => {
       this.#asset(assetId).viewState = state;
     },
@@ -675,6 +679,10 @@ export class FakeCoreClient implements CoreClient {
     "asset.list": () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) }),
     "review.get": ({ assetId }) => this.#asset(assetId).review,
     "viewState.get": ({ assetId }) => this.#asset(assetId).viewState,
+    "review.candidates": ({ assetId }) => {
+      this.#asset(assetId);
+      return { candidates: [] };
+    },
     "comment.screenshot": async ({ assetId, commentId }) => {
       const asset = this.#asset(assetId);
       const comment = this.#comment(asset, commentId);

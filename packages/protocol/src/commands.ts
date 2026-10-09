@@ -217,6 +217,13 @@ export const commands = {
     input: z.object(assetRef),
     output: z.object({ changed: z.boolean() }),
   }),
+  "review.relink": command({
+    description:
+      "Move an earlier review onto the asset after its file was renamed or moved: comments, rounds, screenshots and the composition file, with paths and ids rewritten when the model changed folders. from is the earlier model's absolute path, as review.candidates lists it. That file must be gone, and the asset may have no comments, rounds or dismissed warnings of its own yet.",
+    runsIn: "core",
+    input: z.object({ ...assetRef, from: z.string().min(1) }),
+    output: z.void(),
+  }),
   "view.reportState": command({
     description: "A window reports what it shows for an asset, so the core can restore the view after a crash.",
     runsIn: "core",

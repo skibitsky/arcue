@@ -10,8 +10,10 @@ import type {
   CompositionFile,
   CoreClient,
   ListenerErrorHandler,
+  MeshTopology,
   MessageEndpoint,
   Peer,
+  ReviewCandidate,
   ReviewFile,
   RoundSummary,
   Unsubscribe,
@@ -47,6 +49,7 @@ import { readableImageExtensions } from "./file-search";
 import { versionIdOf } from "./hash";
 import type { CompositionEdit } from "./history";
 import { applySnapshot, editBetween, withDismissedWarnings } from "./history";
+import { readUnityGuid } from "./identity";
 import { importAsset } from "./import";
 import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
@@ -57,9 +60,20 @@ import { renderPrompt } from "./prompt";
 import { Reanchorer } from "./reanchor";
 import type { CallContext } from "./registry";
 import { CommandRegistry } from "./registry";
+import type { EarlierReview } from "./relink";
+import { fileIdentity, findEarlierReviews, matchByIdentity, matchByStructure, rankCandidates } from "./relink";
+import { isUntouched, moveReview } from "./review-move";
 import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
-import { compositionFilePath, loadReview, locateReview, prepareArcueFolder, reviewFilePath } from "./review-store";
+import type { ReviewLocation } from "./review-store";
+import {
+  compositionFilePath,
+  loadReview,
+  locateReview,
+  prepareArcueFolder,
+  reviewFilePath,
+  reviewLocationIn,
+} from "./review-store";
 import { buildRoundData } from "./round-data";
 import {
   anchorRestPositions,
@@ -203,6 +217,7 @@ export class ArcueCore {
       registry.handleCommand("round.copy", (args, context) => this.#copyRound(args.assetId, context.user)),
       registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")),
       registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")),
+      registry.handleCommand("review.relink", (args) => this.#relinkReview(args.assetId, args.from)),
       registry.handleCommand("composition.addFile", (args) => this.#addCompositionFile(args)),
       registry.handleCommand("composition.removeFile", (args) => this.#removeCompositionFile(args)),
       registry.handleCommand("composition.attachFile", (args) => this.#attachCompositionFile(args)),
@@ -229,6 +244,7 @@ export class ArcueCore {
       }),
       registry.handleQuery("asset.list", () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) })),
       registry.handleQuery("review.get", (args) => this.#asset(args.assetId).session.review),
+      registry.handleQuery("review.candidates", (args) => ({ candidates: this.#asset(args.assetId).candidates })),
       registry.handleQuery("viewState.get", (args) => this.#asset(args.assetId).viewState),
       registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()),
       registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })),
@@ -372,6 +388,7 @@ export class ArcueCore {
     if (location.workspaceRoot && !(await insideWithoutLinks(this.#platform, location.workspaceRoot, reviewPath))) {
       throw new ArcueError("conflict", `The review folder ${location.folder} goes through a symbolic link.`);
     }
+    const earlier = await this.#earlierReview(location, path, stat.size);
     const loaded = await loadReview(this.#platform, location);
     const id = `a${this.#nextAssetNumber++}`;
     const session = new ReviewSession(this.#platform, location, loaded, (review) =>
@@ -379,6 +396,8 @@ export class ArcueCore {
     );
     const asset = new OpenAsset(id, path, location, session);
     if (args.viewState) asset.viewState = args.viewState;
+    asset.candidates = earlier.candidates;
+    asset.earlier = earlier.unmatched;
     this.#assets.set(asset.id, asset);
     try {
       await this.#showAsset(asset, window, args);
@@ -387,6 +406,10 @@ export class ArcueCore {
       throw error;
     }
     this.registry.emit("asset.opened", { asset: asset.summary });
+    if (earlier.moved !== null) {
+      this.registry.emit("review.relinked", { assetId: asset.id, from: earlier.moved, automatic: true });
+    }
+    this.#offer(asset);
     asset.stopWatching.push(
       this.#platform.watch(path, () => this.#fileChanged(asset)),
       this.#platform.watch(reviewPath, () => {
@@ -396,6 +419,86 @@ export class ArcueCore {
     this.#watchComposition(asset, [asset.compositionPath]);
     void this.#load(asset).catch(() => undefined);
     return { assetId: asset.id };
+  }
+
+  /**
+   * For a file without a review: finds the reviews whose model is gone and, when exactly one has a version with the
+   * file's bytes or the file's Unity GUID, moves it to the file's review folder. Several such reviews become candidates
+   * to offer; with none, the reviews are kept to compare meshes with once the file loads. A failure leaves the file
+   * without a review rather than failing the open.
+   */
+  async #earlierReview(
+    location: ReviewLocation,
+    path: string,
+    size: number,
+  ): Promise<{ moved: string | null; candidates: ReviewCandidate[]; unmatched: EarlierReview[] }> {
+    const none = { moved: null, candidates: [], unmatched: [] };
+    try {
+      if ((await this.#platform.stat(reviewFilePath(location))) !== null) return none;
+      const open = new Set([...this.#assets.values()].map((asset) => asset.location.folder));
+      const earlier = await findEarlierReviews(this.#platform, location, open);
+      if (earlier.length === 0) return none;
+      const guid = await readUnityGuid(this.#platform, path);
+      const matches = await matchByIdentity(earlier, fileIdentity(this.#platform, path, size, guid));
+      const [only] = matches;
+      if (only && matches.length === 1) {
+        const { location: from, model } = only.earlier;
+        await moveReview(this.#platform, { from, fromModel: model, to: location, toModel: path });
+        return { ...none, moved: model };
+      }
+      return { ...none, candidates: offered(matches), unmatched: matches.length === 0 ? earlier : [] };
+    } catch (error) {
+      this.#onError(error);
+      return none;
+    }
+  }
+
+  /** Compares the first version's meshes with the earlier reviews no file identity matched, rule 3, and offers the best. */
+  #matchStructure(asset: OpenAsset, meshes: readonly MeshTopology[]): void {
+    if (asset.earlier.length === 0) return;
+    asset.candidates = offered(matchByStructure(asset.earlier, meshes));
+    asset.earlier = [];
+    this.#offer(asset);
+  }
+
+  #offer(asset: OpenAsset): void {
+    const [candidate] = asset.candidates;
+    if (candidate) this.registry.emit("review.offered", { assetId: asset.id, candidate });
+  }
+
+  /**
+   * Moves the review of an earlier path of the asset's model onto the asset, as `review.relink` asks, replacing the
+   * review that opening the asset wrote while that holds nothing but versions. The earlier model must be gone and its
+   * review folder inside the asset's reviews root, and the asset reloads to re-anchor the comments.
+   */
+  #relinkReview(assetId: string, given: string): Promise<void> {
+    const asset = this.#asset(assetId);
+    return this.#inCompositionLine(asset, async () => {
+      const from = normalizePath(given);
+      const earlier = reviewLocationIn(this.#platform.appDataDir, asset.location.workspaceRoot, from);
+      if (earlier === null || earlier.root !== asset.location.root || from === asset.path) {
+        throw new ArcueError("invalid-input", `${given} is not an earlier path of ${asset.name} in the same reviews.`);
+      }
+      if (await this.#platform.exists(from)) {
+        throw new ArcueError("conflict", `${basename(from)} still exists, so its review stays with it.`);
+      }
+      if ([...this.#assets.values()].some((open) => open.location.folder === earlier.folder)) {
+        throw new ArcueError("conflict", `The review of ${basename(from)} is open in a tab.`);
+      }
+      await asset.session.moveTo(asset.location, () =>
+        moveReview(this.#platform, {
+          from: earlier,
+          fromModel: from,
+          to: asset.location,
+          toModel: asset.path,
+          replaceUntouched: true,
+        }),
+      );
+      asset.candidates = [];
+      asset.earlier = [];
+      this.registry.emit("review.relinked", { assetId: asset.id, from, automatic: false });
+      await this.#load(asset, true).catch(() => undefined);
+    });
   }
 
   /** Watches the composition file and the files it names, and stops watching files it no longer names. */
@@ -499,11 +602,12 @@ export class ArcueCore {
     });
   }
 
-  #load(asset: OpenAsset): Promise<string> {
-    return this.#track(asset.loads.run(() => this.#loadVersion(asset)));
+  /** Loads the asset's files, and with `force` records and re-anchors even a version that is already on screen. */
+  #load(asset: OpenAsset, force = false): Promise<string> {
+    return this.#track(asset.loads.run(() => this.#loadVersion(asset, force)));
   }
 
-  async #loadVersion(asset: OpenAsset): Promise<string> {
+  async #loadVersion(asset: OpenAsset, force: boolean): Promise<string> {
     if (asset.closed) throw new ArcueError("not-found", `${asset.name} is closed.`);
     let files: AssetFiles;
     try {
@@ -516,7 +620,7 @@ export class ArcueCore {
     }
     this.#watchComposition(asset, files.watch);
     const versionId = files.versionId;
-    if (versionId === asset.version) {
+    if (versionId === asset.version && !force) {
       if (asset.status !== "ready") {
         asset.status = "ready";
         asset.error = null;
@@ -526,17 +630,19 @@ export class ArcueCore {
     }
     asset.status = "loading";
     this.registry.emit("asset.updated", { asset: asset.summary });
+    let meshes: MeshTopology[] = [];
     try {
       const scene = await buildAssetScene(files, (file) => this.#importFile(asset, file), {
         parsed: (file) => asset.parsed(file.path, file.id),
       });
+      meshes = meshesOf(scene).map((entry) => ({ mesh: entry.path, topology: entry.mesh.topology }));
       await asset.session.run((review) => {
         const record: AssetVersion = {
           id: versionId,
           fileModifiedAt: new Date(files.model.modifiedMs).toISOString(),
           loadedAt: this.#now(),
           exporter: exporterName(scene),
-          meshes: meshesOf(scene).map((entry) => ({ mesh: entry.path, topology: entry.mesh.topology })),
+          meshes,
           hash: files.model.hash,
           size: files.model.size,
         };
@@ -569,6 +675,7 @@ export class ArcueCore {
       throw error;
     }
     this.registry.emit("asset.updated", { asset: asset.summary });
+    this.#matchStructure(asset, meshes);
     return versionId;
   }
 
@@ -1172,6 +1279,11 @@ export class ArcueCore {
       return { next: null, result: undefined };
     });
   }
+}
+
+/** The matches worth offering, best first: reviews that hold comments, rounds or dismissed warnings. */
+function offered(matches: Parameters<typeof rankCandidates>[0]): ReviewCandidate[] {
+  return rankCandidates(matches.filter(({ earlier }) => !isUntouched(earlier.review)));
 }
 
 function replaceComment(review: ReviewFile, updated: Comment): ReviewFile {

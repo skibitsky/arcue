@@ -39,8 +39,8 @@ const encoder = new TextEncoder();
 export class ReviewSession {
   readonly history = new ReviewHistory();
   readonly #platform: Platform;
-  readonly #location: ReviewLocation;
-  readonly #path: string;
+  #location: ReviewLocation;
+  #path: string;
   readonly #changed: (review: ReviewFile) => void;
   readonly #edits = new Serial();
   #review: ReviewFile;
@@ -110,6 +110,21 @@ export class ReviewSession {
   refresh(): Promise<void> {
     return this.#edits.run(async () => {
       if (!this.#closed) await this.#sync();
+    });
+  }
+
+  /**
+   * Runs `move`, which moves or replaces the review folder on disk, between two changes, then takes in the review at
+   * `location`, where it lives from now on. The undo history ends, because its steps name files by their old paths.
+   */
+  moveTo(location: ReviewLocation, move: () => Promise<void>): Promise<void> {
+    return this.#edits.run(async () => {
+      if (this.#closed) throw new ArcueError("not-found", "The asset was closed.");
+      await move();
+      this.#location = location;
+      this.#path = reviewFilePath(location);
+      this.history.clear();
+      await this.#sync();
     });
   }
 
