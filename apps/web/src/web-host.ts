@@ -13,6 +13,8 @@ import type { SampleInfo } from "./files";
 import { besideAsset, openedFilePath, partitionFiles, planOpen, samplePath } from "./files";
 import type {
   ImportWorkerFailed,
+  PlaceFilesOutput,
+  RemoveFilesInput,
   SeedFile,
   SeedFilesInput,
   StartImportWorker,
@@ -60,6 +62,8 @@ export class WebHost {
   readonly #ready: Promise<unknown>;
   readonly #seededSamples = new Map<string, Promise<void>>();
   readonly #importWorkers = new Map<number, Worker>();
+  /** The copy each dropped or picked file made beside an asset, for files whose copy no file there had yet. */
+  readonly #copies = new WeakMap<File, string>();
 
   constructor(samples: readonly SampleInfo[], baseUrl: string) {
     this.#sampleInfo = samples;
@@ -98,9 +102,11 @@ export class WebHost {
       },
       place: (dropped, assetPath) => this.placeFiles(dropped, assetPath),
       open: (dropped) => {
-        this.openFiles(dropped).catch((error: unknown) =>
-          this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" }),
-        );
+        this.#removeCopies(dropped)
+          .then(() => this.openFiles(dropped))
+          .catch((error: unknown) =>
+            this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" }),
+          );
       },
     };
     store = createWorkspaceStore({ client: this.client, files });
@@ -159,7 +165,8 @@ export class WebHost {
 
   /**
    * Copies models and images into the core's in-memory workspace beside an opened asset, where its composition may
-   * name them, and returns their paths in order. Other files are left out.
+   * name them, and returns their paths in order. Other files are left out. A different file of the same name there is
+   * never replaced: the copy gets a numbered name, such as "Sword-2.fbx", and a file with the same bytes is reused.
    */
   async placeFiles(files: readonly File[], assetPath: string): Promise<string[]> {
     const usable = files.filter((file) => isModelFile(file.name) || isImageFile(file.name));
@@ -169,8 +176,31 @@ export class WebHost {
         bytes: new Uint8Array(await file.arrayBuffer()),
       })),
     );
-    await this.#seed(seeds);
-    return seeds.map((seed) => seed.path);
+    await this.#ready;
+    const input: SeedFilesInput = { files: seeds };
+    const output = (await this.#host.request(
+      "command",
+      hostRequests.placeFiles,
+      input,
+      seeds.map((seed) => seed.bytes.buffer),
+    )) as PlaceFilesOutput;
+    output.files.forEach((placed, index) => {
+      const file = usable[index];
+      if (file && placed.created) this.#copies.set(file, placed.path);
+    });
+    return output.files.map((placed) => placed.path);
+  }
+
+  /** Removes the copies dropped files made beside an asset, once they open in a tab of their own instead. */
+  async #removeCopies(files: readonly File[]): Promise<void> {
+    const paths = files.flatMap((file) => {
+      const copy = this.#copies.get(file);
+      this.#copies.delete(file);
+      return copy === undefined ? [] : [copy];
+    });
+    if (paths.length === 0) return;
+    const input: RemoveFilesInput = { paths };
+    await this.#host.request("command", hostRequests.removeFiles, input);
   }
 
   #startImportWorker({ id, port }: StartImportWorker): void {
