@@ -1,5 +1,4 @@
 import type { Clip, Track } from "./clip";
-import { clipNames, displayNames } from "./clip";
 import type { Material, Texture, TextureRef, TextureSlot } from "./material";
 import { TEXTURE_SLOTS } from "./material";
 import type { Mesh } from "./mesh";
@@ -79,8 +78,8 @@ const LISTED_NAMES = 5;
  * clip lacks keep the rest pose. Attached nodes keep their rest placement in scene space, as both files were exported
  * in the same rest frame: under a bone they follow it, otherwise they stay in place. A bone in an attached file that
  * matches a model bone by name is that model bone, so skinned meshes and children of those bones follow the model's
- * skeleton, as Unreal's leader pose does. Nodes from other files take the file as a prefix on their paths. The
- * inputs are not changed; typed arrays are shared with them.
+ * skeleton, as Unreal's leader pose does. Nodes and clips from other files take the file as a prefix on their paths
+ * and names. The inputs are not changed; typed arrays are shared with them.
  */
 export function composeScene(model: SceneDescription, composition: Composition): SceneDescription {
   const builder = new SceneBuilder(model, composition.warnings ?? []);
@@ -147,7 +146,7 @@ class SceneBuilder {
   readonly #materials: Material[];
   readonly #textures: Texture[];
   readonly #parts: ScenePart[];
-  #clips: Clip[];
+  readonly #clips: Clip[];
   readonly #warnings: ImportWarning[];
   readonly #members = new Map<string, MemberState>();
   #modelWorlds: Matrix4[] | null = null;
@@ -356,8 +355,13 @@ class SceneBuilder {
     }
   }
 
+  /**
+   * Binds each animation file's clips to the model. A clip's name is its name in its file with the file as a prefix,
+   * so adding or removing other files never renames it. Its display name stays its own unless another clip shows
+   * the same, which adds " (2)", " (3)" and so on.
+   */
   addClips(animations: readonly CompositionMember[]): void {
-    const missingBones: { clip: number; file: string; bones: string[] }[] = [];
+    const shown = new Set(this.#clips.map((clip) => clip.displayName));
     for (const member of animations) {
       for (const clip of member.scene.clips) {
         const missing = new Set<string>();
@@ -369,32 +373,23 @@ class SceneBuilder {
           if (target !== null) tracks.push({ ...track, node: target });
           else if (node.kind === "bone") missing.add(node.name);
         }
-        this.#clips.push({ ...clip, tracks, file: member.file });
-        if (missing.size > 0)
-          missingBones.push({ clip: this.#clips.length - 1, file: member.file, bones: [...missing] });
+        let displayName = clip.displayName;
+        for (let suffix = 2; shown.has(displayName); suffix++) displayName = `${clip.displayName} (${suffix})`;
+        shown.add(displayName);
+        this.#clips.push({ ...clip, name: memberPath(member.file, clip.name), displayName, tracks, file: member.file });
+        if (missing.size > 0) this.#warnMissingBones(member.file, clip.name, displayName, [...missing]);
       }
     }
-    const names = clipNames(this.#clips.map((clip) => clip.name));
-    const shown = displayNames(names);
-    this.#clips = this.#clips.map((clip, index) => ({
-      ...clip,
-      name: names[index] ?? clip.name,
-      displayName: shown[index] ?? clip.displayName,
-    }));
-    for (const { clip, file, bones } of missingBones) {
-      const entry = this.#clips[clip];
-      if (!entry) continue;
-      const listed = bones.slice(0, LISTED_NAMES).join(", ");
-      const more = bones.length > LISTED_NAMES ? ` and ${bones.length - LISTED_NAMES} more` : "";
-      this.#warn(
-        importWarning(
-          "animation-bones-missing",
-          { kind: "clip", name: entry.name },
-          `${entry.displayName} animates bones the model lacks: ${listed}${more}`,
-          file,
-        ),
-      );
-    }
+  }
+
+  #warnMissingBones(file: string, clip: string, displayName: string, bones: readonly string[]): void {
+    const listed = bones.slice(0, LISTED_NAMES).join(", ");
+    const more = bones.length > LISTED_NAMES ? ` and ${bones.length - LISTED_NAMES} more` : "";
+    this.#warn(
+      importWarning("animation-bones-missing", { kind: "clip", name: clip }, `Missing bones: ${displayName}`, file, {
+        detail: `Bones the model lacks: ${listed}${more}`,
+      }),
+    );
   }
 
   hide(ids: readonly string[]): void {

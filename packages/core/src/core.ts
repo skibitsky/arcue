@@ -74,7 +74,7 @@ import { Serial } from "./serial";
 import type { ServeOptions } from "./serve";
 import { serveEndpoint } from "./serve";
 import { SettingsStore } from "./settings";
-import { commentWarning, findWarning, frontCamera, listWarnings, warningPrompt } from "./warnings";
+import { commentWarning, findWarning, frontCamera, listWarnings, warningClip, warningPrompt } from "./warnings";
 import { WindowRegistry } from "./windows";
 
 export interface ArcueCoreOptions {
@@ -1001,7 +1001,8 @@ export class ArcueCore {
       if (queued) return { next: null, result: { commentId: queued.id } };
       const id = `c${review.nextCommentNumber}`;
       const now = this.#now();
-      const clip = warning.subject.kind === "clip" ? findClip(scene, warning.subject.name) : null;
+      const clipName = warningClip(warning);
+      const clip = clipName === null ? null : findClip(scene, clipName);
       const comment: Comment = {
         id,
         text: warning.message,

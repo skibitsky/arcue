@@ -1,6 +1,7 @@
 import type { AssetWarning, Comment, CommentWarning, ReviewFile, WarningFix } from "@arcue/protocol";
 import { ArcueError, warningId } from "@arcue/protocol";
 import type { CameraAnchor, ImportWarning, SceneDescription } from "@arcue/scene";
+import { memberPath } from "@arcue/scene";
 import { dirname, joinPath } from "./paths";
 
 /**
@@ -41,11 +42,19 @@ function newestComment(review: ReviewFile, id: string): Comment | null {
   return newest;
 }
 
+/**
+ * The name of the clip a clip warning is about: its name in the file, with the file as a prefix for a composition's
+ * file, as the composed scene names that file's clips. Null for a warning about something else.
+ */
+export function warningClip(warning: Pick<ImportWarning, "subject" | "file">): string | null {
+  if (warning.subject.kind !== "clip") return null;
+  return warning.file === undefined ? warning.subject.name : memberPath(warning.file, warning.subject.name);
+}
+
 function fixFor(warning: ImportWarning, scene: SceneDescription, assetPath: string): WarningFix | null {
   const { subject } = warning;
-  if (subject.kind === "clip" && scene.clips.some((clip) => clip.name === subject.name)) {
-    return { kind: "show-clip", clip: subject.name };
-  }
+  const clip = warningClip(warning);
+  if (clip !== null && scene.clips.some((entry) => entry.name === clip)) return { kind: "show-clip", clip };
   if (
     subject.kind === "file" &&
     warning.file !== undefined &&

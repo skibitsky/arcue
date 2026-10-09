@@ -69,7 +69,7 @@ test("opens every sample from the gallery with its clips", async ({ page }) => {
 test("opens the modular beetle: its shells ride the Body bone, the spiked one hidden, with the turn's clip", async ({
   page,
 }) => {
-  await page.goto("/?sample=beetle&clip=Armature%7CTurn&frame=20");
+  await page.goto("/?sample=beetle&clip=beetle-turn.fbx%2F%2FArmature%7CTurn&frame=20");
   await expect(page.getByRole("tab", { name: "beetle.fbx" })).toBeVisible();
   const { assetId } = await readyAsset(page, "beetle.fbx");
   await expect(page.getByRole("button", { name: "Clip: Turn" })).toBeVisible();
@@ -98,7 +98,7 @@ test("opens the modular beetle: its shells ride the Body bone, the spiked one hi
     ],
     clips: [
       ["Armature|Walk", null],
-      ["Armature|Turn", "beetle-turn.fbx"],
+      ["beetle-turn.fbx//Armature|Turn", "beetle-turn.fbx"],
     ],
     warnings: [],
     shellParent: "Body",

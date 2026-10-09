@@ -116,7 +116,7 @@ describe("opening a composition", () => {
 
     expect(scene.clips.map((clip) => [clip.name, clip.file])).toEqual([
       ["Armature|Walk", undefined],
-      ["Armature|Turn", "Anim/BugTurn.fbx"],
+      ["Anim/BugTurn.fbx//Armature|Turn", "Anim/BugTurn.fbx"],
     ]);
     expect(scene.clips[1]?.tracks.map((track) => nodePath(scene, track.node))).toEqual(["Hero/Body"]);
     expect(scene.source.warnings).toEqual([
@@ -124,8 +124,9 @@ describe("opening a composition", () => {
         code: "animation-bones-missing",
         severity: "warning",
         subject: { kind: "clip", name: "Armature|Turn" },
-        message: "Turn animates bones the model lacks: Tail",
+        message: "Missing bones: Turn",
         file: "Anim/BugTurn.fbx",
+        detail: "Bones the model lacks: Tail",
       },
     ]);
 
@@ -186,7 +187,7 @@ describe("opening a composition", () => {
     const { scene } = await sceneOf(test, test.assetId);
     expect(scene.clips.map((clip) => [clip.name, clip.file])).toEqual([
       ["Armature|Walk", undefined],
-      ["Armature|Idle", "Bug@Idle.fbx"],
+      ["Bug@Idle.fbx//Armature|Idle", "Bug@Idle.fbx"],
     ]);
     expect(scene.source.warnings).toEqual([]);
     const { assets } = await test.core.client.query("asset.list", {});
@@ -236,7 +237,7 @@ describe("reloading a composition", () => {
     const before = await sceneOf(test, assetId);
     const state = {
       camera,
-      clip: "Armature|Turn",
+      clip: "Anim/BugTurn.fbx//Armature|Turn",
       frame: 7,
       range: null,
       display: { mode: "clay" as const, skeleton: false },
@@ -391,7 +392,7 @@ describe("composition commands", () => {
       ],
     });
     const { scene } = await sceneOf(test, assetId);
-    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Armature|Turn"]);
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Anim/BugTurn.fbx//Armature|Turn"]);
   });
 
   it("refuses files it cannot load and bones the model lacks, without creating a composition file", async () => {
@@ -524,7 +525,7 @@ describe("adding a file without naming its role", () => {
       attach: [{ file: "BugShells.fbx" }],
     });
     const { scene } = await sceneOf(test, test.assetId);
-    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Armature|Turn"]);
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Anim/BugTurn.fbx//Armature|Turn"]);
     expect(scene.parts.map((part) => part.id)).toEqual([
       "Hero/Legs",
       "BugShells.fbx//Hero/ShellA",

@@ -218,8 +218,8 @@ describe("composeScene", () => {
     const composed = composeScene(legs, { ...noComposition(), animations: [{ file: "Legs@Turns.fbx", scene: turns }] });
     expect(composed.clips.map((clip) => [clip.name, clip.displayName, clip.file])).toEqual([
       ["Armature|Walk", "Walk", undefined],
-      ["Armature|Walk#2", "Walk#2", "Legs@Turns.fbx"],
-      ["Armature|Turn", "Turn", "Legs@Turns.fbx"],
+      ["Legs@Turns.fbx//Armature|Walk", "Walk (2)", "Legs@Turns.fbx"],
+      ["Legs@Turns.fbx//Armature|Turn", "Turn", "Legs@Turns.fbx"],
     ]);
     expect(composed.clips[2]?.tracks.map((track) => composed.nodes[track.node]?.path)).toEqual([
       "Armature",
@@ -230,11 +230,31 @@ describe("composeScene", () => {
         code: "animation-bones-missing",
         severity: "warning",
         subject: { kind: "clip", name: "Armature|Turn" },
-        message: "Turn animates bones the model lacks: Tail",
+        message: "Missing bones: Turn",
         file: "Legs@Turns.fbx",
+        detail: "Bones the model lacks: Tail",
       },
     ]);
     expect(legs.clips).toHaveLength(1);
+  });
+
+  it("names another file's clips within that file, so adding or removing other files never renames them", () => {
+    const take = (name: string) => scene({ nodes: [{ name: "Body", kind: "bone" }], clips: [{ name, animate: [0] }] });
+    const names = (files: string[]) =>
+      composeScene(legs, {
+        ...noComposition(),
+        animations: files.map((file) => ({ file, scene: take("Take 001") })),
+      }).clips.map((clip) => clip.name);
+    expect(names(["Legs@Run.fbx", "Legs@Walk.fbx"])).toEqual([
+      "Armature|Walk",
+      "Legs@Run.fbx//Take 001",
+      "Legs@Walk.fbx//Take 001",
+    ]);
+    expect(names(["Legs@Idle.fbx", "Legs@Run.fbx", "Legs@Walk.fbx"]).slice(2)).toEqual([
+      "Legs@Run.fbx//Take 001",
+      "Legs@Walk.fbx//Take 001",
+    ]);
+    expect(names(["Legs@Walk.fbx"])).toEqual(["Armature|Walk", "Legs@Walk.fbx//Take 001"]);
   });
 
   it("attaches a node under a bone, keeping its rest placement, with its file on its path and part", () => {

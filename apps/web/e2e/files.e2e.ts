@@ -114,7 +114,7 @@ test("adds an animation file from the open dialog, groups its clips, and removes
   await expect(page.getByText("Added beetle-turn.fbx")).toBeVisible();
   await expect
     .poll(async () => (await sceneFacts(page, assetId)).clips.at(-1))
-    .toEqual(["Armature|Turn", "beetle-turn.fbx"]);
+    .toEqual(["beetle-turn.fbx//Armature|Turn", "beetle-turn.fbx"]);
   expect((await sceneFacts(page, assetId)).composition).toBe("/samples/pebble-golem.arcue");
   await page.keyboard.press("Escape");
 
@@ -129,14 +129,14 @@ test("adds an animation file from the open dialog, groups its clips, and removes
   await page.screenshot({ path: `${SHOTS}files-clip-groups.png` });
   await group.getByRole("button", { name: "Remove beetle-turn.fbx from the view" }).click();
   await expect(menu.getByRole("group", { name: "beetle-turn.fbx" })).toHaveCount(0);
-  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).not.toContain("Armature|Turn");
+  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).not.toContain("beetle-turn.fbx//Armature|Turn");
 
   const undone = await page.evaluate(async (id) => {
     const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
     return client.execute("review.undo", { assetId: id });
   }, assetId);
   expect(undone).toEqual({ changed: true });
-  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).toContain("Armature|Turn");
+  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).toContain("beetle-turn.fbx//Armature|Turn");
 });
 
 test("drops models on a model's view: animations join at once, anything else asks", async ({ page }) => {
