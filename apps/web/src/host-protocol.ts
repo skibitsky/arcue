@@ -11,6 +11,8 @@ export const hostRequests = {
   placeFiles: "host.placeFiles",
   /** Removes files from the core's in-memory platform. Input: `RemoveFilesInput`. */
   removeFiles: "host.removeFiles",
+  /** Renames a file in the core's in-memory platform, never over another one. Input: `RenameFileInput`. */
+  renameFile: "host.renameFile",
   /**
    * Writes a model's composition file where the core reads it, in the model's review folder. Input:
    * `WriteCompositionInput`.
@@ -62,6 +64,12 @@ export interface PlaceFilesOutput {
 
 export interface RemoveFilesInput {
   paths: string[];
+}
+
+export interface RenameFileInput {
+  /** Absolute virtual paths, such as "/samples/pebble-golem.fbx". */
+  from: string;
+  to: string;
 }
 
 export interface WriteCompositionInput {

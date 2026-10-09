@@ -6,6 +6,7 @@ import type {
   ImportWorkerFailed,
   PlaceFilesOutput,
   RemoveFilesInput,
+  RenameFileInput,
   SeedFilesInput,
   StartImportWorker,
   StopImportWorker,
@@ -69,6 +70,11 @@ const page = createPeer(portEndpoint(self), {
     }
     if (name === hostRequests.removeFiles) {
       for (const path of (input as RemoveFilesInput).paths) await platform.remove(path);
+      return null;
+    }
+    if (name === hostRequests.renameFile) {
+      const { from, to } = input as RenameFileInput;
+      await platform.rename(from, to);
       return null;
     }
     if (name === hostRequests.writeComposition) {

@@ -9,6 +9,7 @@ import type {
   ImportWorkerFailed,
   PlaceFilesOutput,
   RemoveFilesInput,
+  RenameFileInput,
   SeedFile,
   SeedFilesInput,
   StartImportWorker,
@@ -180,6 +181,13 @@ export class WebHost {
     await this.#ready;
     const input: WriteCompositionInput = { model, text };
     await this.#host.request("command", hostRequests.writeComposition, input);
+  }
+
+  /** Renames a file in the core's in-memory platform, as a person renames a model on disk in the desktop app. */
+  async renameFile(from: string, to: string): Promise<void> {
+    await this.#ready;
+    const input: RenameFileInput = { from, to };
+    await this.#host.request("command", hostRequests.renameFile, input);
   }
 
   #alert(error: unknown): void {

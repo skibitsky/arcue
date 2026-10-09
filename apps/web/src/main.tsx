@@ -18,14 +18,15 @@ import { WebHost } from "./web-host";
 declare global {
   interface Window {
     /**
-     * For tests and agents: the window's core client and workspace store, a way to open a sample by id, and a way to
-     * write a model's composition file, as an agent edits it on disk in the desktop app.
+     * For tests and agents: the window's core client and workspace store, a way to open a sample by id, and ways to
+     * write a model's composition file and to rename a file, as an agent or a person does on disk in the desktop app.
      */
     arcue: {
       client: CoreClient;
       store: WorkspaceStore;
       openSample(id: string, at?: OpenAt): Promise<string>;
       writeComposition(model: string, text: string): Promise<void>;
+      renameFile(from: string, to: string): Promise<void>;
     };
   }
 }
@@ -37,6 +38,7 @@ window.arcue = {
   store,
   openSample: (id, at) => host.openSample(id, at),
   writeComposition: (model, text) => host.writeComposition(model, text),
+  renameFile: (from, to) => host.renameFile(from, to),
 };
 
 function alert(error: unknown): void {
