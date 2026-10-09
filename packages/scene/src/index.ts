@@ -39,6 +39,7 @@ export {
   lodLevels,
   partRoleOf,
   partShown,
+  partShownIn,
   shownByDefault,
   viewBounds,
   visibleMeshes,

@@ -10,6 +10,7 @@ import {
   levelFor,
   lodLevels,
   partRoleOf,
+  partShownIn,
   viewBounds,
   visibleMeshes,
   withPartVisible,
@@ -217,6 +218,21 @@ describe("part views", () => {
     expect(visibleMeshes(parts, kept)).toEqual(visibleMeshes(parts, isolated));
     expect(isolationAsVisibility(parts, { ...defaultPartView(), isolated: "Gone" })).toEqual(defaultPartView());
     expect(isolationAsVisibility(parts, kept)).toBe(kept);
+  });
+
+  it("builds one visibility test per parts list and view, so a large isolated view stays quick", () => {
+    const view = { ...defaultPartView(), hidden: ["Boulder2"] };
+    expect(partShownIn(parts, view)).toBe(partShownIn(parts, view));
+    const many: ScenePart[] = Array.from({ length: 5000 }, (_, index) => ({
+      id: `P${index}`,
+      name: `P${index}`,
+      role: "model",
+      node: index,
+      levels: [{ level: 0, meshes: [index] }],
+    }));
+    const kept = isolationAsVisibility(many, { ...defaultPartView(), isolated: "P7" });
+    expect(kept.hidden).toHaveLength(4999);
+    expect([...visibleMeshes(many, kept)]).toEqual([7]);
   });
 
   it("bounds what a view draws, and nothing when it draws nothing", () => {
