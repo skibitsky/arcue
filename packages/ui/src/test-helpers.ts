@@ -369,7 +369,7 @@ export function withWarnings(scene: SceneDescription): SceneDescription {
     source: {
       ...scene.source,
       warnings: [
-        importWarning("root-scale", { kind: "node", name: "Armature" }, "Root scale of 100 on Armature"),
+        importWarning("root-scale", { kind: "node", name: "Armature" }, "Root scale x100: Armature"),
         importWarning(
           "texture-not-used",
           { kind: "texture", name: "Stone_BaseColor.png" },
@@ -380,7 +380,11 @@ export function withWarnings(scene: SceneDescription): SceneDescription {
         importWarning(
           "animation-bones-missing",
           { kind: "clip", name: "Armature|Run" },
-          "Run animates bones the model lacks: Tail",
+          "Missing bones: Run",
+          undefined,
+          {
+            detail: "Bones the model lacks: Tail",
+          },
         ),
         importWarning(
           "texture-not-found",

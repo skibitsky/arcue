@@ -40,9 +40,9 @@ describe("import warnings in the status bar", () => {
     const items = within(list).getAllByRole("listitem");
     expect(items.map((row) => row.querySelector(".warn-msg")?.textContent)).toEqual([
       "Texture not found: Eyes.png",
-      "Root scale of 100 on Armature",
+      "Root scale x100: Armature",
       "Texture not used: Stone_BaseColor.png",
-      "Run animates bones the model lacks: Tail",
+      "Missing bones: Run",
     ]);
     expect(within(items[2] as HTMLElement).getByText("Texture · Stone_BaseColor.png")).toBeTruthy();
     expect(within(items[2] as HTMLElement).getByRole("button", { name: "Use as base color" })).toBeTruthy();
@@ -84,7 +84,7 @@ describe("import warnings in the status bar", () => {
     const first = rows()[0] as HTMLElement;
     await user.click(within(first).getByRole("button", { name: "Dismiss" }));
     await act(() => flush());
-    expect(screen.getByRole("button", { name: /^Root scale of 100 on Armature/ }).textContent).toContain("+2");
+    expect(screen.getByRole("button", { name: /^Root scale x100: Armature/ }).textContent).toContain("+2");
     await user.click(screen.getByRole("button", { name: "Dismiss all" }));
     await act(() => flush());
     expect(document.querySelector(".sb-warn")).toBeNull();
@@ -138,11 +138,11 @@ describe("import warnings in the status bar", () => {
       source: {
         ...scene.source,
         warnings: [
-          importWarning("file-not-found", { kind: "file", name: "lost.fbx" }, "lost.fbx was not found", "lost.fbx"),
+          importWarning("file-not-found", { kind: "file", name: "lost.fbx" }, "File not found: lost.fbx", "lost.fbx"),
           importWarning(
             "file-not-found",
             { kind: "file", name: "StoneResonator@Idle.fbx" },
-            "StoneResonator@Idle.fbx was not found",
+            "File not found: StoneResonator@Idle.fbx",
             "StoneResonator@Idle.fbx",
           ),
         ],
@@ -150,7 +150,7 @@ describe("import warnings in the status bar", () => {
     });
     const { client } = await renderStone(lost);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /^lost\.fbx was not found/ }));
+    await user.click(screen.getByRole("button", { name: /^File not found: lost\.fbx/ }));
     const [first, second] = rows() as [HTMLElement, HTMLElement];
     expect(within(first).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(within(second).queryByRole("button", { name: "Remove from view" })).toBeNull();
