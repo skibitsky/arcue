@@ -570,13 +570,13 @@ describe("export checks", () => {
       found.push(storedPath);
       return Promise.resolve({ path: "../Textures/StoneStriker-BaseColor.png", bytes: PNG_SIGNATURE });
     });
-    expect(found).toEqual(["/private/tmp/striker-staging/StoneStriker-BaseColor.png"]);
+    expect(found).toEqual(["/tmp/export-staging/StoneStriker-BaseColor.png"]);
     expect(scene.textures).toEqual([
       {
         name: "StoneStriker-BaseColor",
         mimeType: "image/png",
         bytes: PNG_SIGNATURE,
-        storedPath: "/private/tmp/striker-staging/StoneStriker-BaseColor.png",
+        storedPath: "/tmp/export-staging/StoneStriker-BaseColor.png",
         foundPath: "../Textures/StoneStriker-BaseColor.png",
       },
     ]);
@@ -586,7 +586,7 @@ describe("export checks", () => {
         severity: "warning",
         subject: { kind: "texture", name: "StoneStriker-BaseColor.png" },
         message: "Absolute texture path: StoneStriker-BaseColor.png",
-        detail: "Stored path: /private/tmp/striker-staging/StoneStriker-BaseColor.png, used as base color of Stone",
+        detail: "Stored path: /tmp/export-staging/StoneStriker-BaseColor.png, used as base color of Stone",
         materials: ["Stone"],
         uses: [{ material: "Stone", slot: "baseColor" }],
       },
@@ -597,7 +597,7 @@ describe("export checks", () => {
     const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX);
     expect(scene.materials[0]?.baseColorTexture).toBeNull();
     expect(scene.materials[0]?.missingTextures).toEqual({
-      baseColor: "/private/tmp/striker-staging/StoneStriker-BaseColor.png",
+      baseColor: "/tmp/export-staging/StoneStriker-BaseColor.png",
     });
     expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
       ["texture-path-absolute", "warning", "Absolute texture path: StoneStriker-BaseColor.png"],

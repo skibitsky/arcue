@@ -463,7 +463,7 @@ ${TRIANGLE_MODEL}
 		Type: "TextureVideoClip"
 		Version: 202
 		TextureName: "Texture::Stone"
-		FileName: "/private/tmp/striker-staging/StoneStriker-BaseColor.png"
+		FileName: "/tmp/export-staging/StoneStriker-BaseColor.png"
 		RelativeFilename: ""
 	}`,
   `${TRIANGLE_CONNECTIONS}
