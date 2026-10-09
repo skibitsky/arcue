@@ -47,6 +47,8 @@ export class ReviewSession {
   /** Hash of the file's text as this session last read or wrote it; null when there is no file. */
   #diskHash: string | null;
   #closed = false;
+  /** Why the session no longer saves: its review folder moved away and could not be moved back. */
+  #stranded: string | null = null;
 
   constructor(
     platform: Platform,
@@ -69,7 +71,7 @@ export class ReviewSession {
   run<Result>(compute: ComputeChange<Result>): Promise<Result> {
     return this.#edits.run(async () => {
       for (let attempt = 1; ; attempt++) {
-        if (this.#closed) throw new ArcueError("not-found", "The asset was closed.");
+        this.#checkUsable();
         await this.#sync();
         const current = this.#review;
         const change = await compute(current);
@@ -116,11 +118,20 @@ export class ReviewSession {
   /**
    * Runs `move`, which moves or replaces the review folder on disk, between two changes, then takes in the review at
    * `location`, where it lives from now on. The undo history ends, because its steps name files by their old paths.
+   * When `move` fails and leaves the review at `location` rather than in its old place, the session stops saving, so
+   * it never writes a second copy of the review into the old folder.
    */
   moveTo(location: ReviewLocation, move: () => Promise<void>): Promise<void> {
     return this.#edits.run(async () => {
-      if (this.#closed) throw new ArcueError("not-found", "The asset was closed.");
-      await move();
+      this.#checkUsable();
+      try {
+        await move();
+      } catch (error) {
+        if (await this.#movedAway(reviewFilePath(location))) {
+          this.#stranded = `The review moved to ${location.folder} but could not be finished, so this tab no longer saves it. Close it and open the model again.`;
+        }
+        throw error;
+      }
       this.#location = location;
       this.#path = reviewFilePath(location);
       this.history.clear();
@@ -133,6 +144,21 @@ export class ReviewSession {
     return this.#edits.run(async () => {
       this.#closed = true;
     });
+  }
+
+  #checkUsable(): void {
+    if (this.#closed) throw new ArcueError("not-found", "The asset was closed.");
+    if (this.#stranded !== null) throw new ArcueError("conflict", this.#stranded);
+  }
+
+  /** Whether the review is at `path` now and no longer where the session keeps it. */
+  async #movedAway(path: string): Promise<boolean> {
+    if (path === this.#path) return false;
+    try {
+      return !(await this.#platform.exists(this.#path)) && (await this.#platform.exists(path));
+    } catch {
+      return true;
+    }
   }
 
   /** Whether saving the review would write the text the file already holds. */

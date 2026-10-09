@@ -46,4 +46,22 @@ describe("ReviewSession", () => {
     expect(session.review.revision).toBe(5);
     await expect(platform.readText(reviewFilePath(location))).resolves.toContain('"revision": 5');
   });
+
+  it("stops saving when a failed move leaves the review in its new place, so the old folder never gets a copy", async () => {
+    const elsewhere = { ...location, folder: "/app-data/reviews/work/Striker.fbx", assetPath: "/work/Striker.fbx" };
+    const { platform, session } = await savedSession();
+    const failing = (rename: boolean) => async () => {
+      if (rename) await platform.rename(location.folder, elsewhere.folder);
+      throw new Error("The disk is full.");
+    };
+    await expect(session.moveTo(elsewhere, failing(false))).rejects.toThrow("The disk is full.");
+    await session.run((review) => ({ next: { ...review, dismissedWarnings: ["a:b:c"] }, result: undefined }));
+    expect(session.review.revision).toBe(4);
+
+    await expect(session.moveTo(elsewhere, failing(true))).rejects.toThrow("The disk is full.");
+    await expect(session.run((review) => ({ next: { ...review }, result: undefined }))).rejects.toMatchObject({
+      code: "conflict",
+    });
+    await expect(platform.exists(location.folder)).resolves.toBe(false);
+  });
 });

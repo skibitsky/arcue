@@ -78,6 +78,7 @@ function files(review: ReviewFile = reviewWith([comment({})])): Record<string, s
     [`${REPO}/.git/HEAD`]: "ref",
     [`${REPO}/Assets/New/Striker.fbx`]: "model",
     [`${REPO}/Assets/Old/Shells.fbx`]: "shells",
+    [`${REPO}/Assets/Old/Hero@Run.fbx`]: "run",
     [`${REPO}/Assets/New/Anim/Walk.fbx`]: "walk",
     [`${REPO}/Assets/Textures/Shell.png`]: "png",
     [`${OLD}/review.json`]: serializeReview(review),
@@ -107,19 +108,92 @@ describe("moveReview", () => {
     const rebased = JSON.parse(await platform.readText(`${NEW}/composition.json`)) as CompositionFile;
     expect(rebased).toEqual({
       version: 1,
-      animations: ["Anim/Walk.fbx"],
+      animations: ["Anim/Walk.fbx", "../Old/Hero@Run.fbx"],
       attach: [{ file: "../Old/Shells.fbx", node: "ShellA", bone: "Body" }],
       materials: { Shell: { baseColor: "../Textures/Shell.png" } },
       hidden: ["../Old/Shells.fbx//Hero/ShellB"],
     });
     const review = JSON.parse(await platform.readText(`${NEW}/review.json`)) as ReviewFile;
     expect(review.comments[0]).toMatchObject({
-      time: { clip: "Hero@Run.fbx//Run" },
+      time: { clip: "../Old/Hero@Run.fbx//Run" },
       target: { mesh: "../Old/Shells.fbx//Hero/ShellA" },
       context: { joints: [{ path: "../Old/Shells.fbx//Hero/Tip" }], screenshot: "screenshots/c1.png" },
       parts: { hidden: ["../Old/Shells.fbx//Hero/ShellB"], isolated: "../Old/Shells.fbx//Hero/ShellA" },
       warning: { id: "file-not-found:file:../Old/Shells.fbx//Shells.fbx", file: "../Old/Shells.fbx" },
     });
+  });
+
+  it("moves the clips of the old model's <stem>@<clip> files to the new model's file of the same clip", async () => {
+    const platform = new MemoryPlatform({ files: { ...files(), [`${REPO}/Assets/New/Striker@Run.fbx`]: "run" } });
+    await moveReview(platform, move);
+    const rebased = JSON.parse(await platform.readText(`${NEW}/composition.json`)) as CompositionFile;
+    expect(rebased.animations).toEqual(["Anim/Walk.fbx"]);
+    const review = JSON.parse(await platform.readText(`${NEW}/review.json`)) as ReviewFile;
+    expect(review.comments[0]?.time).toMatchObject({ clip: "Striker@Run.fbx//Run" });
+  });
+
+  it("keeps a texture where it was found from the old folder, even when one of that name is beside the new one", async () => {
+    const textured: CompositionFile = { version: 1, materials: { Shell: { baseColor: "Textures/Shell.png" } } };
+    const both = new MemoryPlatform({
+      files: {
+        ...files(),
+        [`${OLD}/composition.json`]: JSON.stringify(textured),
+        [`${REPO}/Assets/Old/Textures/Shell.png`]: "hero's",
+        [`${REPO}/Assets/New/Textures/Shell.png`]: "another character's",
+      },
+    });
+    await moveReview(both, move);
+    await expect(both.readText(`${NEW}/composition.json`)).resolves.toContain(
+      '"baseColor": "../Old/Textures/Shell.png"',
+    );
+
+    const moved = new MemoryPlatform({
+      files: {
+        ...files(),
+        [`${OLD}/composition.json`]: JSON.stringify(textured),
+        [`${REPO}/Assets/New/Textures/Shell.png`]: "moved with the model",
+      },
+    });
+    await moveReview(moved, move);
+    await expect(moved.readText(`${NEW}/composition.json`)).resolves.toContain('"baseColor": "Textures/Shell.png"');
+  });
+
+  it("refuses a review it cannot read before it changes anything", async () => {
+    const untouched = serializeReview(emptyReview("Assets/New/Striker.fbx"));
+    for (const text of ["{", JSON.stringify({ ...reviewWith([]), schemaVersion: 2 })]) {
+      const platform = new MemoryPlatform({
+        files: { ...files(), [`${OLD}/review.json`]: text, [`${NEW}/review.json`]: untouched },
+      });
+      await expect(moveReview(platform, { ...move, replaceUntouched: true })).rejects.toMatchObject({
+        code: "conflict",
+      });
+      await expect(platform.readText(`${OLD}/review.json`)).resolves.toBe(text);
+      await expect(platform.readText(`${NEW}/review.json`)).resolves.toBe(untouched);
+    }
+  });
+
+  it("moves the folder back with its composition as it was when a write at the new place fails", async () => {
+    class FullDisk extends MemoryPlatform {
+      override async writeFileAtomic(path: string, data: Uint8Array | string): Promise<void> {
+        if (path === `${NEW}/review.json`) throw new Error("The disk is full.");
+        await super.writeFileAtomic(path, data);
+      }
+    }
+    const platform = new FullDisk({ files: files() });
+    await expect(moveReview(platform, move)).rejects.toThrow("The disk is full.");
+    await expect(platform.readText(`${OLD}/review.json`)).resolves.toBe(files()[`${OLD}/review.json`]);
+    await expect(platform.readText(`${OLD}/composition.json`)).resolves.toBe(JSON.stringify(composition));
+    await expect(platform.readText(`${OLD}/screenshots/c1.png`)).resolves.toBe("png");
+    await expect(platform.exists(NEW)).resolves.toBe(false);
+  });
+
+  it("removes only the folders the move left empty", async () => {
+    const platform = new MemoryPlatform({
+      files: { ...files(), [`${REPO}/.arcue/reviews/Assets/Old/Other.fbx/review.json`]: "{}" },
+    });
+    await moveReview(platform, move);
+    await expect(platform.exists(OLD)).resolves.toBe(false);
+    await expect(platform.exists(`${REPO}/.arcue/reviews/Assets/Old/Other.fbx/review.json`)).resolves.toBe(true);
   });
 
   it("refuses a model that already has a review, and leaves both where they are", async () => {
@@ -139,6 +213,17 @@ describe("moveReview", () => {
     await empty.mkdir(NEW);
     await moveReview(empty, move);
     await expect(empty.exists(`${NEW}/review.json`)).resolves.toBe(true);
+  });
+
+  it("names the other files, not the review, when an untouched review shares its folder", async () => {
+    const untouched = serializeReview(emptyReview("Assets/New/Striker.fbx"));
+    const platform = new MemoryPlatform({
+      files: { ...files(), [`${NEW}/review.json`]: untouched, [`${NEW}/composition.json`]: "{}" },
+    });
+    await expect(moveReview(platform, { ...move, replaceUntouched: true })).rejects.toMatchObject({
+      code: "conflict",
+      message: `${NEW} already holds files, so the review of Hero.fbx stays where it is.`,
+    });
   });
 
   it("replaces only an untouched review when asked to", async () => {

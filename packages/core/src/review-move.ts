@@ -1,9 +1,9 @@
 import type { CompositionFile, ReviewFile } from "@arcue/protocol";
-import { ArcueError } from "@arcue/protocol";
+import { ArcueError, COMPOSITION_VERSION, joinsByName } from "@arcue/protocol";
 import { memberPath, splitMemberPath } from "@arcue/scene";
-import { parseComposition, serializeComposition, withRewrittenPaths, writtenPaths } from "./composition-file";
+import { readComposition, serializeComposition, withRewrittenPaths, writtenPaths } from "./composition-file";
 import { insideWithoutLinks } from "./links";
-import { basename, dirname, joinPath, pathInside, relativePath } from "./paths";
+import { basename, dirname, joinPath, pathInside, relativePath, stemOf } from "./paths";
 import type { Platform } from "./platform";
 import type { ReviewLocation } from "./review-store";
 import { compositionFilePath, parseReview, prepareArcueFolder, reviewFilePath, serializeReview } from "./review-store";
@@ -26,8 +26,10 @@ export interface ReviewMove {
  * Moves a model's review folder, with its `review.json`, `composition.json`, screenshots and rounds, to the review
  * folder of the model's new path in one rename, then writes the new path into `review.json`. It never overwrites or
  * merges: a review or anything else at the new place refuses the move with "conflict", except an empty folder or, with
- * `replaceUntouched`, an untouched review. When the model moved to another folder, the composition's paths are
- * rewritten so they still find the same files, and the ids `review.json` keeps for those files follow them.
+ * `replaceUntouched`, an untouched review. A `review.json` it cannot read refuses the move before anything changes, and
+ * a failure after the rename moves the folder back. When the model moved to another folder or took another name, the
+ * composition's paths are rewritten so they still find the same files, and the ids `review.json` keeps for those
+ * files follow them.
  */
 export async function moveReview(platform: Platform, move: ReviewMove): Promise<void> {
   const { from, to } = move;
@@ -41,18 +43,27 @@ export async function moveReview(platform: Platform, move: ReviewMove): Promise<
   if ((await platform.stat(source))?.kind !== "file") {
     throw new ArcueError("not-found", `${basename(move.fromModel)} has no review to move.`);
   }
+  const review = parseReview(await platform.readText(source), source);
+  const composition = await movedComposition(platform, move, review);
   await clearTarget(platform, move);
   await prepareArcueFolder(platform, to);
   await platform.rename(from.folder, to.folder);
-
-  const labels =
-    dirname(move.fromModel) === dirname(move.toModel)
-      ? new Map<string, string>()
-      : await rebaseCompositionFile(platform, compositionFilePath(to), dirname(move.fromModel), dirname(move.toModel));
-  const target = reviewFilePath(to);
-  const review = parseReview(await platform.readText(target), target);
-  const moved = relabelMembers({ ...review, asset: { ...review.asset, path: to.assetPath } }, labels);
-  await platform.writeFileAtomic(target, serializeReview({ ...moved, revision: review.revision + 1 }));
+  const compositionPath = compositionFilePath(to);
+  try {
+    if (composition.text !== null) await platform.writeFileAtomic(compositionPath, composition.text);
+    const moved = relabelMembers({ ...review, asset: { ...review.asset, path: to.assetPath } }, composition.labels);
+    await platform.writeFileAtomic(reviewFilePath(to), serializeReview({ ...moved, revision: review.revision + 1 }));
+  } catch (error) {
+    const undo = async () => {
+      if (composition.text !== null) {
+        if (composition.original === null) await platform.remove(compositionPath);
+        else await platform.writeFileAtomic(compositionPath, composition.original);
+      }
+      await platform.rename(to.folder, from.folder);
+    };
+    await undo().catch(() => undefined);
+    throw error;
+  }
   await removeEmptyFolders(platform, from.folder, from.root);
 }
 
@@ -68,17 +79,14 @@ async function clearTarget(platform: Platform, move: ReviewMove): Promise<void> 
   const name = basename(move.toModel);
   if (stat.kind !== "directory") throw new ArcueError("conflict", `${folder} is in the way of ${name}'s review.`);
   const entries = await platform.list(folder);
-  const hasReview = entries.some((entry) => entry.name === "review.json");
   if (entries.length > 0) {
-    const replaceable =
-      move.replaceUntouched === true &&
-      hasReview &&
-      entries.length === 1 &&
-      isUntouched(parseReview(await platform.readText(reviewFilePath(move.to)), reviewFilePath(move.to)));
-    if (!replaceable) {
+    const hasReview = entries.some((entry) => entry.name === "review.json");
+    const onlyReview = hasReview && entries.length === 1;
+    const untouched = hasReview && (await untouchedReview(platform, move.to));
+    if (!(move.replaceUntouched === true && onlyReview && untouched)) {
       throw new ArcueError(
         "conflict",
-        hasReview
+        hasReview && (onlyReview || !untouched)
           ? `${name} already has a review, so the review of ${basename(move.fromModel)} stays where it is.`
           : `${folder} already holds files, so the review of ${basename(move.fromModel)} stays where it is.`,
       );
@@ -87,33 +95,50 @@ async function clearTarget(platform: Platform, move: ReviewMove): Promise<void> 
   await platform.remove(folder);
 }
 
-/**
- * Rewrites the paths of a composition file for a model that moved from one folder to another, and returns the old and
- * new labels of the files whose paths changed. A broken composition file is left as it is.
- */
-async function rebaseCompositionFile(
-  platform: Platform,
-  path: string,
-  fromFolder: string,
-  toFolder: string,
-): Promise<Map<string, string>> {
-  if ((await platform.stat(path))?.kind !== "file") return new Map();
-  let composition: CompositionFile;
+async function untouchedReview(platform: Platform, location: ReviewLocation): Promise<boolean> {
+  const file = reviewFilePath(location);
   try {
-    composition = parseComposition(await platform.readText(path), path, "conflict");
+    return isUntouched(parseReview(await platform.readText(file), file));
   } catch {
-    return new Map();
+    return false;
   }
-  const rebased = await rebaseComposition(platform, composition, fromFolder, toFolder);
-  if (rebased.labels.size > 0) await platform.writeFileAtomic(path, serializeComposition(rebased.composition));
-  return rebased.labels;
 }
 
 /**
- * The composition for a model that moved from `fromFolder` to `toFolder`. A path that finds a file from the new folder
- * stays as written, as when the files moved along with the model; one that finds a file only from the old folder is
- * rewritten to point at that file. `labels` maps each rewritten file's label, its path relative to the model's folder,
- * from the old to the new one.
+ * The composition file's text after a move, or null when it stays as it is, with its text before, null where there was
+ * no file, and the old and new labels of the files whose paths changed. A broken composition file is left as it is.
+ */
+async function movedComposition(
+  platform: Platform,
+  move: ReviewMove,
+  review: ReviewFile,
+): Promise<{ text: string | null; original: string | null; labels: Map<string, string> }> {
+  const fromFolder = dirname(move.fromModel);
+  const toFolder = dirname(move.toModel);
+  let found: { text: string; composition: CompositionFile } | null;
+  try {
+    found = await readComposition(platform, compositionFilePath(move.from), "conflict");
+  } catch {
+    return { text: null, original: null, labels: new Map() };
+  }
+  const before: CompositionFile = found?.composition ?? { version: COMPOSITION_VERSION };
+  const rebased =
+    fromFolder === toFolder
+      ? { composition: before, labels: new Map<string, string>() }
+      : await rebaseComposition(platform, before, fromFolder, toFolder);
+  const joined = await joinedByName(platform, move, review, before);
+  const animations = [...(rebased.composition.animations ?? []), ...joined.animations];
+  const text = serializeComposition({ ...rebased.composition, animations });
+  const labels = new Map([...rebased.labels, ...joined.labels]);
+  if (text === serializeComposition(before)) return { text: null, original: null, labels };
+  return { text, original: found?.text ?? null, labels };
+}
+
+/**
+ * The composition for a model that moved from `fromFolder` to `toFolder`. A path that still finds a file from the old
+ * folder is rewritten to point at that file, so a file of the same name beside the new folder never takes its place.
+ * A path whose old file is gone stays as written, as when the files moved along with the model. `labels` maps each
+ * rewritten file's label, its path relative to the model's folder, from the old to the new one.
  */
 export async function rebaseComposition(
   platform: Platform,
@@ -124,13 +149,12 @@ export async function rebaseComposition(
   const labels = new Map<string, string>();
   const rewritten = new Map<string, string>();
   for (const written of new Set(writtenPaths(composition))) {
-    if ((await platform.stat(joinPath(toFolder, written)))?.kind === "file") continue;
     const file = joinPath(fromFolder, written);
     const moved = relativePath(toFolder, file);
     const label = relativePath(fromFolder, file);
     if (moved === null || label === null || (await platform.stat(file))?.kind !== "file") continue;
     rewritten.set(written, moved);
-    labels.set(label, moved);
+    if (label !== moved) labels.set(label, moved);
   }
   const next = withRewrittenPaths(
     composition,
@@ -141,21 +165,68 @@ export async function rebaseComposition(
 }
 
 /**
+ * The old model's "<stem>@<clip>.fbx" files that the review names and that would no longer join the model by name.
+ * Each maps to the new model's file of the same clip when there is one beside it. Otherwise, while it still exists, it
+ * joins as an animation file written from the new model's folder, labelled as that path, as any member file is.
+ */
+async function joinedByName(
+  platform: Platform,
+  move: ReviewMove,
+  review: ReviewFile,
+  composition: CompositionFile,
+): Promise<{ animations: string[]; labels: Map<string, string> }> {
+  const fromFolder = dirname(move.fromModel);
+  const toFolder = dirname(move.toModel);
+  const listed = new Set(
+    writtenPaths(composition).map((written) => relativePath(fromFolder, joinPath(fromFolder, written))),
+  );
+  const animations: string[] = [];
+  const labels = new Map<string, string>();
+  for (const label of namedFiles(review)) {
+    if (!joinsByName(basename(move.fromModel), label) || listed.has(label)) continue;
+    const renamed = `${stemOf(move.toModel)}${label.slice(stemOf(move.fromModel).length)}`;
+    if ((await platform.stat(joinPath(toFolder, renamed)))?.kind === "file") {
+      if (renamed !== label) labels.set(label, renamed);
+      continue;
+    }
+    const old = joinPath(fromFolder, label);
+    const written = relativePath(toFolder, old);
+    if (written === null || (await platform.stat(old))?.kind !== "file") continue;
+    animations.push(written);
+    if (written !== label) labels.set(label, written);
+  }
+  return { animations, labels };
+}
+
+/**
  * The review with the ids it keeps for a composition's files renamed: node, mesh, part and clip ids written as
  * `<file>//<path>`, warning ids and files, and the files of each version. `labels` maps old file labels to new ones.
  */
 export function relabelMembers(review: ReviewFile, labels: ReadonlyMap<string, string>): ReviewFile {
   if (labels.size === 0) return review;
-  const id = (value: string) => relabelId(value, labels);
-  const label = (value: string) => labels.get(value) ?? value;
-  const dismissed = review.dismissedWarnings?.map((value) => relabelWarningId(value, labels));
+  return renameFiles(review, (label) => labels.get(label) ?? label);
+}
+
+/** The file labels the review's ids name, such as "Hero@Run.fbx" for a comment on the clip "Hero@Run.fbx//Run". */
+function namedFiles(review: ReviewFile): Set<string> {
+  const named = new Set<string>();
+  renameFiles(review, (label) => {
+    named.add(label);
+    return label;
+  });
+  return named;
+}
+
+function renameFiles(review: ReviewFile, rename: (label: string) => string): ReviewFile {
+  const id = (value: string) => renameMember(value, rename);
+  const dismissed = review.dismissedWarnings?.map((value) => renameWarningId(value, rename));
   return {
     ...review,
     ...(dismissed ? { dismissedWarnings: dismissed } : {}),
     versions: review.versions.map((version) => ({
       ...version,
       meshes: version.meshes.map((entry) => ({ ...entry, mesh: id(entry.mesh) })),
-      ...(version.files ? { files: version.files.map((file) => ({ ...file, file: label(file.file) })) } : {}),
+      ...(version.files ? { files: version.files.map((file) => ({ ...file, file: rename(file.file) })) } : {}),
     })),
     comments: review.comments.map((comment) => ({
       ...comment,
@@ -179,8 +250,8 @@ export function relabelMembers(review: ReviewFile, labels: ReadonlyMap<string, s
         ? {
             warning: {
               ...comment.warning,
-              id: relabelWarningId(comment.warning.id, labels),
-              ...(comment.warning.file === undefined ? {} : { file: label(comment.warning.file) }),
+              id: renameWarningId(comment.warning.id, rename),
+              ...(comment.warning.file === undefined ? {} : { file: rename(comment.warning.file) }),
             },
           }
         : {}),
@@ -190,23 +261,27 @@ export function relabelMembers(review: ReviewFile, labels: ReadonlyMap<string, s
 
 /** A node, mesh, part or clip id with its file renamed, when it comes from a file in `labels`. */
 export function relabelId(id: string, labels: ReadonlyMap<string, string>): string {
+  return renameMember(id, (label) => labels.get(label) ?? label);
+}
+
+function renameMember(id: string, rename: (label: string) => string): string {
   const { file, path } = splitMemberPath(id);
-  const renamed = file === null ? undefined : labels.get(file);
-  return renamed === undefined ? id : memberPath(renamed, path);
+  if (file === null) return id;
+  const renamed = rename(file);
+  return renamed === file ? id : memberPath(renamed, path);
 }
 
 /** A warning id is "<code>:<kind>:<name>", where the name of a composition file's subject starts with "<file>//". */
-function relabelWarningId(id: string, labels: ReadonlyMap<string, string>): string {
+function renameWarningId(id: string, rename: (label: string) => string): string {
   const match = /^([^:]*:[^:]*:)(.*)$/s.exec(id);
-  return match ? `${match[1]}${relabelId(match[2] ?? "", labels)}` : id;
+  return match ? `${match[1]}${renameMember(match[2] ?? "", rename)}` : id;
 }
 
-/** Removes the folders above `folder` that the move left empty, up to the reviews root. Best effort. */
+/** Removes the folders above `folder` that the move left empty, up to the reviews root, one empty folder at a time. */
 async function removeEmptyFolders(platform: Platform, folder: string, root: string): Promise<void> {
   try {
     for (let current = dirname(folder); pathInside(root, current); current = dirname(current)) {
-      if ((await platform.stat(current))?.kind !== "directory" || (await platform.list(current)).length > 0) return;
-      await platform.remove(current);
+      await platform.removeEmptyFolder(current);
     }
   } catch {
     return;
