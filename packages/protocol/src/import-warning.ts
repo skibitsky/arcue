@@ -43,7 +43,7 @@ export const warningFixSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("use-as-base-color"),
     material: z.string().min(1),
-    /** The image, relative to the asset's composition file. */
+    /** Absolute path of the image, as material.setTexture takes it. */
     file: z.string().min(1),
   }),
   z.object({ kind: z.literal("choose-texture"), material: z.string().min(1), slot: textureSlotSchema }),

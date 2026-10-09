@@ -25,7 +25,7 @@ describe("the modular beetle sample", () => {
     expect(scene.source.warnings).toEqual([]);
     expect(scene.clips.map((clip) => [clip.name, clip.file])).toEqual([
       ["Armature|Walk", undefined],
-      ["Armature|Turn", "beetle-turn.fbx"],
+      ["beetle-turn.fbx//Armature|Turn", "beetle-turn.fbx"],
     ]);
     expect(scene.clips[1]?.tracks).toHaveLength(turn.clips[0]?.tracks.length ?? -1);
     expect(scene.parts.map((part) => [part.id, shownByDefault(part)])).toEqual([

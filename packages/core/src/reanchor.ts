@@ -19,12 +19,15 @@ export const DETACH_SHARE = 0.02;
  * comment's `anchorVersion` keeps its vertex and triangle numbers exactly. Otherwise the stored rest positions are
  * mapped onto the new rest pose: a pin to the closest surface point, and a region vertex by vertex to the nearest
  * vertices, tinting the new triangles whose corners all mapped, or failing that the triangles that touch them. A target with no surface within `DETACH_SHARE` of the model's size is detached and keeps its old anchor.
- * In a composition a target moves only onto meshes of its own file, so each file re-anchors on its own.
+ * In a composition a target moves only onto meshes of its own file, so each file re-anchors on its own, and a target
+ * on a file the version does not load stays as it is until the file loads again.
  */
 export class Reanchorer {
   readonly #versions: ReadonlyMap<string, AssetVersion>;
   readonly #versionId: string;
   readonly #meshes: MeshAtPath[];
+  /** The files that brought meshes to the version, null for the model's own. */
+  readonly #files: ReadonlySet<string | null>;
   readonly #threshold: number;
   readonly #triangles = new Map<number, Uint32Array>();
 
@@ -32,6 +35,7 @@ export class Reanchorer {
     this.#versions = new Map(versions.map((version) => [version.id, version]));
     this.#versionId = versionId;
     this.#meshes = meshesOf(scene);
+    this.#files = new Set(this.#meshes.map((entry) => splitMemberPath(entry.path).file));
     this.#threshold = DETACH_SHARE * modelSize(scene);
   }
 
@@ -44,6 +48,7 @@ export class Reanchorer {
       return this.#anchored(comment, samePath, target, "exact");
     }
     const file = splitMemberPath(target.mesh).file;
+    if (file !== null && !this.#files.has(file)) return comment;
     const candidates = samePath
       ? [samePath]
       : this.#meshes.filter((entry) => splitMemberPath(entry.path).file === file);

@@ -9,6 +9,7 @@ import {
   CENTIMETER_ROOT_SCALE_FBX,
   EXTERNAL_TEXTURE_FBX,
   IN_BETWEEN_FBX,
+  LAYERED_TEXTURE_FBX,
   LEFT_HANDED_FBX,
   LOD_FBX,
   METAL_ROUGH_FBX,
@@ -27,18 +28,21 @@ import { fbxImporter } from "./importer";
 
 const BOUNDS_TOLERANCE = 1e-3;
 
-const noFiles: Pick<ImportRequest, "readFile" | "findFile"> = {
+const noFiles: Pick<ImportRequest, "readFile" | "findFile" | "locateFile"> = {
   readFile: () => Promise.resolve(null),
   findFile: () => Promise.resolve(null),
+  locateFile: () => Promise.resolve(null),
 };
 
 function importText(
   fileName: string,
   text: string,
   findFile: (storedPath: string) => Promise<FoundFile | null> = noFiles.findFile,
+  locateFile: (storedPath: string) => Promise<string | null> = async (storedPath) =>
+    (await findFile(storedPath))?.path ?? null,
 ): Promise<SceneDescription> {
   const bytes = new TextEncoder().encode(text);
-  return fbxImporter.import({ ...noFiles, fileName, bytes, findFile });
+  return fbxImporter.import({ ...noFiles, fileName, bytes, findFile, locateFile });
 }
 
 function textureName(scene: SceneDescription, ref: { texture: number } | null | undefined): string | null {
@@ -265,7 +269,8 @@ describe("handedness", () => {
         code: "left-handed-axes",
         severity: "warning",
         subject: { kind: "file", name: "left.fbx" },
-        message: "Left-handed axes, mirrored along X",
+        message: "Left-handed axes: left.fbx",
+        detail: "The scene is mirrored along X",
       },
     ]);
     expect(restPoseError(scene, 0)).toBeLessThan(1e-6);
@@ -437,7 +442,8 @@ describe("animation", () => {
         code: "inbetween-shapes",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "In-between shape keys of Tri use their final shape",
+        message: "In-between shape keys: Tri",
+        detail: "They show their final shape",
       },
     ]);
   });
@@ -506,7 +512,8 @@ describe("skinning", () => {
         code: "unweighted-vertices",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "Some vertices of Tri have no skin weights",
+        message: "Unweighted vertices: Tri",
+        detail: "Some vertices have no skin weights",
       },
     ]);
     expect(restPoseError(scene, 0)).toBeLessThan(1e-6);
@@ -521,7 +528,7 @@ describe("export checks", () => {
         code: "root-scale",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "Root scale of 100 on Tri",
+        message: "Root scale x100: Tri",
       },
     ]);
   });
@@ -534,7 +541,7 @@ describe("export checks", () => {
         code: "root-scale",
         severity: "warning",
         subject: { kind: "node", name: "Armature" },
-        message: "Root scale of 0.01 on Armature",
+        message: "Root scale x0.01: Armature",
       },
     ]);
   });
@@ -547,7 +554,7 @@ describe("export checks", () => {
         code: "root-rotation",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "Root rotation of -90° about X on Tri",
+        message: "Root rotated -90° on X: Tri",
       },
     ]);
   });
@@ -578,7 +585,7 @@ describe("export checks", () => {
         code: "texture-path-absolute",
         severity: "warning",
         subject: { kind: "texture", name: "StoneStriker-BaseColor.png" },
-        message: "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
+        message: "Absolute texture path: StoneStriker-BaseColor.png",
         detail: "Stored path: /private/tmp/striker-staging/StoneStriker-BaseColor.png, used as base color of Stone",
         materials: ["Stone"],
         uses: [{ material: "Stone", slot: "baseColor" }],
@@ -593,11 +600,7 @@ describe("export checks", () => {
       baseColor: "/private/tmp/striker-staging/StoneStriker-BaseColor.png",
     });
     expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
-      [
-        "texture-path-absolute",
-        "warning",
-        "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
-      ],
+      ["texture-path-absolute", "warning", "Absolute texture path: StoneStriker-BaseColor.png"],
       ["texture-not-found", "error", "Texture not found: StoneStriker-BaseColor.png"],
     ]);
   });
@@ -623,10 +626,18 @@ describe("export checks", () => {
     expect(scene.materials[0]?.missingTextures).toEqual({ baseColor: "textures/painted.png" });
   });
 
-  it("warns about a texture that no material links, with where its image was found", async () => {
-    const scene = await importText("body.fbx", UNLINKED_TEXTURE_FBX, (storedPath) =>
-      Promise.resolve(storedPath === "textures/Body_BaseColor.png" ? { path: storedPath, bytes: PNG_SIGNATURE } : null),
+  it("warns about a texture that no material links, with where its image was found, without reading it", async () => {
+    const read: string[] = [];
+    const scene = await importText(
+      "body.fbx",
+      UNLINKED_TEXTURE_FBX,
+      (storedPath) => {
+        read.push(storedPath);
+        return Promise.resolve(null);
+      },
+      (storedPath) => Promise.resolve(storedPath === "textures/Body_BaseColor.png" ? storedPath : null),
     );
+    expect(read).toEqual([]);
     expect(scene.textures).toEqual([]);
     expect(scene.source.warnings).toEqual([
       {
@@ -638,6 +649,11 @@ describe("export checks", () => {
         foundPath: "textures/Body_BaseColor.png",
       },
     ]);
+  });
+
+  it("counts every file of a layered texture as used", async () => {
+    const scene = await importText("layered.fbx", LAYERED_TEXTURE_FBX, findAnyPng);
+    expect(scene.source.warnings).toEqual([]);
   });
 
   it("does not report a texture that a material links to a slot the preview does not show", async () => {

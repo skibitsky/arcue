@@ -229,7 +229,7 @@ describe("asset.inspect", () => {
       ["Hero/UCX_Body", "collision", false],
       ["Shield.fbx//Hero/Shield", "model", true],
     ]);
-    expect(fromModel.clips.map((clip) => clip.name)).toContain("Armature|Idle");
+    expect(fromModel.clips.map((clip) => clip.name)).toContain("Hero@Idle.fbx//Armature|Idle");
     expect(
       fromModel.warnings.map((warning) => [warning.code, warning.severity, warning.subject, warning.file]),
     ).toEqual([

@@ -1,5 +1,6 @@
 import type { CommandInput, CompositionFile } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
+import { importWarning } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import type { FakeAssetSpec, TestCore } from "./test-support";
 import {
@@ -116,7 +117,7 @@ describe("opening a composition", () => {
 
     expect(scene.clips.map((clip) => [clip.name, clip.file])).toEqual([
       ["Armature|Walk", undefined],
-      ["Armature|Turn", "Anim/BugTurn.fbx"],
+      ["Anim/BugTurn.fbx//Armature|Turn", "Anim/BugTurn.fbx"],
     ]);
     expect(scene.clips[1]?.tracks.map((track) => nodePath(scene, track.node))).toEqual(["Hero/Body"]);
     expect(scene.source.warnings).toEqual([
@@ -124,8 +125,9 @@ describe("opening a composition", () => {
         code: "animation-bones-missing",
         severity: "warning",
         subject: { kind: "clip", name: "Armature|Turn" },
-        message: "Turn animates bones the model lacks: Tail",
+        message: "Missing bones: Turn",
         file: "Anim/BugTurn.fbx",
+        detail: "Bones the model lacks: Tail",
       },
     ]);
 
@@ -186,7 +188,7 @@ describe("opening a composition", () => {
     const { scene } = await sceneOf(test, test.assetId);
     expect(scene.clips.map((clip) => [clip.name, clip.file])).toEqual([
       ["Armature|Walk", undefined],
-      ["Armature|Idle", "Bug@Idle.fbx"],
+      ["Bug@Idle.fbx//Armature|Idle", "Bug@Idle.fbx"],
     ]);
     expect(scene.source.warnings).toEqual([]);
     const { assets } = await test.core.client.query("asset.list", {});
@@ -229,6 +231,174 @@ describe("opening a composition", () => {
   });
 });
 
+describe("the composition as part of the asset", () => {
+  const VARIANT = `${FOLDER}/Variant.arcue`;
+  const variant: CompositionFile = { version: 1, model: "Bug.fbx", attach: [{ file: "BugShells.fbx" }] };
+
+  it("opens a model once for each composition file, and focuses the tab of the same model and composition", async () => {
+    const test = await setup({ [VARIANT]: JSON.stringify(variant) });
+    const other = await openAsset(test, VARIANT);
+    expect(other).not.toBe(test.assetId);
+    await expect(openAsset(test, MODEL)).resolves.toBe(test.assetId);
+    await expect(openAsset(test, SIDECAR)).resolves.toBe(test.assetId);
+    await expect(openAsset(test, VARIANT)).resolves.toBe(other);
+    const { assets } = await test.core.client.query("asset.list", {});
+    expect(assets.map((asset) => [asset.assetId, asset.path, asset.composition])).toEqual([
+      [test.assetId, MODEL, SIDECAR],
+      [other, MODEL, VARIANT],
+    ]);
+    const { scene } = await sceneOf(test, other);
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk"]);
+  });
+
+  it("keeps a comment on a file the version does not load as it was, until the file loads again", async () => {
+    const test = await setup();
+    const { assetId } = test;
+    const { version } = await sceneOf(test, assetId);
+    await test.window.client.execute("comment.create", {
+      assetId,
+      text: "Round the shell's rim.",
+      version,
+      time: { kind: "none" },
+      target: { kind: "surface", mesh: "BugShells.fbx//Hero/ShellA", vertices: [0, 1, 2], weights: [0.4, 0.3, 0.3] },
+      camera,
+      context: pinContext,
+      screenshot: png,
+    });
+    await test.platform.writeFile(SIDECAR, JSON.stringify({ ...composition, attach: [], hidden: [] }));
+    await settle(test);
+    let review = await test.core.client.query("review.get", { assetId });
+    expect(review.versions).toHaveLength(2);
+    expect(review.comments[0]).toMatchObject({ anchorState: "exact", anchorVersion: version });
+
+    await test.platform.writeFile(SIDECAR, JSON.stringify({ ...composition, hidden: [] }));
+    await settle(test);
+    review = await test.core.client.query("review.get", { assetId });
+    const latest = review.versions.at(-1)?.id;
+    expect(latest).not.toBe(version);
+    expect(review.comments[0]).toMatchObject({ anchorState: "exact", anchorVersion: latest });
+  });
+});
+
+describe("a composition above its model, outside a git repository", () => {
+  const files = {
+    "/art/Bug.arcue": JSON.stringify({
+      version: 1,
+      model: "Models/Bug.fbx",
+      attach: [{ file: "Props/BugShells.fbx", node: "ShellA", bone: "Body" }],
+      materials: { Shell: { baseColor: "Textures/Shell.png" } },
+    }),
+    "/art/Models/Bug.fbx": fakeAsset(bug),
+    "/art/Props/BugShells.fbx": fakeAsset(shells),
+    "/art/Props/Spare.fbx": fakeAsset(shells),
+    "/art/Textures/Shell.png": pngBytes,
+  };
+
+  it("loads, edits and inspects the files it names from the composition's folder", async () => {
+    const test = await startTestCore(files);
+    const assetId = await openAsset(test, "/art/Bug.arcue");
+    const { scene } = await sceneOf(test, assetId);
+    expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs", "../Props/BugShells.fbx//Hero/ShellA"]);
+    expect(scene.source.warnings.map((warning) => warning.code)).toEqual([]);
+    const material = scene.materials.find((entry) => entry.name === "Shell");
+    expect(material?.textureOverrides?.baseColor?.found).toBe(true);
+
+    await expect(
+      test.window.client.execute("composition.addFile", { assetId, file: "Props/Spare.fbx", role: "set" }),
+    ).resolves.toEqual({ path: "/art/Bug.arcue", role: "set" });
+    expect(await readJson(test.platform, "/art/Bug.arcue")).toMatchObject({
+      attach: [{ file: "Props/BugShells.fbx", node: "ShellA", bone: "Body" }, { file: "Props/Spare.fbx" }],
+    });
+
+    const inspection = await test.core.client.query("asset.inspect", { path: "/art/Bug.arcue" });
+    expect(inspection.members.map((member) => [member.file, member.found])).toEqual([
+      ["../Props/BugShells.fbx", true],
+      ["../Props/Spare.fbx", true],
+      ["../Textures/Shell.png", true],
+    ]);
+  });
+});
+
+describe("a composition file that cannot be read", () => {
+  it("opens the model alone with a warning that names the file, and applies the file once it is fixed", async () => {
+    for (const broken of ["", "{ not json"]) {
+      const test = await setup({ [SIDECAR]: broken });
+      const { assets } = await test.core.client.query("asset.list", {});
+      expect(assets).toMatchObject([{ status: "ready", error: null }]);
+      expect(assets[0]?.composition).toBeUndefined();
+      const { scene } = await sceneOf(test, test.assetId);
+      expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs"]);
+      const { warnings } = await test.core.client.query("warning.list", { assetId: test.assetId });
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          code: "invalid-data",
+          subject: { kind: "file", name: "Bug.arcue" },
+          message: "Composition could not be read: Bug.arcue",
+          file: "Bug.arcue",
+          detail: "Bug.arcue is not valid JSON.",
+          fix: { kind: "retry" },
+        }),
+      ]);
+
+      await test.platform.writeFile(SIDECAR, JSON.stringify(composition));
+      await settle(test);
+      const fixed = await sceneOf(test, test.assetId);
+      expect(fixed.scene.parts).toHaveLength(3);
+      expect(fixed.scene.source.warnings.map((warning) => warning.code)).toEqual(["animation-bones-missing"]);
+    }
+  });
+
+  it("opens the model alone when a folder sits where its composition file goes, and inspects it the same way", async () => {
+    const test = await setup({ [SIDECAR]: null, [`${SIDECAR}/notes.txt`]: "notes" });
+    const { scene } = await sceneOf(test, test.assetId);
+    expect(scene.source.warnings.map((warning) => [warning.code, warning.detail])).toEqual([
+      ["invalid-data", "Bug.arcue is not a plain file."],
+    ]);
+    const inspection = await test.core.client.query("asset.inspect", { path: MODEL });
+    expect(inspection.warnings.map((warning) => warning.message)).toEqual(["Composition could not be read: Bug.arcue"]);
+  });
+});
+
+describe("warnings from the files of a composition", () => {
+  it("lists each file's own warnings with its file, and only the clip warnings of an animation file", async () => {
+    const shellWarning = importWarning(
+      "unweighted-vertices",
+      { kind: "node", name: "ShellA" },
+      "Unweighted vertices: ShellA",
+    );
+    const turnWarnings = [
+      importWarning("root-scale", { kind: "node", name: "Body" }, "Root scale x100: Body"),
+      importWarning("clip-not-sampled", { kind: "clip", name: "Armature|Turn" }, "Clip not sampled: Armature|Turn"),
+    ];
+    const test = await setup({
+      [SHELLS]: fakeAsset({ ...shells, warnings: [shellWarning] }),
+      [TURN]: fakeAsset({ ...turn, warnings: turnWarnings }),
+    });
+    const { warnings } = await test.core.client.query("warning.list", { assetId: test.assetId });
+    expect(warnings.map((warning) => [warning.id, warning.fix])).toEqual([
+      [
+        "clip-not-sampled:clip:Anim/BugTurn.fbx//Armature|Turn",
+        { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
+      ],
+      ["unweighted-vertices:node:BugShells.fbx//ShellA", null],
+      [
+        "animation-bones-missing:clip:Anim/BugTurn.fbx//Armature|Turn",
+        { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
+      ],
+    ]);
+    const { commentId } = await test.window.client.execute("comment.createFromWarning", {
+      assetId: test.assetId,
+      warningId: "clip-not-sampled:clip:Anim/BugTurn.fbx//Armature|Turn",
+    });
+    const review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.comments.find((comment) => comment.id === commentId)?.time).toMatchObject({
+      kind: "frame",
+      clip: "Anim/BugTurn.fbx//Armature|Turn",
+      frame: 0,
+    });
+  });
+});
+
 describe("reloading a composition", () => {
   it("reloads when a member changes, parsing only that file and keeping the view state", async () => {
     const test = await setup();
@@ -236,7 +406,7 @@ describe("reloading a composition", () => {
     const before = await sceneOf(test, assetId);
     const state = {
       camera,
-      clip: "Armature|Turn",
+      clip: "Anim/BugTurn.fbx//Armature|Turn",
       frame: 7,
       range: null,
       display: { mode: "clay" as const, skeleton: false },
@@ -391,7 +561,7 @@ describe("composition commands", () => {
       ],
     });
     const { scene } = await sceneOf(test, assetId);
-    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Armature|Turn"]);
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Anim/BugTurn.fbx//Armature|Turn"]);
   });
 
   it("refuses files it cannot load and bones the model lacks, without creating a composition file", async () => {
@@ -440,7 +610,7 @@ describe("composition commands", () => {
     const parentOf = (path: string) => nodePath(scene, scene.nodes.find((node) => node.path === path)?.parent ?? -1);
     expect(parentOf("BugShells.fbx//Hero/ShellA")).toBe("Hero/Body/Leg");
 
-    await attach({ file: "BugShells.fbx", node: "Hero/ShellB", bone: null });
+    await attach({ file: "BugShells.fbx", nodes: ["Hero/ShellB"], bone: null });
     expect(await sidecar(test)).toMatchObject({
       attach: [
         { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
@@ -453,6 +623,29 @@ describe("composition commands", () => {
     expect(await sidecar(test)).toMatchObject({ hidden: ["BugShells.fbx//Hero/ShellB"] });
   });
 
+  it("moves several nodes of a file in one edit, with one write, one reload and one undo step", async () => {
+    const test = await setup();
+    const writes = test.platform.writes.length;
+    const versions = (await test.core.client.query("review.get", { assetId: test.assetId })).versions.length;
+    await test.window.client.execute("composition.attachFile", {
+      assetId: test.assetId,
+      file: "BugShells.fbx",
+      nodes: ["ShellA", "Hero/ShellB"],
+      bone: "Leg",
+    });
+    expect(test.platform.writes.slice(writes).filter((write) => write.path === SIDECAR)).toHaveLength(1);
+    const review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.versions).toHaveLength(versions + 1);
+    expect(await sidecar(test)).toMatchObject({
+      attach: [
+        { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
+        { file: "BugShells.fbx", node: "ShellB", bone: "Leg" },
+      ],
+    });
+    await test.window.client.execute("review.undo", { assetId: test.assetId });
+    expect(await sidecar(test)).toMatchObject({ attach: composition.attach });
+  });
+
   it("refuses bones the model lacks, files it does not attach and animation files, without writing", async () => {
     const test = await setup();
     const before = await test.platform.readText(SIDECAR);
@@ -461,7 +654,7 @@ describe("composition commands", () => {
     await expect(attach({ file: "BugShells.fbx", bone: "Wing" })).rejects.toMatchObject({ code: "invalid-input" });
     await expect(attach({ file: "Anim/BugTurn.fbx", bone: "Body" })).rejects.toMatchObject({ code: "invalid-input" });
     await expect(attach({ file: "Other.fbx", bone: "Body" })).rejects.toMatchObject({ code: "not-found" });
-    await expect(attach({ file: "BugShells.fbx", node: "ShellC", bone: null })).rejects.toMatchObject({
+    await expect(attach({ file: "BugShells.fbx", nodes: ["ShellC"], bone: null })).rejects.toMatchObject({
       code: "not-found",
     });
     await expect(attach({ file: "BugShells.fbx", bone: "" })).rejects.toMatchObject({ code: "invalid-input" });
@@ -488,6 +681,42 @@ describe("composition commands", () => {
     await expect(set({ material: "Shell", slot: "baseColor", file: "BugShells.fbx" })).rejects.toMatchObject({
       code: "invalid-input",
     });
+  });
+
+  it("keeps texture overrides of materials named like built-in object members to those materials", async () => {
+    const model = fakeAsset({ ...bug, meshes: [{ name: "Legs", grid: 3, material: 0 }], materials: ["constructor"] });
+    const test = await setup({
+      [MODEL]: model,
+      [SIDECAR]: JSON.stringify({
+        version: 1,
+        model: "Bug.fbx",
+        materials: {
+          constructor: { baseColor: "../Textures/Shell.png" },
+          toString: { normal: "../Textures/Shell.png" },
+        },
+      }),
+    });
+    expect(Object.hasOwn(Object, "baseColor")).toBe(false);
+    expect(Object.hasOwn(Object.prototype.toString, "normal")).toBe(false);
+    await test.window.client.execute("material.setTexture", {
+      assetId: test.assetId,
+      material: "constructor",
+      slot: "baseColor",
+      file: null,
+    });
+    await test.window.client.execute("material.setTexture", {
+      assetId: test.assetId,
+      material: "constructor",
+      slot: "normal",
+      file: TEXTURE,
+    });
+    expect(await sidecar(test)).toMatchObject({
+      materials: { constructor: { normal: "../Textures/Shell.png" }, toString: { normal: "../Textures/Shell.png" } },
+    });
+    const { scene } = await sceneOf(test, test.assetId);
+    const material = scene.materials.find((entry) => entry.name === "constructor");
+    expect(material?.baseColorTexture).toBeNull();
+    expect(material?.normalTexture).not.toBeNull();
   });
 
   it("never overwrites a composition file it cannot read", async () => {
@@ -524,7 +753,7 @@ describe("adding a file without naming its role", () => {
       attach: [{ file: "BugShells.fbx" }],
     });
     const { scene } = await sceneOf(test, test.assetId);
-    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Armature|Turn"]);
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Anim/BugTurn.fbx//Armature|Turn"]);
     expect(scene.parts.map((part) => part.id)).toEqual([
       "Hero/Legs",
       "BugShells.fbx//Hero/ShellA",
@@ -650,10 +879,23 @@ describe("undoing composition edits", () => {
     await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
     await expect(steps.text()).resolves.toBe(changed);
     expect(test.platform.writes.slice(writes)).toEqual([]);
+  });
 
-    await test.platform.remove(SIDECAR);
+  it("drops a composition step that conflicts, so the next undo reaches the edits before it", async () => {
+    const test = await plain();
+    const steps = history(test);
+    const { version } = await sceneOf(test, test.assetId);
+    await test.window.client.execute("comment.create", looseComment(test.assetId, "The legs are too thin.", version));
+    await steps.add("BugShells.fbx");
+    const changed = JSON.stringify({ version: 1, model: "Bug.fbx", animations: ["Anim/BugTurn.fbx"] });
+    await test.platform.writeFile(SIDECAR, changed);
     await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
-    await expect(steps.text()).resolves.toBeNull();
+    await expect(steps.undo()).resolves.toEqual({ changed: true });
+    const review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.queue).toEqual([]);
+    await expect(steps.text()).resolves.toBe(changed);
+    await expect(steps.redo()).resolves.toEqual({ changed: true });
+    await expect(steps.redo()).resolves.toEqual({ changed: false });
   });
 
   it("refuses a redo when the file changed since the undo", async () => {

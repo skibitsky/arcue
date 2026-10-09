@@ -422,14 +422,14 @@ describe("importWarningSchema", () => {
       code: "file-not-found",
       severity: "error",
       subject: { kind: "file", name: "beetle-shells.fbx" },
-      message: "beetle-shells.fbx was not found",
+      message: "File not found: beetle-shells.fbx",
       file: "beetle-shells.fbx",
     };
     expect(importWarningSchema.parse(warning)).toEqual(warning);
   });
 
   it("rejects unknown codes and subjects", () => {
-    const base = { severity: "warning", message: "Root scale of 100 on Armature" };
+    const base = { severity: "warning", message: "Root scale x100: Armature" };
     expect(
       importWarningSchema.safeParse({ ...base, code: "other", subject: { kind: "node", name: "A" } }).success,
     ).toBe(false);

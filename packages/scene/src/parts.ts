@@ -181,18 +181,43 @@ export function levelFor(part: ScenePart, lod: number): PartLevel | null {
   return chosen;
 }
 
+const shownPredicates = new WeakMap<readonly ScenePart[], WeakMap<PartView, (part: ScenePart) => boolean>>();
+
+/**
+ * Whether a view shows each part, as a test built once per parts list and view, so checking every part stays linear.
+ * An isolated part that the scene does not have isolates nothing.
+ */
+export function partShownIn(parts: readonly ScenePart[], view: PartView): (part: ScenePart) => boolean {
+  let byView = shownPredicates.get(parts);
+  if (!byView) {
+    byView = new WeakMap();
+    shownPredicates.set(parts, byView);
+  }
+  let shown = byView.get(view);
+  if (!shown) {
+    const isolated = view.isolated;
+    const hidden = new Set(view.hidden);
+    const overrides = new Set(view.shown);
+    shown =
+      isolated !== null && parts.some((candidate) => candidate.id === isolated)
+        ? (part) => part.id === isolated
+        : (part) => (shownByDefault(part) ? !hidden.has(part.id) : overrides.has(part.id));
+    byView.set(view, shown);
+  }
+  return shown;
+}
+
 /** Whether a view shows a part. An isolated part that the scene does not have isolates nothing. */
 export function partShown(parts: readonly ScenePart[], view: PartView, part: ScenePart): boolean {
-  const isolated = view.isolated !== null && parts.some((candidate) => candidate.id === view.isolated);
-  if (isolated) return part.id === view.isolated;
-  return shownByDefault(part) ? !view.hidden.includes(part.id) : view.shown.includes(part.id);
+  return partShownIn(parts, view)(part);
 }
 
 /** The meshes a view draws. Socket meshes are never drawn. */
 export function visibleMeshes(parts: readonly ScenePart[], view: PartView = defaultPartView()): Set<number> {
+  const shown = partShownIn(parts, view);
   const meshes = new Set<number>();
   for (const part of parts) {
-    if (part.role === "socket" || !partShown(parts, view, part)) continue;
+    if (part.role === "socket" || !shown(part)) continue;
     for (const mesh of levelFor(part, view.lod)?.meshes ?? []) meshes.add(mesh);
   }
   return meshes;
@@ -212,10 +237,11 @@ export function withPartVisible(view: PartView, part: ScenePart, visible: boolea
  */
 export function isolationAsVisibility(parts: readonly ScenePart[], view: PartView): PartView {
   if (view.isolated === null) return view;
-  if (!parts.some((part) => part.id === view.isolated)) return { ...view, isolated: null };
-  let next: PartView = { ...view, hidden: [], shown: [], isolated: null };
-  for (const part of parts) next = withPartVisible(next, part, part.id === view.isolated);
-  return next;
+  const isolated = parts.find((part) => part.id === view.isolated);
+  if (!isolated) return { ...view, isolated: null };
+  const hidden = parts.filter((part) => part !== isolated && shownByDefault(part)).map((part) => part.id);
+  const shown = shownByDefault(isolated) ? [] : [isolated.id];
+  return { ...view, hidden: hidden.sort(), shown, isolated: null };
 }
 
 /** Every LOD level some part has, ascending. */

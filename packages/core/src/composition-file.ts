@@ -4,9 +4,10 @@ import {
   COMPOSITION_EXTENSION,
   COMPOSITION_VERSION,
   compositionFileSchema,
+  defaultCompositionPath,
   joinsByName,
 } from "@arcue/protocol";
-import { basename, dirname, joinPath, stemOf } from "./paths";
+import { basename, normalizePath } from "./paths";
 import type { Platform } from "./platform";
 
 /** Extensions of the model files a composition may load. */
@@ -23,7 +24,7 @@ export function hasExtension(path: string, extensions: readonly string[]): boole
 
 /** Where a model's composition file sits: "<folder>/<model stem>.arcue". */
 export function compositionPathFor(modelPath: string): string {
-  return joinPath(dirname(modelPath), `${stemOf(modelPath)}${COMPOSITION_EXTENSION}`);
+  return defaultCompositionPath(normalizePath(modelPath));
 }
 
 /** Files named "<model stem>@<anything>.fbx" join the model as animation files, as in Unity. */
@@ -70,18 +71,19 @@ export function serializeComposition(composition: CompositionFile): string {
 
 /**
  * The composition file's text and content, or null when there is none. A link or a folder at the path, and a file
- * that cannot be parsed, reject with `code`.
+ * that cannot be parsed, reject with `code` and a message that names the file as `name`.
  */
 export async function readComposition(
   platform: Platform,
   path: string,
   code: ErrorCode,
+  name: string = path,
 ): Promise<{ text: string; composition: CompositionFile } | null> {
   const stat = await platform.stat(path);
   if (stat === null) return null;
-  if (stat.kind !== "file") throw new ArcueError(code, `${path} is not a plain file.`);
+  if (stat.kind !== "file") throw new ArcueError(code, `${name} is not a plain file.`);
   const text = await platform.readText(path);
-  return { text, composition: parseComposition(text, path, code) };
+  return { text, composition: parseComposition(text, name, code) };
 }
 
 export type MemberRole = "animation" | "attach" | "set";
@@ -159,11 +161,11 @@ export function withTexture(
   slot: TextureSlotName,
   file: string | null,
 ): CompositionFile {
-  const materials = { ...(composition.materials ?? {}) };
-  const slots = { ...(materials[material] ?? {}) };
+  const materials = new Map(Object.entries(composition.materials ?? {}));
+  const slots = { ...materials.get(material) };
   if (file === null) delete slots[slot];
   else slots[slot] = file;
-  if (Object.keys(slots).length > 0) materials[material] = slots;
-  else delete materials[material];
-  return { ...composition, materials };
+  if (Object.keys(slots).length > 0) materials.set(material, slots);
+  else materials.delete(material);
+  return { ...composition, materials: Object.fromEntries(materials) };
 }

@@ -46,6 +46,7 @@ function subjectOf(file: TextureFile): ImportWarningSubject {
 export function createTextureResolver(
   files: readonly TextureFile[],
   findFile: (storedPath: string) => Promise<FoundFile | null>,
+  locateFile: (storedPath: string) => Promise<string | null>,
 ): TextureResolver {
   const textures: Texture[] = [];
   const problems: Problem[] = [];
@@ -53,11 +54,14 @@ export function createTextureResolver(
   const uses = new Map<number, TextureUse[]>();
   const resolved = new Map<number, Promise<number | null>>();
 
-  const find = async (file: TextureFile): Promise<FoundFile | null> => {
+  const firstOf = async <Found>(
+    file: TextureFile,
+    lookUp: (storedPath: string) => Promise<Found | null>,
+  ): Promise<Found | null> => {
     for (const candidate of new Set([file.relative, file.absolute])) {
       if (candidate === "") continue;
-      const found = await findFile(candidate);
-      if (found) return found;
+      const found = await lookUp(candidate);
+      if (found !== null) return found;
     }
     return null;
   };
@@ -73,12 +77,12 @@ export function createTextureResolver(
         problems.push({
           code: "texture-path-absolute",
           subject,
-          message: `Texture path is absolute: ${file.absolute}`,
+          message: `Absolute texture path: ${subject.name}`,
           detail: `Stored path: ${file.absolute}`,
           file: index,
         });
       }
-      const found = await find(file);
+      const found = await firstOf(file, findFile);
       if (found) {
         bytes = found.bytes;
         foundPath = found.path;
@@ -106,14 +110,14 @@ export function createTextureResolver(
 
   const unusedWarning = async (file: TextureFile): Promise<ImportWarning> => {
     const subject = subjectOf(file);
-    const found = file.content ? null : await find(file);
+    const found = file.content ? null : await firstOf(file, locateFile);
     const stored = `Stored path: ${storedPathOf(file)}`;
     return importWarning(
       "texture-not-used",
       subject,
       `Texture not used: ${subject.name}`,
       undefined,
-      found ? { detail: `${stored}, found at ${found.path}`, foundPath: found.path } : { detail: stored },
+      found ? { detail: `${stored}, found at ${found}`, foundPath: found } : { detail: stored },
     );
   };
 

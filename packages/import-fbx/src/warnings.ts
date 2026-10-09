@@ -2,28 +2,27 @@ import type { ImportWarning, ImportWarningSubject, Quat, Space } from "@arcue/sc
 import { importWarning } from "@arcue/scene";
 import type { WireNode, WireWarning } from "./decode";
 
-function message(warning: WireWarning, name: string): string {
+/** The warning's problem, written before its subject as "problem: subject", and what it means for the preview. */
+function describe(warning: WireWarning): { problem: string; detail?: string } {
   switch (warning.code) {
     case "too-many-uv-sets":
-      return `Only the first 8 UV sets of ${name} are kept`;
+      return { problem: "Too many UV sets", detail: "Only the first 8 UV sets are kept" };
     case "too-many-bones":
-      return `${name} uses more than 65534 bones; the rest are dropped`;
+      return { problem: "Too many bones", detail: "Bones past the first 65534 are dropped" };
     case "extra-skins":
-      return `Only the first skin of ${name} is used`;
+      return { problem: "Several skins", detail: "Only the first skin is used" };
     case "unweighted-vertices":
-      return `Some vertices of ${name} have no skin weights`;
+      return { problem: "Unweighted vertices", detail: "Some vertices have no skin weights" };
     case "inbetween-shapes":
-      return `In-between shape keys of ${name} use their final shape`;
+      return { problem: "In-between shape keys", detail: "They show their final shape" };
     case "bind-pose-mismatch":
-      return "Meshes are bound in different poses; the first one is used";
+      return { problem: "Bind poses differ", detail: "Meshes are bound in different poses; the first one is used" };
     case "clip-not-sampled":
-      return warning.detail
-        ? `Clip ${name} could not be sampled: ${warning.detail}`
-        : `Clip ${name} could not be sampled`;
+      return warning.detail ? { problem: "Clip not sampled", detail: warning.detail } : { problem: "Clip not sampled" };
     case "left-handed-axes":
-      return "Left-handed axes, mirrored along X";
+      return { problem: "Left-handed axes", detail: "The scene is mirrored along X" };
     case "invalid-data":
-      return warning.detail ?? "The file has invalid data";
+      return warning.detail ? { problem: "Invalid data", detail: warning.detail } : { problem: "Invalid data" };
   }
 }
 
@@ -34,7 +33,9 @@ export function parserWarnings(warnings: readonly WireWarning[], fileName: strin
       kind: warning.subjectKind,
       name: warning.subjectKind === "file" ? fileName : (warning.subject ?? ""),
     };
-    return importWarning(warning.code, subject, message(warning, subject.name));
+    const { problem, detail } = describe(warning);
+    const message = `${problem}: ${subject.name}`;
+    return importWarning(warning.code, subject, message, undefined, detail === undefined ? {} : { detail });
   });
 }
 
@@ -78,10 +79,10 @@ export function rootTransformWarnings(nodes: readonly WireNode[], space: Space):
     const subject: ImportWarningSubject = { kind: "node", name: node.name };
     const scale = uniformScale(node.fileScale);
     if (scale !== null && !near(scale * space.unitMeters, 1)) {
-      warnings.push(importWarning("root-scale", subject, `Root scale of ${scale} on ${node.name}`));
+      warnings.push(importWarning("root-scale", subject, `Root scale x${scale}: ${node.name}`));
     }
     if (space.axes.up !== "+Y" && nearRotation(node.fileRotation, MINUS_90_ABOUT_X)) {
-      warnings.push(importWarning("root-rotation", subject, `Root rotation of -90° about X on ${node.name}`));
+      warnings.push(importWarning("root-rotation", subject, `Root rotated -90° on X: ${node.name}`));
     }
   }
   return warnings;

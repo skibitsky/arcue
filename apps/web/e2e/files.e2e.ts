@@ -114,7 +114,7 @@ test("adds an animation file from the open dialog, groups its clips, and removes
   await expect(page.getByText("Added beetle-turn.fbx")).toBeVisible();
   await expect
     .poll(async () => (await sceneFacts(page, assetId)).clips.at(-1))
-    .toEqual(["Armature|Turn", "beetle-turn.fbx"]);
+    .toEqual(["beetle-turn.fbx//Armature|Turn", "beetle-turn.fbx"]);
   expect((await sceneFacts(page, assetId)).composition).toBe("/samples/pebble-golem.arcue");
   await page.keyboard.press("Escape");
 
@@ -129,14 +129,14 @@ test("adds an animation file from the open dialog, groups its clips, and removes
   await page.screenshot({ path: `${SHOTS}files-clip-groups.png` });
   await group.getByRole("button", { name: "Remove beetle-turn.fbx from the view" }).click();
   await expect(menu.getByRole("group", { name: "beetle-turn.fbx" })).toHaveCount(0);
-  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).not.toContain("Armature|Turn");
+  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).not.toContain("beetle-turn.fbx//Armature|Turn");
 
   const undone = await page.evaluate(async (id) => {
     const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
     return client.execute("review.undo", { assetId: id });
   }, assetId);
   expect(undone).toEqual({ changed: true });
-  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).toContain("Armature|Turn");
+  expect((await sceneFacts(page, assetId)).clips.map(([name]) => name)).toContain("beetle-turn.fbx//Armature|Turn");
 });
 
 test("drops models on a model's view: animations join at once, anything else asks", async ({ page }) => {
@@ -154,10 +154,23 @@ test("drops models on a model's view: animations join at once, anything else ask
   await prompt.getByRole("menuitem", { name: "Add to view" }).click();
   await expect.poll(async () => (await sceneFacts(page, assetId)).parts).toContain("crate.fbx//Crate");
 
+  await drop(page, VIEW, [{ name: "crate.fbx", sample: "blob.fbx" }]);
+  await prompt.getByRole("menuitem", { name: "Add to view" }).click();
+  await expect.poll(async () => (await sceneFacts(page, assetId)).parts).toContain("crate-2.fbx//Blob");
+  expect((await sceneFacts(page, assetId)).parts).toContain("crate.fbx//Crate");
+
   await drop(page, VIEW, [{ name: "blob.fbx", sample: "blob.fbx" }]);
   await page.getByRole("menu", { name: "Dropped file" }).getByRole("menuitem", { name: "New tab" }).click();
   await expect(page.getByRole("tab", { name: "blob.fbx" })).toHaveAttribute("aria-selected", "true");
   expect((await sceneFacts(page, assetId)).parts).not.toContain("blob.fbx//Blob");
+  const besideGolem = await page.evaluate(async () => {
+    const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+    return client.query("asset.inspect", { path: "/samples/blob.fbx" }).then(
+      () => "found",
+      (error: { code?: string }) => error.code,
+    );
+  });
+  expect(besideGolem).toBe("not-found");
 });
 
 test("assigns a texture from the open dialog and restores the file's own", async ({ page }) => {

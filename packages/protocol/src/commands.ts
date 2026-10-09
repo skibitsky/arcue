@@ -25,7 +25,7 @@ const compositionOutput = z.object({
 export const commands = {
   "asset.open": command({
     description:
-      'Open an asset in a tab, or focus its tab when it is already open. A ".arcue" composition file opens its model with the files it lists. Optionally show a clip, by its name in the file, and a frame.',
+      'Open an asset in a tab, or focus its tab when it is already open. A ".arcue" composition file opens its model with the files it lists, in a tab of its own unless it is the model\'s "<stem>.arcue". Optionally show a clip, by its name in the file, and a frame.',
     runsIn: "core",
     input: z.object({
       path: z.string().min(1),
@@ -172,13 +172,13 @@ export const commands = {
   }),
   "composition.attachFile": command({
     description:
-      "Attach a file of the asset's composition to a bone of the model, or detach it with a null bone, which leaves it in place as a set piece. Without node every attached entry of the file moves; with node only the entry for that node. Saves the change in the composition file. Undo with review.undo.",
+      "Attach a file of the asset's composition to a bone of the model, or detach it with a null bone, which leaves it in place as a set piece. Without nodes every attached entry of the file moves; with nodes only the entries for those nodes, all in one edit. Saves the change in the composition file. Undo with review.undo.",
     runsIn: "core",
     input: z.object({
       ...assetRef,
       file: compositionMemberSchema,
-      /** A node's name or path in the file, naming one of the file's entries. */
-      node: z.string().min(1).optional(),
+      /** Names or paths of nodes in the file, each naming one of the file's entries. */
+      nodes: z.array(z.string().min(1)).min(1).optional(),
       /** A bone's name or path in the model, or null for a set piece. */
       bone: z.string().min(1).nullable(),
     }),

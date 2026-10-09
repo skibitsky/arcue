@@ -4,6 +4,8 @@ import { ArcueError, createPeer, portEndpoint } from "@arcue/protocol";
 import type {
   ConnectWindowInput,
   ImportWorkerFailed,
+  PlaceFilesOutput,
+  RemoveFilesInput,
   SeedFilesInput,
   StartImportWorker,
   StopImportWorker,
@@ -11,6 +13,7 @@ import type {
 import { hostEvents, hostRequests, pageEvents } from "../host-protocol";
 import { closableEndpoint } from "./closable-endpoint";
 import { freeClosedFiles } from "./free-closed-files";
+import { placeFile } from "./place-files";
 
 const clock: Clock = {
   now: () => Date.now(),
@@ -56,6 +59,15 @@ const page = createPeer(portEndpoint(self), {
     }
     if (name === hostRequests.seedFiles) {
       for (const file of (input as SeedFilesInput).files) await platform.writeFile(file.path, file.bytes);
+      return null;
+    }
+    if (name === hostRequests.placeFiles) {
+      const output: PlaceFilesOutput = { files: [] };
+      for (const file of (input as SeedFilesInput).files) output.files.push(await placeFile(platform, file));
+      return output;
+    }
+    if (name === hostRequests.removeFiles) {
+      for (const path of (input as RemoveFilesInput).paths) await platform.remove(path);
       return null;
     }
     throw new ArcueError("unknown-command", `The core worker does not handle "${name}".`);

@@ -17,7 +17,10 @@ export function isReadableImage(name: string): boolean {
 }
 
 export interface FileSearch {
+  /** The image for a stored path, with where it was found relative to the asset's folder, read now. */
   find(storedPath: string): Promise<FoundFile | null>;
+  /** Where the image for a stored path is, relative to the asset's folder, without reading it. */
+  locate(storedPath: string): Promise<string | null>;
 }
 
 /**
@@ -79,18 +82,26 @@ export function createFileSearch(platform: Platform, assetPath: string, readRoot
     return null;
   };
 
+  const locate = (storedPath: string): Promise<string | null> => {
+    let path = found.get(storedPath);
+    if (!path) {
+      path = search(storedPath);
+      found.set(storedPath, path);
+    }
+    return path;
+  };
+
   return {
     async find(storedPath) {
-      let path = found.get(storedPath);
-      if (!path) {
-        path = search(storedPath);
-        found.set(storedPath, path);
-      }
-      const file = await path;
+      const file = await locate(storedPath);
       if (file === null) return null;
       const relative = relativePath(assetFolder, file);
       const bytes = relative === null ? null : await platform.readFile(file).catch(() => null);
       return relative !== null && bytes ? { path: relative, bytes } : null;
+    },
+    async locate(storedPath) {
+      const file = await locate(storedPath);
+      return file === null ? null : relativePath(assetFolder, file);
     },
   };
 }

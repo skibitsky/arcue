@@ -34,6 +34,7 @@ export {
   COMPOSITION_VERSION,
   compositionAttachSchema,
   compositionFileSchema,
+  defaultCompositionPath,
   IMAGE_FILE_EXTENSIONS,
   joinsByName,
   materialTexturesSchema,
@@ -69,6 +70,8 @@ export {
 export type {
   ImportFindFileInput,
   ImportFindFileOutput,
+  ImportLocateFileInput,
+  ImportLocateFileOutput,
   ImportReadFileInput,
   ImportReadFileOutput,
   ImportRunInput,

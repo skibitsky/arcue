@@ -1,4 +1,5 @@
 import type { CompositionFile } from "@arcue/protocol";
+import { joinsByName } from "@arcue/protocol";
 
 /** The image types an importer may read beside a model, as the core's referenced-file check allows them. */
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "tga", "tif", "tiff", "bmp", "dds", "exr", "hdr", "webp"]);
@@ -49,6 +50,14 @@ export function besideAsset(assetPath: string, file: string): string {
   return `${assetPath.slice(0, slash)}/${name}`;
 }
 
+/** The path with a number before its extension, such as "Sword-2.fbx", for a copy beside a different same-named file. */
+export function numberedPath(path: string, number: number): string {
+  const slash = path.lastIndexOf("/");
+  const dot = path.lastIndexOf(".");
+  const at = dot > slash + 1 ? dot : path.length;
+  return `${path.slice(0, at)}-${number}${path.slice(at)}`;
+}
+
 function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
@@ -85,8 +94,8 @@ export interface OpenPlan<Item> {
 /**
  * What to open from files picked or dropped together. Dropped files arrive without their folders, so each
  * composition file goes in a folder with every model and texture of the drop. A model opens on its own unless a
- * composition names it or it is an animation file "<model>@<clip>.fbx" of another model in the drop, which it joins.
- * `contents` holds each composition file's content, or null when it could not be read.
+ * composition names it or it joins another model in the drop by its name, "<model stem>@<clip>.fbx", as the core
+ * joins such files. `contents` holds each composition file's content, or null when it could not be read.
  */
 export function planOpen<Item extends { name: string }>(
   files: readonly Item[],
@@ -100,19 +109,14 @@ export function planOpen<Item extends { name: string }>(
     const listed = [content.model, ...(content.animations ?? []), ...(content.attach ?? []).map((entry) => entry.file)];
     for (const path of listed) named.add(fileNameOf(path));
   }
-  const names = new Set(models.map((model) => model.name));
-  const animationOf = (file: Item): string | null => {
-    const at = file.name.indexOf("@");
-    const model = at > 0 ? `${file.name.slice(0, at)}.fbx` : null;
-    return model !== null && names.has(model) ? model : null;
-  };
+  const joins = (model: Item, file: Item) => file !== model && joinsByName(model.name, file.name);
   const plans: OpenPlan<Item>[] = compositions.map((composition) => ({
     open: composition,
     files: [composition, ...models, ...textures],
   }));
   for (const model of models) {
-    if (named.has(model.name) || animationOf(model) !== null) continue;
-    const animations = models.filter((other) => animationOf(other) === model.name);
+    if (named.has(model.name) || models.some((other) => joins(other, model))) continue;
+    const animations = models.filter((other) => joins(model, other));
     plans.push({ open: model, files: [model, ...animations, ...textures] });
   }
   return plans;

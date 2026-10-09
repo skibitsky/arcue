@@ -238,7 +238,7 @@ describe("the desktop app", () => {
 
     await answer([turn]);
     await page.getByRole("button", { name: "Add file" }).click();
-    await expect.poll(async () => (await sceneOf(page, crateId)).clips).toEqual(["Armature|Turn"]);
+    await expect.poll(async () => (await sceneOf(page, crateId)).clips).toEqual(["beetle-turn.fbx//Armature|Turn"]);
     const composition = join(workDir, "samples", "crate.arcue");
     expect(JSON.parse(readFileSync(composition, "utf8"))).toEqual({
       version: 1,

@@ -24,6 +24,11 @@ export interface ImportRequest {
    * Resolves to null when no image is found.
    */
   findFile(storedPath: string): Promise<FoundFile | null>;
+  /**
+   * Where `findFile` finds the image, relative to the asset's folder, without reading it, for an image the asset
+   * carries but does not use. Resolves to null when no image is found.
+   */
+  locateFile(storedPath: string): Promise<string | null>;
 }
 
 /** Turns one file format into a scene description. Importers run in an import worker without file access. */

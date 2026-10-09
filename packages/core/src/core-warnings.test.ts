@@ -18,7 +18,7 @@ import {
 const TEXTURE = "/work/game/Assets/Art/Textures/Body_BaseColor.png";
 
 const warnings: ImportWarning[] = [
-  importWarning("root-scale", { kind: "node", name: "Hero" }, "Root scale of 100 on Hero"),
+  importWarning("root-scale", { kind: "node", name: "Hero" }, "Root scale x100: Hero"),
   importWarning(
     "texture-not-used",
     { kind: "texture", name: "Body_BaseColor.png" },
@@ -34,7 +34,7 @@ const warnings: ImportWarning[] = [
     materials: ["Body"],
     uses: [{ material: "Body", slot: "baseColor" }],
   }),
-  importWarning("clip-not-sampled", { kind: "clip", name: "Armature|Run" }, "Clip Armature|Run could not be sampled"),
+  importWarning("clip-not-sampled", { kind: "clip", name: "Armature|Run" }, "Clip not sampled: Armature|Run"),
 ];
 
 const spec: FakeAssetSpec = {
@@ -97,13 +97,53 @@ describe("warning.list", () => {
     const failed = importWarning(
       "file-not-found",
       { kind: "file", name: "Shells.fbx" },
-      "Shells.fbx was not found",
+      "File not found: Shells.fbx",
       "Shells.fbx",
     );
     const test = await setup({ [HERO]: fakeAsset({ ...spec, warnings: [failed] }) });
     expect(await listed(test)).toEqual([
       expect.objectContaining({ id: "file-not-found:file:Shells.fbx//Shells.fbx", fix: { kind: "retry" } }),
     ]);
+  });
+
+  it("moves Choose texture to the next slot a missing texture leaves empty, and clears it once every slot is set", async () => {
+    const skin = importWarning(
+      "texture-not-found",
+      { kind: "texture", name: "Skin.png" },
+      "Texture not found: Skin.png",
+      undefined,
+      {
+        materials: ["Body", "Head"],
+        uses: [
+          { material: "Body", slot: "baseColor" },
+          { material: "Head", slot: "baseColor" },
+        ],
+      },
+    );
+    const test = await setup({
+      [HERO]: fakeAsset({
+        ...spec,
+        meshes: [
+          { name: "Body", grid: 3, material: 0 },
+          { name: "Head", grid: 3, material: 1 },
+        ],
+        materials: ["Body", "Head"],
+        warnings: [skin],
+      }),
+    });
+    const skinFix = async () => (await listed(test)).find((warning) => warning.subject.name === "Skin.png")?.fix;
+    const setTexture = (material: string) =>
+      test.window.client.execute("material.setTexture", {
+        assetId: test.assetId,
+        material,
+        slot: "baseColor",
+        file: TEXTURE,
+      });
+    await expect(skinFix()).resolves.toEqual({ kind: "choose-texture", material: "Body", slot: "baseColor" });
+    await setTexture("Body");
+    await expect(skinFix()).resolves.toEqual({ kind: "choose-texture", material: "Head", slot: "baseColor" });
+    await setTexture("Head");
+    await expect(skinFix()).resolves.toBeUndefined();
   });
 
   it("offers no base color when more than one material lacks one", async () => {
@@ -246,7 +286,7 @@ describe("warning.prompt", () => {
       [
         `Fix these import warnings in ${HERO}, then export it again.`,
         '1. Texture not found: Eyes.png · texture "Eyes.png" · Stored path: C:/art/Eyes.png',
-        '2. Root scale of 100 on Hero · node "Hero"',
+        '2. Root scale x100: Hero · node "Hero"',
         '3. Texture not used: Body_BaseColor.png · texture "Body_BaseColor.png" · Stored path: Textures/Body_BaseColor.png, found at Textures/Body_BaseColor.png',
       ].join("\n"),
     );

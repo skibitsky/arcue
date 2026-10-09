@@ -1,6 +1,14 @@
 import type { CompositionFile } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
-import { besideAsset, openedFilePath, openedModelFolder, partitionFiles, planOpen, samplePath } from "./files";
+import {
+  besideAsset,
+  numberedPath,
+  openedFilePath,
+  openedModelFolder,
+  partitionFiles,
+  planOpen,
+  samplePath,
+} from "./files";
 
 describe("partitionFiles", () => {
   it("opens FBX and composition files, keeps image files as textures, and ignores the rest", () => {
@@ -48,6 +56,15 @@ describe("planOpen", () => {
     ]);
   });
 
+  it("joins animation files to their model as the core does, whatever the extension's case or the stem's '@'", () => {
+    expect(names(planOpen([file("Hero.FBX"), file("Hero@Walk.FBX")], new Map()))).toEqual([
+      ["Hero.FBX", ["Hero.FBX", "Hero@Walk.FBX"]],
+    ]);
+    expect(names(planOpen([file("Hero@v2.fbx"), file("Hero@v2@Walk.fbx")], new Map()))).toEqual([
+      ["Hero@v2.fbx", ["Hero@v2.fbx", "Hero@v2@Walk.fbx"]],
+    ]);
+  });
+
   it("still opens a composition that could not be read, and every model, so the core reports the problem", () => {
     const broken = file("Bug.arcue");
     expect(names(planOpen([file("Bug.fbx"), broken], new Map([[broken, null]])))).toEqual([
@@ -65,6 +82,15 @@ describe("virtual paths", () => {
     expect(openedFilePath("Villain.fbx", "BaseColor.png")).toBe("/files/Villain/BaseColor.png");
     expect(openedFilePath("a/b\\c.fbx")).toBe("/files/a_b_c/a_b_c.fbx");
     expect(openedModelFolder(".fbx")).toBe("/files/.fbx");
+  });
+});
+
+describe("numberedPath", () => {
+  it("numbers a file before its extension, and a name without one at its end", () => {
+    expect(numberedPath("/files/Hero/Sword.fbx", 2)).toBe("/files/Hero/Sword-2.fbx");
+    expect(numberedPath("/files/Hero/Hero@Run.fbx", 3)).toBe("/files/Hero/Hero@Run-3.fbx");
+    expect(numberedPath("/files/Hero.v2/notes", 2)).toBe("/files/Hero.v2/notes-2");
+    expect(numberedPath("/files/Hero/.hidden", 2)).toBe("/files/Hero/.hidden-2");
   });
 });
 

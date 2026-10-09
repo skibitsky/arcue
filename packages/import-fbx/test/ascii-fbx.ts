@@ -489,3 +489,32 @@ ${TRIANGLE_MODEL}
   `${TRIANGLE_CONNECTIONS}
 	C: "OO",3000,2000`,
 );
+
+/**
+ * The triangle with a material whose diffuse color is a layered texture of two files, "dirt.png" over "paint.png",
+ * as Maya and 3ds Max write layered textures.
+ */
+export const LAYERED_TEXTURE_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Material: 3000, "Material::Layered", "" {
+		Version: 102
+		ShadingModel: "lambert"
+	}
+	LayeredTexture: 5000, "LayeredTexture::Layers", "" {
+		LayeredTexture: 101
+		BlendModes: *2 {
+			a: 0,0
+		}
+		Alphas: *2 {
+			a: 1,1
+		}
+	}
+${texture(4000, "dirt")}
+${texture(4001, "paint")}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",3000,2000
+	C: "OO",4000,5000
+	C: "OO",4001,5000
+	C: "OP",5000,3000, "DiffuseColor"`,
+);

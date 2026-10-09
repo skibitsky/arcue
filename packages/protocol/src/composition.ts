@@ -36,6 +36,14 @@ export function memberRoleFor(content: { meshes: number; clips: number }): Exclu
   return content.clips > 0 ? "animation" : null;
 }
 
+/** Where a model's own composition file sits, "<folder>/<model stem>.arcue", for a path with "/" separators. */
+export function defaultCompositionPath(modelPath: string): string {
+  const slash = modelPath.lastIndexOf("/");
+  const name = modelPath.slice(slash + 1);
+  const dot = name.lastIndexOf(".");
+  return `${modelPath.slice(0, slash + 1)}${dot > 0 ? name.slice(0, dot) : name}${COMPOSITION_EXTENSION}`;
+}
+
 /** Whether a file beside the model joins it by its name, "<model stem>@<anything>.fbx", rather than through the composition. */
 export function joinsByName(modelName: string, fileName: string): boolean {
   const dot = modelName.lastIndexOf(".");

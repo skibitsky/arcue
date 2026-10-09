@@ -218,8 +218,8 @@ describe("composeScene", () => {
     const composed = composeScene(legs, { ...noComposition(), animations: [{ file: "Legs@Turns.fbx", scene: turns }] });
     expect(composed.clips.map((clip) => [clip.name, clip.displayName, clip.file])).toEqual([
       ["Armature|Walk", "Walk", undefined],
-      ["Armature|Walk#2", "Walk#2", "Legs@Turns.fbx"],
-      ["Armature|Turn", "Turn", "Legs@Turns.fbx"],
+      ["Legs@Turns.fbx//Armature|Walk", "Walk (2)", "Legs@Turns.fbx"],
+      ["Legs@Turns.fbx//Armature|Turn", "Turn", "Legs@Turns.fbx"],
     ]);
     expect(composed.clips[2]?.tracks.map((track) => composed.nodes[track.node]?.path)).toEqual([
       "Armature",
@@ -230,11 +230,31 @@ describe("composeScene", () => {
         code: "animation-bones-missing",
         severity: "warning",
         subject: { kind: "clip", name: "Armature|Turn" },
-        message: "Turn animates bones the model lacks: Tail",
+        message: "Missing bones: Turn",
         file: "Legs@Turns.fbx",
+        detail: "Bones the model lacks: Tail",
       },
     ]);
     expect(legs.clips).toHaveLength(1);
+  });
+
+  it("names another file's clips within that file, so adding or removing other files never renames them", () => {
+    const take = (name: string) => scene({ nodes: [{ name: "Body", kind: "bone" }], clips: [{ name, animate: [0] }] });
+    const names = (files: string[]) =>
+      composeScene(legs, {
+        ...noComposition(),
+        animations: files.map((file) => ({ file, scene: take("Take 001") })),
+      }).clips.map((clip) => clip.name);
+    expect(names(["Legs@Run.fbx", "Legs@Walk.fbx"])).toEqual([
+      "Armature|Walk",
+      "Legs@Run.fbx//Take 001",
+      "Legs@Walk.fbx//Take 001",
+    ]);
+    expect(names(["Legs@Idle.fbx", "Legs@Run.fbx", "Legs@Walk.fbx"]).slice(2)).toEqual([
+      "Legs@Run.fbx//Take 001",
+      "Legs@Walk.fbx//Take 001",
+    ]);
+    expect(names(["Legs@Walk.fbx"])).toEqual(["Armature|Walk", "Legs@Walk.fbx//Take 001"]);
   });
 
   it("attaches a node under a bone, keeping its rest placement, with its file on its path and part", () => {
@@ -315,6 +335,20 @@ describe("composeScene", () => {
     expect(composed.nodes.some((entry) => entry.path === "Helmet.fbx//Armature/Body")).toBe(false);
   });
 
+  it("places a file's node entry before its whole-file entry, whichever the composition lists first", () => {
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: [
+        { member: { file: "Shells.fbx", scene: shells }, node: null, bone: null },
+        { member: { file: "Shells.fbx", scene: shells }, node: "ShellA", bone: "Body" },
+      ],
+    });
+    const parentOf = (path: string) => composed.nodes.find((node) => node.path === path)?.parent;
+    expect(parentOf("Shells.fbx//ShellA")).toBe(1);
+    expect(parentOf("Shells.fbx//ShellB")).toBe(-1);
+    expect(worldOf(composed, "Shells.fbx//ShellA")).toEqual(worldOf(shells, "ShellA"));
+  });
+
   it("reports a missing node and a missing bone, and keeps an attachment without its bone in place", () => {
     const composed = composeScene(legs, {
       ...noComposition(),
@@ -359,5 +393,30 @@ describe("composeScene", () => {
     expect(composed.source.warnings.map((warning) => [warning.code, warning.subject.name])).toEqual([
       ["material-not-found", "Missing"],
     ]);
+  });
+
+  it("adds a texture that several slots share once, and points every slot at it", () => {
+    const texture: Texture = {
+      name: "Atlas",
+      mimeType: "image/png",
+      bytes: Uint8Array.of(1, 2),
+      storedPath: "Atlas.png",
+      foundPath: "Atlas.png",
+    };
+    const slot = { path: "Atlas.png", texture };
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: [{ member: { file: "Shells.fbx", scene: shells }, node: null, bone: null }],
+      materials: { Shell: { baseColor: slot, emissive: slot }, Spikes: { roughness: slot } },
+    });
+    expect(composed.textures.filter((entry) => entry === texture)).toHaveLength(1);
+    const index = composed.textures.indexOf(texture);
+    const shell = composed.materials.find((entry) => entry.name === "Shell");
+    const spikes = composed.materials.find((entry) => entry.name === "Spikes");
+    expect([
+      shell?.baseColorTexture?.texture,
+      shell?.emissiveTexture?.texture,
+      spikes?.roughnessTexture?.texture,
+    ]).toEqual([index, index, index]);
   });
 });
