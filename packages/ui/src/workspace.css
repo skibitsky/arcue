@@ -223,22 +223,6 @@
   height: 14px;
 }
 
-.ibtn.has-alert {
-  position: relative;
-}
-
-.ibtn.has-alert::after {
-  content: "";
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--alert);
-  box-shadow: 0 0 0 2px var(--surface-base);
-}
-
 .seg {
   margin: 0;
   border: 0;
@@ -2324,7 +2308,9 @@ button.slot-pick:hover .nm {
 
   .sb-stats {
     flex-wrap: wrap;
+    justify-content: flex-end;
     gap: var(--space-6) var(--space-12);
+    margin-left: auto;
   }
 
   .tab-name {

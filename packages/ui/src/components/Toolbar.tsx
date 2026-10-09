@@ -1,6 +1,6 @@
 import type { DisplayMode } from "@arcue/protocol";
 import type { MaterialSlot, MaterialSlots, SceneDescription, Texture } from "@arcue/scene";
-import { fileNameOf, materialSlots, missingSlots } from "@arcue/scene";
+import { fileNameOf, materialSlots } from "@arcue/scene";
 import { Popover } from "radix-ui";
 import type { DragEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -161,12 +161,11 @@ function AssetInfo({ store, session }: { store: WorkspaceStore; session: AssetSe
   const review = useSelect(session.state, (state) => state.review);
   const version = review?.versions.find((candidate) => candidate.id === summary.version) ?? null;
   const materials = useMemo(() => (scene ? materialSlots(scene) : []), [scene]);
-  const missing = useMemo(() => missingSlots(materials).length > 0, [materials]);
   return (
     <Popover.Root>
       <Tip label="Asset info" side="bottom">
         <Popover.Trigger asChild>
-          <button type="button" className={`ibtn${missing ? " has-alert" : ""}`} aria-label="Asset info">
+          <button type="button" className="ibtn" aria-label="Asset info">
             <Icon name="info" />
           </button>
         </Popover.Trigger>

@@ -195,7 +195,7 @@ test("shows a missing texture struck through and fills it with an image dropped 
     { name: "crate.arcue", text: composition },
   ]);
   const assetId = await readyAsset(page, "crate.fbx");
-  await expect(page.getByRole("button", { name: "Asset info" })).toHaveClass(/has-alert/);
+  await expect(page.locator(".sb-warn")).toContainText("Texture not found: crate_wood.png");
   await page.getByRole("button", { name: "Asset info" }).click();
   const wood = page.getByRole("region", { name: "Material Wood" });
   const missing = wood.getByRole("button", { name: "Base color: crate_wood.png, not found" });
@@ -212,5 +212,5 @@ test("shows a missing texture struck through and fills it with an image dropped 
       material: "Wood",
       slots: [{ slot: "baseColor", state: "set", path: "wood-basecolor.png", overridden: true }],
     });
-  await expect(page.getByRole("button", { name: "Asset info" })).not.toHaveClass(/has-alert/);
+  await expect(page.locator(".sb-warn")).toHaveCount(0);
 });
