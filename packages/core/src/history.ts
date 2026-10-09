@@ -7,7 +7,7 @@ export interface ReviewSnapshot {
   dismissedWarnings: readonly string[];
 }
 
-/** An edit of the comments and the queue in `review.json`. */
+/** An edit of the comments, the queue and the dismissed warnings in `review.json`. */
 export interface CommentEdit {
   kind: "comments";
   before: ReviewSnapshot;

@@ -616,6 +616,30 @@ describe("undoing composition edits", () => {
     await expect(steps.text()).resolves.toBe(original);
   });
 
+  it("undoes and redoes attaching a file to a bone, moving its nodes back each time", async () => {
+    const original = `${JSON.stringify(composition)}\n`;
+    const test = await setup({ [SIDECAR]: original });
+    const steps = history(test);
+    const parentOf = async (path: string) => {
+      const { scene } = await sceneOf(test, test.assetId);
+      return nodePath(scene, scene.nodes.find((node) => node.path === path)?.parent ?? -1);
+    };
+    const before = await parentOf("BugShells.fbx//Hero/ShellA");
+    await test.window.client.execute("composition.attachFile", {
+      assetId: test.assetId,
+      file: "BugShells.fbx",
+      bone: "Hero/Body/Leg",
+    });
+    const attached = await steps.text();
+    await expect(parentOf("BugShells.fbx//Hero/ShellA")).resolves.toBe("Hero/Body/Leg");
+    await expect(steps.undo()).resolves.toEqual({ changed: true });
+    await expect(steps.text()).resolves.toBe(original);
+    await expect(parentOf("BugShells.fbx//Hero/ShellA")).resolves.toBe(before);
+    await expect(steps.redo()).resolves.toEqual({ changed: true });
+    await expect(steps.text()).resolves.toBe(attached);
+    await expect(parentOf("BugShells.fbx//Hero/ShellA")).resolves.toBe("Hero/Body/Leg");
+  });
+
   it("refuses with conflict and writes nothing when the file changed since the edit", async () => {
     const test = await plain();
     const steps = history(test);
