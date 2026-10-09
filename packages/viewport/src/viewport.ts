@@ -130,6 +130,11 @@ export interface Viewport {
   /** Replaces every drawn comment. */
   setOverlays(overlays: readonly CommentOverlay[]): void;
   /**
+   * Tints whole meshes, by node path, in the warnings' amber under any painted region, as when pointing at an import
+   * warning. Null or an empty list clears the tint. Unknown paths are ignored, and the paths survive `setScene`.
+   */
+  setHighlight(meshes: readonly string[] | null): void;
+  /**
    * Where the anchor's point is on screen in the current pose, or null when it is off screen or not in the scene.
    * A region's point is its posed centroid, the same point as `context.centroid.posed`.
    */

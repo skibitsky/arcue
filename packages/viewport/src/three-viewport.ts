@@ -67,6 +67,7 @@ interface TintStyles {
   resolvedHovered: Rgba;
   resolvedSelected: Rgba;
   stroke: Rgba;
+  highlight: Rgba;
 }
 
 interface OverlayEntry {
@@ -138,6 +139,7 @@ export class ThreeViewport implements Viewport {
   private overlays: OverlayEntry[] = [];
   private readonly surfaceVisibility = new Map<string, boolean>();
   private hoveredOverlay: string | null = null;
+  private highlighted: ReadonlySet<string> = new Set();
   private tintDirty = true;
   private pinCandidates: PinCandidate[] = [];
 
@@ -453,6 +455,14 @@ export class ThreeViewport implements Viewport {
     };
   }
 
+  setHighlight(meshes: readonly string[] | null): void {
+    const next = new Set(meshes ?? []);
+    if (next.size === this.highlighted.size && [...next].every((path) => this.highlighted.has(path))) return;
+    this.highlighted = next;
+    this.tintDirty = true;
+    this.requestRender();
+  }
+
   setOverlays(overlays: readonly CommentOverlay[]): void {
     const previous = new Map(this.overlays.map((entry) => [entry.overlay.id, entry]));
     let changed = this.strokeFinished || overlays.length !== this.overlays.length;
@@ -599,7 +609,7 @@ export class ThreeViewport implements Viewport {
       },
       pose: time,
       overlays: model ? (options.overlays ?? []).map((overlay) => this.resolveEntry(overlay)) : [],
-      paintTint: (entries) => this.paintTint(entries, null),
+      paintTint: (entries) => this.paintTint(entries, null, new Set()),
       judgeVisible: (resolved, point, depth, sample) => this.judgeVisible(resolved, point, depth, sample),
     });
     if (model) model.applyPose(this.clip, this.shownTime());
@@ -702,13 +712,22 @@ export class ThreeViewport implements Viewport {
     this.paintTint(
       this.overlays.filter((entry) => !finished || entry.overlay.id !== finished.overlayId),
       finished,
+      this.highlighted,
     );
   }
 
-  private paintTint(entries: readonly OverlayEntry[], stroke: PaintStroke | null): void {
+  /** Tints the highlighted meshes, then the painted regions over them; screenshots pass no highlight. */
+  private paintTint(
+    entries: readonly OverlayEntry[],
+    stroke: PaintStroke | null,
+    highlighted: ReadonlySet<string>,
+  ): void {
     const model = this.model;
     if (!model) return;
-    for (const runtime of model.meshes) runtime.tint.clear();
+    for (const runtime of model.meshes) {
+      runtime.tint.clear();
+      if (highlighted.has(runtime.path)) runtime.tint.fill(this.tintStyles.highlight);
+    }
     const ranked = entries
       .filter((entry) => entry.resolved?.kind === "region")
       .map((entry) => ({ entry, rank: this.tintRank(entry.overlay) }))
@@ -1129,5 +1148,6 @@ function tintStyles(palette: Palette): TintStyles {
     resolved: style(palette.feedbackResolved, 0.34),
     resolvedHovered: style(palette.feedbackResolved, 0.42),
     resolvedSelected: style(palette.feedbackResolved, 0.5),
+    highlight: style(palette.alert, 0.55),
   };
 }

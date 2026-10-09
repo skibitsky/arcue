@@ -1,5 +1,6 @@
 import type { BoneShare, PartView, RoundComment, RoundData } from "@arcue/protocol";
 import { nameInPath } from "./scene-lookup";
+import { subjectLabel } from "./warnings";
 
 export interface PromptInput {
   data: RoundData;
@@ -44,6 +45,7 @@ function compositionLine(data: RoundData): string[] {
 }
 
 function renderComment(comment: RoundComment, partNames: ReadonlyMap<string, string>): string {
+  if (comment.warning) return renderWarningComment(comment, comment.warning);
   const headline = [timeLabel(comment), targetLabel(comment)];
   const parts = comment.parts ? partsLabel(comment.parts, partNames) : null;
   if (parts) headline.push(parts);
@@ -60,6 +62,15 @@ function renderComment(comment: RoundComment, partNames: ReadonlyMap<string, str
     lines.push(`   Bones: ${bones.map((bone) => `${bone.name} ${percent(bone.share)}`).join(", ")}`);
   const view = viewLine(comment);
   if (view) lines.push(`   ${view}`);
+  for (const earlier of comment.earlierMessages) lines.push(`   Round ${earlier.round}: ${quote(earlier.text)}`);
+  lines.push(`   ${quote(comment.text)}`);
+  return lines.join("\n");
+}
+
+/** A comment made from an import warning: the warning's code and subject, its detail, then the comment's text. */
+function renderWarningComment(comment: RoundComment, warning: NonNullable<RoundComment["warning"]>): string {
+  const lines = [`${comment.number}. Import warning "${warning.code}" · ${subjectLabel(warning)}`];
+  if (warning.detail !== undefined) lines.push(`   ${warning.detail}`);
   for (const earlier of comment.earlierMessages) lines.push(`   Round ${earlier.round}: ${quote(earlier.text)}`);
   lines.push(`   ${quote(comment.text)}`);
   return lines.join("\n");

@@ -18,6 +18,7 @@ import {
   ROOT_ROTATION_FBX,
   ROOT_SCALE_FBX,
   SHARED_GEOMETRY_FBX,
+  UNLINKED_TEXTURE_FBX,
   Y_UP_ROOT_ROTATION_FBX,
 } from "../test/ascii-fbx";
 import { posedWorldMatrices, restPoseError, skinnedSourceVertex } from "../test/geometry";
@@ -578,6 +579,8 @@ describe("export checks", () => {
         severity: "warning",
         subject: { kind: "texture", name: "StoneStriker-BaseColor.png" },
         message: "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
+        detail: "Stored path: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
+        materials: ["Stone"],
       },
     ]);
   });
@@ -605,8 +608,39 @@ describe("export checks", () => {
       return Promise.resolve(null);
     });
     expect(found).toEqual(["textures/painted.png", "C:/Users/artist/textures/painted.png"]);
-    expect(scene.source.warnings.map((warning) => warning.code)).toEqual(["texture-not-found"]);
+    expect(scene.source.warnings).toEqual([
+      {
+        code: "texture-not-found",
+        severity: "error",
+        subject: { kind: "texture", name: "painted.png" },
+        message: "Texture not found: painted.png",
+        detail: "Stored path: textures/painted.png",
+        materials: ["Painted"],
+      },
+    ]);
     expect(scene.materials[0]?.missingTextures).toEqual({ baseColor: "textures/painted.png" });
+  });
+
+  it("warns about a texture that no material links, with where its image was found", async () => {
+    const scene = await importText("body.fbx", UNLINKED_TEXTURE_FBX, (storedPath) =>
+      Promise.resolve(storedPath === "textures/Body_BaseColor.png" ? { path: storedPath, bytes: PNG_SIGNATURE } : null),
+    );
+    expect(scene.textures).toEqual([]);
+    expect(scene.source.warnings).toEqual([
+      {
+        code: "texture-not-used",
+        severity: "warning",
+        subject: { kind: "texture", name: "Body_BaseColor.png" },
+        message: "Texture not used: Body_BaseColor.png",
+        detail: "Stored path: textures/Body_BaseColor.png, found at textures/Body_BaseColor.png",
+        foundPath: "textures/Body_BaseColor.png",
+      },
+    ]);
+  });
+
+  it("does not report a texture that a material links to a slot the preview does not show", async () => {
+    const scene = await importText("shiny.fbx", PHONG_SHININESS_FBX, findAnyPng);
+    expect(scene.source.warnings).toEqual([]);
   });
 });
 

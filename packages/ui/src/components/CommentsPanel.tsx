@@ -97,8 +97,8 @@ function QueueItem({ session, comment, number }: { session: AssetSession; commen
         {thumbnail ? (
           <img className="qi-thumb" src={thumbnail} alt="" />
         ) : (
-          <span className="qi-thumb is-blank">
-            <Icon name={comment.target ? "pin" : "clock"} />
+          <span className={comment.warning ? "qi-thumb is-blank is-alert" : "qi-thumb is-blank"}>
+            <Icon name={comment.warning ? "alert" : comment.target ? "pin" : "clock"} />
           </span>
         )}
         <span className="qi-body">

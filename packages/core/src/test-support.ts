@@ -4,6 +4,7 @@ import type {
   CameraAnchor,
   Clip,
   Importer,
+  ImportWarning,
   Material,
   Mesh,
   SceneDescription,
@@ -63,6 +64,8 @@ export interface FakeAssetSpec {
   fail?: string;
   /** Paths the importer asks the core for; the ones it gets become textures. */
   textures?: string[];
+  /** The import warnings the scene reports. */
+  warnings?: ImportWarning[];
 }
 
 export function fakeAsset(spec: FakeAssetSpec): string {
@@ -157,7 +160,7 @@ export function fakeScene(spec: FakeAssetSpec): SceneDescription {
       fps,
       originalSpace: SCENE_SPACE,
       conversion: { scale: 1, rotation: [0, 0, 0, 1] },
-      warnings: [],
+      warnings: spec.warnings ?? [],
     },
     nodes,
     meshes,

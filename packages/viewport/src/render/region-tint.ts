@@ -41,6 +41,12 @@ export class RegionTint {
     }
   }
 
+  /** Tints every triangle. */
+  fill(rgba: readonly [number, number, number, number]): void {
+    for (let triangle = 0; triangle < this.triangleCount; triangle++) this.data.set(rgba, triangle * 4);
+    this.empty = this.triangleCount === 0;
+  }
+
   upload(): void {
     this.uniforms.regionTint.value.needsUpdate = true;
   }

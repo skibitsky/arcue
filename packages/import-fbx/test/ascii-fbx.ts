@@ -470,3 +470,22 @@ ${TRIANGLE_MODEL}
 	C: "OO",3000,2000
 	C: "OP",4000,3000, "DiffuseColor"`,
 );
+
+/** The triangle with a material that links no texture, and a texture "Body_BaseColor.png" that no material links. */
+export const UNLINKED_TEXTURE_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Material: 3000, "Material::Body", "" {
+		Version: 102
+		ShadingModel: "lambert"
+	}
+	Texture: 4000, "Texture::Body", "" {
+		Type: "TextureVideoClip"
+		Version: 202
+		TextureName: "Texture::Body"
+		FileName: "C:/Users/artist/textures/Body_BaseColor.png"
+		RelativeFilename: "textures/Body_BaseColor.png"
+	}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",3000,2000`,
+);

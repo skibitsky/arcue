@@ -62,7 +62,7 @@ async function buildMaterials(
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
     const ref = async (wire: WireTextureRef | null | undefined, slot?: TextureSlot): Promise<TextureRef | null> => {
       if (!wire) return null;
-      const texture = await textures.resolve(wire.file);
+      const texture = await textures.resolve(wire.file, material.name);
       if (texture === null) {
         if (slot) missingTextures[slot] = textures.storedPath(wire.file);
         return null;
@@ -134,7 +134,7 @@ async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<Sc
       warnings: [
         ...parserWarnings(parsed.warnings, request.fileName),
         ...rootTransformWarnings(parsed.nodes, parsed.originalSpace),
-        ...textures.warnings,
+        ...(await textures.warnings()),
       ],
     },
     nodes,

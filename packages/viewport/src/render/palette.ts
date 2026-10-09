@@ -10,6 +10,7 @@ export interface Palette {
   feedbackResolved: string;
   feedbackResolvedInk: string;
   feedbackRing: string;
+  alert: string;
   viewportGlow: string;
   viewportEdge: string;
   surfaceDesk: string;
@@ -27,6 +28,7 @@ export const DEFAULT_PALETTE: Palette = {
   feedbackResolved: "#34445c",
   feedbackResolvedInk: "#8ea5c6",
   feedbackRing: "rgba(91, 156, 246, 0.35)",
+  alert: "#f0a43a",
   viewportGlow: "#2d2b28",
   viewportEdge: "#1a1917",
   surfaceDesk: "#121110",
@@ -44,6 +46,7 @@ const TOKENS: Record<keyof Palette, string> = {
   feedbackResolved: "--feedback-resolved",
   feedbackResolvedInk: "--feedback-resolved-ink",
   feedbackRing: "--feedback-ring",
+  alert: "--alert",
   viewportGlow: "--viewport-glow",
   viewportEdge: "--viewport-edge",
   surfaceDesk: "--surface-desk",

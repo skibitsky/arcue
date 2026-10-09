@@ -2,6 +2,7 @@ import { z } from "zod";
 import { indexRangesSchema, indexSchema, vec3Schema } from "./anchors";
 import { commentIdSchema } from "./assets";
 import { boneShareSchema, jointPositionSchema } from "./context";
+import { commentWarningSchema } from "./import-warning";
 import { anchorStateSchema, versionFileSchema } from "./review";
 import { partViewSchema } from "./view-state";
 
@@ -84,6 +85,8 @@ export const roundCommentSchema = z.object({
   earlierMessages: z.array(z.object({ round: z.int().positive(), text: z.string() })).default([]),
   /** The parts the view showed, by part id. Absent for the default view: LOD0, collision helpers hidden. */
   parts: partViewSchema.optional(),
+  /** The import warning the comment was made from: its code, subject, file and detail. */
+  warning: commentWarningSchema.optional(),
 });
 
 /** `round.json`: the full data behind one copied prompt. Agents read it; it never changes once written. */

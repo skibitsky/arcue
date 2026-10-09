@@ -199,6 +199,44 @@ async function sampleChecks(page: Page, origin: Origin): Promise<void> {
     changedShare: golem.moved,
   });
 
+  const viewShot = async () => {
+    await page.waitForTimeout(150);
+    const box = await page.locator("#view").boundingBox();
+    return (await page.screenshot(box ? { clip: box } : {})).toString("base64");
+  };
+  const modelShot = () =>
+    page.evaluate(
+      (size) => window.harness?.screenshotBase64({ ...size, camera: window.harness.viewport.getCamera() }) ?? "",
+      SHOT,
+    );
+  const plain = await viewShot();
+  const plainShot = await modelShot();
+  const golemMesh = await page.evaluate(() => {
+    const harness = window.harness;
+    const path = harness?.scene.nodes.find((node) => node.mesh === 0)?.path ?? null;
+    if (path) harness?.viewport.setHighlight([path]);
+    return path;
+  });
+  const tinted = await viewShot();
+  const tintedShot = await modelShot();
+  await page.evaluate(() => window.harness?.viewport.setHighlight(null));
+  const cleared = await viewShot();
+  save("23-golem-highlight", tinted);
+  const highlight = await page.evaluate(
+    async ({ plain, tinted, cleared, tintedShot, plainShot }) => ({
+      tinted: (await window.harness?.changedShare(plain, tinted)) ?? 0,
+      cleared: (await window.harness?.changedShare(plain, cleared)) ?? 1,
+      screenshot: (await window.harness?.changedShare(plainShot, tintedShot)) ?? 1,
+    }),
+    { plain, tinted, cleared, tintedShot, plainShot },
+  );
+  check(
+    "setHighlight tints the mesh on screen and null clears it",
+    golemMesh !== null && highlight.tinted > 0.01 && highlight.cleared < 0.001,
+    highlight,
+  );
+  check("screenshots leave the highlight out", highlight.screenshot < 0.001, highlight);
+
   const forearm = await page.evaluate(() => {
     const harness = window.harness;
     const scene = harness?.scene;

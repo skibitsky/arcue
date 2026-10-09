@@ -4,6 +4,7 @@ import { assetIdSchema, assetSummarySchema, bytesSchema, commentIdSchema } from 
 import { textureSlotSchema } from "./composition";
 import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
+import { assetWarningSchema } from "./import-warning";
 import { assetInspectionSchema } from "./inspect";
 import { partSummarySchema } from "./parts";
 import { reviewFileSchema } from "./review";
@@ -73,6 +74,18 @@ export const queries = {
       "List the materials of the asset version on screen, each once by name, with the texture slots that have an image or miss one, and always the base color slot. A slot the composition file sets is marked overridden; material.setTexture with a null file restores the file's own texture.",
     input: z.object(assetRef),
     output: z.object({ materials: z.array(materialSlotsSchema) }),
+  }),
+  "warning.list": query({
+    description:
+      "List the import warnings of the asset version on screen, errors first, each with its id, whether it was dismissed, the comment made from it and the command that fixes it.",
+    input: z.object(assetRef),
+    output: z.object({ warnings: z.array(assetWarningSchema) }),
+  }),
+  "warning.prompt": query({
+    description:
+      "Get a prompt that asks a coding agent to fix the asset's import warnings that are not dismissed: one instruction line, then one numbered entry per warning.",
+    input: z.object(assetRef),
+    output: z.object({ prompt: z.string() }),
   }),
   "asset.inspect": query({
     description:

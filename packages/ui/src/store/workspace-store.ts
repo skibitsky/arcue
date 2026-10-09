@@ -27,7 +27,8 @@ export interface Toast extends ToastInput {
 }
 
 export interface CopySheet {
-  round: number;
+  /** The round the prompt was saved as, or null for a prompt that is not a round, such as the warnings. */
+  round: number | null;
   prompt: string;
 }
 
@@ -70,6 +71,7 @@ export const VIEW_COMMANDS = [
   "view.isolatePart",
   "view.setLod",
   "view.setOutlineOpen",
+  "view.highlightSubject",
   "view.selectComment",
   "view.screenshot",
 ] as const satisfies readonly CommandName[];
@@ -368,6 +370,7 @@ export class WorkspaceStore {
     "view.isolatePart": ({ assetId, part }) => this.#require(assetId).isolatePart(part),
     "view.setLod": ({ assetId, level }) => this.#require(assetId).setLod(level),
     "view.setOutlineOpen": ({ assetId, open }) => this.#require(assetId).setOutlineOpen(open),
+    "view.highlightSubject": ({ assetId, subject }) => this.#require(assetId).highlightSubject(subject),
     "view.selectComment": ({ assetId, commentId }) => {
       const session = this.#require(assetId);
       if (commentId === null && session.hasUnsavedBox()) {
