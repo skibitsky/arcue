@@ -15,6 +15,7 @@ export const channels = {
   adoptTab: "arcue:adopt-tab",
   tabDragEnd: "arcue:tab-drag-end",
   menuCommand: "arcue:menu-command",
+  editText: "arcue:edit-text",
   closeRequest: "arcue:close-request",
   closeReady: "arcue:close-ready",
 } as const;
@@ -50,7 +51,10 @@ export const adoptTabSchema = z.object({ assetId: assetIdSchema });
 
 export const tabDragEndSchema = z.object({ assetId: assetIdSchema, dropped: z.boolean() });
 
-export const menuCommandSchema = z.enum(["new-tab", "close-tab"]);
+export const menuCommandSchema = z.enum(["new-tab", "close-tab", "undo", "redo"]);
+
+/** The native text edits a window asks for when Edit > Undo or Redo reaches it while a text field has focus. */
+export const textEditSchema = z.enum(["undo", "redo"]);
 
 export const openDialogResultSchema = z.array(pathSchema);
 
@@ -61,6 +65,7 @@ export type SavedTab = z.output<typeof savedTabSchema>;
 export type WindowTabs = z.output<typeof windowTabsSchema>;
 export type WindowInit = z.output<typeof windowInitSchema>;
 export type MenuCommand = z.output<typeof menuCommandSchema>;
+export type TextEdit = z.output<typeof textEditSchema>;
 export type FileKind = z.output<typeof fileKindSchema>;
 
 /** What the preload exposes to the page as `window.arcueDesktop`. */
@@ -84,6 +89,8 @@ export interface DesktopBridge {
   /** A tab drag ended; `dropped` is false when no tab strip took it, so the main process may tear it off. */
   tabDragEnd(assetId: string, dropped: boolean): void;
   onMenuCommand(listener: (command: MenuCommand) => void): () => void;
+  /** Runs the native undo or redo of the focused text field. */
+  editText(edit: TextEdit): void;
   /** The main process asks the window to close its assets before the window closes; answer with `closeReady`. */
   onCloseRequest(listener: () => void): () => void;
   closeReady(tabs: WindowTabs): void;

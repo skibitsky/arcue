@@ -2,7 +2,11 @@ import type { MenuItemConstructorOptions } from "electron";
 import { app, Menu } from "electron";
 import type { WindowManager } from "./windows";
 
-/** The native menus. Tab commands go to the focused window; the rest run in the main process. */
+/**
+ * The native menus. Tab commands go to the focused window; the rest run in the main process. Undo and redo go to the
+ * focused window too, which undoes text in a focused text field and the visible tab's review otherwise; the window
+ * leaves those keys to these items, so one key press never undoes twice.
+ */
 export function installMenu(windows: WindowManager): void {
   const mac = process.platform === "darwin";
   const developer = !app.isPackaged;
@@ -40,8 +44,16 @@ export function installMenu(windows: WindowManager): void {
     {
       label: "Edit",
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        { id: "undo", label: "Undo", accelerator: "CmdOrCtrl+Z", click: () => windows.editHistory("undo") },
+        {
+          id: "redo",
+          label: "Redo",
+          accelerator: "Shift+CmdOrCtrl+Z",
+          click: () => windows.editHistory("redo"),
+        },
+        ...(mac
+          ? []
+          : [{ label: "Redo", accelerator: "Ctrl+Y", visible: false, click: () => windows.editHistory("redo") }]),
         { type: "separator" },
         { role: "cut" },
         { role: "copy" },

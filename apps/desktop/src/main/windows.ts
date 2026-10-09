@@ -1,8 +1,8 @@
 import { IMAGE_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { IpcMainEvent, IpcMainInvokeEvent, Rectangle, WebContents } from "electron";
-import { BrowserWindow, dialog, ipcMain, screen } from "electron";
-import type { FileKind, MenuCommand, WindowInit, WindowTabs } from "../shared/ipc";
-import { channels, fileKindSchema, tabDragEndSchema, windowTabsSchema } from "../shared/ipc";
+import { BrowserWindow, dialog, ipcMain, screen, webContents } from "electron";
+import type { FileKind, MenuCommand, TextEdit, WindowInit, WindowTabs } from "../shared/ipc";
+import { channels, fileKindSchema, tabDragEndSchema, textEditSchema, windowTabsSchema } from "../shared/ipc";
 import type { Log } from "../shared/log";
 import { ASSET_EXTENSIONS } from "./args";
 import type { CoreHost } from "./core-host";
@@ -186,6 +186,20 @@ export class WindowManager {
     reveal((this.#lastUsedWindow() ?? this.create()).window);
   }
 
+  /**
+   * Edit > Undo or Redo. Contents that are not an app window, such as developer tools, get their native edit; an app
+   * window decides between its text field's edit and the visible tab's review.
+   */
+  editHistory(edit: TextEdit): void {
+    const focused = webContents.getFocusedWebContents();
+    if (focused && !this.#windows.has(focused.id)) {
+      if (edit === "undo") focused.undo();
+      else focused.redo();
+      return;
+    }
+    this.sendMenuCommand(edit);
+  }
+
   sendMenuCommand(command: MenuCommand): void {
     const target = this.#focusedWindow();
     if (target) target.contents.send(channels.menuCommand, command);
@@ -343,6 +357,12 @@ export class WindowManager {
       const entry = this.#sender(event);
       const kind = fileKindSchema.safeParse(payload);
       return entry && kind.success ? this.#pickViewFiles(entry.window, kind.data) : [];
+    });
+    ipcMain.on(channels.editText, (event, payload: unknown) => {
+      const edit = textEditSchema.safeParse(payload);
+      if (!this.#sender(event) || !edit.success) return;
+      if (edit.data === "undo") event.sender.undo();
+      else event.sender.redo();
     });
     ipcMain.on(channels.tabDragEnd, (event, payload: unknown) => {
       const entry = this.#sender(event);

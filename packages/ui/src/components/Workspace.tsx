@@ -37,13 +37,27 @@ export interface WorkspaceProps extends TabDragHandlers {
   windowControls?: ReactNode;
   /** The clock for relative times in History. */
   now?: () => Date;
+  /**
+   * Whether the undo and redo keys run review.undo and review.redo for the visible tab. The default is true; a host
+   * whose native Edit menu takes those keys turns it off, so one key press never undoes twice.
+   */
+  historyKeys?: boolean;
 }
 
 const systemNow = () => new Date();
 
 /** The Workspace window: tab strip, and for the active asset the toolbar, 3D view, timeline, comments and status. */
 export function Workspace(props: WorkspaceProps) {
-  const { store, createViewport, samples = [], onOpenFile, onDropFiles, windowControls, now = systemNow } = props;
+  const {
+    store,
+    createViewport,
+    samples = [],
+    onOpenFile,
+    onDropFiles,
+    windowControls,
+    now = systemNow,
+    historyKeys = true,
+  } = props;
   const tabs = useSelect(store.state, (state) => state.tabs);
   const active = useSelect(store.state, (state) => state.active);
   const connection = useSelect(store.state, (state) => state.connection);
@@ -78,6 +92,7 @@ export function Workspace(props: WorkspaceProps) {
               connection={connection}
               createViewport={createViewport}
               now={now}
+              historyKeys={historyKeys}
             />
           ) : null;
         })}
@@ -106,6 +121,7 @@ function AssetView({
   connection,
   createViewport,
   now,
+  historyKeys,
 }: {
   store: WorkspaceStore;
   session: AssetSession;
@@ -113,6 +129,7 @@ function AssetView({
   connection: ConnectionState;
   createViewport: CreateViewport;
   now: () => Date;
+  historyKeys: boolean;
 }) {
   const rootRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -120,7 +137,7 @@ function AssetView({
     let spaceUsed = false;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!rootRef.current || rootRef.current.closest("[hidden]")) return;
-      if (handleShortcut(event, session)) {
+      if (handleShortcut(event, session, { history: historyKeys })) {
         event.preventDefault();
         spaceUsed = event.key === " ";
       }
@@ -137,7 +154,7 @@ function AssetView({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [active, session]);
+  }, [active, session, historyKeys]);
 
   return (
     <main

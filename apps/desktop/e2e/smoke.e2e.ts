@@ -135,6 +135,15 @@ function shown(page: Page, assetId: string) {
   }, assetId);
 }
 
+/** Clicks an item of the native application menu by its id, as a mouse click would. */
+async function clickMenuItem(electron: ElectronApplication, id: string): Promise<void> {
+  await electron.evaluate(({ Menu }, itemId) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById(itemId);
+    if (!item) throw new Error(`No menu item "${itemId}".`);
+    item.click();
+  }, id);
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -246,11 +255,25 @@ describe("the desktop app", () => {
       animations: ["beetle-turn.fbx"],
     });
 
-    await page.evaluate(async (id) => {
-      await (globalThis as WindowProbe).arcueWindow?.client.execute("review.undo", { assetId: id });
-    }, crateId);
-    expect(existsSync(composition)).toBe(false);
-    expect((await sceneOf(page, crateId)).clips).toEqual([]);
+    const clips = async () => (await sceneOf(page, crateId)).clips;
+    await clickMenuItem(electron, "undo");
+    await expect.poll(() => existsSync(composition)).toBe(false);
+    await expect.poll(clips).toEqual([]);
+    await clickMenuItem(electron, "redo");
+    await expect.poll(clips).toEqual(["beetle-turn.fbx//Armature|Turn"]);
+
+    const field = page.getByLabel("Comment without a pin").filter({ visible: true });
+    await field.click();
+    await page.keyboard.type("Spin");
+    await clickMenuItem(electron, "undo");
+    await expect.poll(() => field.inputValue()).not.toBe("Spin");
+    expect(existsSync(composition)).toBe(true);
+    await field.fill("");
+    await field.blur();
+
+    await clickMenuItem(electron, "undo");
+    await expect.poll(() => existsSync(composition)).toBe(false);
+    await expect.poll(clips).toEqual([]);
     await page.keyboard.press("Escape");
   });
 

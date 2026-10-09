@@ -6,7 +6,7 @@ import "./desktop.css";
 import type { CoreClient } from "@arcue/protocol";
 import { portEndpoint } from "@arcue/protocol";
 import type { WorkspaceStore } from "@arcue/ui";
-import { Workspace } from "@arcue/ui";
+import { inTextField, Workspace } from "@arcue/ui";
 import { createViewport } from "@arcue/viewport";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -34,7 +34,13 @@ function onPort(listener: (channel: CoreChannel) => void): () => void {
 }
 
 const bridge = window.arcueDesktop;
-const host = new WindowHost({ bridge, onPort, closeWindow: () => window.close(), hasFocus: () => document.hasFocus() });
+const host = new WindowHost({
+  bridge,
+  onPort,
+  closeWindow: () => window.close(),
+  hasFocus: () => document.hasFocus(),
+  inTextField: () => inTextField(document.activeElement),
+});
 window.arcueWindow = { client: host.client, store: host.store };
 
 const root = document.getElementById("app");
@@ -49,6 +55,7 @@ createRoot(root).render(
       onDropFiles={(files) => host.openFiles(files)}
       onTabDragEnd={(assetId, event) => bridge.tabDragEnd(assetId, event.dataTransfer.dropEffect !== "none")}
       onTabDrop={(assetId, index) => void host.moveHere(assetId, index)}
+      historyKeys={false}
     />
   </StrictMode>,
 );

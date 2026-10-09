@@ -2,7 +2,7 @@ import type { AssetSummary } from "@arcue/protocol";
 import { separateComposition } from "@arcue/protocol";
 import type { FileHost, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore } from "@arcue/ui";
-import type { DesktopBridge, MenuCommand, SavedTab, WindowTabs } from "../shared/ipc";
+import type { DesktopBridge, MenuCommand, SavedTab, TextEdit, WindowTabs } from "../shared/ipc";
 import type { CoreChannel } from "./reconnecting-client";
 import { ReconnectingClient } from "./reconnecting-client";
 
@@ -13,6 +13,8 @@ export interface WindowHostOptions {
   closeWindow(): void;
   /** Whether this window has the keyboard focus, so a new core learns which window the user works in. */
   hasFocus?: () => boolean;
+  /** Whether the keyboard focus is in a text field, which keeps its own undo. */
+  inTextField?: () => boolean;
   setTimer?: (delayMs: number, callback: () => void) => () => void;
 }
 
@@ -202,6 +204,10 @@ export class WindowHost {
   }
 
   #menu(command: MenuCommand): void {
+    if (command === "undo" || command === "redo") {
+      this.#history(command);
+      return;
+    }
     if (command === "new-tab") {
       this.store.openNewTab();
       return;
@@ -209,6 +215,16 @@ export class WindowHost {
     const { active, tabs } = this.store.state.get();
     if (active !== null) void this.store.closeTab(active);
     else if (tabs.length === 0) this.#options.closeWindow();
+  }
+
+  /** Edit > Undo or Redo: the focused text field's own undo, or the visible tab's review history. */
+  #history(edit: TextEdit): void {
+    if (this.#options.inTextField?.()) {
+      this.#bridge.editText(edit);
+      return;
+    }
+    const session = this.store.activeSession();
+    if (session) void (edit === "undo" ? session.undo() : session.redo());
   }
 
   /** Closes this window's assets in the core, so their writes finish, and hands the main process the final tabs. */

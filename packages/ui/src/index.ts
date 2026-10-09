@@ -3,6 +3,7 @@ export type { TabDragHandlers } from "./components/TitleBar";
 export { TAB_DRAG_TYPE } from "./components/TitleBar";
 export type { WorkspaceProps } from "./components/Workspace";
 export { Workspace } from "./components/Workspace";
+export { inTextField } from "./shortcuts";
 export type {
   BoxMode,
   CommentBox,

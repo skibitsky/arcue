@@ -9,6 +9,7 @@ import {
   menuCommandSchema,
   openDialogResultSchema,
   openPathsSchema,
+  textEditSchema,
   windowInitSchema,
 } from "../shared/ipc";
 
@@ -52,6 +53,7 @@ const bridge: DesktopBridge = {
   pathForFile: (file) => webUtils.getPathForFile(file),
   tabDragEnd: (assetId, dropped) => ipcRenderer.send(channels.tabDragEnd, { assetId, dropped }),
   onMenuCommand: (listener) => on(channels.menuCommand, menuCommandSchema, listener),
+  editText: (edit) => ipcRenderer.send(channels.editText, textEditSchema.parse(edit)),
   onCloseRequest: (listener) => {
     const handler = () => listener();
     ipcRenderer.on(channels.closeRequest, handler);

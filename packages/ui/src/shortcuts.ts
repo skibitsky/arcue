@@ -1,7 +1,8 @@
 import { isMacPlatform } from "./format";
 import type { AssetSession } from "./store/asset-session";
 
-const TEXT_FIELDS = "input, textarea, select, [contenteditable='true']";
+const TEXT_FIELDS =
+  "input:not([type='range'], [type='checkbox'], [type='radio'], [type='button'], [type='submit']), textarea, select, [contenteditable='true']";
 const WIDGETS_WITH_KEYS = "[role='menu'], [role='dialog'], [role='slider'], input[type='range']";
 const ACTIVATED_BY_SPACE = "button, a[href], summary, [role='button'], [role='tab'], [role='menuitem']";
 const BRUSH_STEP = 4;
@@ -15,8 +16,22 @@ function historyKey(event: KeyboardEvent): "undo" | "redo" | null {
   return key === "y" && !mac && !event.shiftKey ? "redo" : null;
 }
 
+/** Whether an element is or sits in a text field, which keeps its own undo and most keys. */
+export function inTextField(element: Element | null): boolean {
+  return element !== null && element.closest(TEXT_FIELDS) !== null;
+}
+
+export interface ShortcutOptions {
+  /** Whether the undo and redo keys run review.undo and review.redo; off where a native menu takes those keys. */
+  history: boolean;
+}
+
 /** Runs the spec's shortcuts for the visible tab. Returns true when the key was used. */
-export function handleShortcut(event: KeyboardEvent, session: AssetSession): boolean {
+export function handleShortcut(
+  event: KeyboardEvent,
+  session: AssetSession,
+  options: ShortcutOptions = { history: true },
+): boolean {
   const target = event.target instanceof Element ? event.target : null;
   const mod = event.metaKey || event.ctrlKey;
   const key = event.key;
@@ -24,8 +39,8 @@ export function handleShortcut(event: KeyboardEvent, session: AssetSession): boo
     void session.copyPrompt();
     return true;
   }
-  if (event.defaultPrevented || target?.closest(TEXT_FIELDS)) return false;
-  const history = historyKey(event);
+  if (event.defaultPrevented || inTextField(target)) return false;
+  const history = options.history ? historyKey(event) : null;
   if (history === "undo") void session.undo();
   if (history === "redo") void session.redo();
   if (history) return true;

@@ -98,6 +98,37 @@ describe("Workspace", () => {
     expect(session.state.get().tool).toBe("view");
   });
 
+  it("leaves the undo and redo keys to the host's menu when the host turns history keys off", async () => {
+    const { client, store } = setup();
+    render(<Workspace store={store} createViewport={() => new TestViewport()} now={() => NOW} historyKeys={false} />);
+    await act(async () => {
+      await client.execute("asset.open", { path: STONE_RESONATOR_PATH });
+      await flush(10);
+    });
+    const presses = [
+      { key: "z", ctrlKey: true },
+      { key: "z", ctrlKey: true, shiftKey: true },
+      { key: "y", ctrlKey: true },
+    ];
+    for (const press of presses) {
+      const event = new KeyboardEvent("keydown", { ...press, bubbles: true, cancelable: true });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    await act(() => flush());
+    expect(client.calls.some((call) => call.name === "review.undo" || call.name === "review.redo")).toBe(false);
+  });
+
+  it("undoes from the keyboard while the brush slider has focus, since it is no text field", async () => {
+    const { client } = await renderStone();
+    const user = userEvent.setup();
+    await user.keyboard("c");
+    await user.click(screen.getByRole("slider", { name: "Brush size" }));
+    await user.keyboard("{Control>}z{/Control}");
+    await act(() => flush());
+    expect(client.calls.some((call) => call.name === "review.undo")).toBe(true);
+  });
+
   it("ignores shortcuts while typing, except Copy prompt", async () => {
     const { session, client } = await renderStone();
     const user = userEvent.setup();

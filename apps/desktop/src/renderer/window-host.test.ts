@@ -2,7 +2,7 @@ import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
 import type { MemoryEndpoint } from "@arcue/protocol";
 import { createMemoryChannel } from "@arcue/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopBridge, MenuCommand, WindowInit, WindowTabs } from "../shared/ipc";
+import type { DesktopBridge, MenuCommand, TextEdit, WindowInit, WindowTabs } from "../shared/ipc";
 import type { CoreChannel } from "./reconnecting-client";
 import { WindowHost } from "./window-host";
 
@@ -29,6 +29,7 @@ class FakeDesktop {
   crashAfterOpens: number | null = null;
   readonly reports: WindowTabs[] = [];
   readonly closed: WindowTabs[] = [];
+  readonly textEdits: TextEdit[] = [];
   readyCount = 0;
   crashes = 0;
   #connections = 0;
@@ -112,6 +113,9 @@ class FakeDesktop {
     onMenuCommand: (listener) => {
       this.#menu = listener;
       return () => undefined;
+    },
+    editText: (edit) => {
+      this.textEdits.push(edit);
     },
     onCloseRequest: (listener) => {
       this.#close = listener;
@@ -296,6 +300,34 @@ describe("WindowHost", () => {
     await vi.waitFor(() => expect(window.store.state.get().tabs).toEqual([]));
     desktop.menu("new-tab");
     expect(window.store.state.get().tabs.map((tab) => tab.kind)).toEqual(["empty"]);
+  });
+
+  it("runs Edit > Undo and Redo as text edits in a focused text field, and on the visible tab's review otherwise", async () => {
+    const desktop = new FakeDesktop({ platform: "darwin", restore: null, adopt: null });
+    let typing = true;
+    const window = await startHost(desktop, { inTextField: () => typing });
+    await vi.waitFor(() => expect(desktop.readyCount).toBe(1));
+    await window.store.openPath(HERO);
+    await vi.waitFor(() => expect(paths(window)).toEqual([HERO]));
+    const assetId = window.store.state.get().active;
+    const execute = vi.spyOn(window.client, "execute");
+    const history = () => execute.mock.calls.filter(([name]) => name === "review.undo" || name === "review.redo");
+
+    desktop.menu("undo");
+    desktop.menu("redo");
+    expect(desktop.textEdits).toEqual(["undo", "redo"]);
+    expect(history()).toEqual([]);
+
+    typing = false;
+    desktop.menu("undo");
+    desktop.menu("redo");
+    await vi.waitFor(() =>
+      expect(history()).toEqual([
+        ["review.undo", { assetId }],
+        ["review.redo", { assetId }],
+      ]),
+    );
+    expect(desktop.textEdits).toHaveLength(2);
   });
 
   it("takes a tab from another window with view.moveAsset", async () => {
