@@ -1,5 +1,12 @@
 import type { ComputedContext, DisplayMode, TimeSelection } from "@arcue/protocol";
-import type { CameraAnchor, RegionAnchor, SceneDescription, SpatialAnchor, SurfaceAnchor } from "@arcue/scene";
+import type {
+  CameraAnchor,
+  PartView,
+  RegionAnchor,
+  SceneDescription,
+  SpatialAnchor,
+  SurfaceAnchor,
+} from "@arcue/scene";
 
 export type ToolId = "view" | "comment";
 
@@ -108,6 +115,11 @@ export interface Viewport {
   setPlaybackRange(range: PlaybackRange | null): void;
   setDisplayMode(mode: DisplayMode): void;
   setSkeletonVisible(visible: boolean): void;
+  /**
+   * Which parts to draw, LOD0 without collision helpers by default. Hidden parts are left out of picking, painting,
+   * pins, framing, screenshots and `computeContext`. The view keeps it across `setScene`.
+   */
+  setPartView(view: PartView): void;
   setTool(tool: ToolId): void;
   /** Brush radius in CSS pixels. */
   setBrushSize(radius: number): void;

@@ -293,6 +293,58 @@ async function sampleChecks(page: Page, origin: Origin): Promise<void> {
       agreement: await harness.textureAgreement(),
     };
   }, SHOT);
+  const lods = await page.evaluate(async (size) => {
+    const harness = window.harness;
+    if (!harness) throw new Error("no harness");
+    const plain = harness.scene;
+    const { min, max } = plain.bounds;
+    const extent = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+    const center: [number, number, number] = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+    const camera = {
+      position: [center[0], center[1], center[2] + extent * 6] as [number, number, number],
+      target: center,
+      up: [0, 1, 0] as [number, number, number],
+      fov: 35,
+    };
+    const shoot = () => harness.screenshotBase64({ ...size, camera });
+    await harness.viewport.setScene(null);
+    const background = await shoot();
+    await harness.showScene(plain);
+    const single = await shoot();
+    const scene = harness.withLods(plain, extent * 1.6);
+    await harness.showScene(scene);
+    const lod0 = await shoot();
+    const view = { hidden: [], shown: [], isolated: null, lod: 0 };
+    harness.viewport.setPartView({ ...view, lod: 1 });
+    const lod1 = await shoot();
+    const collision = scene.parts.find((part) => part.role === "collision")?.id ?? null;
+    harness.viewport.setPartView({ ...view, isolated: collision });
+    const isolated = await shoot();
+    harness.viewport.setPartView(view);
+    return {
+      lod0,
+      lod1,
+      isolated,
+      parts: scene.parts.map((part) => `${part.id}:${part.role}:${part.levels.length}`),
+      sameAsSingle: await harness.changedShare(single, lod0),
+      lod1Changed: await harness.changedShare(lod0, lod1),
+      lod1Pixels: await harness.modelPixels(lod1, background),
+      collisionPixels: await harness.modelPixels(isolated, background),
+    };
+  }, SHOT);
+  save("26-lods-default", lods.lod0);
+  save("27-lods-lod1", lods.lod1);
+  save("28-lods-collision-isolated", lods.isolated);
+  check(
+    "only LOD0 of a LOD group renders, and its collision helper stays hidden",
+    lods.parts.length === 2 && lods.sameAsSingle < 0.001 && lods.collisionPixels > area * 0.002,
+    { parts: lods.parts, sameAsSingle: lods.sameAsSingle, collisionShare: lods.collisionPixels / area },
+  );
+  check(
+    "choosing LOD1 draws the second level in place of LOD0",
+    lods.lod1Changed > 0.004 && lods.lod1Pixels > area * 0.002,
+    { lod1Changed: lods.lod1Changed, lod1Share: lods.lod1Pixels / area },
+  );
   save("24-rock-lit", rock.lit);
   save("25-rock-clay", rock.clay);
   check(

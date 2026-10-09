@@ -53,6 +53,8 @@ export interface MeshRuntime {
   doubleSided: boolean;
   /** The mesh's node has a negative determinant in the current pose, so the GPU flips which winding faces front. */
   mirrored: boolean;
+  /** The part view draws the mesh. A hidden mesh is drawn by neither pass. */
+  visible: boolean;
   representatives: Int32Array;
   posed: PosedVertexCache;
   /** The mesh as the CPU poses it: without skin influences when it renders rigid. */
@@ -74,6 +76,7 @@ export class Model {
   private readonly materials: Material[] = [];
   readonly scene: SceneDescription;
   private readonly images: (DecodedImage | null)[];
+  private displayMode: DisplayMode = "lit";
 
   private constructor(scene: SceneDescription, images: (DecodedImage | null)[], palette: Palette, anisotropy: number) {
     this.scene = scene;
@@ -208,6 +211,7 @@ export class Model {
       tint,
       doubleSided: side === DoubleSide,
       mirrored: false,
+      visible: true,
       representatives,
       posedMesh,
       posed: new PosedVertexCache(posedMesh),
@@ -258,10 +262,21 @@ export class Model {
   }
 
   setDisplayMode(mode: DisplayMode): void {
+    this.displayMode = mode;
     for (const runtime of this.meshes) {
       runtime.display.material = mode === "lit" ? runtime.lit : mode === "clay" ? runtime.clay : runtime.wireFill;
       runtime.pick.material = mode === "lit" ? runtime.pickLit : runtime.pickSolid;
-      runtime.wire.visible = mode === "wireframe";
+      runtime.wire.visible = runtime.visible && mode === "wireframe";
+    }
+  }
+
+  /** Draws only the meshes with these indices. */
+  setVisibleMeshes(visible: ReadonlySet<number>): void {
+    for (const runtime of this.meshes) {
+      runtime.visible = visible.has(runtime.index);
+      runtime.display.visible = runtime.visible;
+      runtime.pick.visible = runtime.visible;
+      runtime.wire.visible = runtime.visible && this.displayMode === "wireframe";
     }
   }
 

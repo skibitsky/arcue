@@ -1,6 +1,7 @@
 import type { ComputedContext, DisplayMode, TimeSelection } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
-import type { CameraAnchor, Clip, SceneDescription, SpatialAnchor, SurfaceAnchor, Vec3 } from "@arcue/scene";
+import type { CameraAnchor, Clip, PartView, SceneDescription, SpatialAnchor, SurfaceAnchor, Vec3 } from "@arcue/scene";
+import { defaultPartView, visibleMeshes } from "@arcue/scene";
 import { Vector3 } from "three";
 import { Emitter } from "./events";
 import type { StrokeMode } from "./interaction/paint";
@@ -131,6 +132,7 @@ export class ThreeViewport implements Viewport {
 
   private displayMode: DisplayMode = "lit";
   private skeletonVisible = false;
+  private partView: PartView = defaultPartView();
   private tool: ToolId = "view";
 
   private overlays: OverlayEntry[] = [];
@@ -269,6 +271,7 @@ export class ThreeViewport implements Viewport {
     if (model) {
       this.stage.scene.add(model.root);
       model.setDisplayMode(this.displayMode);
+      model.setVisibleMeshes(visibleMeshes(model.scene.parts, this.partView));
       this.skeleton = new SkeletonOverlay(model.scene, this.palette.text);
       this.skeleton.object.visible = this.skeletonVisible;
       this.stage.scene.add(this.skeleton.object);
@@ -362,6 +365,23 @@ export class ThreeViewport implements Viewport {
     this.requestRender();
   }
 
+  setPartView(view: PartView): void {
+    this.partView = { ...view, hidden: [...view.hidden], shown: [...view.shown] };
+    const model = this.model;
+    if (!model) return;
+    this.cancelGesture();
+    model.setVisibleMeshes(visibleMeshes(model.scene.parts, this.partView));
+    this.viewStamp++;
+    this.idPass.invalidate();
+    this.surfaceVisibility.clear();
+    this.visibilityVersion = -1;
+    this.overlays = this.overlays.map((entry) => this.resolveEntry(entry.overlay));
+    this.pins.sync(this.overlays.map((entry) => entry.overlay));
+    this.tintDirty = true;
+    this.requestRender();
+    this.scheduleHover();
+  }
+
   setTool(tool: ToolId): void {
     if (tool === this.tool) return;
     this.tool = tool;
@@ -410,6 +430,7 @@ export class ThreeViewport implements Viewport {
     const max = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
     const point = new Float64Array(3);
     for (const runtime of model.meshes) {
+      if (!runtime.visible) continue;
       const count = runtime.data.positions.length / 3;
       for (let vertex = 0; vertex < count; vertex++) {
         runtime.posed.get(vertex, point);
@@ -516,6 +537,7 @@ export class ThreeViewport implements Viewport {
     if (!anchor) return { vertexCount: 0, bones: [], centroid: null, joints: [], viewLabel: label };
     const runtime = model.meshByPath.get(anchor.mesh);
     if (!runtime) throw new ArcueError("not-found", `The scene has no mesh at "${anchor.mesh}".`);
+    if (!runtime.visible) throw new ArcueError("not-found", `The mesh at "${anchor.mesh}" is hidden.`);
     const scene = model.scene;
     const pose = poseAt(scene, at.clip, at.seconds);
     const worlds = worldMatrices(scene.nodes, pose);
