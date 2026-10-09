@@ -482,7 +482,7 @@ export class AssetSession {
   }
 
   /**
-   * Attaches an added file to a model bone, by the bone's node index, or detaches it with null, through
+   * Attaches an added file to a model bone, by the bone's node index, or detaches it with null, through one
    * "composition.attachFile". A file that sits in several places moves only its nodes in this place.
    */
   async attachFile(file: OutlineFile, bone: number | null): Promise<void> {
@@ -492,11 +492,10 @@ export class AssetSession {
     const folder = summary.path.slice(0, summary.path.lastIndexOf("/") + 1);
     const input = { assetId: this.assetId, file: `${folder}${file.file}`, bone: path };
     try {
-      if (file.nodes === null) {
-        await this.#client.execute("composition.attachFile", input);
-      } else {
-        for (const node of file.nodes) await this.#client.execute("composition.attachFile", { ...input, node });
-      }
+      await this.#client.execute(
+        "composition.attachFile",
+        file.nodes === null || file.nodes.length === 0 ? input : { ...input, nodes: [...file.nodes] },
+      );
     } catch (error) {
       this.#host.notify({ message: messageOf(error), kind: "alert" });
     }

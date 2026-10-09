@@ -83,7 +83,7 @@ const LISTED_NAMES = 5;
  */
 export function composeScene(model: SceneDescription, composition: Composition): SceneDescription {
   const builder = new SceneBuilder(model, composition.warnings ?? []);
-  for (const attachment of composition.attach) builder.attach(attachment);
+  for (const attachment of attachOrder(composition.attach)) builder.attach(attachment);
   builder.addMemberParts();
   builder.addClips(composition.animations);
   builder.hide(composition.hidden);
@@ -459,6 +459,23 @@ class SceneBuilder {
       bounds: defaultViewBounds(this.#meshes, this.#parts),
     };
   }
+}
+
+/**
+ * The attachments with each file's node entries before its whole-file entries, files in the order they first appear.
+ * A whole-file entry takes every node its file has not placed yet, so an entry for one of its nodes must come first.
+ */
+function attachOrder(attach: readonly CompositionAttachment[]): CompositionAttachment[] {
+  const byFile = new Map<string, CompositionAttachment[]>();
+  for (const attachment of attach) {
+    const entries = byFile.get(attachment.member.file) ?? [];
+    entries.push(attachment);
+    byFile.set(attachment.member.file, entries);
+  }
+  return [...byFile.values()].flatMap((entries) => [
+    ...entries.filter((entry) => entry.node !== null),
+    ...entries.filter((entry) => entry.node === null),
+  ]);
 }
 
 /** Marks the roots and everything below them. Parents come before their children. */

@@ -610,7 +610,7 @@ describe("composition commands", () => {
     const parentOf = (path: string) => nodePath(scene, scene.nodes.find((node) => node.path === path)?.parent ?? -1);
     expect(parentOf("BugShells.fbx//Hero/ShellA")).toBe("Hero/Body/Leg");
 
-    await attach({ file: "BugShells.fbx", node: "Hero/ShellB", bone: null });
+    await attach({ file: "BugShells.fbx", nodes: ["Hero/ShellB"], bone: null });
     expect(await sidecar(test)).toMatchObject({
       attach: [
         { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
@@ -623,6 +623,29 @@ describe("composition commands", () => {
     expect(await sidecar(test)).toMatchObject({ hidden: ["BugShells.fbx//Hero/ShellB"] });
   });
 
+  it("moves several nodes of a file in one edit, with one write, one reload and one undo step", async () => {
+    const test = await setup();
+    const writes = test.platform.writes.length;
+    const versions = (await test.core.client.query("review.get", { assetId: test.assetId })).versions.length;
+    await test.window.client.execute("composition.attachFile", {
+      assetId: test.assetId,
+      file: "BugShells.fbx",
+      nodes: ["ShellA", "Hero/ShellB"],
+      bone: "Leg",
+    });
+    expect(test.platform.writes.slice(writes).filter((write) => write.path === SIDECAR)).toHaveLength(1);
+    const review = await test.core.client.query("review.get", { assetId: test.assetId });
+    expect(review.versions).toHaveLength(versions + 1);
+    expect(await sidecar(test)).toMatchObject({
+      attach: [
+        { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
+        { file: "BugShells.fbx", node: "ShellB", bone: "Leg" },
+      ],
+    });
+    await test.window.client.execute("review.undo", { assetId: test.assetId });
+    expect(await sidecar(test)).toMatchObject({ attach: composition.attach });
+  });
+
   it("refuses bones the model lacks, files it does not attach and animation files, without writing", async () => {
     const test = await setup();
     const before = await test.platform.readText(SIDECAR);
@@ -631,7 +654,7 @@ describe("composition commands", () => {
     await expect(attach({ file: "BugShells.fbx", bone: "Wing" })).rejects.toMatchObject({ code: "invalid-input" });
     await expect(attach({ file: "Anim/BugTurn.fbx", bone: "Body" })).rejects.toMatchObject({ code: "invalid-input" });
     await expect(attach({ file: "Other.fbx", bone: "Body" })).rejects.toMatchObject({ code: "not-found" });
-    await expect(attach({ file: "BugShells.fbx", node: "ShellC", bone: null })).rejects.toMatchObject({
+    await expect(attach({ file: "BugShells.fbx", nodes: ["ShellC"], bone: null })).rejects.toMatchObject({
       code: "not-found",
     });
     await expect(attach({ file: "BugShells.fbx", bone: "" })).rejects.toMatchObject({ code: "invalid-input" });

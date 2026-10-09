@@ -781,7 +781,7 @@ export class ArcueCore {
 
   /**
    * Moves an added file's attached entries onto a bone of the model, written by its name when the name finds it, or
-   * off their bone. A node picks the entry whose node names the same node of the file.
+   * off their bone, in one edit. `nodes` picks the entries whose node names one of those nodes of the file.
    */
   #attachCompositionFile(args: CommandArgs<"composition.attachFile">): Promise<{ path: string }> {
     const asset = this.#asset(args.assetId);
@@ -794,23 +794,28 @@ export class ArcueCore {
         if (bone === undefined) throw new ArcueError("invalid-input", `${asset.name} has no bone "${args.bone}".`);
       }
       const member = asset.imported.get(path)?.scene;
-      const wanted = args.node;
-      const sameNode = (written: string | undefined): boolean => {
-        if (wanted === undefined) return true;
+      const sameNode = (wanted: string, written: string | undefined): boolean => {
         if (written === undefined) return false;
         if (written === wanted) return true;
         if (!member) return false;
         const index = findNode(member.nodes, written, false);
         return index !== null && index === findNode(member.nodes, wanted, false);
       };
+      const wanted = args.nodes;
+      const picked = (written: string | undefined): boolean =>
+        wanted === undefined || wanted.some((node) => sameNode(node, written));
       return this.#editComposition(asset, (composition, same) => {
-        const moved = withAttachBone(composition, same(path), sameNode, bone);
-        if (moved) return moved;
-        if ((composition.animations ?? []).some(same(path))) {
+        const entries = (composition.attach ?? []).filter((entry) => same(path)(entry.file));
+        if (entries.length === 0 && (composition.animations ?? []).some(same(path))) {
           throw new ArcueError("invalid-input", `${args.file} is an animation file, so it has nothing to attach.`);
         }
-        const what = wanted === undefined ? args.file : `Node ${wanted} of ${args.file}`;
-        throw new ArcueError("not-found", `${what} is not attached or set in the composition.`);
+        const lost = (wanted ?? []).find((node) => !entries.some((entry) => sameNode(node, entry.node)));
+        if (lost !== undefined) {
+          throw new ArcueError("not-found", `Node ${lost} of ${args.file} is not attached or set in the composition.`);
+        }
+        const moved = withAttachBone(composition, same(path), picked, bone);
+        if (moved) return moved;
+        throw new ArcueError("not-found", `${args.file} is not attached or set in the composition.`);
       });
     });
   }

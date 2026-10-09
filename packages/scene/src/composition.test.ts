@@ -335,6 +335,20 @@ describe("composeScene", () => {
     expect(composed.nodes.some((entry) => entry.path === "Helmet.fbx//Armature/Body")).toBe(false);
   });
 
+  it("places a file's node entry before its whole-file entry, whichever the composition lists first", () => {
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: [
+        { member: { file: "Shells.fbx", scene: shells }, node: null, bone: null },
+        { member: { file: "Shells.fbx", scene: shells }, node: "ShellA", bone: "Body" },
+      ],
+    });
+    const parentOf = (path: string) => composed.nodes.find((node) => node.path === path)?.parent;
+    expect(parentOf("Shells.fbx//ShellA")).toBe(1);
+    expect(parentOf("Shells.fbx//ShellB")).toBe(-1);
+    expect(worldOf(composed, "Shells.fbx//ShellA")).toEqual(worldOf(shells, "ShellA"));
+  });
+
   it("reports a missing node and a missing bone, and keeps an attachment without its bone in place", () => {
     const composed = composeScene(legs, {
       ...noComposition(),

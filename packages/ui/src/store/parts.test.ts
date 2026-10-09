@@ -109,7 +109,7 @@ describe("parts", () => {
     expect(session.outlineAvailable()).toBe(false);
   });
 
-  it("attaches and detaches an added file through composition.attachFile, by path, place by place", async () => {
+  it("attaches and detaches an added file through one composition.attachFile per place, by path", async () => {
     const { client, session, store } = await openStone({ scene: composedStone({ split: true }) });
     const scene = session.state.get().scene;
     if (!scene) throw new Error("The scene loaded.");
@@ -117,16 +117,15 @@ describe("parts", () => {
     const [onBone1] = rows.flatMap((row) => (row.item.kind === "file" ? [row.item] : []));
     if (!onBone1) throw new Error("The file has a row.");
     await session.attachFile(onBone1, stoneBone(scene, "Bone_7"));
+    await session.attachFile({ ...onBone1, nodes: ["ShellRound", "ShellSpiked"] }, stoneBone(scene, "Bone_7"));
     await session.attachFile({ ...onBone1, nodes: null }, null);
     const folder = "/work/iza/Assets/Art/Characters/StoneResonator/Models";
+    const file = `${folder}/beetle-shells.fbx`;
+    const bone = "StoneResonator/Armature/Bone_1/Bone_7";
     expect(client.calls.filter((call) => call.name === "composition.attachFile").map((call) => call.input)).toEqual([
-      {
-        assetId: session.assetId,
-        file: `${folder}/beetle-shells.fbx`,
-        node: "ShellRound",
-        bone: "StoneResonator/Armature/Bone_1/Bone_7",
-      },
-      { assetId: session.assetId, file: `${folder}/beetle-shells.fbx`, bone: null },
+      { assetId: session.assetId, file, nodes: ["ShellRound"], bone },
+      { assetId: session.assetId, file, nodes: ["ShellRound", "ShellSpiked"], bone },
+      { assetId: session.assetId, file, bone: null },
     ]);
     vi.spyOn(client, "execute").mockRejectedValueOnce(new ArcueError("conflict", "The composition file is broken."));
     await session.attachFile(onBone1, null);
