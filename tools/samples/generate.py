@@ -768,6 +768,49 @@ def build_mushroom():
     return obj
 
 
+# ---------------------------------------------------------------- rock with LODs
+
+# Icosphere levels share their coarser levels' vertices, so each lower LOD's vertices are a subset of LOD0's and
+# the LODs stay inside LOD0's bounds. The collision box sits inside them too.
+
+ROCK_LOD_SUBDIVISIONS = [4, 3, 2]
+
+
+def rock_lod_bmesh(subdivisions):
+    bm = bmesh.new()
+    add_lumpy_ellipsoid(bm, (0, 0, 0.2), (0.3, 0.24, 0.2), lump=0.03, seed=41, subdivisions=subdivisions)
+    return bm
+
+
+def build_rock_lods():
+    reset_scene()
+    stone = make_material("Stone", (0.45, 0.43, 0.4), roughness=0.85)
+    lods = [object_from_bmesh("Rock_LOD%d" % level, rock_lod_bmesh(subdivisions), (stone,))
+            for level, subdivisions in enumerate(ROCK_LOD_SUBDIVISIONS)]
+    ground = Matrix.Translation((0.0, 0.0, -min(v.co.z for v in lods[0].data.vertices)))
+    for obj in lods:
+        obj.data.transform(ground)
+        obj.data.update()
+        shade_by_angle(obj, 40)
+
+    bm = bmesh.new()
+    add_lumpy_ellipsoid(bm, (0.48, -0.1, 0.06), (0.08, 0.07, 0.06), lump=0.008, seed=43, subdivisions=3)
+    pebble = object_from_bmesh("Pebble", bm, (stone,))
+    drop_to_ground(pebble)
+    shade_by_angle(pebble, 40)
+
+    corners = [v.co for v in lods[0].data.vertices]
+    lo = Vector([min(c[i] for c in corners) for i in range(3)])
+    hi = Vector([max(c[i] for c in corners) for i in range(3)])
+    center, half = (lo + hi) / 2, (hi - lo) / 2 * 0.8
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=2.0)
+    bmesh.ops.transform(bm, matrix=Matrix.Diagonal((*half, 1.0)), verts=bm.verts)
+    bmesh.ops.translate(bm, vec=center, verts=bm.verts)
+    object_from_bmesh("UCX_Rock", bm, (stone,))
+    return lods[0]
+
+
 # ---------------------------------------------------------------- modular beetle
 
 # A creature spread over three files, as game pipelines split one asset: legs with the rig and a walk, two
@@ -1011,6 +1054,12 @@ SAMPLES = [
         export=beetle_export_settings({"ARMATURE"}),
     ),
     dict(
+        name="rock-lods",
+        description="LODs: a rock in three levels named Rock_LOD0 to Rock_LOD2, a pebble beside it without LODs, "
+                    "and a convex collision box, UCX_Rock.",
+        export=dict(UNITY_EXPORT, object_types={"MESH"}),
+    ),
+    dict(
         name="zup-centimeters",
         description="Axis and unit conversion: a 15 cm mushroom exported with Z up and centimeter units "
                     "(vertex positions are in centimeters, UnitScaleFactor 1).",
@@ -1035,6 +1084,8 @@ def build(name, texture_dir):
         build_beetle_shells()
     elif name == "beetle-turn":
         build_beetle(False, ("Turn", 40, pose_beetle_turn))
+    elif name == "rock-lods":
+        build_rock_lods()
     elif name == "zup-centimeters":
         build_mushroom()
     else:

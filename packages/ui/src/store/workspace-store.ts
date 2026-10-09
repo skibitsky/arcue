@@ -69,6 +69,7 @@ export const VIEW_COMMANDS = [
   "view.setPartVisible",
   "view.isolatePart",
   "view.setLod",
+  "view.setOutlineOpen",
   "view.selectComment",
   "view.screenshot",
 ] as const satisfies readonly CommandName[];
@@ -366,6 +367,7 @@ export class WorkspaceStore {
     "view.setPartVisible": ({ assetId, part, visible }) => this.#require(assetId).setPartVisible(part, visible),
     "view.isolatePart": ({ assetId, part }) => this.#require(assetId).isolatePart(part),
     "view.setLod": ({ assetId, level }) => this.#require(assetId).setLod(level),
+    "view.setOutlineOpen": ({ assetId, open }) => this.#require(assetId).setOutlineOpen(open),
     "view.selectComment": ({ assetId, commentId }) => {
       const session = this.#require(assetId);
       if (commentId === null && session.hasUnsavedBox()) {

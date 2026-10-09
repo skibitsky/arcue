@@ -6,9 +6,11 @@ import {
   defaultViewBounds,
   describeParts,
   isDefaultPartView,
+  isolationAsVisibility,
   levelFor,
   lodLevels,
   partRoleOf,
+  viewBounds,
   visibleMeshes,
   withPartVisible,
 } from "./parts";
@@ -206,6 +208,22 @@ describe("part views", () => {
 
   it("ignores an isolated part the scene does not have", () => {
     expect([...visibleMeshes(parts, { ...defaultPartView(), isolated: "Gone" })].sort()).toEqual([0, 4]);
+  });
+
+  it("turns an isolated view into visibility overrides that draw the same meshes", () => {
+    const isolated = { ...withPartVisible(defaultPartView(), boulder, false), isolated: "UCX_Body", lod: 1 };
+    const kept = isolationAsVisibility(parts, isolated);
+    expect(kept).toEqual({ hidden: ["Body_LOD0", "Boulder2"], shown: ["UCX_Body"], isolated: null, lod: 1 });
+    expect(visibleMeshes(parts, kept)).toEqual(visibleMeshes(parts, isolated));
+    expect(isolationAsVisibility(parts, { ...defaultPartView(), isolated: "Gone" })).toEqual(defaultPartView());
+    expect(isolationAsVisibility(parts, kept)).toBe(kept);
+  });
+
+  it("bounds what a view draws, and nothing when it draws nothing", () => {
+    const at = (x: number) => ({ restPositions: Float32Array.of(x, 0, 0, x, 2 + x, 0) });
+    const meshes = [at(0), at(5), at(6), at(-9), at(1), at(20)];
+    expect(viewBounds(meshes, parts, { ...defaultPartView(), lod: 1 })).toEqual({ min: [1, 0, 0], max: [5, 7, 0] });
+    expect(viewBounds(meshes, parts, { ...defaultPartView(), hidden: ["Body_LOD0", "Boulder2"] })).toBeNull();
   });
 
   it("bounds what a default view draws", () => {

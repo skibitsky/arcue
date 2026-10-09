@@ -149,6 +149,20 @@ export const commands = {
     input: z.object({ ...assetRef, file: compositionMemberSchema }),
     output: compositionOutput,
   }),
+  "composition.attachFile": command({
+    description:
+      "Attach a file of the asset's composition to a bone of the model, or detach it with a null bone, which leaves it in place as a set piece. Without node every attached entry of the file moves; with node only the entry for that node. Saves the change in the composition file.",
+    runsIn: "core",
+    input: z.object({
+      ...assetRef,
+      file: compositionMemberSchema,
+      /** A node's name or path in the file, naming one of the file's entries. */
+      node: z.string().min(1).optional(),
+      /** A bone's name or path in the model, or null for a set piece. */
+      bone: z.string().min(1).nullable(),
+    }),
+    output: compositionOutput,
+  }),
   "material.setTexture": command({
     description:
       "Show a texture in a material slot of the asset, in place of what the model's file says, and save it in the composition file. A null file removes the override. scene.materials lists the slots. Undo with review.undo.",
@@ -283,7 +297,7 @@ export const commands = {
   }),
   "view.setPartVisible": command({
     description:
-      "Show or hide a part by its id from scene.parts. Collision helpers are hidden until shown; sockets draw no mesh.",
+      "Show or hide a part by its id from scene.parts. Collision helpers are hidden until shown; sockets draw no mesh. While a part is isolated, the other parts stay as they are on screen and the isolation ends.",
     runsIn: "view",
     input: z.object({ ...assetRef, part: partIdSchema, visible: z.boolean() }),
     output: z.void(),
@@ -298,6 +312,13 @@ export const commands = {
     description: "Show a LOD level. A part without that level shows its nearest lower one.",
     runsIn: "view",
     input: z.object({ ...assetRef, level: indexSchema }),
+    output: z.void(),
+  }),
+  "view.setOutlineOpen": command({
+    description:
+      "Open or close the outline drawer, which lists the model's files, bones and parts. It shows only for models with parts or added files to list.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, open: z.boolean() }),
     output: z.void(),
   }),
   "view.selectComment": command({

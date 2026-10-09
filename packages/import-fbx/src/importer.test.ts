@@ -330,6 +330,16 @@ describe("parts", () => {
     expect(scene.bounds.max[0]).toBeCloseTo(6, 5);
   });
 
+  it("groups the rock sample's levels into one part beside its pebble, and finds its collision box", async () => {
+    const scene = await importSample("rock-lods.fbx");
+    const parts = scene.parts.map((part) => [part.id, part.name, part.role, part.levels.map((level) => level.level)]);
+    expect(parts).toEqual([
+      ["Pebble", "Pebble", "model", [0]],
+      ["Rock_LOD0", "Rock", "model", [0, 1, 2]],
+      ["UCX_Rock", "UCX_Rock", "collision", [0]],
+    ]);
+  });
+
   it("makes one part per mesh in a file without roles", async () => {
     const scene = await importText("shared.fbx", SHARED_GEOMETRY_FBX);
     expect(scene.parts.map((part) => [part.id, part.role, part.levels.length])).toEqual([

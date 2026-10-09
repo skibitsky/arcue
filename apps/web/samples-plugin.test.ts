@@ -11,6 +11,7 @@ describe("readSampleEntries", () => {
       "pebble-golem-sparse",
       "blob",
       "textured-rock",
+      "rock-lods",
       "zup-centimeters",
       "beetle",
     ]);

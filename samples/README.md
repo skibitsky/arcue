@@ -20,6 +20,7 @@ The sample files and `manifest.json` are released under
 | `blob.fbx` | Shape keys. One mesh with Squash and Blink shape keys and one 30-frame take, `Bounce`, that animates them. |
 | `textured-rock.fbx` | An embedded texture. A rock with a 512×512 PNG base-color texture baked from procedural noise and embedded in the FBX. |
 | `zup-centimeters.fbx` | Axis and unit conversion. A 15 cm mushroom exported with Z up and centimeter units. |
+| `rock-lods.fbx` | LODs and a collision helper. A rock in three levels, `Rock_LOD0` to `Rock_LOD2`, that group into one part by their suffix, a pebble beside it without LODs, and a convex box, `UCX_Rock`, that starts hidden. |
 | `beetle.fbx` | The legs and rig of a modular beetle. One skinned mesh with rigid weights, 13 bones, one 30-frame take, `Walk`, that also moves the Body bone. |
 | `beetle-shells.fbx` | Two alternative beetle shells, `ShellRound` and `ShellSpiked`, unrigged and modelled in the rest pose over the Body bone. |
 | `beetle-turn.fbx` | Animation only. The beetle's armature with one 40-frame take, `Turn`, and no mesh. |

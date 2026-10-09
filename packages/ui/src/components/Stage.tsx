@@ -7,6 +7,7 @@ import { useSelect } from "../store/observable";
 import type { WorkspaceStore } from "../store/workspace-store";
 import { CommentBoxLayer } from "./CommentBox";
 import { Icon } from "./Icon";
+import { OutlineDrawer } from "./Outline";
 import { Toolbar } from "./Toolbar";
 
 export function Stage({
@@ -24,36 +25,39 @@ export function Stage({
   return (
     <section className="stage">
       <Toolbar store={store} session={session} />
-      <section
-        className={`viewport-area${over ? " is-drop" : ""}`}
-        aria-label="3D view"
-        onDragOver={(event) => {
-          if (!hasFiles(event)) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-          setOver(true);
-        }}
-        onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false);
-        }}
-        onDrop={(event) => {
-          if (!hasFiles(event)) return;
-          event.preventDefault();
-          setOver(false);
-          const files = [...event.dataTransfer.files];
-          const rect = event.currentTarget.getBoundingClientRect();
-          const at = {
-            x: Math.min(Math.max(0, event.clientX - rect.left), rect.width),
-            y: Math.min(Math.max(0, event.clientY - rect.top), rect.height),
-          };
-          if (files.length > 0) void store.dropOnView(session.assetId, files, at);
-        }}
-      >
-        <ViewportHost session={session} createViewport={createViewport} />
-        <ViewportStatus session={session} />
-        <CommentBoxLayer session={session} />
-        <DropMenu store={store} assetId={session.assetId} />
-      </section>
+      <div className="stage-row">
+        <OutlineDrawer session={session} />
+        <section
+          className={`viewport-area${over ? " is-drop" : ""}`}
+          aria-label="3D view"
+          onDragOver={(event) => {
+            if (!hasFiles(event)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            setOver(true);
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false);
+          }}
+          onDrop={(event) => {
+            if (!hasFiles(event)) return;
+            event.preventDefault();
+            setOver(false);
+            const files = [...event.dataTransfer.files];
+            const rect = event.currentTarget.getBoundingClientRect();
+            const at = {
+              x: Math.min(Math.max(0, event.clientX - rect.left), rect.width),
+              y: Math.min(Math.max(0, event.clientY - rect.top), rect.height),
+            };
+            if (files.length > 0) void store.dropOnView(session.assetId, files, at);
+          }}
+        >
+          <ViewportHost session={session} createViewport={createViewport} />
+          <ViewportStatus session={session} />
+          <CommentBoxLayer session={session} />
+          <DropMenu store={store} assetId={session.assetId} />
+        </section>
+      </div>
     </section>
   );
 }

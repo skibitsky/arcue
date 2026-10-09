@@ -491,6 +491,7 @@ export class FakeCoreClient implements CoreClient {
     },
     "composition.addFile": ({ assetId, role }) => ({ path: this.#compositionPath(assetId), role: role ?? "set" }),
     "composition.removeFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
+    "composition.attachFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "material.setTexture": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "settings.set": (args) => {
       this.#settings = { ...this.#settings, ...args };
@@ -522,6 +523,7 @@ export class FakeCoreClient implements CoreClient {
     "view.setPartVisible": () => {},
     "view.isolatePart": () => {},
     "view.setLod": () => {},
+    "view.setOutlineOpen": () => {},
     "view.selectComment": () => {},
     "view.screenshot": () => ({ png: new Uint8Array() }),
   };

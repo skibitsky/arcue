@@ -53,6 +53,7 @@ export function IconButton({ icon, label, shortcut, tipSide, pressed, small, cla
 export function Chip({
   icon,
   label,
+  tip,
   onRemove,
   removeLabel,
   tone,
@@ -60,6 +61,8 @@ export function Chip({
 }: {
   icon?: IconName;
   label: string;
+  /** A tooltip for the whole chip. */
+  tip?: string;
   onRemove?: () => void;
   removeLabel?: string;
   tone?: "alert";
@@ -68,7 +71,7 @@ export function Chip({
   const classes = ["chip", small ? "chip-sm" : "", onRemove ? "" : "chip-static", tone ? `chip-${tone}` : ""]
     .filter(Boolean)
     .join(" ");
-  return (
+  const chip = (
     <span className={classes}>
       {icon ? <Icon name={icon} /> : null}
       <span>{label}</span>
@@ -81,6 +84,7 @@ export function Chip({
       ) : null}
     </span>
   );
+  return tip ? <Tip label={tip}>{chip}</Tip> : chip;
 }
 
 /** Grows a text field with its content, up to `max` pixels. */

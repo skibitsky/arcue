@@ -928,6 +928,129 @@
       }
     },
     {
+      "file": "rock-lods.fbx",
+      "description": "LODs: a rock in three levels named Rock_LOD0 to Rock_LOD2, a pebble beside it without LODs, and a convex collision box, UCX_Rock.",
+      "size_bytes": 71228,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": false,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "Pebble",
+          "control_points": 162,
+          "polygons": 320,
+          "triangles": 320,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": false
+        },
+        {
+          "name": "Rock_LOD0",
+          "control_points": 642,
+          "polygons": 1280,
+          "triangles": 1280,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": false
+        },
+        {
+          "name": "Rock_LOD1",
+          "control_points": 162,
+          "polygons": 320,
+          "triangles": 320,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": false
+        },
+        {
+          "name": "Rock_LOD2",
+          "control_points": 42,
+          "polygons": 80,
+          "triangles": 80,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": false
+        },
+        {
+          "name": "UCX_Rock",
+          "control_points": 8,
+          "polygons": 6,
+          "triangles": 12,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [],
+          "has_uvs": false,
+          "shape_keys": [],
+          "skinned": false
+        }
+      ],
+      "armature": null,
+      "clips": [],
+      "blender_import_action_names": [],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.3082,
+          0.0,
+          -0.2484
+        ],
+        "max": [
+          0.5605,
+          0.4064,
+          0.2471
+        ]
+      }
+    },
+    {
       "file": "zup-centimeters.fbx",
       "description": "Axis and unit conversion: a 15 cm mushroom exported with Z up and centimeter units (vertex positions are in centimeters, UnitScaleFactor 1).",
       "size_bytes": 32668,

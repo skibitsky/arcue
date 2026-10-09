@@ -6,6 +6,7 @@ import type { AssetSession } from "../store/asset-session";
 import type { HistoryItem } from "../store/history";
 import { currentMessage, historyRounds, pendingFollowUp, queuedComments, roundSummaryText } from "../store/history";
 import { useSelect } from "../store/observable";
+import { viewChip } from "../store/outline";
 import { Chip, fitHeight, IconButton, Tip } from "./controls";
 import { Icon } from "./Icon";
 
@@ -52,9 +53,17 @@ function CommentChips({ session, comment }: { session: AssetSession; comment: Co
         <Chip small label={targetLabel(comment.target, comment.context.bones[0]?.name ?? null)} />
       ) : null}
       {followUp ? <Chip small label={`Follow-up · round ${followUp.afterRound}`} /> : null}
+      <ViewChip session={session} comment={comment} />
       <AnchorStateChip comment={comment} />
     </span>
   );
+}
+
+/** The parts the comment was made with, when they differ from the default view. */
+function ViewChip({ session, comment }: { session: AssetSession; comment: Comment }) {
+  const scene = useSelect(session.state, (state) => state.scene);
+  const chip = useMemo(() => viewChip(scene, comment.parts), [scene, comment.parts]);
+  return chip ? <Chip small icon="layers" label={chip.label} tip={chip.tip || undefined} /> : null;
 }
 
 function AnchorStateChip({ comment }: { comment: Comment }) {

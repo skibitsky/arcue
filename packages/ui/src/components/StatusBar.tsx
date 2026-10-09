@@ -1,5 +1,6 @@
 import type { ConnectionState, CoordinateConvention } from "@arcue/protocol";
 import { DropdownMenu } from "radix-ui";
+import { useMemo } from "react";
 import { formatClock, formatCount, formatHeight, plural, sceneStats } from "../format";
 import type { AssetSession } from "../store/asset-session";
 import { useSelect } from "../store/observable";
@@ -95,9 +96,13 @@ export function StatusBar({
   const summary = useSelect(session.state, (state) => state.summary);
   const review = useSelect(session.state, (state) => state.review);
   const scene = useSelect(session.state, (state) => state.scene);
+  const parts = useSelect(session.state, (state) => state.parts);
   const exportedAt = review?.versions.find((version) => version.id === summary.version)?.fileModifiedAt ?? null;
   const watch = watchState(connection, summary.status, summary.version, exportedAt, summary.error);
-  const stats = scene ? sceneStats(scene) : null;
+  const stats = useMemo(() => (scene ? sceneStats(scene, parts) : null), [scene, parts]);
+  const usual = useMemo(() => (scene ? sceneStats(scene) : null), [scene]);
+  const changed = (value: number, key: "triangles" | "height") =>
+    usual !== null && Math.abs(usual[key] - value) > 1e-9 ? "is-changed" : undefined;
   return (
     <footer className="statusbar">
       <Tip label={watch.tip}>
@@ -110,10 +115,14 @@ export function StatusBar({
       <CoordinatesMenu store={store} />
       {stats ? (
         <span className="sb-stats">
-          {stats.triangles > 0 ? <span>{formatCount(stats.triangles)} tris</span> : null}
+          {stats.triangles > 0 ? (
+            <span className={changed(stats.triangles, "triangles")}>{formatCount(stats.triangles)} tris</span>
+          ) : null}
           {stats.bones > 0 ? <span>{plural(stats.bones, "bone")}</span> : null}
           {stats.clips > 0 ? <span className="sb-clips">{plural(stats.clips, "clip")}</span> : null}
-          {stats.height > 0 ? <span>{formatHeight(stats.height)}</span> : null}
+          {stats.height > 0 ? (
+            <span className={changed(stats.height, "height")}>{formatHeight(stats.height)}</span>
+          ) : null}
         </span>
       ) : null}
     </footer>

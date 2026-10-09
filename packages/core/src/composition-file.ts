@@ -112,6 +112,28 @@ export function withMember(composition: CompositionFile, entry: MemberEntry, sam
   return { ...composition, attach: next };
 }
 
+/**
+ * The composition with the bone of a file's attached entries changed, or removed for undefined, which leaves them in
+ * place as set pieces. `node` picks the entries by their node; null when no entry of the file matches.
+ */
+export function withAttachBone(
+  composition: CompositionFile,
+  same: SameFile,
+  node: (written: string | undefined) => boolean,
+  bone: string | undefined,
+): CompositionFile | null {
+  let matched = false;
+  const attach = (composition.attach ?? []).map((entry) => {
+    if (!same(entry.file) || !node(entry.node)) return entry;
+    matched = true;
+    const moved: CompositionAttach = { file: entry.file };
+    if (entry.node !== undefined) moved.node = entry.node;
+    if (bone !== undefined) moved.bone = bone;
+    return moved;
+  });
+  return matched ? { ...composition, attach } : null;
+}
+
 /** The composition without a file, and without the hidden parts that came from it. */
 export function withoutMember(
   composition: CompositionFile,

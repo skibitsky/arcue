@@ -12,11 +12,21 @@ import type {
 } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { CameraAnchor, Clip, SceneDescription, SpatialAnchor, TimeAnchor } from "@arcue/scene";
-import { defaultPartView, frameToSeconds, lastFrame, lodLevels, secondsToFrame, withPartVisible } from "@arcue/scene";
+import {
+  defaultPartView,
+  frameToSeconds,
+  isolationAsVisibility,
+  lastFrame,
+  lodLevels,
+  secondsToFrame,
+  withPartVisible,
+} from "@arcue/scene";
 import type { CommentOverlay, ScreenPosition, ToolId, Viewport } from "@arcue/viewport";
 import { plural } from "../format";
 import { currentMessage, lastRound, pendingFollowUp, queuedComments } from "./history";
 import { Store } from "./observable";
+import type { OutlineFile } from "./outline";
+import { hasOutline } from "./outline";
 import { adjacentKey, clampFrame, normalizeRange, stepFrame } from "./timeline";
 
 export const NEW_COMMENT_OVERLAY = "new";
@@ -87,6 +97,8 @@ export interface SessionState {
   skeleton: boolean;
   /** Which parts the view draws: hidden and shown parts, an isolated part and the LOD level. */
   parts: PartView;
+  /** The outline drawer is open; it shows only when `hasOutline` holds for the scene. */
+  outlineOpen: boolean;
   brushSize: number;
   clip: string | null;
   loop: boolean;
@@ -152,6 +164,7 @@ export class AssetSession {
       displayMode: "lit",
       skeleton: false,
       parts: defaultPartView(),
+      outlineOpen: false,
       brushSize: 22,
       clip: null,
       loop: true,
@@ -334,6 +347,7 @@ export class AssetSession {
       this.setDisplayMode(saved.display.mode);
       this.setSkeleton(saved.display.skeleton);
       this.setPartView(saved.parts);
+      this.setOutlineOpen(saved.outlineOpen);
     }
     const exists = (clip: string | null | undefined) => clip == null || scene.clips.some((c) => c.name === clip);
     if (pending && exists(pending.clip)) {
@@ -417,9 +431,11 @@ export class AssetSession {
     return part;
   }
 
-  /** Shows or hides a part by its id; an unknown id is refused. */
+  /** Shows or hides a part by its id; an unknown id is refused. An isolation ends, keeping what is on screen. */
   setPartVisible(id: string, visible: boolean): void {
-    this.setPartView(withPartVisible(this.state.get().parts, this.#part(id), visible));
+    const part = this.#part(id);
+    const parts = this.state.get().scene?.parts ?? [];
+    this.setPartView(withPartVisible(isolationAsVisibility(parts, this.state.get().parts), part, visible));
   }
 
   /** Shows only one part, or every part again for null. */
@@ -435,6 +451,39 @@ export class AssetSession {
     if (level > highest)
       throw new ArcueError("invalid-input", `The model has no LOD${level}; its highest is LOD${highest}.`);
     this.setPartView({ ...this.state.get().parts, lod: level });
+  }
+
+  /** Whether the model has parts or added files to list in an outline. */
+  outlineAvailable(): boolean {
+    const scene = this.state.get().scene;
+    return scene !== null && hasOutline(scene);
+  }
+
+  setOutlineOpen(open: boolean): void {
+    if (this.state.get().outlineOpen === open) return;
+    this.state.patch({ outlineOpen: open });
+    this.#scheduleReport();
+  }
+
+  /**
+   * Attaches an added file to a model bone, by the bone's node index, or detaches it with null, through
+   * "composition.attachFile". A file that sits in several places moves only its nodes in this place.
+   */
+  async attachFile(file: OutlineFile, bone: number | null): Promise<void> {
+    const { scene, summary } = this.state.get();
+    const path = bone === null ? null : (scene?.nodes[bone]?.path ?? null);
+    if (bone !== null && path === null) return;
+    const folder = summary.path.slice(0, summary.path.lastIndexOf("/") + 1);
+    const input = { assetId: this.assetId, file: `${folder}${file.file}`, bone: path };
+    try {
+      if (file.nodes === null) {
+        await this.#client.execute("composition.attachFile", input);
+      } else {
+        for (const node of file.nodes) await this.#client.execute("composition.attachFile", { ...input, node });
+      }
+    } catch (error) {
+      this.#host.notify({ message: messageOf(error), kind: "alert" });
+    }
   }
 
   setBrushSize(size: number): void {
@@ -551,10 +600,11 @@ export class AssetSession {
     viewport.frame(comment.target, { animate: true });
   }
 
-  /** Escape: closes the box or clears the selection, and with nothing selected clears the range. */
+  /** Escape: closes the box or clears the selection, then ends an isolation, then clears the range. */
   escape(): void {
-    const { box, selection, range } = this.state.get();
+    const { box, selection, range, parts } = this.state.get();
     if (box || selection) this.deselect();
+    else if (parts.isolated !== null) this.isolatePart(null);
     else if (range) this.setRange(null);
   }
 
@@ -1063,7 +1113,7 @@ export class AssetSession {
   viewState(): ViewState | null {
     const viewport = this.#viewport;
     if (!viewport || !this.#initialViewApplied) return null;
-    const { clip, range, displayMode, skeleton, parts } = this.state.get();
+    const { clip, range, displayMode, skeleton, parts, outlineOpen } = this.state.get();
     return {
       camera: viewport.getCamera(),
       clip,
@@ -1071,6 +1121,7 @@ export class AssetSession {
       range,
       display: { mode: displayMode, skeleton },
       parts,
+      outlineOpen,
     };
   }
 

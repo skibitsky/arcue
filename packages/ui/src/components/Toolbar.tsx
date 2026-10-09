@@ -8,6 +8,7 @@ import { formatCount, formatHeight, plural, sceneStats } from "../format";
 import type { AssetSession } from "../store/asset-session";
 import { BRUSH_MAX, BRUSH_MIN } from "../store/asset-session";
 import { useSelect } from "../store/observable";
+import { hasOutline, lodOptions, lodShown, visibilityChanged } from "../store/outline";
 import { slotLabel } from "../store/view-files";
 import type { WorkspaceStore } from "../store/workspace-store";
 import { IconButton, Tip } from "./controls";
@@ -26,6 +27,7 @@ export function Toolbar({ store, session }: { store: WorkspaceStore; session: As
   const ready = useSelect(session.state, (state) => state.viewportReady);
   return (
     <div className="toolbar">
+      <OutlineButton session={session} />
       <fieldset className="seg" aria-label="Tool">
         <IconButton
           icon="view"
@@ -65,6 +67,7 @@ export function Toolbar({ store, session }: { store: WorkspaceStore; session: As
         pressed={skeleton}
         onClick={() => session.setSkeleton(!skeleton)}
       />
+      <LodSwitch session={session} />
       <span className="tb-sep" />
       <IconButton
         icon="frame"
@@ -76,6 +79,57 @@ export function Toolbar({ store, session }: { store: WorkspaceStore; session: As
       />
       <AssetInfo store={store} session={session} />
     </div>
+  );
+}
+
+/** The outline drawer's toggle, for models with parts or added files. A dot marks a view that hides or isolates. */
+function OutlineButton({ session }: { session: AssetSession }) {
+  const available = useSelect(session.state, (state) => state.scene !== null && hasOutline(state.scene));
+  const open = useSelect(session.state, (state) => state.outlineOpen);
+  const changed = useSelect(session.state, (state) => visibilityChanged(state.parts));
+  if (!available) return null;
+  return (
+    <>
+      <IconButton
+        icon="outline"
+        label="Outline"
+        shortcut="O"
+        tipSide="bottom"
+        pressed={open}
+        className={changed ? "has-dot" : undefined}
+        onClick={() => session.setOutlineOpen(!open)}
+      />
+      <span className="tb-sep" />
+    </>
+  );
+}
+
+/** LOD0 first; each level's tooltip gives the triangles on screen at that level. */
+function LodSwitch({ session }: { session: AssetSession }) {
+  const scene = useSelect(session.state, (state) => state.scene);
+  const parts = useSelect(session.state, (state) => state.parts);
+  const options = useMemo(() => (scene ? lodOptions(scene, parts) : []), [scene, parts]);
+  if (options.length === 0) return null;
+  const shown = lodShown(options, parts.lod);
+  return (
+    <fieldset className="seg lod" aria-label="LOD">
+      <span className="lod-label" aria-hidden="true">
+        LOD
+      </span>
+      {options.map(({ level, triangles }) => (
+        <Tip key={level} label={`LOD${level} · ${formatCount(triangles)} tris`} side="bottom">
+          <button
+            type="button"
+            className="ibtn lod-level"
+            aria-label={`LOD${level}`}
+            aria-pressed={level === shown}
+            onClick={() => session.setLod(level)}
+          >
+            {level}
+          </button>
+        </Tip>
+      ))}
+    </fieldset>
   );
 }
 

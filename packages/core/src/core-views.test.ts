@@ -24,6 +24,7 @@ const state: ViewState = {
   range: null,
   display: { mode: "clay", skeleton: true },
   parts: { hidden: ["Hero/Body"], shown: [], isolated: null, lod: 0 },
+  outlineOpen: true,
 };
 
 describe("view commands", () => {
@@ -32,9 +33,11 @@ describe("view commands", () => {
     const cli = bridge(test);
     await cli.execute("view.setFrame", { assetId: test.assetId, frame: 34 });
     await cli.execute("view.frame", { assetId: test.assetId });
+    await cli.execute("view.setOutlineOpen", { assetId: test.assetId, open: true });
     expect(test.window.requests).toEqual([
       { kind: "command", name: "view.setFrame", input: { assetId: test.assetId, frame: 34 } },
       { kind: "command", name: "view.frame", input: { assetId: test.assetId, commentId: null } },
+      { kind: "command", name: "view.setOutlineOpen", input: { assetId: test.assetId, open: true } },
     ]);
   });
 

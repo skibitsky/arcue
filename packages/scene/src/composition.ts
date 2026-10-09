@@ -117,6 +117,14 @@ function nodeLookup(nodes: readonly SceneNode[]): NodeLookup {
   };
 }
 
+/**
+ * A node's index by its path, or else by its name, preferring a bone or another node as asked, as a composition
+ * names nodes and bones. Null when nothing matches.
+ */
+export function findNode(nodes: readonly SceneNode[], nameOrPath: string, preferBone: boolean): number | null {
+  return nodeLookup(nodes).find(nameOrPath, preferBone);
+}
+
 /** What one member file contributed so far. */
 interface MemberState {
   member: CompositionMember;
