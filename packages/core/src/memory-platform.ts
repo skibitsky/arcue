@@ -112,6 +112,15 @@ export class MemoryPlatform implements Platform {
     }
   }
 
+  async removeEmptyFolder(path: string): Promise<void> {
+    const folder = this.#resolve(path, false);
+    if (this.#entries.get(folder)?.kind !== "directory") throw notFound(folder);
+    if ([...this.#entries.keys()].some((entry) => entry !== folder && dirname(entry) === folder)) {
+      throw new ArcueError("conflict", `${folder} is not empty.`);
+    }
+    this.#entries.delete(folder);
+  }
+
   async rename(from: string, to: string): Promise<void> {
     const source = this.#resolve(from, false);
     const target = this.#resolve(to, false);

@@ -57,9 +57,13 @@ export interface Platform {
   list(path: string): Promise<DirectoryEntry[]>;
   /** Removes a file, or a folder with everything in it. Does nothing when the path does not exist. */
   remove(path: string): Promise<void>;
+  /** Removes a folder only while it is empty; one that holds anything rejects with "conflict" and stays. */
+  removeEmptyFolder(path: string): Promise<void>;
   /**
-   * Moves a file, or a folder with everything in it, in one step, and creates the missing folders above `to`. It never
-   * replaces anything: when `to` exists it rejects with "conflict" and moves nothing. A link at `from` moves as a link.
+   * Moves a file, or a folder with everything in it, in one step, and creates the missing folders above `to`. When
+   * `to` exists it rejects with "conflict" and moves nothing. That check is best effort: Node has no rename that refuses
+   * an existing target, so `NodePlatform` checks first, and on POSIX a file or an empty folder created at `to` between
+   * the check and the move is replaced. A link at `from` moves as a link.
    */
   rename(from: string, to: string): Promise<void>;
   /**

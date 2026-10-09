@@ -82,6 +82,16 @@ describe("MemoryPlatform files", () => {
     await expect(platform.remove("/")).rejects.toMatchObject({ code: "invalid-input" });
   });
 
+  it("removes a folder only while it is empty", async () => {
+    const platform = new MemoryPlatform();
+    await platform.writeFile("/r/full/review.json", "{}");
+    await platform.mkdir("/r/empty");
+    await expect(platform.removeEmptyFolder("/r/full")).rejects.toMatchObject({ code: "conflict" });
+    await expect(platform.removeEmptyFolder("/r/missing")).rejects.toMatchObject({ code: "not-found" });
+    await platform.removeEmptyFolder("/r/empty");
+    await expect(platform.list("/r")).resolves.toEqual([{ name: "full", kind: "directory" }]);
+  });
+
   it("renames a folder with everything in it, creating the folders above the new name", async () => {
     const platform = new MemoryPlatform();
     await platform.writeFile("/r/Hero.fbx/review.json", "{}");

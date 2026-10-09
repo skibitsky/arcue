@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import { unwatchFile, watchFile } from "node:fs";
-import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import type { Clock, DirectoryEntry, EntryKind, FileChange, FileStat, ImportWorker, Platform } from "@arcue/core";
 import { basename, dirname, findGitRoot, joinPath, normalizePath } from "@arcue/core";
 import { ArcueError } from "@arcue/protocol";
@@ -100,6 +100,10 @@ export class NodePlatform implements Platform {
     const target = normalizePath(path);
     if (dirname(target) === target) throw new ArcueError("invalid-input", "The root folder cannot be removed.");
     await this.#call(target, (native) => rm(native, { recursive: true, force: true }));
+  }
+
+  async removeEmptyFolder(path: string): Promise<void> {
+    await this.#call(path, (native) => rmdir(native));
   }
 
   async rename(from: string, to: string): Promise<void> {

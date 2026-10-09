@@ -99,6 +99,15 @@ describe("NodePlatform files", () => {
     await expect(platform.remove("/")).rejects.toMatchObject({ code: "invalid-input" });
   });
 
+  it("removes a folder only while it is empty", async () => {
+    await platform.writeFile(at("r/full/review.json"), "{}");
+    await platform.mkdir(at("r/empty"));
+    await expect(platform.removeEmptyFolder(at("r/full"))).rejects.toMatchObject({ code: "conflict" });
+    await expect(platform.removeEmptyFolder(at("r/missing"))).rejects.toMatchObject({ code: "not-found" });
+    await platform.removeEmptyFolder(at("r/empty"));
+    await expect(platform.list(at("r"))).resolves.toEqual([{ name: "full", kind: "directory" }]);
+  });
+
   it("renames a folder with everything in it, creating the folders above the new name", async () => {
     await platform.writeFile(at("r/Hero.fbx/review.json"), "{}");
     await platform.writeFile(at("r/Hero.fbx/rounds/round-1/prompt.md"), "p");
