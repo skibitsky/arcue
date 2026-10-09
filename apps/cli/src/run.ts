@@ -3,14 +3,25 @@ import { resolve } from "node:path";
 import { connectOrLaunch, connectToApp, userDataDir } from "./app-connection";
 import type { Command } from "./args";
 import { parseArgs, USAGE, UsageError } from "./args";
+import { bundledImportWorker, formatInspection, inspectFile } from "./inspect";
 
 export interface Output {
   out(text: string): void;
   err(text: string): void;
 }
 
+export interface RunOptions {
+  /** Defaults to the import worker bundled beside `arcue.js`. */
+  importWorkerEntry?: string;
+}
+
 /** Runs the command line and returns its exit code: 0 on success, 1 on failure, 2 for a usage error. */
-export async function run(args: readonly string[], output: Output, cwd = process.cwd()): Promise<number> {
+export async function run(
+  args: readonly string[],
+  output: Output,
+  cwd = process.cwd(),
+  options: RunOptions = {},
+): Promise<number> {
   let command: Command;
   try {
     command = parseArgs(args);
@@ -28,6 +39,8 @@ export async function run(args: readonly string[], output: Output, cwd = process
         return await status(output);
       case "open":
         return await open(command, cwd, output);
+      case "inspect":
+        return await inspect(command, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
     }
   } catch (error) {
     output.err(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -57,11 +70,36 @@ async function status(output: Output): Promise<number> {
   }
 }
 
-async function open(command: Extract<Command, { command: "open" }>, cwd: string, output: Output): Promise<number> {
-  const given = resolve(cwd, command.path);
+async function existingFile(cwd: string, relative: string): Promise<string> {
+  const given = resolve(cwd, relative);
   const file = await stat(given).catch(() => null);
   if (!file?.isFile()) throw new Error(`${given} is not a file.`);
-  const path = await realpath(given);
+  return realpath(given);
+}
+
+async function inspect(
+  command: Extract<Command, { command: "inspect" }>,
+  cwd: string,
+  output: Output,
+  importWorkerEntry: string,
+): Promise<number> {
+  const path = await existingFile(cwd, command.path);
+  let workerError: unknown = null;
+  const inspection = await inspectFile(path, {
+    importWorkerEntry,
+    userData: userDataDir(),
+    onError: (error) => {
+      workerError ??= error;
+    },
+  }).catch((error: unknown) => {
+    throw workerError ?? error;
+  });
+  output.out(command.json ? `${JSON.stringify(inspection, null, 2)}\n` : formatInspection(inspection));
+  return 0;
+}
+
+async function open(command: Extract<Command, { command: "open" }>, cwd: string, output: Output): Promise<number> {
+  const path = await existingFile(cwd, command.path);
   const connection = await connectOrLaunch(userDataDir());
   try {
     const { assetId } = await connection.client.execute("asset.open", {

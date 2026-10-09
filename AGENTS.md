@@ -14,7 +14,7 @@ A local `docs/` folder, kept out of git, may hold `spec.md` for behavior, `archi
 | `pnpm lint` | Biome lint and format check. `pnpm format` fixes what it can. |
 | `pnpm test` | Runs every test. `pnpm test --project @arcue/core` runs one package. |
 | `pnpm --filter @arcue/web test:e2e` | Builds the web host and runs its Playwright tests. Run `pnpm --filter @arcue/web exec playwright install chromium` once first. |
-| `pnpm --filter @arcue/cli build` | Builds the `arcue` command into `apps/cli/dist/arcue.js`. |
+| `pnpm --filter @arcue/cli build` | Builds the `arcue` command and its import worker into `apps/cli/dist/`. |
 | `pnpm --filter @arcue/desktop dev` | Runs the desktop app with its windows on a Vite dev server. |
 | `pnpm --filter @arcue/desktop test:e2e` | Builds the desktop app and the `arcue` command, then drives the built app with Playwright. |
 

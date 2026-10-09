@@ -56,6 +56,15 @@ importers:
 
   apps/cli:
     dependencies:
+      '@arcue/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@arcue/import-fbx':
+        specifier: workspace:*
+        version: link:../../packages/import-fbx
+      '@arcue/platform-node':
+        specifier: workspace:*
+        version: link:../../packages/platform-node
       '@arcue/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

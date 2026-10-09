@@ -1,5 +1,6 @@
 export type Command =
   | { command: "open"; path: string; clip?: string; frame?: number }
+  | { command: "inspect"; path: string; json: boolean }
   | { command: "status" }
   | { command: "help" };
 
@@ -7,6 +8,9 @@ export const USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>]
       Opens an asset in the running Arcue app, starting the app when it is not running.
       --clip names a clip by its name in the file, such as "Armature|Walk"; --frame is a whole frame number from 0.
+  arcue inspect <file> [--json]
+      Imports a file without the app and summarizes its meshes, bones, materials, clips and warnings.
+      --json prints the full result for scripts and agents. Exits with 1 when the file cannot be read or parsed.
   arcue status
       Reports whether Arcue is running and which assets it has open. Exits with 1 when it is not running.
   arcue help
@@ -27,6 +31,7 @@ export function parseArgs(args: readonly string[]): Command {
     if (rest.length > 0) throw new UsageError(`"arcue status" takes no arguments, got "${rest.join(" ")}".`);
     return { command: "status" };
   }
+  if (command === "inspect") return parseInspect(rest);
   if (command !== "open") throw new UsageError(`Unknown command "${command}".`);
   let path: string | undefined;
   let clip: string | undefined;
@@ -49,6 +54,19 @@ export function parseArgs(args: readonly string[]): Command {
   }
   if (path === undefined) throw new UsageError('"arcue open" needs a file.');
   return { command: "open", path, ...(clip !== undefined ? { clip } : {}), ...(frame !== undefined ? { frame } : {}) };
+}
+
+function parseInspect(args: readonly string[]): Command {
+  let path: string | undefined;
+  let json = false;
+  for (const arg of args) {
+    if (arg === "--json") json = true;
+    else if (arg.startsWith("--")) throw new UsageError(`Unknown option "${arg}".`);
+    else if (path === undefined) path = arg;
+    else throw new UsageError(`"arcue inspect" takes one file, got "${path}" and "${arg}".`);
+  }
+  if (path === undefined) throw new UsageError('"arcue inspect" needs a file.');
+  return { command: "inspect", path, json };
 }
 
 function parseFrame(value: string): number {
