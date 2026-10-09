@@ -1,0 +1,24 @@
+{
+  "name": "@arcue/import-fbx",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./arcue-ufbx.wasm": "./wasm/arcue-ufbx.wasm"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "build:wasm": "node scripts/build-wasm.mjs"
+  },
+  "dependencies": {
+    "@arcue/protocol": "workspace:*",
+    "@arcue/scene": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

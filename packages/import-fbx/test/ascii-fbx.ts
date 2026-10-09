@@ -1,0 +1,336 @@
+const FRAME = 46186158000 / 30;
+
+function asciiFbx(objects: string, connections: string, { coordAxisSign = 1 } = {}): string {
+  return `; FBX 7.4.0 project file
+FBXHeaderExtension:  {
+	FBXHeaderVersion: 1003
+	FBXVersion: 7400
+}
+GlobalSettings:  {
+	Version: 1000
+	Properties70:  {
+		P: "UpAxis", "int", "Integer", "",1
+		P: "UpAxisSign", "int", "Integer", "",1
+		P: "FrontAxis", "int", "Integer", "",2
+		P: "FrontAxisSign", "int", "Integer", "",1
+		P: "CoordAxis", "int", "Integer", "",0
+		P: "CoordAxisSign", "int", "Integer", "",${coordAxisSign}
+		P: "UnitScaleFactor", "double", "Number", "",100
+		P: "TimeMode", "enum", "", "",6
+	}
+}
+Objects:  {
+${objects}
+}
+Connections:  {
+${connections}
+}
+`;
+}
+
+const TRIANGLE_GEOMETRY = `	Geometry: 1000, "Geometry::Tri", "Mesh" {
+		Vertices: *9 {
+			a: 0,0,0,1,0,0,0,1,0
+		}
+		PolygonVertexIndex: *3 {
+			a: 0,1,-3
+		}
+		LayerElementUV: 0 {
+			Version: 101
+			Name: "UVMap"
+			MappingInformationType: "ByPolygonVertex"
+			ReferenceInformationType: "Direct"
+			UV: *6 {
+				a: 0,0,1,0,0,1
+			}
+		}
+		LayerElementMaterial: 0 {
+			Version: 101
+			MappingInformationType: "AllSame"
+			ReferenceInformationType: "IndexToDirect"
+			Materials: *1 {
+				a: 0
+			}
+		}
+		Layer: 0 {
+			Version: 100
+			LayerElement:  {
+				Type: "LayerElementUV"
+				TypedIndex: 0
+			}
+			LayerElement:  {
+				Type: "LayerElementMaterial"
+				TypedIndex: 0
+			}
+		}
+	}`;
+
+const TRIANGLE_MODEL = `	Model: 2000, "Model::Tri", "Mesh" {
+		Version: 232
+	}`;
+
+const TRIANGLE_CONNECTIONS = `	C: "OO",2000,0
+	C: "OO",1000,2000`;
+
+/**
+ * A one-triangle mesh whose material references an image that is not embedded, stored with a relative path and an
+ * absolute path from another machine.
+ */
+export const EXTERNAL_TEXTURE_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Material: 3000, "Material::Painted", "" {
+		Version: 102
+		ShadingModel: "lambert"
+		Properties70:  {
+			P: "DiffuseColor", "Color", "", "A",1,1,1
+		}
+	}
+	Texture: 4000, "Texture::Painted", "" {
+		Type: "TextureVideoClip"
+		Version: 202
+		TextureName: "Texture::Painted"
+		FileName: "C:/Users/artist/textures/painted.png"
+		RelativeFilename: "textures/painted.png"
+	}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",3000,2000
+	C: "OP",4000,3000, "DiffuseColor"`,
+);
+
+function texture(id: number, name: string): string {
+  return `	Texture: ${id}, "Texture::${name}", "" {
+		Type: "TextureVideoClip"
+		Version: 202
+		TextureName: "Texture::${name}"
+		FileName: "${name}.png"
+		RelativeFilename: "${name}.png"
+	}`;
+}
+
+/**
+ * The triangle with a 3ds Max PBR metal/roughness material whose roughness map is "rough.png" and whose metalness
+ * map is "metal.png".
+ */
+export const METAL_ROUGH_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Material: 3000, "Material::Metal", "" {
+		Version: 102
+		ShadingModel: "unknown"
+		Properties70:  {
+			P: "3dsMax|ClassIDa", "int", "Integer", "",3490651648
+			P: "3dsMax|ClassIDb", "int", "Integer", "",3195528448
+			P: "3dsMax|main|roughness", "float", "Number", "",0.4
+			P: "3dsMax|main|metalness", "float", "Number", "",1
+		}
+	}
+${texture(4000, "rough")}
+${texture(4001, "metal")}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",3000,2000
+	C: "OP",4000,3000, "3dsMax|main|roughness_map"
+	C: "OP",4001,3000, "3dsMax|main|metalness_map"`,
+);
+
+/** The triangle with an FBX Phong material whose ShininessExponent is driven by the texture "gloss.png". */
+export const PHONG_SHININESS_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Material: 3000, "Material::Shiny", "" {
+		Version: 102
+		ShadingModel: "phong"
+		Properties70:  {
+			P: "ShininessExponent", "Number", "", "A",20
+		}
+	}
+${texture(4000, "gloss")}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",3000,2000
+	C: "OP",4000,3000, "ShininessExponent"`,
+);
+
+/**
+ * One triangle shared by two nodes: "Left" moved 2 m along -X, and "Right" moved 2 m along +X with a geometric
+ * translation of 1 m along +Y that applies to its geometry only.
+ */
+export const SHARED_GEOMETRY_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+	Model: 2000, "Model::Left", "Mesh" {
+		Version: 232
+		Properties70:  {
+			P: "Lcl Translation", "Lcl Translation", "", "A",-2,0,0
+		}
+	}
+	Model: 2001, "Model::Right", "Mesh" {
+		Version: 232
+		Properties70:  {
+			P: "Lcl Translation", "Lcl Translation", "", "A",2,0,0
+			P: "GeometricTranslation", "Vector3D", "Vector", "",0,1,0
+		}
+	}
+	Material: 3000, "Material::Plain", "" {
+		Version: 102
+		ShadingModel: "lambert"
+	}`,
+  `	C: "OO",2000,0
+	C: "OO",2001,0
+	C: "OO",1000,2000
+	C: "OO",1000,2001
+	C: "OO",3000,2000
+	C: "OO",3000,2001`,
+);
+
+interface TakeOptions {
+  /** The take's range in frames at 30 fps, or null for a take without LocalStart and LocalStop. */
+  range: [start: number, stop: number] | null;
+  /** Frames at 30 fps of the keys on the triangle's X translation. */
+  keyFrames: number[];
+  values: number[];
+  interpolation: "constant" | "linear";
+}
+
+/** The triangle and one take, "Hop", that animates its X translation. */
+export function animatedFbx({ range, keyFrames, values, interpolation }: TakeOptions): string {
+  const ticks = (frame: number) => Math.round(frame * FRAME);
+  const stackRange = range
+    ? `
+		Properties70:  {
+			P: "LocalStart", "KTime", "Time", "",${ticks(range[0])}
+			P: "LocalStop", "KTime", "Time", "",${ticks(range[1])}
+		}`
+    : "";
+  return asciiFbx(
+    `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	AnimationStack: 5000, "AnimStack::Hop", "" {${stackRange}
+	}
+	AnimationLayer: 5001, "AnimLayer::BaseLayer", "" {
+	}
+	AnimationCurveNode: 5002, "AnimCurveNode::T", "" {
+		Properties70:  {
+			P: "d|X", "Number", "", "A",0
+			P: "d|Y", "Number", "", "A",0
+			P: "d|Z", "Number", "", "A",0
+		}
+	}
+	AnimationCurve: 5003, "AnimCurve::", "" {
+		Default: 0
+		KeyVer: 4009
+		KeyTime: *${keyFrames.length} {
+			a: ${keyFrames.map(ticks).join(",")}
+		}
+		KeyValueFloat: *${values.length} {
+			a: ${values.join(",")}
+		}
+		KeyAttrFlags: *1 {
+			a: ${interpolation === "constant" ? 2 : 4}
+		}
+		KeyAttrDataFloat: *4 {
+			a: 0,0,0,0
+		}
+		KeyAttrRefCount: *1 {
+			a: ${keyFrames.length}
+		}
+	}`,
+    `${TRIANGLE_CONNECTIONS}
+	C: "OO",5001,5000
+	C: "OO",5002,5001
+	C: "OP",5002,2000, "Lcl Translation"
+	C: "OP",5003,5002, "d|X"`,
+  );
+}
+
+/** The triangle in a file whose X axis points left, so its axes are left-handed. */
+export const LEFT_HANDED_FBX = asciiFbx(`${TRIANGLE_GEOMETRY}\n${TRIANGLE_MODEL}`, TRIANGLE_CONNECTIONS, {
+  coordAxisSign: -1,
+});
+
+/** The triangle skinned to one bone, "Root", that weights only its first two vertices. */
+export const PARTLY_WEIGHTED_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	NodeAttribute: 6000, "NodeAttribute::Root", "LimbNode" {
+		TypeFlags: "Skeleton"
+	}
+	Model: 6001, "Model::Root", "LimbNode" {
+		Version: 232
+	}
+	Deformer: 7000, "Deformer::Skin", "Skin" {
+		Version: 101
+		Link_DeformAcuracy: 50
+	}
+	Deformer: 7001, "SubDeformer::Root", "Cluster" {
+		Version: 100
+		UserData: "", ""
+		Indexes: *2 {
+			a: 0,1
+		}
+		Weights: *2 {
+			a: 1,1
+		}
+		Transform: *16 {
+			a: 1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1
+		}
+		TransformLink: *16 {
+			a: 1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1
+		}
+	}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",6001,0
+	C: "OO",6000,6001
+	C: "OO",7000,1000
+	C: "OO",7001,7000
+	C: "OO",6001,7001`,
+);
+
+/**
+ * The triangle with one shape key, "Bulge", at 25%. It has an in-between shape at 50% that lifts the first vertex
+ * 0.5 m along Z and a full shape that lifts it 1 m and turns its normal by (0, 1, 0).
+ */
+export const IN_BETWEEN_FBX = asciiFbx(
+  `${TRIANGLE_GEOMETRY}
+${TRIANGLE_MODEL}
+	Geometry: 1100, "Geometry::Half", "Shape" {
+		Version: 100
+		Indexes: *1 {
+			a: 0
+		}
+		Vertices: *3 {
+			a: 0,0,0.5
+		}
+		Normals: *3 {
+			a: 0,0.5,0
+		}
+	}
+	Geometry: 1101, "Geometry::Full", "Shape" {
+		Version: 100
+		Indexes: *1 {
+			a: 0
+		}
+		Vertices: *3 {
+			a: 0,0,1
+		}
+		Normals: *3 {
+			a: 0,1,0
+		}
+	}
+	Deformer: 8000, "Deformer::Blend", "BlendShape" {
+		Version: 100
+	}
+	Deformer: 8001, "SubDeformer::Bulge", "BlendShapeChannel" {
+		Version: 100
+		DeformPercent: 25
+		FullWeights: *2 {
+			a: 50,100
+		}
+	}`,
+  `${TRIANGLE_CONNECTIONS}
+	C: "OO",8000,1000
+	C: "OO",8001,8000
+	C: "OO",1100,8001
+	C: "OO",1101,8001`,
+);
+
+/** The eight-byte PNG signature, enough for the importer to tell the image type. */
+export const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);

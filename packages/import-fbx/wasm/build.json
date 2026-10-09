@@ -1,0 +1,42 @@
+{
+  "emscripten": "6.0.11",
+  "ufbx": {
+    "tag": "v0.23.1",
+    "commit": "26a482ae66871d7de36eb722aa060bce95bce274"
+  },
+  "defines": [
+    "NDEBUG",
+    "UFBX_NO_STDIO",
+    "UFBX_NO_SUBDIVISION",
+    "UFBX_NO_TESSELLATION",
+    "UFBX_NO_GEOMETRY_CACHE",
+    "UFBX_NO_SCENE_EVALUATION",
+    "UFBX_NO_SKINNING_EVALUATION",
+    "UFBX_NO_FORMAT_OBJ",
+    "UFBX_WASM_32BIT"
+  ],
+  "settings": [
+    "MODULARIZE=1",
+    "EXPORT_ES6=1",
+    "EXPORT_NAME=createArcueUfbx",
+    "ENVIRONMENT=web,worker,node",
+    "ALLOW_MEMORY_GROWTH=1",
+    "MAXIMUM_MEMORY=4GB",
+    "STACK_SIZE=1MB",
+    "FILESYSTEM=0",
+    "DYNAMIC_EXECUTION=0",
+    "EXPORTED_FUNCTIONS=_malloc,_free,_arcue_import,_arcue_free",
+    "EXPORTED_RUNTIME_METHODS=HEAPU8",
+    "INCOMING_MODULE_JS_API=[]"
+  ],
+  "inputs": {
+    "native/arcue_ufbx.c": "8bf1d02d9c175eb3488bbfb63f1950e460322d8f3bb851e07ad1f3c69363a8f0",
+    "scripts/build-wasm.mjs": "fb18944afb597c926c836c4427a3eb41c0c986004eb403d5e1f47a5317bed465",
+    "vendor/ufbx/ufbx.c": "4a956c26a708e40d82ecb0aeaee54da709d5ba7c144c9642174970059bda7e1d",
+    "vendor/ufbx/ufbx.h": "f787be529af577efc04f3e3e735844a08556718dbb613d1211c2b313d72895dc"
+  },
+  "outputs": {
+    "wasm/arcue-ufbx.js": "37d852327b3551e2cfe5defb4a0106edd53f1e0e21917374690fe77da690d884",
+    "wasm/arcue-ufbx.wasm": "b1cdd25d33e89fa66fdb56f7f13c1aff513fa37456b553faca5f5fcb5e61cb01"
+  }
+}

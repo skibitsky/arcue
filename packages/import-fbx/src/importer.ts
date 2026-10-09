@@ -1,0 +1,154 @@
+import { ArcueError } from "@arcue/protocol";
+import type {
+  Clip,
+  Importer,
+  ImportRequest,
+  Material,
+  Mesh,
+  SceneDescription,
+  SceneNode,
+  TextureRef,
+} from "@arcue/scene";
+import {
+  boundsOfPoints,
+  buildNodePaths,
+  clipNames,
+  displayNames,
+  frameCountFor,
+  isKeyedEveryFrame,
+  mergeKeyTimes,
+  topologyFingerprint,
+} from "@arcue/scene";
+import type { ParsedClip, ParsedFbx, WireMaterial, WireTextureRef } from "./decode";
+import { FbxParseError } from "./decode";
+import { parseFbx } from "./parser";
+import type { TextureResolver } from "./textures";
+import { createTextureResolver } from "./textures";
+
+function buildNodes(parsed: ParsedFbx): SceneNode[] {
+  const paths = buildNodePaths(parsed.nodes);
+  return parsed.nodes.map((node, index) => ({
+    name: node.name,
+    path: paths[index] ?? node.name,
+    parent: node.parent,
+    kind: node.kind,
+    translation: node.translation,
+    rotation: node.rotation,
+    scale: node.scale,
+    mesh: node.mesh,
+  }));
+}
+
+function uvSetIndex(meshes: readonly Mesh[], material: number, uvSet: string): number {
+  if (uvSet === "") return 0;
+  for (const mesh of meshes) {
+    if (!mesh.groups.some((group) => group.material === material)) continue;
+    const index = mesh.uvs.findIndex((uv) => uv.name === uvSet);
+    if (index !== -1) return index;
+  }
+  return 0;
+}
+
+async function buildMaterials(
+  materials: readonly WireMaterial[],
+  meshes: readonly Mesh[],
+  textures: TextureResolver,
+): Promise<Material[]> {
+  const result: Material[] = [];
+  for (const [index, material] of materials.entries()) {
+    const ref = async (wire: WireTextureRef | null | undefined): Promise<TextureRef | null> => {
+      if (!wire) return null;
+      const texture = await textures.resolve(wire.file);
+      if (texture === null) return null;
+      return {
+        texture,
+        uvSet: uvSetIndex(meshes, index, wire.uvSet),
+        wrapU: wire.wrapU,
+        wrapV: wire.wrapV,
+        transform: wire.transform,
+      };
+    };
+    result.push({
+      name: material.name,
+      baseColor: material.baseColor,
+      baseColorTexture: await ref(material.baseColorTexture),
+      metallic: material.metallic,
+      roughness: material.roughness,
+      metallicRoughnessTexture: null,
+      roughnessTexture: await ref(material.roughnessTexture),
+      metalnessTexture: await ref(material.metalnessTexture),
+      normalTexture: await ref(material.normalTexture),
+      normalScale: 1,
+      occlusionTexture: await ref(material.occlusionTexture),
+      emissive: material.emissive,
+      emissiveTexture: await ref(material.emissiveTexture),
+      alphaMode: material.alphaMode,
+      alphaCutoff: 0.5,
+      doubleSided: material.doubleSided,
+    });
+  }
+  return result;
+}
+
+function buildClips(clips: readonly ParsedClip[], fps: number): Clip[] {
+  const names = clipNames(clips.map((clip) => clip.name));
+  const display = displayNames(names);
+  return clips.map((clip, index) => {
+    const frameCount = frameCountFor(clip.duration, fps);
+    return {
+      name: names[index] ?? clip.name,
+      displayName: display[index] ?? clip.name,
+      fps,
+      duration: clip.duration,
+      frameCount,
+      tracks: clip.tracks,
+      keyTimes: mergeKeyTimes(clip.curveTimes),
+      keyedEveryFrame: isKeyedEveryFrame(clip.curveTimes, fps, frameCount),
+    };
+  });
+}
+
+async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<SceneDescription> {
+  const meshes: Mesh[] = parsed.meshes.map((mesh) => ({ ...mesh, topology: topologyFingerprint(mesh) }));
+  const textures = createTextureResolver(parsed.textureFiles, request.fileName, request.readFile);
+  const materials = await buildMaterials(parsed.materials, meshes, textures);
+  return {
+    source: {
+      format: "fbx",
+      exporter: parsed.exporter,
+      fps: parsed.fps,
+      originalSpace: parsed.originalSpace,
+      conversion: parsed.conversion,
+      warnings: [...parsed.warnings, ...textures.warnings],
+    },
+    nodes: buildNodes(parsed),
+    meshes,
+    skeletons: parsed.skeletons,
+    materials,
+    textures: textures.textures,
+    clips: buildClips(parsed.clips, parsed.fps),
+    bounds: boundsOfPoints(meshes.map((mesh) => mesh.restPositions)),
+  };
+}
+
+async function importFbx(request: ImportRequest): Promise<SceneDescription> {
+  let parsed: ParsedFbx;
+  try {
+    parsed = await parseFbx(request.bytes);
+  } catch (error) {
+    if (error instanceof FbxParseError) {
+      throw new ArcueError("invalid-input", `${request.fileName} is not a readable FBX file: ${error.message}`, {
+        cause: error,
+      });
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ArcueError("internal", `The FBX parser failed on ${request.fileName}: ${reason}`, { cause: error });
+  }
+  return buildScene(parsed, request);
+}
+
+export const fbxImporter: Importer = {
+  format: "fbx",
+  extensions: [".fbx"],
+  import: importFbx,
+};
