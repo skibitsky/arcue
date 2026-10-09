@@ -17,7 +17,16 @@ pnpm --filter @arcue/desktop dev   # the desktop app
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm --filter @arcue/web test:e2e
 ```
+
+CI runs browser tests on Linux with SwiftShader software rendering. To use the same renderer on macOS:
+
+```sh
+ARCUE_E2E_SOFTWARE=1 pnpm --filter @arcue/web test:e2e --workers=1
+```
+
+Software rendering has a longer test budget because shader compilation and screenshots can block for several seconds. The same assertions run with either renderer; failures retain traces and screenshots, which CI uploads as artifacts.
 
 ## License
 
