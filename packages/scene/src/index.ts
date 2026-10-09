@@ -1,10 +1,13 @@
 export type { CameraAnchor, IndexRange, RegionAnchor, SpatialAnchor, SurfaceAnchor, TimeAnchor } from "./anchor";
 export type { Clip, Interpolation, Track, TrackProperty } from "./clip";
 export { cleanClipName, clipNames, displayNames, UNNAMED_CLIP } from "./clip";
+export type { Composition, CompositionAttachment, CompositionMember, TextureSlot } from "./composition";
+export { composeScene, MEMBER_SEPARATOR, memberPath, splitMemberPath, TEXTURE_SLOTS } from "./composition";
 export type { TopologyFingerprint, TopologyInput } from "./fingerprint";
 export { sameTopology, topologyFingerprint } from "./fingerprint";
 export type { Barycentric, NearestVertex, SurfacePoint } from "./geometry";
 export { closestPointOnTriangle, closestSurfacePoint, nearestVertex, sourceIndices } from "./geometry";
+export { fileNameOf, imageMimeType } from "./image";
 export type { Importer, ImportRequest } from "./importer";
 export { findImporter, referencedFileCandidates } from "./importer";
 export type { AlphaMode, Material, Texture, TextureRef, UvTransform, WrapMode } from "./material";

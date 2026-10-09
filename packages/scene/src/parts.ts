@@ -20,7 +20,8 @@ export interface PartLevel {
 export interface ScenePart {
   /**
    * The stable id that view state and comments use: the node path of the part's mesh, of its LOD group node, or of
-   * the lowest level's mesh for a LOD group found by name. A part from another file will carry a file prefix.
+   * the lowest level's mesh for a LOD group found by name. A part from another file of a composition carries that
+   * file as a prefix, as `memberPath` writes it.
    */
   id: string;
   /** For people: the node's name, without the "_LOD<n>" suffix for a group found by name. */
@@ -30,6 +31,8 @@ export interface ScenePart {
   node: number;
   /** Meshes by LOD level, lowest level first. A part without LODs has level 0 only; a socket without a mesh has none. */
   levels: PartLevel[];
+  /** A composition hides the part until someone shows it, such as the second of two alternative bodies. */
+  hiddenByDefault?: boolean;
 }
 
 export type PartNode = Pick<SceneNode, "name" | "path" | "parent" | "mesh">;
@@ -166,9 +169,9 @@ export function isDefaultPartView(view: PartView): boolean {
   return view.hidden.length === 0 && view.shown.length === 0 && view.isolated === null && view.lod === 0;
 }
 
-/** Models show by default; collision helpers are hidden, and sockets draw no mesh. */
+/** Models show by default unless a composition hides them; collision helpers are hidden, and sockets draw no mesh. */
 export function shownByDefault(part: ScenePart): boolean {
-  return part.role === "model";
+  return part.role === "model" && part.hiddenByDefault !== true;
 }
 
 /** The level a part shows for a LOD: the highest level not above it, or the part's lowest level. */

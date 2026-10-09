@@ -36,6 +36,8 @@ export interface Clip {
   keyTimes: Float32Array;
   /** Every animated curve in the file has a key on every frame; see `isKeyedEveryFrame`. */
   keyedEveryFrame: boolean;
+  /** For a clip from another file of a composition: that file, relative to the model's folder. */
+  file?: string;
 }
 
 const UNTITLED_CLIP = "Untitled clip";

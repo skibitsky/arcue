@@ -32,13 +32,23 @@ export interface Exporter {
   version: string | null;
 }
 
-export type ImportWarningCode = "missing-texture" | "unsupported-feature" | "invalid-data" | "other";
+export type ImportWarningCode =
+  | "missing-texture"
+  | "unsupported-feature"
+  | "invalid-data"
+  | "other"
+  | "animation-bones-missing"
+  | "file-not-found"
+  | "node-not-found"
+  | "material-not-found";
 
 export interface ImportWarning {
   code: ImportWarningCode;
   message: string;
   /** Node path, texture path or clip name the warning is about. */
   subject: string | null;
+  /** The composition's file the warning comes from, relative to the model's folder; absent for the model's file. */
+  file?: string;
 }
 
 export interface SourceInfo {
