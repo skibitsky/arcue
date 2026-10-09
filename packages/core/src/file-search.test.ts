@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFileSearch, MAX_SEARCHED_FOLDERS } from "./file-search";
+import { createFileSearch, findFilesByExtension, MAX_SEARCHED_FOLDERS } from "./file-search";
 import { MemoryPlatform } from "./memory-platform";
 import type { DirectoryEntry } from "./platform";
 
@@ -135,5 +135,34 @@ describe("createFileSearch", () => {
     const found = await createFileSearch(platform, `${deep}/Deep.fbx`, "/repo").find("Top.png");
     expect(found).toBeNull();
     expect(platform.listed.length).toBeLessThanOrEqual(MAX_SEARCHED_FOLDERS);
+  });
+});
+
+describe("findFilesByExtension", () => {
+  it("lists files of the extensions in the folders and below them, inside the root and never through links", async () => {
+    const platform = new CountingPlatform({
+      files: {
+        "/repo/Art/Run.FBX": "a",
+        "/repo/Art/Sub/Walk.fbx": "b",
+        "/repo/Art/Notes.txt": "c",
+        "/repo/Other/Jump.fbx": "d",
+        "/outside/Secret.fbx": "e",
+      },
+      symlinks: { "/repo/Art/Linked": "/outside", "/repo/Art/Linked.fbx": "/outside/Secret.fbx" },
+    });
+    await expect(findFilesByExtension(platform, "/repo", ["/repo/Art", "/outside"], [".fbx"])).resolves.toEqual([
+      "/repo/Art/Run.FBX",
+      "/repo/Art/Sub/Walk.fbx",
+    ]);
+  });
+
+  it("lists at most MAX_SEARCHED_FOLDERS folders", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: MAX_SEARCHED_FOLDERS + 10 }, (_, index) => [`/repo/f${index}/A.fbx`, "a"]),
+    );
+    const platform = new CountingPlatform({ files });
+    const found = await findFilesByExtension(platform, "/repo", ["/repo"], [".fbx"]);
+    expect(platform.listed.length).toBeLessThanOrEqual(MAX_SEARCHED_FOLDERS);
+    expect(found.length).toBe(MAX_SEARCHED_FOLDERS - 1);
   });
 });

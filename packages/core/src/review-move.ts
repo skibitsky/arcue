@@ -1,7 +1,7 @@
 import type { CompositionFile, ReviewFile } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import { memberPath, splitMemberPath } from "@arcue/scene";
-import { parseComposition, serializeComposition } from "./composition-file";
+import { parseComposition, serializeComposition, withRewrittenPaths, writtenPaths } from "./composition-file";
 import { insideWithoutLinks } from "./links";
 import { basename, dirname, joinPath, pathInside, relativePath } from "./paths";
 import type { Platform } from "./platform";
@@ -122,36 +122,21 @@ export async function rebaseComposition(
   toFolder: string,
 ): Promise<{ composition: CompositionFile; labels: Map<string, string> }> {
   const labels = new Map<string, string>();
-  const rebase = async (written: string): Promise<string> => {
-    if ((await platform.stat(joinPath(toFolder, written)))?.kind === "file") return written;
+  const rewritten = new Map<string, string>();
+  for (const written of new Set(writtenPaths(composition))) {
+    if ((await platform.stat(joinPath(toFolder, written)))?.kind === "file") continue;
     const file = joinPath(fromFolder, written);
     const moved = relativePath(toFolder, file);
     const label = relativePath(fromFolder, file);
-    if (moved === null || label === null || (await platform.stat(file))?.kind !== "file") return written;
+    if (moved === null || label === null || (await platform.stat(file))?.kind !== "file") continue;
+    rewritten.set(written, moved);
     labels.set(label, moved);
-    return moved;
-  };
-  const next: CompositionFile = { ...composition };
-  if (composition.animations) {
-    next.animations = [];
-    for (const file of composition.animations) next.animations.push(await rebase(file));
   }
-  if (composition.attach) {
-    next.attach = [];
-    for (const entry of composition.attach) next.attach.push({ ...entry, file: await rebase(entry.file) });
-  }
-  if (composition.materials) {
-    const materials: NonNullable<CompositionFile["materials"]> = {};
-    for (const [material, slots] of Object.entries(composition.materials)) {
-      const rebased: typeof slots = {};
-      for (const [slot, file] of Object.entries(slots) as [keyof typeof slots, string | undefined][]) {
-        if (file !== undefined) rebased[slot] = await rebase(file);
-      }
-      materials[material] = rebased;
-    }
-    next.materials = materials;
-  }
-  if (composition.hidden) next.hidden = composition.hidden.map((id) => relabelId(id, labels));
+  const next = withRewrittenPaths(
+    composition,
+    (written) => rewritten.get(written) ?? written,
+    (id) => relabelId(id, labels),
+  );
   return { composition: next, labels };
 }
 
@@ -203,7 +188,8 @@ export function relabelMembers(review: ReviewFile, labels: ReadonlyMap<string, s
   };
 }
 
-function relabelId(id: string, labels: ReadonlyMap<string, string>): string {
+/** A node, mesh, part or clip id with its file renamed, when it comes from a file in `labels`. */
+export function relabelId(id: string, labels: ReadonlyMap<string, string>): string {
   const { file, path } = splitMemberPath(id);
   const renamed = file === null ? undefined : labels.get(file);
   return renamed === undefined ? id : memberPath(renamed, path);

@@ -25,6 +25,8 @@ export class OpenAsset {
   identity: { hash: string; size: number } | null = null;
   /** The model file stayed missing after a change, and no file in its folder could be followed. */
   missing = false;
+  /** Lost composition files already looked for under a new name, by path, until the next `asset.reload`. */
+  readonly searched = new Set<string>();
   /** The composition file applied to the version on screen, or null for a plain model. */
   composition: string | null = null;
   status: AssetStatus = "loading";

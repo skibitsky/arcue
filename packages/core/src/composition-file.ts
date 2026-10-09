@@ -1,5 +1,6 @@
-import type { CompositionAttach, CompositionFile, ErrorCode, TextureSlotName } from "@arcue/protocol";
+import type { CompositionAttach, CompositionFile, ErrorCode, MaterialTextures, TextureSlotName } from "@arcue/protocol";
 import { ArcueError, COMPOSITION_VERSION, compositionFileSchema, joinsByName } from "@arcue/protocol";
+import { TEXTURE_SLOTS } from "@arcue/scene";
 import { basename } from "./paths";
 import type { Platform } from "./platform";
 
@@ -151,4 +152,37 @@ export function withTexture(
   if (Object.keys(slots).length > 0) materials.set(material, slots);
   else materials.delete(material);
   return { ...composition, materials: Object.fromEntries(materials) };
+}
+
+/** Every file path a composition writes: animation files, attached files and textures, as written. */
+export function writtenPaths(composition: CompositionFile): string[] {
+  const textures = Object.values(composition.materials ?? {}).flatMap((slots) =>
+    TEXTURE_SLOTS.flatMap((slot) => slots[slot] ?? []),
+  );
+  return [...(composition.animations ?? []), ...(composition.attach ?? []).map((entry) => entry.file), ...textures];
+}
+
+/** The composition with each written file path replaced by `rewrite(path)`, and each hidden part id by `relabel(id)`. */
+export function withRewrittenPaths(
+  composition: CompositionFile,
+  rewrite: (written: string) => string,
+  relabel: (id: string) => string,
+): CompositionFile {
+  const next: CompositionFile = { ...composition };
+  if (composition.animations) next.animations = composition.animations.map(rewrite);
+  if (composition.attach) next.attach = composition.attach.map((entry) => ({ ...entry, file: rewrite(entry.file) }));
+  if (composition.materials) {
+    const materials: Record<string, MaterialTextures> = {};
+    for (const [material, slots] of Object.entries(composition.materials)) {
+      const rewritten: MaterialTextures = {};
+      for (const slot of TEXTURE_SLOTS) {
+        const written = slots[slot];
+        if (written !== undefined) rewritten[slot] = rewrite(written);
+      }
+      materials[material] = rewritten;
+    }
+    next.materials = materials;
+  }
+  if (composition.hidden) next.hidden = composition.hidden.map(relabel);
+  return next;
 }

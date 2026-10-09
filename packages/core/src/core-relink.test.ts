@@ -445,3 +445,97 @@ async function openVersion(test: TestCore, path: string): Promise<string | null>
   await test.core.client.execute("asset.close", { assetId });
   return version;
 }
+
+describe("a renamed file of a composition", () => {
+  const model = `${ART}/Bug.fbx`;
+  const run = `${ART}/Anim/Run.fbx`;
+  const texture = `${ART}/Textures/Shell.png`;
+  const reviewFolder = "/work/game/.arcue/reviews/Assets/Art/Bug.fbx";
+  const bug: FakeAssetSpec = {
+    bones: [{ name: "Body" }],
+    meshes: [{ name: "Legs", grid: 3, material: 0 }],
+    materials: ["Shell"],
+  };
+  const runSpec: FakeAssetSpec = { bones: [{ name: "Body" }], meshes: [], clips: [{ name: "Run", frames: 11 }] };
+  const composition: CompositionFile = {
+    version: 1,
+    animations: ["Anim/Run.fbx"],
+    materials: { Shell: { baseColor: "Textures/Shell.png" } },
+  };
+  const png = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 3);
+
+  async function composed(extra: Record<string, string | Uint8Array> = {}) {
+    const test = await startTestCore({
+      "/work/game/.git/HEAD": "ref",
+      [model]: fakeAsset(bug),
+      [run]: fakeAsset(runSpec),
+      [texture]: png,
+      [`${reviewFolder}/composition.json`]: JSON.stringify(composition),
+      ...extra,
+    });
+    const assetId = await openAsset(test, model);
+    await test.core.client.execute("comment.create", {
+      ...looseComment(assetId, "Lift the knees.", await sceneVersion(test, assetId)),
+      time: { kind: "frame", clip: "Anim/Run.fbx//Run", frame: 5 },
+    });
+    return { test, assetId };
+  }
+
+  const codes = async (test: TestCore, assetId: string) =>
+    (await test.core.client.query("warning.list", { assetId })).warnings.map((warning) => warning.code);
+
+  it("finds a member renamed by its bytes, writes its new path and keeps comments on its clips", async () => {
+    const { test, assetId } = await composed();
+    await test.platform.rename(run, `${ART}/Anim/Running.fbx`);
+    await settle(test);
+    await expect(readJson(test.platform, `${reviewFolder}/composition.json`)).resolves.toMatchObject({
+      animations: ["Anim/Running.fbx"],
+    });
+    const { scene } = await test.core.client.query("scene.get", { assetId });
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Anim/Running.fbx//Run"]);
+    const [comment] = (await test.core.client.query("review.get", { assetId })).comments;
+    expect(comment?.time).toMatchObject({ clip: "Anim/Running.fbx//Run", frame: 5 });
+    expect(await codes(test, assetId)).toEqual([]);
+  });
+
+  it("finds a member renamed and exported again by its Unity GUID", async () => {
+    const { test, assetId } = await composed({ [`${run}.meta`]: `guid: ${GUID}\n` });
+    await test.platform.rename(run, `${ART}/Anim/Running.fbx`);
+    await test.platform.rename(`${run}.meta`, `${ART}/Anim/Running.fbx.meta`);
+    await test.platform.writeFile(`${ART}/Anim/Running.fbx`, fakeAsset({ ...runSpec, fps: 24 }));
+    await settle(test);
+    await expect(readJson(test.platform, `${reviewFolder}/composition.json`)).resolves.toMatchObject({
+      animations: ["Anim/Running.fbx"],
+    });
+    expect(await codes(test, assetId)).toEqual([]);
+  });
+
+  it("finds an override texture moved below the model's folder by its bytes", async () => {
+    const { test, assetId } = await composed();
+    await test.platform.rename(texture, `${ART}/Textures/Old/ShellBase.png`);
+    await settle(test);
+    await expect(readJson(test.platform, `${reviewFolder}/composition.json`)).resolves.toMatchObject({
+      materials: { Shell: { baseColor: "Textures/Old/ShellBase.png" } },
+    });
+    expect(await codes(test, assetId)).toEqual([]);
+  });
+
+  it("leaves a lost file alone while two files match it, and looks again on retry", async () => {
+    const { test, assetId } = await composed();
+    await test.platform.writeFile(`${ART}/Anim/Copy.fbx`, fakeAsset(runSpec));
+    await test.platform.rename(run, `${ART}/Anim/Running.fbx`);
+    await settle(test);
+    expect(await codes(test, assetId)).toContain("file-not-found");
+    await expect(readJson(test.platform, `${reviewFolder}/composition.json`)).resolves.toMatchObject({
+      animations: ["Anim/Run.fbx"],
+    });
+
+    await test.platform.remove(`${ART}/Anim/Copy.fbx`);
+    await test.core.client.execute("asset.reload", { assetId });
+    await settle(test);
+    expect(await codes(test, assetId)).toEqual([]);
+    await expect(readJson(test.platform, `${reviewFolder}/composition.json`)).resolves.toMatchObject({
+      animations: ["Anim/Running.fbx"],
+    });
+  });
+});

@@ -38,7 +38,10 @@ export function createFileSearch(platform: Platform, assetPath: string, readRoot
   const list = (folder: string): Promise<DirectoryEntry[]> => {
     let listing = listings.get(folder);
     if (!listing) {
-      listing = listings.size >= MAX_SEARCHED_FOLDERS ? Promise.resolve([]) : listFolder(platform, root, folder);
+      listing =
+        listings.size >= MAX_SEARCHED_FOLDERS
+          ? Promise.resolve([])
+          : listFolder(platform, root, folder, isReadableImage);
       listings.set(folder, listing);
     }
     return listing;
@@ -106,12 +109,47 @@ export function createFileSearch(platform: Platform, assetPath: string, readRoot
   };
 }
 
-async function listFolder(platform: Platform, root: string, folder: string): Promise<DirectoryEntry[]> {
+/**
+ * The files with one of the extensions in the given folders and every folder below them, breadth first, for finding a
+ * file that was renamed. It follows the same rules as the search for images: inside `readRoot`, never through links,
+ * and at most `MAX_SEARCHED_FOLDERS` folders listed.
+ */
+export async function findFilesByExtension(
+  platform: Platform,
+  readRoot: string,
+  folders: readonly string[],
+  extensions: readonly string[],
+): Promise<string[]> {
+  const root = normalizePath(readRoot);
+  const matches = (name: string) => extensions.some((extension) => name.toLowerCase().endsWith(extension));
+  const queue = folders.filter((folder) => pathInside(root, folder) !== null);
+  const listed = new Set<string>();
+  const files: string[] = [];
+  while (queue.length > 0 && listed.size < MAX_SEARCHED_FOLDERS) {
+    const folder = queue.shift();
+    if (folder === undefined || listed.has(folder)) continue;
+    listed.add(folder);
+    for (const entry of await listFolder(platform, root, folder, matches)) {
+      const path = joinPath(folder, entry.name);
+      if (entry.kind === "directory") queue.push(path);
+      else files.push(path);
+    }
+  }
+  return files;
+}
+
+/** A folder's subfolders and the plain files whose names `keep` accepts; nothing outside `root` or through a link. */
+async function listFolder(
+  platform: Platform,
+  root: string,
+  folder: string,
+  keep: (name: string) => boolean,
+): Promise<DirectoryEntry[]> {
   try {
     if (!(await insideWithoutLinks(platform, root, folder))) return [];
     if ((await platform.stat(folder))?.kind !== "directory") return [];
     const entries = await platform.list(folder);
-    return entries.filter((entry) => entry.kind === "directory" || isReadableImage(entry.name));
+    return entries.filter((entry) => entry.kind === "directory" || (entry.kind === "file" && keep(entry.name)));
   } catch {
     return [];
   }

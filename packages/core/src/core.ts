@@ -53,6 +53,8 @@ import { readUnityGuid } from "./identity";
 import { importAsset } from "./import";
 import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
+import type { LostFile } from "./lost-files";
+import { findLostFiles, lostFiles, withMovedFiles } from "./lost-files";
 import { findComment, OpenAsset, readRootFor } from "./open-asset";
 import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
 import type { FileStat, Platform } from "./platform";
@@ -62,7 +64,7 @@ import type { CallContext } from "./registry";
 import { CommandRegistry } from "./registry";
 import type { EarlierReview } from "./relink";
 import { fileIdentity, findEarlierReviews, matchByIdentity, matchByStructure, rankCandidates } from "./relink";
-import { isUntouched, moveReview } from "./review-move";
+import { isUntouched, moveReview, relabelMembers } from "./review-move";
 import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
 import type { ReviewLocation } from "./review-store";
@@ -213,9 +215,11 @@ export class ArcueCore {
       registry.handleCommand("asset.open", (args, context) => this.#opening.run(() => this.#open(args, context))),
       registry.handleCommand("asset.close", (args) => this.#close(args.assetId)),
       registry.handleCommand("asset.relink", (args) => this.#relinkAsset(args.assetId, args.path)),
-      registry.handleCommand("asset.reload", async (args) => ({
-        version: await this.#load(this.#asset(args.assetId)),
-      })),
+      registry.handleCommand("asset.reload", async (args) => {
+        const asset = this.#asset(args.assetId);
+        asset.searched.clear();
+        return { version: await this.#load(asset) };
+      }),
       registry.handleCommand("comment.create", (args, context) => this.#createComment(args, context.user)),
       registry.handleCommand("comment.update", (args) => this.#updateComment(args)),
       registry.handleCommand("comment.delete", (args) => this.#deleteComment(args)),
@@ -623,6 +627,44 @@ export class ArcueCore {
     });
   }
 
+  /**
+   * Starts looking for the composition's lost files under new names, each once until the next `asset.reload`. It runs
+   * beside the load, since writing the composition file waits for the asset's edits, and those may wait for loads.
+   */
+  #searchLostFiles(asset: OpenAsset, files: AssetFiles): void {
+    const lost = lostFiles(files, asset.session.review).filter((file) => !asset.searched.has(file.path));
+    if (lost.length === 0) return;
+    for (const file of lost) asset.searched.add(file.path);
+    const taken = new Set([asset.path, ...files.members.keys(), ...files.textures.map((texture) => texture.path)]);
+    const relinked = this.#relinkLostFiles(asset, lost, taken).catch((error: unknown) => {
+      if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
+    });
+    void this.#track(relinked);
+  }
+
+  /**
+   * Writes each lost file found under a new name into the composition file at its new path, renames the review's ids
+   * for it, and reloads. A composition file that changed meanwhile keeps any entry that no longer names the old path.
+   */
+  async #relinkLostFiles(asset: OpenAsset, lost: readonly LostFile[], taken: ReadonlySet<string>): Promise<void> {
+    const moved = await findLostFiles(this.#platform, asset.path, asset.readRoot, lost, taken);
+    if (moved.size === 0) return;
+    const changed = await this.#inCompositionLine(asset, () =>
+      asset.session.run<boolean>(async (review) => {
+        await this.#checkCompositionPath(asset);
+        const found = await readComposition(this.#platform, asset.compositionPath, "conflict");
+        if (!found) return { next: null, result: false };
+        const { composition, labels } = withMovedFiles(found.composition, dirname(asset.path), moved);
+        const text = serializeComposition(composition);
+        if (text === serializeComposition(found.composition)) return { next: null, result: false };
+        await prepareArcueFolder(this.#platform, asset.location);
+        await this.#platform.writeFileAtomic(asset.compositionPath, text);
+        return { next: relabelMembers(review, labels), result: true };
+      }),
+    );
+    if (changed) await this.#load(asset).catch(() => undefined);
+  }
+
   /** Loads the asset's files, and with `force` records and re-anchors even a version that is already on screen. */
   /**
    * The model stayed missing across two checks, so it was not replaced by an export. When exactly one file in its
@@ -744,6 +786,7 @@ export class ArcueCore {
     }
     asset.missing = false;
     this.#watchComposition(asset, files.watch);
+    this.#searchLostFiles(asset, files);
     const versionId = files.versionId;
     if (versionId === asset.version && !force) {
       if (asset.status !== "ready") {
