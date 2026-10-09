@@ -2,6 +2,7 @@ import type {
   AssetInspection,
   AssetVersion,
   AssetWarning,
+  Author,
   CommandArgs,
   CommandName,
   CommandOutput,
@@ -12,6 +13,7 @@ import type {
   MessageEndpoint,
   Peer,
   ReviewFile,
+  RoundSummary,
   Unsubscribe,
 } from "@arcue/protocol";
 import {
@@ -147,13 +149,15 @@ export class ArcueCore {
 
   /**
    * Serves a window or a bridge on the endpoint. The core sends view commands to windows over the returned peer.
-   * Connection names must be unique among the open connections.
+   * Connection names must be unique among the open connections. Without a `user`, a window acts as the person the
+   * `authorName` setting names, and a bridge as nobody.
    */
   connect(endpoint: MessageEndpoint, options: ServeOptions): Peer {
     if (this.#connections.has(options.connection)) {
       throw new ArcueError("conflict", `A connection named "${options.connection}" is already open.`);
     }
-    const peer = serveEndpoint(this.registry, endpoint, options);
+    const user = options.user ?? (options.caller === "window" ? () => this.#localUser() : undefined);
+    const peer = serveEndpoint(this.registry, endpoint, { ...options, user });
     this.#connections.add(options.connection);
     peer.onClose(() => this.#connections.delete(options.connection));
     if (options.caller === "window") {
@@ -186,15 +190,17 @@ export class ArcueCore {
       registry.handleCommand("asset.reload", async (args) => ({
         version: await this.#load(this.#asset(args.assetId)),
       })),
-      registry.handleCommand("comment.create", (args) => this.#createComment(args)),
+      registry.handleCommand("comment.create", (args, context) => this.#createComment(args, context.user)),
       registry.handleCommand("comment.update", (args) => this.#updateComment(args)),
       registry.handleCommand("comment.delete", (args) => this.#deleteComment(args)),
       registry.handleCommand("comment.resolve", (args) => this.#resolveComment(args)),
-      registry.handleCommand("comment.reopen", (args) => this.#reopenComment(args)),
-      registry.handleCommand("comment.createFromWarning", (args) => this.#createFromWarning(args)),
+      registry.handleCommand("comment.reopen", (args, context) => this.#reopenComment(args, context.user)),
+      registry.handleCommand("comment.createFromWarning", (args, context) =>
+        this.#createFromWarning(args, context.user),
+      ),
       registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])),
       registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)),
-      registry.handleCommand("round.copy", (args) => this.#copyRound(args.assetId)),
+      registry.handleCommand("round.copy", (args, context) => this.#copyRound(args.assetId, context.user)),
       registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")),
       registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")),
       registry.handleCommand("composition.addFile", (args) => this.#addCompositionFile(args)),
@@ -287,6 +293,12 @@ export class ArcueCore {
 
   #newCommentId(): string {
     return this.#commentIds.next(this.#platform.clock.now());
+  }
+
+  /** The person the `authorName` setting names, who acts through the windows. */
+  #localUser(): Author | undefined {
+    const name = this.#settings.current.authorName;
+    return name === undefined ? undefined : { name };
   }
 
   #windowFor(asset: OpenAsset, context: CallContext): string {
@@ -810,7 +822,10 @@ export class ArcueCore {
     });
   }
 
-  #createComment(args: CommandArgs<"comment.create">): Promise<CommandOutput<"comment.create">> {
+  #createComment(
+    args: CommandArgs<"comment.create">,
+    author: Author | undefined,
+  ): Promise<CommandOutput<"comment.create">> {
     const asset = this.#asset(args.assetId);
     return asset.session.run(async (review) => {
       const { scene, version } = asset.pickedOn(args.version);
@@ -839,6 +854,7 @@ export class ArcueCore {
       };
       const parts = storedPartView(scene, args.parts);
       if (parts) comment.parts = parts;
+      if (author) comment.author = author;
       const next: ReviewFile = { ...review, comments: [...review.comments, comment], queue: [...review.queue, id] };
       return {
         next,
@@ -928,7 +944,7 @@ export class ArcueCore {
     });
   }
 
-  #reopenComment(args: CommandArgs<"comment.reopen">): Promise<void> {
+  #reopenComment(args: CommandArgs<"comment.reopen">, author: Author | undefined): Promise<void> {
     const asset = this.#asset(args.assetId);
     return asset.session.run((review) => {
       const comment = findComment(review, args.commentId);
@@ -942,7 +958,10 @@ export class ArcueCore {
         status: "draft",
         reopenedFrom: comment.status,
         updatedAt: now,
-        followUps: [...comment.followUps, { text: args.text, createdAt: now, afterRound }],
+        followUps: [
+          ...comment.followUps,
+          { text: args.text, createdAt: now, afterRound, ...(author ? { author } : {}) },
+        ],
       });
       const next = { ...reopened, queue: [...reopened.queue, comment.id] };
       return { next, result: undefined, edit: editBetween(review, next, [comment.id]) };
@@ -977,6 +996,7 @@ export class ArcueCore {
    */
   #createFromWarning(
     args: CommandArgs<"comment.createFromWarning">,
+    author: Author | undefined,
   ): Promise<CommandOutput<"comment.createFromWarning">> {
     const asset = this.#asset(args.assetId);
     return asset.session.run((review) => {
@@ -1007,6 +1027,7 @@ export class ArcueCore {
         reopenedFrom: null,
         warning: commentWarning(warning),
       };
+      if (author) comment.author = author;
       const next: ReviewFile = { ...review, comments: [...review.comments, comment], queue: [...review.queue, id] };
       return { next, result: { commentId: id }, edit: editBetween(review, next, [id]) };
     });
@@ -1045,7 +1066,7 @@ export class ArcueCore {
     });
   }
 
-  async #copyRound(assetId: string): Promise<CommandOutput<"round.copy">> {
+  async #copyRound(assetId: string, author: Author | undefined): Promise<CommandOutput<"round.copy">> {
     const asset = this.#asset(assetId);
     const reviewFolder = asset.location.folder;
     const { round, prompt } = await asset.session.run(async (review) => {
@@ -1094,7 +1115,8 @@ export class ArcueCore {
           },
         };
       });
-      const summary = { number: round, createdAt: now, version, comments: [...review.queue] };
+      const summary: RoundSummary = { number: round, createdAt: now, version, comments: [...review.queue] };
+      if (author) summary.author = author;
       return {
         next: { ...review, comments, queue: [], rounds: [...review.rounds, summary] },
         result: { round, prompt },

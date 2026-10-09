@@ -1,4 +1,5 @@
 import type {
+  Author,
   CommandArgs,
   CommandDefinition,
   CommandInput,
@@ -27,6 +28,8 @@ export interface CallContext {
   /** The connection the call arrived on, or null for a call made inside the core's own process. */
   connection: string | null;
   caller: CallerKind;
+  /** Who made the call, when the connection names someone. The core records it as the author of what the call makes. */
+  user?: Author | undefined;
 }
 
 export type CommandHandler<Name extends CommandName> = (

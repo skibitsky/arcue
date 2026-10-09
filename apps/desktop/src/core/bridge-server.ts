@@ -73,7 +73,8 @@ async function privateFolder(path: string): Promise<void> {
 
 /**
  * Listens for the command line on a local socket. Each connection must present the token from `bridge.json`, which
- * only the user can read, and is then served with the caller "bridge", so internal commands are refused.
+ * only the user can read, and is then served with the caller "bridge", so internal commands are refused. A hello
+ * that names a user makes that user the author of what the connection does.
  */
 export async function startBridgeServer(options: BridgeServerOptions): Promise<BridgeServer> {
   const infoPath = join(options.userData, BRIDGE_INFO_FILE);
@@ -92,10 +93,11 @@ export async function startBridgeServer(options: BridgeServerOptions): Promise<B
       token,
       timeout: { ms: options.handshakeTimeoutMs ?? 5000, setTimer: unrefTimer },
     }).then(
-      (endpoint) => {
+      ({ endpoint, user }) => {
         options.core.connect(windowFirst(endpoint, options.ensureWindow), {
           connection: `bridge-${next++}`,
           caller: "bridge",
+          user: () => user,
           onListenerError: options.onError,
         });
       },

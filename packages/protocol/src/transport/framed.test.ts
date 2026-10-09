@@ -101,7 +101,8 @@ describe("bridge handshake", () => {
     const accepted = acceptBridge(framedChannel(left, json), { token, timeout: timers });
     const connected = connectBridge(framedChannel(right, json), { token, timeout: timers });
     const [coreSide, bridgeSide] = await Promise.all([accepted, connected]);
-    createPeer(coreSide, { handleRequest: ({ name }) => ({ answered: name }) });
+    expect(coreSide.user).toBeUndefined();
+    createPeer(coreSide.endpoint, { handleRequest: ({ name }) => ({ answered: name }) });
     const peer = createPeer(bridgeSide);
     await expect(peer.request("query", "asset.list", {})).resolves.toEqual({ answered: "asset.list" });
   });
@@ -111,11 +112,27 @@ describe("bridge handshake", () => {
     const bridge = framedChannel(right, json);
     bridge.send({ type: "arcue.hello", version: 1, token });
     bridge.send({ type: "request", id: 1, kind: "query", name: "asset.list", input: {} });
-    const coreSide = await acceptBridge(framedChannel(left, json), { token, timeout: timers });
+    const { endpoint } = await acceptBridge(framedChannel(left, json), { token, timeout: timers });
     const names: string[] = [];
-    createPeer(coreSide, { handleRequest: ({ name }) => names.push(name) });
+    createPeer(endpoint, { handleRequest: ({ name }) => names.push(name) });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(names).toEqual(["asset.list"]);
+  });
+
+  it("passes on the user a bridge acts for", async () => {
+    const [left, right] = streamPair();
+    const accepted = acceptBridge(framedChannel(left, json), { token, timeout: timers });
+    const connected = connectBridge(framedChannel(right, json), { token, timeout: timers, user: { name: "Agent" } });
+    const [coreSide] = await Promise.all([accepted, connected]);
+    expect(coreSide.user).toEqual({ name: "Agent" });
+  });
+
+  it("refuses a hello whose user is not valid, saying why", async () => {
+    const [left, right] = streamPair();
+    const accepted = acceptBridge(framedChannel(left, json), { token, timeout: timers });
+    const connected = connectBridge(framedChannel(right, json), { token, timeout: timers, user: { name: " " } });
+    await expect(accepted).rejects.toMatchObject({ code: "forbidden" });
+    await expect(connected).rejects.toThrow(/user name is not valid/);
   });
 
   it("rejects a wrong token on both sides and closes the channel", async () => {

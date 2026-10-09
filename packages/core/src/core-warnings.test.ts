@@ -240,6 +240,13 @@ describe("comment.createFromWarning", () => {
     expect((await savedReview(test)).comments).toEqual([]);
   });
 
+  it("names the window's person as the author", async () => {
+    const test = await setup();
+    await test.core.client.execute("settings.set", { authorName: "Ana" });
+    await test.window.client.execute("comment.createFromWarning", { assetId: test.assetId, warningId: MISSING });
+    expect((await savedReview(test)).comments[0]?.author).toEqual({ name: "Ana" });
+  });
+
   it("makes a clip's comment at the clip's first frame", async () => {
     const test = await setup();
     await test.window.client.execute("comment.createFromWarning", { assetId: test.assetId, warningId: CLIP });

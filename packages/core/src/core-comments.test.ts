@@ -1,5 +1,5 @@
-import type { CommandInput, ReviewFile } from "@arcue/protocol";
-import { roundDataSchema } from "@arcue/protocol";
+import type { CommandInput, CoreClient, ReviewFile } from "@arcue/protocol";
+import { createMemoryChannel, createPeer, createRemoteClient, roundDataSchema } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
 import { ArcueCore } from "./core";
 import type { TestCore } from "./test-support";
@@ -578,5 +578,52 @@ describe("the review's revision", () => {
     await test.core.client.execute("asset.close", { assetId: test.assetId });
     await openAsset(test);
     await expect(test.platform.readText(`${HERO_REVIEW}/review.json`)).resolves.toBe(text);
+  });
+});
+
+/** A bridge connected to the test's core, acting for `user` when given. */
+function bridge(test: TestCore, user?: { name: string }): CoreClient {
+  const [coreSide, bridgeSide] = createMemoryChannel();
+  test.core.connect(coreSide, { connection: "bridge-1", caller: "bridge", ...(user ? { user: () => user } : {}) });
+  return createRemoteClient(createPeer(bridgeSide));
+}
+
+describe("authors", () => {
+  it("records who made comments, follow-ups and rounds, as the caller names them", async () => {
+    const test = await setup();
+    const { assetId } = test;
+    const agent = bridge(test, { name: "Agent" });
+    const { commentId } = await agent.execute("comment.create", pinComment(assetId));
+    await agent.execute("round.copy", { assetId });
+    await agent.execute("comment.reopen", { assetId, commentId, text: "Still bent." });
+
+    const review = await savedReview(test);
+    expect(review.comments[0]?.author).toEqual({ name: "Agent" });
+    expect(review.comments[0]?.followUps[0]?.author).toEqual({ name: "Agent" });
+    expect(review.rounds[0]?.author).toEqual({ name: "Agent" });
+  });
+
+  it("names the authorName setting as the author of what windows do, and nobody without it", async () => {
+    const test = await setup();
+    const { assetId } = test;
+    const before = (await test.window.client.execute("comment.create", pinComment(assetId))).commentId;
+    await test.core.client.execute("settings.set", { authorName: "Ana" });
+    const after = (await test.window.client.execute("comment.create", pinComment(assetId))).commentId;
+    const fromBridge = (await bridge(test).execute("comment.create", looseComment(assetId))).commentId;
+    const fromCore = await create(test);
+
+    const authors = new Map((await savedReview(test)).comments.map((comment) => [comment.id, comment.author]));
+    expect(authors.get(before)).toBeUndefined();
+    expect(authors.get(after)).toEqual({ name: "Ana" });
+    expect(authors.get(fromBridge)).toBeUndefined();
+    expect(authors.get(fromCore)).toBeUndefined();
+  });
+
+  it("ignores a blank authorName in settings.json and keeps the other settings", async () => {
+    const test = await startTestCore({
+      ...heroFiles(),
+      "/app-data/settings.json": JSON.stringify({ coordinates: "z-up-blender", authorName: " " }),
+    });
+    await expect(test.core.client.query("settings.get", {})).resolves.toEqual({ coordinates: "z-up-blender" });
   });
 });

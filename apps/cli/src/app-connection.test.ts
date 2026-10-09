@@ -48,7 +48,7 @@ async function startFakeCore(token = TOKEN): Promise<void> {
       close: () => connection.destroy(),
     };
     acceptBridge(framedChannel(stream, jsonFrameCodec), { token, timeout: { ms: 2000, setTimer: timer } }).then(
-      (endpoint) => {
+      ({ endpoint }) => {
         createPeer(endpoint, {
           handleRequest: (request) => {
             requests.push(request);

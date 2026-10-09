@@ -8,6 +8,7 @@ import {
   vec3Schema,
 } from "./anchors";
 import { commentIdSchema } from "./assets";
+import { authorSchema } from "./author";
 import { commentContextSchema, screenshotOwner } from "./context";
 import { commentWarningSchema, warningIdSchema } from "./import-warning";
 import { partViewSchema } from "./view-state";
@@ -25,6 +26,8 @@ export const followUpSchema = z.object({
   createdAt: timestampSchema,
   /** The round whose fix did not work. */
   afterRound: roundNumberSchema,
+  /** Who reopened the comment, when the caller named someone. */
+  author: authorSchema.optional(),
 });
 
 export const commentSchema = z
@@ -62,6 +65,8 @@ export const commentSchema = z
     parts: partViewSchema.optional(),
     /** The import warning the comment was made from, if any. */
     warning: commentWarningSchema.optional(),
+    /** Who made the comment, when the caller named someone. */
+    author: authorSchema.optional(),
   })
   .refine((comment) => comment.anchorRestPositions.length === anchoredVertexCount(comment.target), {
     message: "There must be one rest position per anchored vertex.",
@@ -123,6 +128,8 @@ export const roundSummarySchema = z.object({
   version: z.string().min(1),
   /** Comment ids in prompt order. */
   comments: z.array(commentIdSchema),
+  /** Who copied the round, when the caller named someone. */
+  author: authorSchema.optional(),
 });
 
 /**

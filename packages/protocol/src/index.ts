@@ -22,7 +22,9 @@ export {
   COMMENT_ID_PATTERN,
   commentIdSchema,
 } from "./assets";
-export type { BridgeInfo, HandshakeOptions, LaunchInfo } from "./bridge";
+export type { Author } from "./author";
+export { authorSchema } from "./author";
+export type { AcceptedBridge, BridgeInfo, ConnectBridgeOptions, HandshakeOptions, LaunchInfo } from "./bridge";
 export {
   acceptBridge,
   BRIDGE_INFO_FILE,

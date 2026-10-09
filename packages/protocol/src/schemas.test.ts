@@ -19,6 +19,7 @@ import {
   timeAnchorSchema,
 } from "./anchors";
 import { commentIdSchema } from "./assets";
+import { authorSchema } from "./author";
 import { commands, isCommandName } from "./commands";
 import { isEventName } from "./events";
 import { importWarningSchema } from "./import-warning";
@@ -26,6 +27,7 @@ import { isQueryName } from "./queries";
 import type { ReviewFile } from "./review";
 import { reviewFileSchema } from "./review";
 import { roundDataSchema } from "./round";
+import { settingsSchema } from "./settings";
 import { viewStateSchema } from "./view-state";
 
 const specRoundExample = {
@@ -361,6 +363,27 @@ describe("reviewFileSchema", () => {
     expect(reviewFileSchema.parse(review()).comments[0]?.parts).toBeUndefined();
   });
 
+  it("keeps the authors of comments, follow-ups and rounds, and accepts them missing", () => {
+    const author = { name: "Ana" };
+    const followUp = { text: "Still bent.", createdAt: "2026-10-08T14:06:00.000Z", afterRound: 1, author };
+    const reopened = {
+      ...comment("c2", "draft"),
+      author,
+      rounds: [1],
+      followUps: [followUp],
+      reopenedFrom: "sent" as const,
+    };
+    const [round] = review().rounds;
+    if (!round) throw new Error("The fixture has a round.");
+    const parsed = reviewFileSchema.parse(
+      review({ comments: [comment("c1", "draft"), reopened], queue: ["c1", "c2"], rounds: [{ ...round, author }] }),
+    );
+    expect(parsed.comments[1]?.author).toEqual(author);
+    expect(parsed.comments[1]?.followUps[0]?.author).toEqual(author);
+    expect(parsed.rounds[0]?.author).toEqual(author);
+    expect(parsed.comments[0]?.author).toBeUndefined();
+  });
+
   it("rejects repeated comment and version ids", () => {
     const [version] = review().versions;
     if (!version) throw new Error("The fixture has a version.");
@@ -385,6 +408,20 @@ describe("commentIdSchema", () => {
     ]) {
       expect(commentIdSchema.safeParse(id).success, id).toBe(false);
     }
+  });
+});
+
+describe("authorSchema", () => {
+  it("trims the name and refuses a blank or very long one", () => {
+    expect(authorSchema.parse({ name: "  Ana  " })).toEqual({ name: "Ana" });
+    expect(authorSchema.safeParse({ name: "   " }).success).toBe(false);
+    expect(authorSchema.safeParse({ name: "a".repeat(100) }).success).toBe(true);
+    expect(authorSchema.safeParse({ name: "a".repeat(101) }).success).toBe(false);
+  });
+
+  it("is an optional setting", () => {
+    expect(settingsSchema.parse({ coordinates: "y-up" })).toEqual({ coordinates: "y-up" });
+    expect(settingsSchema.parse({ coordinates: "y-up", authorName: "Ana" }).authorName).toBe("Ana");
   });
 });
 

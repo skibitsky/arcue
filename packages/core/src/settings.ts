@@ -3,7 +3,10 @@ import { settingsSchema } from "@arcue/protocol";
 import { joinPath } from "./paths";
 import type { Platform } from "./platform";
 
-const storedSettingsSchema = settingsSchema.extend({ coordinates: settingsSchema.shape.coordinates.catch("y-up") });
+const storedSettingsSchema = settingsSchema.extend({
+  coordinates: settingsSchema.shape.coordinates.catch("y-up"),
+  authorName: settingsSchema.shape.authorName.catch(undefined),
+});
 
 export const defaultSettings: Settings = { coordinates: "y-up" };
 

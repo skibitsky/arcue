@@ -3,7 +3,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
-import type { BridgeInfo, CoreClient } from "@arcue/protocol";
+import type { Author, BridgeInfo, CoreClient } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
   bridgeInfoSchema,
@@ -13,7 +13,7 @@ import {
   framedChannel,
   jsonFrameCodec,
 } from "@arcue/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeServer } from "./bridge-server";
 import { bridgeAddress, startBridgeServer } from "./bridge-server";
 import { socketStream } from "./node-socket";
@@ -50,7 +50,7 @@ function readInfo(): BridgeInfo {
   return bridgeInfoSchema.parse(JSON.parse(readFileSync(join(userData, BRIDGE_INFO_FILE), "utf8")));
 }
 
-async function connectWith(token: string): Promise<CoreClient> {
+async function connectWith(token: string, user?: Author): Promise<CoreClient> {
   const socket = connect(readInfo().socket);
   await new Promise<void>((resolve, reject) => {
     socket.once("connect", resolve);
@@ -59,6 +59,7 @@ async function connectWith(token: string): Promise<CoreClient> {
   const endpoint = await connectBridge(framedChannel(socketStream(socket), jsonFrameCodec), {
     token,
     timeout: { ms: 2000, setTimer: timer },
+    ...(user ? { user } : {}),
   });
   return createRemoteClient(createPeer(endpoint));
 }
@@ -78,6 +79,13 @@ describe("the bridge server", () => {
   it("serves a bridge that presents the token", async () => {
     const client = await connectWith(readInfo().token);
     await expect(client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
+
+  it("serves a bridge as the user its hello names, and as nobody without one", async () => {
+    const connect = vi.spyOn(core, "connect");
+    await (await connectWith(readInfo().token, { name: "Agent" })).query("asset.list", {});
+    await (await connectWith(readInfo().token)).query("asset.list", {});
+    expect(connect.mock.calls.map(([, options]) => options.user?.())).toEqual([{ name: "Agent" }, undefined]);
   });
 
   it("refuses internal commands from a bridge", async () => {

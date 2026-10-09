@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { Author } from "./author";
+import { authorSchema } from "./author";
 import { ArcueError } from "./errors";
 import type { MessageEndpoint } from "./transport/endpoint";
 import type { FramedChannel } from "./transport/framed";
@@ -35,7 +37,13 @@ export type LaunchInfo = z.output<typeof launchInfoSchema>;
 /** The largest hello or reply either side accepts, so an unauthenticated peer cannot make the other buffer much. */
 export const HANDSHAKE_MAX_FRAME_BYTES = 4096;
 
-const helloSchema = z.object({ type: z.literal("arcue.hello"), version: z.literal(1), token: z.string() });
+const helloSchema = z.object({
+  type: z.literal("arcue.hello"),
+  version: z.literal(1),
+  token: z.string(),
+  /** Who the bridge acts for, checked against `authorSchema` once the token matches. */
+  user: z.unknown().optional(),
+});
 
 const replySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("arcue.welcome") }),
@@ -48,25 +56,47 @@ export interface HandshakeOptions {
   timeout: { ms: number; setTimer: SetTimer };
 }
 
+export interface ConnectBridgeOptions extends HandshakeOptions {
+  /** Who the bridge acts for. The core records it as the author of the comments and rounds the bridge makes. */
+  user?: Author;
+}
+
+export interface AcceptedBridge {
+  /** Carries envelopes once the handshake is done. */
+  endpoint: MessageEndpoint;
+  /** Who the bridge acts for, when its hello names someone. */
+  user?: Author;
+}
+
 /**
  * The core's side of a bridge connection: the first message must carry the token. On success the returned endpoint
  * carries envelopes; otherwise the channel is closed and the promise rejects as "forbidden".
  */
-export async function acceptBridge(channel: FramedChannel, options: HandshakeOptions): Promise<MessageEndpoint> {
-  const first = await firstMessage(channel, options.timeout);
-  const hello = helloSchema.safeParse(first);
-  if (!hello.success || !sameToken(hello.data.token, options.token)) {
-    channel.send({ type: "arcue.rejected", message: "The token does not match the running app." });
+export async function acceptBridge(channel: FramedChannel, options: HandshakeOptions): Promise<AcceptedBridge> {
+  const hello = helloSchema.safeParse(await firstMessage(channel, options.timeout));
+  const refuse = (message: string, reason: string) => {
+    channel.send({ type: "arcue.rejected", message });
     channel.close();
-    throw new ArcueError("forbidden", "A bridge connected without the app's token.");
+    return new ArcueError("forbidden", reason);
+  };
+  if (!hello.success || !sameToken(hello.data.token, options.token)) {
+    throw refuse("The token does not match the running app.", "A bridge connected without the app's token.");
   }
+  const user = authorSchema.optional().safeParse(hello.data.user);
+  if (!user.success) throw refuse("The user name is not valid.", "A bridge named a user that is not valid.");
   channel.send({ type: "arcue.welcome" });
-  return framedEndpoint(channel);
+  const endpoint = framedEndpoint(channel);
+  return user.data ? { endpoint, user: user.data } : { endpoint };
 }
 
 /** The bridge's side: presents the token and resolves once the core accepts it. */
-export async function connectBridge(channel: FramedChannel, options: HandshakeOptions): Promise<MessageEndpoint> {
-  channel.send({ type: "arcue.hello", version: 1, token: options.token });
+export async function connectBridge(channel: FramedChannel, options: ConnectBridgeOptions): Promise<MessageEndpoint> {
+  channel.send({
+    type: "arcue.hello",
+    version: 1,
+    token: options.token,
+    ...(options.user ? { user: options.user } : {}),
+  });
   const reply = replySchema.safeParse(await firstMessage(channel, options.timeout));
   if (!reply.success || reply.data.type === "arcue.rejected") {
     channel.close();
