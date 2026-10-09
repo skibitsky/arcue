@@ -1,4 +1,4 @@
-import type { Clip, Material, Mesh, Quat, SceneDescription, SceneNode, Track, Vec3 } from "@arcue/scene";
+import type { Clip, Material, Mesh, Quat, SceneDescription, SceneNode, Texture, Track, Vec3 } from "@arcue/scene";
 import {
   boundsOfPoints,
   buildNodePaths,
@@ -495,10 +495,14 @@ export function buildCreature(textures: CreatureTextures, detail = 1): SceneDesc
       },
     ],
     textures: [
-      ...(skinTexture ? [{ name: "creature_skin.png", mimeType: "image/png", bytes: skinTexture }] : []),
-      ...(textures.badge ? [{ name: "badge.png", mimeType: "image/png", bytes: textures.badge }] : []),
+      ...(skinTexture ? [embedded("creature_skin.png", skinTexture)] : []),
+      ...(textures.badge ? [embedded("badge.png", textures.badge)] : []),
     ],
     clips,
     bounds: boundsOfPoints(meshes.map((mesh) => mesh.restPositions)),
   };
+}
+
+function embedded(name: string, bytes: Uint8Array): Texture {
+  return { name, mimeType: "image/png", bytes, storedPath: name, foundPath: null };
 }

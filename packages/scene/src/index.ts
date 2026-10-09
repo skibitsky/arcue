@@ -6,7 +6,7 @@ export { sameTopology, topologyFingerprint } from "./fingerprint";
 export type { Barycentric, NearestVertex, SurfacePoint } from "./geometry";
 export { closestPointOnTriangle, closestSurfacePoint, nearestVertex, sourceIndices } from "./geometry";
 export type { FoundFile, Importer, ImportRequest, StoredPath } from "./importer";
-export { findImporter, parseStoredPath, referencedFileCandidates } from "./importer";
+export { findImporter, parseStoredPath } from "./importer";
 export type { AlphaMode, Material, Texture, TextureRef, UvTransform, WrapMode } from "./material";
 export type { Bounds, Quat, Vec3, Vec4 } from "./math";
 export { boundsOfPoints } from "./math";

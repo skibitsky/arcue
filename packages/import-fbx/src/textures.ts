@@ -1,5 +1,5 @@
-import type { ImportWarning, Texture } from "@arcue/scene";
-import { importWarning, parseStoredPath, referencedFileCandidates } from "@arcue/scene";
+import type { FoundFile, ImportWarning, Texture } from "@arcue/scene";
+import { importWarning, parseStoredPath } from "@arcue/scene";
 import type { TextureFile } from "./decode";
 
 const SIGNATURES: readonly { mimeType: string; offset: number; bytes: readonly number[] }[] = [
@@ -64,42 +64,49 @@ export interface TextureResolver {
 }
 
 /**
- * Turns the file's texture paths into scene textures on first use. Embedded images are used as they are; other
- * images are read through `readFile` from the paths `referencedFileCandidates` gives. A missing image adds
- * "texture-not-found", and a file that stores only an absolute path from the exporting machine adds
- * "texture-path-absolute" even when the image is found by name.
+ * Turns the file's texture paths into scene textures on first use. Embedded images are used as they are; the core
+ * finds the others through `findFile`. A missing image adds "texture-not-found", and a file that stores only an
+ * absolute path from the exporting machine adds "texture-path-absolute" even when the image is found by name.
  */
 export function createTextureResolver(
   files: readonly TextureFile[],
-  assetFileName: string,
-  readFile: (relativePath: string) => Promise<Uint8Array | null>,
+  findFile: (storedPath: string) => Promise<FoundFile | null>,
 ): TextureResolver {
   const textures: Texture[] = [];
   const warnings: ImportWarning[] = [];
   const resolved = new Map<number, Promise<number | null>>();
 
   const load = async (file: TextureFile): Promise<number | null> => {
-    const storedPath = file.relative !== "" ? file.relative : file.absolute;
-    const subject = { kind: "texture", name: fileName(storedPath) } as const;
+    const relative = parseStoredPath(file.relative);
+    const storedPath = relative.relative ?? file.absolute;
+    const subject = { kind: "texture", name: fileName(storedPath) || fileName(file.relative) } as const;
     let bytes = file.content;
+    let foundPath: string | null = null;
     if (!bytes) {
-      if (parseStoredPath(file.relative).relative === null && parseStoredPath(file.absolute).absolute) {
+      if (relative.relative === null && parseStoredPath(file.absolute).absolute) {
         warnings.push(importWarning("texture-path-absolute", subject, `Texture path is absolute: ${file.absolute}`));
       }
-      const candidates = new Set([
-        ...referencedFileCandidates(file.relative, assetFileName),
-        ...referencedFileCandidates(file.absolute, assetFileName),
-      ]);
-      for (const candidate of candidates) {
-        bytes = await readFile(candidate);
-        if (bytes) break;
+      for (const candidate of new Set([file.relative, file.absolute])) {
+        if (candidate === "") continue;
+        const found = await findFile(candidate);
+        if (found) {
+          bytes = found.bytes;
+          foundPath = found.path;
+          break;
+        }
       }
     }
     if (!bytes) {
       warnings.push(importWarning("texture-not-found", subject, `Texture not found: ${subject.name}`));
       return null;
     }
-    textures.push({ name: textureName(storedPath), mimeType: imageMimeType(bytes, storedPath), bytes });
+    textures.push({
+      name: textureName(storedPath),
+      mimeType: imageMimeType(bytes, foundPath ?? storedPath),
+      bytes,
+      storedPath,
+      foundPath,
+    });
     return textures.length - 1;
   };
 

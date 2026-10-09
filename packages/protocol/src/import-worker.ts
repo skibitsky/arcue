@@ -61,7 +61,11 @@ export function serveImportWorker(endpoint: MessageEndpoint, importers: readonly
         const request: ImportReadFileInput = { relativePath };
         return (await peer.request("command", importRequests.readFile, request)) as ImportReadFileOutput;
       };
-      const scene = await importer.import({ fileName, bytes, readFile });
+      const findFile = async (storedPath: string) => {
+        const request: ImportFindFileInput = { storedPath };
+        return (await peer.request("command", importRequests.findFile, request)) as ImportFindFileOutput;
+      };
+      const scene = await importer.import({ fileName, bytes, readFile, findFile });
       return withTransfer(scene, collectTransferables(scene));
     },
   });

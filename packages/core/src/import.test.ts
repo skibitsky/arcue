@@ -1,5 +1,5 @@
 import type { Importer, SceneDescription } from "@arcue/scene";
-import { referencedFileCandidates, SCENE_SPACE } from "@arcue/scene";
+import { SCENE_SPACE } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import { importAsset, readReferencedFile } from "./import";
 import { MemoryPlatform } from "./memory-platform";
@@ -39,7 +39,13 @@ function emptyScene(textureNames: string[]): SceneDescription {
     meshes: [],
     skeletons: [],
     materials: [],
-    textures: textureNames.map((name) => ({ name, mimeType: "image/png", bytes: new Uint8Array(4) })),
+    textures: textureNames.map((name) => ({
+      name,
+      mimeType: "image/png",
+      bytes: new Uint8Array(4),
+      storedPath: name,
+      foundPath: name,
+    })),
     clips: [],
     bounds: { min: [0, 0, 0], max: [0, 0, 0] },
   };
@@ -83,14 +89,6 @@ describe("readReferencedFile outside a repository", () => {
     await expect(read("missing.png")).resolves.toBeNull();
     await expect(read("textures")).resolves.toBeNull();
     await expect(read("")).resolves.toBeNull();
-  });
-
-  it("finds a texture stored with an absolute path through its fallback candidates", async () => {
-    const found: string[] = [];
-    for (const candidate of referencedFileCandidates("C:\\Users\\artist\\baked.png", "Rock.fbx")) {
-      if (await readReferencedFile(platform, asset, candidate)) found.push(candidate);
-    }
-    expect(found).toEqual(["Rock.fbm/baked.png"]);
   });
 });
 
@@ -137,14 +135,6 @@ describe("readReferencedFile inside a repository", () => {
     await expect(readLinked("../Inner/Rock_Normal.tga")).resolves.toBeNull();
     await expect(readLinked("../Textures/Rock_Normal.tga")).resolves.not.toBeNull();
   });
-
-  it("keeps the file-name fallback for absolute paths stored in the file", async () => {
-    const found: string[] = [];
-    for (const candidate of referencedFileCandidates("C:\\Users\\artist\\baked.png", "Rock.fbx")) {
-      if (await readReferencedFile(platform, repoAsset, candidate, "/repo")) found.push(candidate);
-    }
-    expect(found).toEqual(["Rock.fbm/baked.png"]);
-  });
 });
 
 describe("importAsset", () => {
@@ -176,6 +166,21 @@ describe("importAsset", () => {
       "Rock.fbx",
       "../Textures/Rock_Albedo.PNG",
     ]);
+  });
+
+  it("lets the worker find a stale texture path by name anywhere up to the repository root", async () => {
+    const finder: Importer = {
+      format: "fbx",
+      extensions: [".fbx"],
+      async import({ findFile }) {
+        const found = await findFile("C:\\Users\\artist\\rock_albedo.png");
+        const outside = await findFile("../../../../outside/leak.png");
+        return emptyScene([found?.path ?? "none", outside?.path ?? "none"]);
+      },
+    };
+    const platform = new MemoryPlatform({ files, importers: [finder] });
+    const scene = await importAsset(platform, repoAsset, await platform.readFile(repoAsset));
+    expect(scene.textures.map((texture) => texture.name)).toEqual(["../Textures/Rock_Albedo.PNG", "none"]);
   });
 
   it("rejects a file no importer reads", async () => {

@@ -1,6 +1,6 @@
-import type { ImportReadFileInput, ImportRunInput } from "@arcue/protocol";
+import type { ImportFindFileInput, ImportRunInput } from "@arcue/protocol";
 import { ArcueError, createMemoryChannel, createPeer, importRequests } from "@arcue/protocol";
-import type { SceneDescription } from "@arcue/scene";
+import type { FoundFile, SceneDescription } from "@arcue/scene";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXTERNAL_TEXTURE_FBX, PNG_SIGNATURE } from "../test/ascii-fbx";
 import { readSample } from "../test/samples";
@@ -12,16 +12,16 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-function connect(files: Record<string, Uint8Array> = {}) {
+function connect(files: Record<string, FoundFile> = {}) {
   const [coreSide, workerSide] = createMemoryChannel();
   const worker = startFbxImportWorker(workerSide);
   const requested: string[] = [];
   const core = createPeer(coreSide, {
     handleRequest: ({ name, input }) => {
-      if (name !== importRequests.readFile) throw new ArcueError("unknown-command", name);
-      const { relativePath } = input as ImportReadFileInput;
-      requested.push(relativePath);
-      return files[relativePath] ?? null;
+      if (name !== importRequests.findFile) throw new ArcueError("unknown-command", name);
+      const { storedPath } = input as ImportFindFileInput;
+      requested.push(storedPath);
+      return files[storedPath] ?? null;
     },
   });
   cleanups.push(() => {
@@ -47,11 +47,21 @@ describe("startFbxImportWorker", () => {
     expect(requested).toEqual([]);
   });
 
-  it("reads an external texture through import.readFile from the candidate paths", async () => {
-    const { run, requested } = connect({ "tri.fbm/painted.png": PNG_SIGNATURE });
+  it("asks the core to find an external texture by its stored path through import.findFile", async () => {
+    const { run, requested } = connect({
+      "textures/painted.png": { path: "tri.fbm/painted.png", bytes: PNG_SIGNATURE },
+    });
     const scene = await run("tri.fbx", new TextEncoder().encode(EXTERNAL_TEXTURE_FBX));
-    expect(requested).toEqual(["textures/painted.png", "painted.png", "tri.fbm/painted.png"]);
-    expect(scene.textures).toEqual([{ name: "painted", mimeType: "image/png", bytes: PNG_SIGNATURE }]);
+    expect(requested).toEqual(["textures/painted.png"]);
+    expect(scene.textures).toEqual([
+      {
+        name: "painted",
+        mimeType: "image/png",
+        bytes: PNG_SIGNATURE,
+        storedPath: "textures/painted.png",
+        foundPath: "tri.fbm/painted.png",
+      },
+    ]);
     expect(scene.materials[0]?.baseColorTexture?.texture).toBe(0);
     expect(scene.source.warnings).toEqual([]);
     expect(scene.meshes[0]?.indices).toHaveLength(3);
@@ -60,7 +70,7 @@ describe("startFbxImportWorker", () => {
   it("warns about a missing external texture and leaves the slot empty", async () => {
     const { run, requested } = connect();
     const scene = await run("tri.fbx", new TextEncoder().encode(EXTERNAL_TEXTURE_FBX));
-    expect(requested).toEqual(["textures/painted.png", "painted.png", "tri.fbm/painted.png"]);
+    expect(requested).toEqual(["textures/painted.png", "C:/Users/artist/textures/painted.png"]);
     expect(scene.textures).toEqual([]);
     expect(scene.materials[0]?.baseColorTexture).toBeNull();
     expect(scene.source.warnings).toEqual([

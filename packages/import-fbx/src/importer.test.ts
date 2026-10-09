@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
-import type { SceneDescription } from "@arcue/scene";
-import { cleanClipName, collectTransferables, lastFrame } from "@arcue/scene";
+import type { FoundFile, ImportRequest, SceneDescription } from "@arcue/scene";
+import { cleanClipName, collectTransferables, lastFrame, parseStoredPath } from "@arcue/scene";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  ABSOLUTE_TEXTURE_FBX,
   ARMATURE_SCALE_FBX,
   animatedFbx,
   CENTIMETER_ROOT_SCALE_FBX,
+  EXTERNAL_TEXTURE_FBX,
   IN_BETWEEN_FBX,
   LEFT_HANDED_FBX,
   METAL_ROUGH_FBX,
@@ -23,20 +25,26 @@ import { fbxImporter } from "./importer";
 
 const BOUNDS_TOLERANCE = 1e-3;
 
+const noFiles: Pick<ImportRequest, "readFile" | "findFile"> = {
+  readFile: () => Promise.resolve(null),
+  findFile: () => Promise.resolve(null),
+};
+
 function importText(
   fileName: string,
   text: string,
-  readFile: (relativePath: string) => Promise<Uint8Array | null> = () => Promise.resolve(null),
+  findFile: (storedPath: string) => Promise<FoundFile | null> = noFiles.findFile,
 ): Promise<SceneDescription> {
   const bytes = new TextEncoder().encode(text);
-  return fbxImporter.import({ fileName, bytes, readFile });
+  return fbxImporter.import({ ...noFiles, fileName, bytes, findFile });
 }
 
 function textureName(scene: SceneDescription, ref: { texture: number } | null | undefined): string | null {
   return ref ? (scene.textures[ref.texture]?.name ?? null) : null;
 }
 
-const readAnyPng = () => Promise.resolve(PNG_SIGNATURE);
+const findAnyPng = (storedPath: string) =>
+  Promise.resolve({ path: parseStoredPath(storedPath).name, bytes: PNG_SIGNATURE });
 
 function frames(times: Float32Array | undefined, fps: number): number[] {
   return Array.from(times ?? [], (time) => Math.round(time * fps * 1000) / 1000);
@@ -257,7 +265,7 @@ describe("handedness", () => {
 describe("shared geometry", () => {
   it("gives every node that uses the geometry its own mesh, with its geometric transform applied", async () => {
     const bytes = new TextEncoder().encode(SHARED_GEOMETRY_FBX);
-    const scene = await fbxImporter.import({ fileName: "shared.fbx", bytes, readFile: () => Promise.resolve(null) });
+    const scene = await fbxImporter.import({ ...noFiles, fileName: "shared.fbx", bytes });
     expect(scene.nodes.map((node) => [node.name, node.mesh])).toEqual([
       ["Left", 0],
       ["Right", 1],
@@ -303,7 +311,7 @@ describe("textures", () => {
   });
 
   it("fills the roughness and metalness slots of a PBR material", async () => {
-    const scene = await importText("metal.fbx", METAL_ROUGH_FBX, readAnyPng);
+    const scene = await importText("metal.fbx", METAL_ROUGH_FBX, findAnyPng);
     const material = scene.materials[0];
     expect(textureName(scene, material?.roughnessTexture)).toBe("rough");
     expect(textureName(scene, material?.metalnessTexture)).toBe("metal");
@@ -312,7 +320,7 @@ describe("textures", () => {
   });
 
   it("leaves the roughness slot empty when a Phong material's shininess has a texture", async () => {
-    const scene = await importText("shiny.fbx", PHONG_SHININESS_FBX, readAnyPng);
+    const scene = await importText("shiny.fbx", PHONG_SHININESS_FBX, findAnyPng);
     const material = scene.materials[0];
     expect(material?.roughnessTexture).toBeNull();
     expect(material?.metalnessTexture).toBeNull();
@@ -482,19 +490,69 @@ describe("export checks", () => {
     expect((await importText("cm.fbx", CENTIMETER_ROOT_SCALE_FBX)).source.warnings).toEqual([]);
     expect((await importText("blender.fbx", Y_UP_ROOT_ROTATION_FBX)).source.warnings).toEqual([]);
   });
+
+  it("warns about a texture stored only with an absolute path, even when it is found by name", async () => {
+    const found: string[] = [];
+    const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX, (storedPath) => {
+      found.push(storedPath);
+      return Promise.resolve({ path: "../Textures/StoneStriker-BaseColor.png", bytes: PNG_SIGNATURE });
+    });
+    expect(found).toEqual(["/private/tmp/striker-staging/StoneStriker-BaseColor.png"]);
+    expect(scene.textures).toEqual([
+      {
+        name: "StoneStriker-BaseColor",
+        mimeType: "image/png",
+        bytes: PNG_SIGNATURE,
+        storedPath: "/private/tmp/striker-staging/StoneStriker-BaseColor.png",
+        foundPath: "../Textures/StoneStriker-BaseColor.png",
+      },
+    ]);
+    expect(scene.source.warnings).toEqual([
+      {
+        code: "texture-path-absolute",
+        severity: "warning",
+        subject: { kind: "texture", name: "StoneStriker-BaseColor.png" },
+        message: "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
+      },
+    ]);
+  });
+
+  it("reports a texture that is not found as an error", async () => {
+    const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX);
+    expect(scene.materials[0]?.baseColorTexture).toBeNull();
+    expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
+      [
+        "texture-path-absolute",
+        "warning",
+        "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
+      ],
+      ["texture-not-found", "error", "Texture not found: StoneStriker-BaseColor.png"],
+    ]);
+  });
+
+  it("does not warn about the absolute path beside a relative one, and tries the relative one first", async () => {
+    const found: string[] = [];
+    const scene = await importText("tri.fbx", EXTERNAL_TEXTURE_FBX, (storedPath) => {
+      found.push(storedPath);
+      return Promise.resolve(null);
+    });
+    expect(found).toEqual(["textures/painted.png", "C:/Users/artist/textures/painted.png"]);
+    expect(scene.source.warnings.map((warning) => warning.code)).toEqual(["texture-not-found"]);
+  });
 });
 
 describe("errors", () => {
   it("rejects bytes that are not FBX as invalid input", async () => {
     const bytes = new TextEncoder().encode("this is not an fbx file");
-    await expect(
-      fbxImporter.import({ fileName: "broken.fbx", bytes, readFile: () => Promise.resolve(null) }),
-    ).rejects.toMatchObject({ name: "ArcueError", code: "invalid-input" });
+    await expect(fbxImporter.import({ ...noFiles, fileName: "broken.fbx", bytes })).rejects.toMatchObject({
+      name: "ArcueError",
+      code: "invalid-input",
+    });
   });
 
   it("keeps working after a rejected file", async () => {
     await expect(
-      fbxImporter.import({ fileName: "empty.fbx", bytes: new Uint8Array(), readFile: () => Promise.resolve(null) }),
+      fbxImporter.import({ ...noFiles, fileName: "empty.fbx", bytes: new Uint8Array() }),
     ).rejects.toMatchObject({ code: "invalid-input" });
     const scene = await importSample("crate.fbx");
     expect(scene.meshes).toHaveLength(1);
