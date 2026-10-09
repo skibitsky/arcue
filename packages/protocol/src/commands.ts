@@ -15,7 +15,7 @@ const commentTextSchema = z.string().trim().min(1);
 /** A clip's name in the file, such as "Armature|Charge". */
 const clipNameSchema = z.string().min(1);
 const versionIdSchema = z.string().min(1);
-/** An absolute path, or one relative to the asset's composition file. */
+/** An absolute path, or one relative to the model's folder. */
 const compositionMemberSchema = z.string().min(1);
 const compositionOutput = z.object({
   /** The composition file the command wrote. */
@@ -25,7 +25,7 @@ const compositionOutput = z.object({
 export const commands = {
   "asset.open": command({
     description:
-      'Open an asset in a tab, or focus its tab when it is already open. A ".arcue" composition file opens its model with the files it lists, in a tab of its own unless it is the model\'s "<stem>.arcue". Optionally show a clip, by its name in the file, and a frame.',
+      "Open an asset in a tab, or focus its tab when it is already open. The model loads with the files its composition lists. Optionally show a clip, by its name in the file, and a frame.",
     runsIn: "core",
     input: z.object({
       path: z.string().min(1),
@@ -141,7 +141,7 @@ export const commands = {
   }),
   "composition.addFile": command({
     description:
-      "Load another file into the asset's view and save it in the asset's composition file, which is created beside the model when there is none. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place, and its bones merge into the model's bones of the same name, so a skinned mesh binds to the rig. Without a role the core reads the file: clips and no meshes make an animation file, meshes a set file. Adding a file again with the same node replaces its entry. Undo with review.undo.",
+      "Load another file into the asset's view and save it in the asset's composition file, composition.json in the asset's review folder, which is created on the first edit. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place, and its bones merge into the model's bones of the same name, so a skinned mesh binds to the rig. Without a role the core reads the file: clips and no meshes make an animation file, meshes a set file. Adding a file again with the same node replaces its entry. Undo with review.undo.",
     runsIn: "core",
     input: z
       .object({

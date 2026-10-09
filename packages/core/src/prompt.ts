@@ -1,4 +1,5 @@
 import type { BoneShare, PartView, RoundComment, RoundData } from "@arcue/protocol";
+import { COMPOSITION_FILE_NAME } from "@arcue/protocol";
 import { nameInPath } from "./scene-lookup";
 import { subjectLabel } from "./warnings";
 
@@ -35,9 +36,15 @@ export function renderPrompt({ data, assetPath, roundFolder, exportedAt, partNam
   return [header, ...data.comments.map((comment) => renderComment(comment, partNames))].join("\n\n");
 }
 
-/** The other files of a composition, which the prompt names once so their prefixed mesh paths make sense. */
+/**
+ * The other files of a composition, which the prompt names once so their prefixed mesh paths make sense. The
+ * composition file itself lives in the review folder, not the model's, so it is left out.
+ */
 function compositionLine(data: RoundData): string[] {
-  const others = (data.asset.files ?? []).slice(1).map((file) => file.file);
+  const others = (data.asset.files ?? [])
+    .slice(1)
+    .map((file) => file.file)
+    .filter((file) => file !== COMPOSITION_FILE_NAME);
   if (others.length === 0) return [];
   return [
     `Also loaded, relative to the model's folder: ${others.join(", ")}. Meshes from those files are named "<file>//<node path>".`,

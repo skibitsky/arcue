@@ -1128,14 +1128,29 @@
   ],
   "compositions": [
     {
-      "file": "beetle.arcue",
       "model": "beetle.fbx",
       "description": "Modular beetle in three files: legs with the rig and a walk, two alternative shells on the Body bone, the second hidden, and an animation-only file with a turn.",
-      "files": [
-        "beetle.fbx",
-        "beetle-shells.fbx",
-        "beetle-turn.fbx"
-      ]
+      "composition": {
+        "version": 1,
+        "animations": [
+          "beetle-turn.fbx"
+        ],
+        "attach": [
+          {
+            "file": "beetle-shells.fbx",
+            "node": "ShellRound",
+            "bone": "Body"
+          },
+          {
+            "file": "beetle-shells.fbx",
+            "node": "ShellSpiked",
+            "bone": "Body"
+          }
+        ],
+        "hidden": [
+          "beetle-shells.fbx//ShellSpiked"
+        ]
+      }
     }
   ]
 }

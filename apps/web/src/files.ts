@@ -10,11 +10,13 @@ export const FILES_FOLDER = "/files";
 
 export interface SampleInfo {
   id: string;
-  /** The file to open: a model, or a composition file that opens its model. */
+  /** The model to open. */
   file: string;
   description: string;
-  /** Every file to fetch, `file` first. */
+  /** Every file to fetch, the model first. */
   files: readonly string[];
+  /** The model's composition, which the web host writes where the core reads it before opening the model. */
+  composition?: CompositionFile;
 }
 
 export function samplePath(file: string): string {
@@ -63,26 +65,20 @@ function extensionOf(name: string): string {
   return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
 }
 
-function fileNameOf(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1);
-}
-
-/** Splits picked or dropped files into models, composition files, textures, and files Arcue cannot use. */
+/** Splits picked or dropped files into models, textures, and files Arcue cannot use. */
 export function partitionFiles<Item extends { name: string }>(
   files: readonly Item[],
-): { models: Item[]; compositions: Item[]; textures: Item[]; ignored: Item[] } {
+): { models: Item[]; textures: Item[]; ignored: Item[] } {
   const models: Item[] = [];
-  const compositions: Item[] = [];
   const textures: Item[] = [];
   const ignored: Item[] = [];
   for (const file of files) {
     const extension = extensionOf(file.name);
     if (extension === "fbx") models.push(file);
-    else if (extension === "arcue") compositions.push(file);
     else if (IMAGE_EXTENSIONS.has(extension)) textures.push(file);
     else ignored.push(file);
   }
-  return { models, compositions, textures, ignored };
+  return { models, textures, ignored };
 }
 
 /** One tab to open: the file to open, and the files to place in its folder first, itself included. */
@@ -92,30 +88,15 @@ export interface OpenPlan<Item> {
 }
 
 /**
- * What to open from files picked or dropped together. Dropped files arrive without their folders, so each
- * composition file goes in a folder with every model and texture of the drop. A model opens on its own unless a
- * composition names it or it joins another model in the drop by its name, "<model stem>@<clip>.fbx", as the core
- * joins such files. `contents` holds each composition file's content, or null when it could not be read.
+ * What to open from files picked or dropped together. Each model opens with the textures of the drop beside it, unless
+ * it joins another model in the drop by its name, "<model stem>@<clip>.fbx", as the core joins such files.
  */
-export function planOpen<Item extends { name: string }>(
-  files: readonly Item[],
-  contents: ReadonlyMap<Item, CompositionFile | null>,
-): OpenPlan<Item>[] {
-  const { models, compositions, textures } = partitionFiles(files);
-  const named = new Set<string>();
-  for (const composition of compositions) {
-    const content = contents.get(composition);
-    if (!content) continue;
-    const listed = [content.model, ...(content.animations ?? []), ...(content.attach ?? []).map((entry) => entry.file)];
-    for (const path of listed) named.add(fileNameOf(path));
-  }
+export function planOpen<Item extends { name: string }>(files: readonly Item[]): OpenPlan<Item>[] {
+  const { models, textures } = partitionFiles(files);
   const joins = (model: Item, file: Item) => file !== model && joinsByName(model.name, file.name);
-  const plans: OpenPlan<Item>[] = compositions.map((composition) => ({
-    open: composition,
-    files: [composition, ...models, ...textures],
-  }));
+  const plans: OpenPlan<Item>[] = [];
   for (const model of models) {
-    if (named.has(model.name) || models.some((other) => joins(other, model))) continue;
+    if (models.some((other) => joins(other, model))) continue;
     const animations = models.filter((other) => joins(model, other));
     plans.push({ open: model, files: [model, ...animations, ...textures] });
   }

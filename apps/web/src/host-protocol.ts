@@ -11,6 +11,11 @@ export const hostRequests = {
   placeFiles: "host.placeFiles",
   /** Removes files from the core's in-memory platform. Input: `RemoveFilesInput`. */
   removeFiles: "host.removeFiles",
+  /**
+   * Writes a model's composition file where the core reads it, in the model's review folder. Input:
+   * `WriteCompositionInput`.
+   */
+  writeComposition: "host.writeComposition",
 } as const;
 
 /** Events the page sends the core worker. */
@@ -57,6 +62,13 @@ export interface PlaceFilesOutput {
 
 export interface RemoveFilesInput {
   paths: string[];
+}
+
+export interface WriteCompositionInput {
+  /** Absolute virtual path of the model, such as "/samples/beetle.fbx". */
+  model: string;
+  /** The composition file's text. */
+  text: string;
 }
 
 export interface StartImportWorker {

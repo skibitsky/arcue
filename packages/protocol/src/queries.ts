@@ -89,7 +89,7 @@ export const queries = {
   }),
   "asset.inspect": query({
     description:
-      "Import a file without opening it and summarize it: format, exporter, axes, height, meshes, parts, bones, materials, textures, clips and warnings. A model is composed with its composition file as opening it would be; a .arcue path inspects the model it names.",
+      "Import a file without opening it and summarize it: format, exporter, axes, height, meshes, parts, bones, materials, textures, clips and warnings. A model is composed with its composition file as opening it would be.",
     input: z.object({ path: z.string().min(1) }),
     output: assetInspectionSchema,
   }),

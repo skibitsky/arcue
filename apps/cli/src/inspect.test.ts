@@ -228,7 +228,7 @@ describe("formatInspection", () => {
       ],
       textures: [{ name: "Textures/Moss.png", found: false, mimeType: null }],
       clips: [{ name: "Roll", displayName: "Roll", frames: 1, fps: 30, duration: 0 }],
-      composition: "/work/Rock.arcue",
+      composition: "/work/.arcue/reviews/Rock.fbx/composition.json",
       members: [
         { file: "Moss.fbx", role: "set", found: true },
         { file: "Rock@Roll.fbx", role: "animation", found: true },
@@ -245,7 +245,7 @@ describe("formatInspection", () => {
           severity: "warning",
           subject: { kind: "material", name: "Lichen" },
           message: "Material not used by any mesh: Lichen",
-          file: "Rock.arcue",
+          file: "composition.json",
         },
       ],
     };
@@ -266,11 +266,11 @@ describe("formatInspection", () => {
         "             Moss        hidden",
         "Materials    Stone  base color Stone_BaseColor, normal Stone_Normal",
         "Clips        Roll  1 frame at 30 fps",
-        "Composition  /work/Rock.arcue",
+        "Composition  /work/.arcue/reviews/Rock.fbx/composition.json",
         "Files        Moss.fbx       set",
         "             Rock@Roll.fbx  animation",
         "Errors       Texture not found: Moss.png",
-        "Warnings     Material not used by any mesh: Lichen (Rock.arcue)",
+        "Warnings     Material not used by any mesh: Lichen (composition.json)",
         "",
       ].join("\n"),
     );

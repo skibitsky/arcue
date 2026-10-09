@@ -27,9 +27,7 @@ import {
 import type { SceneDescription, SceneNode } from "@arcue/scene";
 import { findNode, materialSlots, splitMemberPath } from "@arcue/scene";
 import {
-  compositionPathFor,
   hasExtension,
-  isCompositionPath,
   isConventionAnimation,
   listsMember,
   MODEL_EXTENSIONS,
@@ -58,7 +56,7 @@ import type { CallContext } from "./registry";
 import { CommandRegistry } from "./registry";
 import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
-import { loadReview, locateReview, reviewFilePath } from "./review-store";
+import { compositionFilePath, loadReview, locateReview, reviewFilePath } from "./review-store";
 import { buildRoundData } from "./round-data";
 import {
   anchorRestPositions,
@@ -340,15 +338,8 @@ export class ArcueCore {
   }
 
   async #open(args: CommandArgs<"asset.open">, context: CallContext): Promise<CommandOutput<"asset.open">> {
-    let path = normalizePath(args.path);
-    let compositionPath = compositionPathFor(path);
-    if (isCompositionPath(path)) {
-      compositionPath = path;
-      path = await this.#modelOf(path);
-    }
-    const existing = [...this.#assets.values()].find(
-      (asset) => asset.path === path && asset.compositionPath === compositionPath && !asset.closing,
-    );
+    const path = normalizePath(args.path);
+    const existing = [...this.#assets.values()].find((asset) => asset.path === path && !asset.closing);
     if (existing) {
       await this.#showAsset(existing, this.#windowFor(existing, context), args);
       return { assetId: existing.id };
@@ -368,7 +359,7 @@ export class ArcueCore {
     const session = new ReviewSession(this.#platform, location, loaded, (review) =>
       this.registry.emit("review.changed", { assetId: id, review }),
     );
-    const asset = new OpenAsset(id, path, location, session, compositionPath);
+    const asset = new OpenAsset(id, path, location, session);
     if (args.viewState) asset.viewState = args.viewState;
     this.#assets.set(asset.id, asset);
     try {
@@ -384,24 +375,9 @@ export class ArcueCore {
         void this.#track(asset.session.refresh().catch((error: unknown) => this.#onError(error)));
       }),
     );
-    this.#watchComposition(asset, [compositionPath]);
+    this.#watchComposition(asset, [asset.compositionPath]);
     void this.#load(asset).catch(() => undefined);
     return { assetId: asset.id };
-  }
-
-  /** The model a composition file names, which must sit inside the composition's workspace. */
-  async #modelOf(compositionPath: string): Promise<string> {
-    const found = await readComposition(this.#platform, compositionPath, "invalid-input");
-    if (!found) throw new ArcueError("not-found", `${compositionPath} does not exist.`);
-    const model = joinPath(dirname(compositionPath), found.composition.model);
-    const root = (await this.#platform.findWorkspaceRoot(compositionPath)) ?? dirname(compositionPath);
-    if (pathInside(root, model) === null || !(await insideWithoutLinks(this.#platform, root, model))) {
-      throw new ArcueError(
-        "invalid-input",
-        `${compositionPath} names ${found.composition.model}, which is outside its workspace.`,
-      );
-    }
-    return model;
   }
 
   /** Watches the composition file and the files it names, and stops watching files it no longer names. */
@@ -425,24 +401,24 @@ export class ArcueCore {
 
   /**
    * Parses a file in its own import worker, composed with its composition's files as opening it would be, without
-   * opening a tab or touching review data. A composition path inspects the model it names.
+   * opening a tab or touching review data.
    */
   async #inspect(given: string): Promise<AssetInspection> {
     const path = normalizePath(given);
     const stat = await this.#platform.stat(path);
     if (!stat) throw new ArcueError("not-found", `${path} does not exist.`);
     if (stat.kind !== "file") throw new ArcueError("invalid-input", `${path} is not an asset file.`);
-    const composition = isCompositionPath(path);
-    const model = composition ? await this.#modelOf(path) : path;
-    const compositionPath = composition ? path : compositionPathFor(model);
-    const readRoot = readRootFor(await this.#platform.findWorkspaceRoot(model), compositionPath);
-    const files = await readAssetFiles(this.#platform, model, compositionPath, readRoot, { brokenComposition: "warn" });
+    const location = await locateReview(this.#platform, path);
+    const readRoot = readRootFor(location.workspaceRoot, path);
+    const files = await readAssetFiles(this.#platform, path, compositionFilePath(location), readRoot, {
+      brokenComposition: "warn",
+    });
     const bytes = files.model.bytes.byteLength;
     const scene = await buildAssetScene(files, (file) =>
       importAsset(this.#platform, file.path, file.bytes, { readRoot, timeoutMs: this.#importTimeoutMs }),
     );
     return inspectScene(scene, {
-      path: model,
+      path,
       bytes,
       composition: files.composition?.file.path ?? null,
       members: inspectMembers(files),
@@ -628,26 +604,20 @@ export class ArcueCore {
   }
 
   /**
-   * Changes the asset's composition file, creating it beside the model on the first change, records the change in the
-   * asset's undo history and reloads the asset. It works on the file as it is on disk, and never overwrites a file it
-   * cannot read. Call it inside `#inCompositionLine`.
+   * Changes the asset's composition file, creating it in the review folder on the first change, records the change in
+   * the asset's undo history and reloads the asset. It works on the file as it is on disk, and never overwrites a file
+   * it cannot read. Call it inside `#inCompositionLine`.
    */
   async #editComposition(
     asset: OpenAsset,
     change: (composition: CompositionFile, same: (path: string) => (written: string) => boolean) => CompositionFile,
   ): Promise<{ path: string }> {
     const path = asset.compositionPath;
-    const folder = dirname(path);
+    const folder = dirname(asset.path);
     const changed = await asset.session.run<boolean>(async () => {
       await this.#checkCompositionPath(asset);
       const found = await readComposition(this.#platform, path, "conflict");
-      if (found && joinPath(folder, found.composition.model) !== asset.path) {
-        throw new ArcueError("conflict", `${basename(path)} belongs to ${found.composition.model}, not ${asset.name}.`);
-      }
-      const current: CompositionFile = found?.composition ?? {
-        version: COMPOSITION_VERSION,
-        model: relativePath(folder, asset.path) ?? asset.name,
-      };
+      const current: CompositionFile = found?.composition ?? { version: COMPOSITION_VERSION };
       const same = (target: string) => (written: string) => joinPath(folder, written) === target;
       const text = serializeComposition(change(current, same));
       if (text === serializeComposition(current)) return { next: null, result: false };
@@ -662,12 +632,11 @@ export class ArcueCore {
     return { path };
   }
 
+  /** Refuses a composition file reached through a link, as opening refuses a review folder reached through one. */
   async #checkCompositionPath(asset: OpenAsset): Promise<void> {
-    if (!(await insideWithoutLinks(this.#platform, asset.readRoot, asset.compositionPath))) {
-      throw new ArcueError(
-        "conflict",
-        `${asset.compositionPath} is outside the workspace or reached through a symbolic link.`,
-      );
+    const root = asset.location.workspaceRoot ?? asset.location.folder;
+    if (!(await insideWithoutLinks(this.#platform, root, asset.compositionPath))) {
+      throw new ArcueError("conflict", `${asset.compositionPath} is reached through a symbolic link.`);
     }
   }
 
@@ -691,12 +660,10 @@ export class ArcueCore {
     else await this.#platform.writeFileAtomic(edit.path, restored);
   }
 
-  /** A path a composition command names: absolute, or relative to the composition file. */
+  /** A path a composition command names: absolute, or relative to the model's folder. */
   #resolveCompositionPath(asset: OpenAsset, file: string): string {
     const slashed = file.replaceAll("\\", "/");
-    return /^(?:[A-Za-z]:)?\//.test(slashed)
-      ? normalizePath(slashed)
-      : joinPath(dirname(asset.compositionPath), slashed);
+    return /^(?:[A-Za-z]:)?\//.test(slashed) ? normalizePath(slashed) : joinPath(dirname(asset.path), slashed);
   }
 
   /**
@@ -710,7 +677,7 @@ export class ArcueCore {
   ): Promise<{ path: string; written: string }> {
     const path = this.#resolveCompositionPath(asset, file);
     const name = basename(path);
-    const written = relativePath(dirname(asset.compositionPath), path);
+    const written = relativePath(dirname(asset.path), path);
     if (written === null || pathInside(asset.readRoot, path) === null) {
       throw new ArcueError("invalid-input", `${name} is outside the asset's workspace.`);
     }

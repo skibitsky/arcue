@@ -1,30 +1,14 @@
 import type { CompositionAttach, CompositionFile, ErrorCode, TextureSlotName } from "@arcue/protocol";
-import {
-  ArcueError,
-  COMPOSITION_EXTENSION,
-  COMPOSITION_VERSION,
-  compositionFileSchema,
-  defaultCompositionPath,
-  joinsByName,
-} from "@arcue/protocol";
-import { basename, normalizePath } from "./paths";
+import { ArcueError, COMPOSITION_VERSION, compositionFileSchema, joinsByName } from "@arcue/protocol";
+import { basename } from "./paths";
 import type { Platform } from "./platform";
 
 /** Extensions of the model files a composition may load. */
 export const MODEL_EXTENSIONS: readonly string[] = [".fbx", ".glb", ".gltf"];
 
-export function isCompositionPath(path: string): boolean {
-  return path.toLowerCase().endsWith(COMPOSITION_EXTENSION);
-}
-
 export function hasExtension(path: string, extensions: readonly string[]): boolean {
   const lower = path.toLowerCase();
   return extensions.some((extension) => lower.endsWith(extension));
-}
-
-/** Where a model's composition file sits: "<folder>/<model stem>.arcue". */
-export function compositionPathFor(modelPath: string): string {
-  return defaultCompositionPath(normalizePath(modelPath));
 }
 
 /** Files named "<model stem>@<anything>.fbx" join the model as animation files, as in Unity. */
@@ -56,7 +40,7 @@ export function parseComposition(text: string, path: string, code: ErrorCode): C
 
 /** The file's text, without empty lists, after checking it against the schema. */
 export function serializeComposition(composition: CompositionFile): string {
-  const tidy: CompositionFile = { version: composition.version, model: composition.model };
+  const tidy: CompositionFile = { version: composition.version };
   if (composition.animations?.length) tidy.animations = composition.animations;
   if (composition.attach?.length) tidy.attach = composition.attach;
   if (composition.materials && Object.keys(composition.materials).length > 0) tidy.materials = composition.materials;
@@ -71,25 +55,24 @@ export function serializeComposition(composition: CompositionFile): string {
 
 /**
  * The composition file's text and content, or null when there is none. A link or a folder at the path, and a file
- * that cannot be parsed, reject with `code` and a message that names the file as `name`.
+ * that cannot be parsed, reject with `code` and a message that names the file by its path.
  */
 export async function readComposition(
   platform: Platform,
   path: string,
   code: ErrorCode,
-  name: string = path,
 ): Promise<{ text: string; composition: CompositionFile } | null> {
   const stat = await platform.stat(path);
   if (stat === null) return null;
-  if (stat.kind !== "file") throw new ArcueError(code, `${name} is not a plain file.`);
+  if (stat.kind !== "file") throw new ArcueError(code, `${path} is not a plain file.`);
   const text = await platform.readText(path);
-  return { text, composition: parseComposition(text, name, code) };
+  return { text, composition: parseComposition(text, path, code) };
 }
 
 export type MemberRole = "animation" | "attach" | "set";
 
 export interface MemberEntry {
-  /** Relative to the composition file. */
+  /** Relative to the model's folder. */
   file: string;
   role: MemberRole;
   node?: string | undefined;

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { defaultCompositionPath } from "./composition";
 
 export const assetIdSchema = z.string().min(1);
 
@@ -20,21 +19,9 @@ export const assetSummarySchema = z.object({
   version: z.string().nullable(),
   /** Why the latest load failed; the previous version stays on screen. */
   error: z.string().nullable(),
-  /**
-   * Absolute path of the composition file the asset reads: always for one it was opened through, and for the model's
-   * own "<stem>.arcue" while that applies. The model with this file is the asset, so opening the pair again finds it.
-   */
+  /** Absolute path of the model's composition file while the version on screen applies it. */
   composition: z.string().min(1).optional(),
 });
 
 export type AssetStatus = z.output<typeof assetStatusSchema>;
 export type AssetSummary = z.output<typeof assetSummarySchema>;
-
-/**
- * The composition file an asset was opened through when that is not the model's own "<stem>.arcue", which makes the
- * asset a separate view of the model with a tab of its own; null otherwise.
- */
-export function separateComposition(summary: Pick<AssetSummary, "path" | "composition">): string | null {
-  const { composition, path } = summary;
-  return composition !== undefined && composition !== defaultCompositionPath(path) ? composition : null;
-}

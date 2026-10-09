@@ -1,5 +1,5 @@
 import type { ReviewFile } from "@arcue/protocol";
-import { ArcueError, reviewFileSchema } from "@arcue/protocol";
+import { ArcueError, COMPOSITION_FILE_NAME, reviewFileSchema } from "@arcue/protocol";
 import { joinPath, normalizePath, pathInside } from "./paths";
 import type { Platform } from "./platform";
 
@@ -38,6 +38,16 @@ function rootless(path: string): string {
 
 export function reviewFilePath(location: ReviewLocation): string {
   return joinPath(location.folder, "review.json");
+}
+
+/** The asset's composition file, which the review folder keeps beside `review.json`, so nothing lands beside the model. */
+export function compositionFilePath(location: ReviewLocation): string {
+  return joinPath(location.folder, COMPOSITION_FILE_NAME);
+}
+
+/** Where a model's composition file lives: `composition.json` in its review folder. */
+export async function locateComposition(platform: Platform, modelPath: string): Promise<string> {
+  return compositionFilePath(await locateReview(platform, modelPath));
 }
 
 export function emptyReview(assetPath: string): ReviewFile {

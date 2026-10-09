@@ -36,13 +36,13 @@ A local `docs/` folder, kept out of git, may hold `spec.md` for behavior, `archi
 - Dependencies point one way: apps import packages, never the reverse. Only `core` reads or writes files, and only through `Platform`. `viewport` and `ui` never import `core`; they use `CoreClient`.
 - The schemas in `packages/protocol` are the contract. Change a command, file format or event there first, and keep `docs/architecture.md` in step when it exists.
 - Clips are identified by their name in the file, such as "Armature|Charge", made unique by `clipNames`; a composition's other files prefix theirs as `<file>//<clip>`. Display names are only for people.
-- A model's composition file, `<model stem>.arcue`, loads other files into its view. Their nodes, parts and anchors are named `<file>//<node path>`, with the file relative to the model's folder; `splitMemberPath` splits them.
+- A model's composition file, `composition.json` in its review folder, loads other files into its view. Its paths are relative to the model's folder. Their nodes, parts and anchors are named `<file>//<node path>`; `splitMemberPath` splits them. The core never writes beside the model.
 - Every package exports its public surface from `src/index.ts`. Do not import another package's internal files.
 - Logic gets Vitest tests next to the code, as `*.test.ts`.
 - No code comments unless they are essential for understanding how to use the code. Prefer clear names.
 - No `any`. TypeScript is strict, with `noUncheckedIndexedAccess`.
 - Colors have functions, and each function owns its color: feedback is blue, resolved comments a very dim blue, the playhead a thin red line, warnings and errors amber, everything else warm charcoal neutrals. Use the tokens in `packages/ui/src/tokens.css`, never raw colors.
-- Verify UI changes in the web host in a browser before calling them done. `?sample=pebble-golem&clip=Armature%7CWalk&frame=12` opens a sample at a clip and frame; `window.arcue.client` runs any command or query, and `window.arcue.store` holds the window's state.
+- Verify UI changes in the web host in a browser before calling them done. `?sample=pebble-golem&clip=Armature%7CWalk&frame=12` opens a sample at a clip and frame; `window.arcue.client` runs any command or query, `window.arcue.store` holds the window's state, and `window.arcue.writeComposition(model, text)` writes a model's composition file.
 - Commit messages end with this line:
 
   ```text

@@ -6,17 +6,21 @@ export type Command =
 
 export const USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>]
-      Opens an asset in the running Arcue app, starting the app when it is not running. A .arcue composition
-      file opens its model with the files it lists.
+      Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
+      files its composition lists.
       --clip names a clip by its name in the file, such as "Armature|Walk"; --frame is a whole frame number from 0.
   arcue inspect <file> [--json]
-      Imports a file without the app and summarizes its meshes, parts, bones, materials, clips and warnings. A model
-      is composed with its .arcue composition file, and a .arcue file inspects the model it names.
+      Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
+      composed with the files its composition lists, as opening it would.
       --json prints the full result for scripts and agents. Exits with 1 when the file cannot be read or parsed.
   arcue status
       Reports whether Arcue is running and which assets it has open. Exits with 1 when it is not running.
   arcue help
       Shows this text.
+
+A model's composition is composition.json in its review folder: .arcue/reviews/<path from the repository root>/
+inside a git repository, otherwise reviews/<absolute path>/ in Arcue's data folder. Its paths are relative to the
+model's folder.
 `;
 
 export class UsageError extends Error {

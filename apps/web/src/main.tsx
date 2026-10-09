@@ -17,18 +17,27 @@ import { WebHost } from "./web-host";
 
 declare global {
   interface Window {
-    /** For tests and agents: the window's core client and workspace store, and a way to open a sample by id. */
+    /**
+     * For tests and agents: the window's core client and workspace store, a way to open a sample by id, and a way to
+     * write a model's composition file, as an agent edits it on disk in the desktop app.
+     */
     arcue: {
       client: CoreClient;
       store: WorkspaceStore;
       openSample(id: string, at?: OpenAt): Promise<string>;
+      writeComposition(model: string, text: string): Promise<void>;
     };
   }
 }
 
 const host = new WebHost(samples, import.meta.env.BASE_URL);
 const { store } = host;
-window.arcue = { client: host.client, store, openSample: (id, at) => host.openSample(id, at) };
+window.arcue = {
+  client: host.client,
+  store,
+  openSample: (id, at) => host.openSample(id, at),
+  writeComposition: (model, text) => host.writeComposition(model, text),
+};
 
 function alert(error: unknown): void {
   store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" });
@@ -39,7 +48,7 @@ function openFiles(files: readonly File[]): void {
 }
 
 function pickFiles(): void {
-  void chooseFiles({ accept: ".fbx,.arcue,image/*", multiple: true }).then((files) => {
+  void chooseFiles({ accept: ".fbx,image/*", multiple: true }).then((files) => {
     if (files.length > 0) openFiles(files);
   });
 }

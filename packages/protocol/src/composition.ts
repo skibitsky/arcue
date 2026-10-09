@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { partIdSchema } from "./view-state";
 
-/** The extension of a composition file, which sits beside its model as "<model stem>.arcue". */
-export const COMPOSITION_EXTENSION = ".arcue";
+/** The name of a model's composition file, which lives in the model's review folder. */
+export const COMPOSITION_FILE_NAME = "composition.json";
 
 export const COMPOSITION_VERSION = 1;
 
@@ -36,14 +36,6 @@ export function memberRoleFor(content: { meshes: number; clips: number }): Exclu
   return content.clips > 0 ? "animation" : null;
 }
 
-/** Where a model's own composition file sits, "<folder>/<model stem>.arcue", for a path with "/" separators. */
-export function defaultCompositionPath(modelPath: string): string {
-  const slash = modelPath.lastIndexOf("/");
-  const name = modelPath.slice(slash + 1);
-  const dot = name.lastIndexOf(".");
-  return `${modelPath.slice(0, slash + 1)}${dot > 0 ? name.slice(0, dot) : name}${COMPOSITION_EXTENSION}`;
-}
-
 /** Whether a file beside the model joins it by its name, "<model stem>@<anything>.fbx", rather than through the composition. */
 export function joinsByName(modelName: string, fileName: string): boolean {
   const dot = modelName.lastIndexOf(".");
@@ -56,11 +48,11 @@ function isRelativeFile(path: string): boolean {
   return path.split("/").every((segment) => segment !== "");
 }
 
-/** A path relative to the composition file with "/" separators, such as "Shells.fbx" or "../Textures/Rock.png". */
+/** A path relative to the model's folder with "/" separators, such as "Shells.fbx" or "../Textures/Rock.png". */
 export const relativeFileSchema = z
   .string()
   .min(1)
-  .refine(isRelativeFile, { message: 'Use a path relative to the composition file, with "/" separators.' });
+  .refine(isRelativeFile, { message: 'Use a path relative to the model\'s folder, with "/" separators.' });
 
 export const textureSlotSchema = z.enum(["baseColor", "normal", "roughness", "metalness", "emissive"]);
 
@@ -72,7 +64,7 @@ export const compositionAttachSchema = z.strictObject({
   bone: z.string().min(1).optional(),
 });
 
-/** Textures by slot, relative to the composition file. They replace what the model's files say. */
+/** Textures by slot, relative to the model's folder. They replace what the model's files say. */
 export const materialTexturesSchema = z.strictObject({
   baseColor: relativeFileSchema.optional(),
   normal: relativeFileSchema.optional(),
@@ -82,15 +74,14 @@ export const materialTexturesSchema = z.strictObject({
 });
 
 /**
- * A composition file: one view of a model and the other files that complete it, as game pipelines spread one asset
- * over several files. Opening the model applies it; opening the file opens its model with it. Parts and anchors from
- * the other files carry the file, relative to the model's folder, as a prefix on their node paths: "Shells.fbx//Boulder1".
+ * A model's composition file: the other files that complete its view, as game pipelines spread one asset over several
+ * files. It is `composition.json` in the model's review folder, so its place names the model, and opening the model
+ * applies it. Every path is relative to the model's folder. Parts and anchors from the other files carry the file as a
+ * prefix on their node paths: "Shells.fbx//Boulder1".
  */
 export const compositionFileSchema = z
   .strictObject({
     version: z.literal(COMPOSITION_VERSION),
-    /** The model the view is about; its review keeps its comments. */
-    model: relativeFileSchema,
     /** Files whose clips bind to the model's bones by name. */
     animations: z.array(relativeFileSchema).optional(),
     /** Files, or nodes in them, that follow a bone of the model or stay in place. */

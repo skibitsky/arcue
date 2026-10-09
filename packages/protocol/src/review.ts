@@ -99,7 +99,10 @@ export const meshTopologySchema = z.object({
 });
 
 export const versionFileSchema = z.object({
-  /** Relative to the model's folder, as composition prefixes write it: "BugShells.fbx", or "Bug.arcue". */
+  /**
+   * Relative to the model's folder, as composition prefixes write it, such as "BugShells.fbx"; the composition file
+   * itself is "composition.json".
+   */
   file: z.string().min(1),
   /** Short hash of that file's bytes. */
   id: z.string().min(1),

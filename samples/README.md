@@ -1,6 +1,6 @@
 # Sample FBX files
 
-Small FBX files and one composition file for Arcue's importer tests and for demo models in the web preview.
+Small FBX files for Arcue's importer tests and for demo models in the web preview.
 A script in this repository builds every model from primitives in Blender, so the files carry no
 third-party content.
 
@@ -24,7 +24,6 @@ The sample files and `manifest.json` are released under
 | `beetle.fbx` | The legs and rig of a modular beetle. One skinned mesh with rigid weights, 13 bones, one 30-frame take, `Walk`, that also moves the Body bone. |
 | `beetle-shells.fbx` | Two alternative beetle shells, `ShellRound` and `ShellSpiked`, unrigged and modelled in the rest pose over the Body bone. |
 | `beetle-turn.fbx` | Animation only. The beetle's armature with one 40-frame take, `Turn`, and no mesh. |
-| `beetle.arcue` | The composition that puts the beetle together: it attaches both shells to the Body bone, hides `ShellSpiked`, and adds the turn. |
 
 All files except `zup-centimeters.fbx` use the settings of a typical Blender-to-Unity pipeline:
 forward -Z, up Y, apply scale "FBX All", 1 unit = 1 m. Every model stands on the ground at Y = 0, except
@@ -35,8 +34,9 @@ counts, materials, UVs, shape keys, bones, takes with their frame ranges and key
 bounds. The script measures these facts from the exported files, by parsing each FBX and by re-importing
 it in Blender. It does not copy them from the generator's inputs.
 
-Its `compositions` list names each composition file with its model and the files it loads. The beetle
-files only make sense together, so the web preview lists `beetle.arcue` in place of each of them.
+Its `compositions` list gives a model the composition Arcue would keep in that model's review folder. The
+beetle's composition attaches both shells to the Body bone, hides `ShellSpiked`, and adds the turn. The web
+preview writes it where the core reads it, so `beetle.fbx` opens with its shells and the turn.
 
 ## Things importers should expect
 
@@ -59,7 +59,7 @@ Run from the repository root with Blender 5.2:
 blender --background --factory-startup --python-exit-code 1 --python tools/samples/generate.py
 ```
 
-Add `-- --only crate,blob` to rebuild some files (`beetle` also rewrites `beetle.arcue`), or `-- --no-export` to only rewrite `manifest.json`.
+Add `-- --only crate,blob` to rebuild some files, or `-- --no-export` to only rewrite `manifest.json`.
 `--only` still re-measures every file for the manifest.
 
 Two runs produce byte-identical files apart from the FBX creation timestamp. The script swaps the

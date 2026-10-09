@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 
 interface ArcueGlobal {
   client: CoreClient;
+  writeComposition(model: string, text: string): Promise<void>;
 }
 
 const SHOTS = fileURLToPath(new URL("../screenshots/", import.meta.url));
@@ -115,7 +116,9 @@ test("adds an animation file from the open dialog, groups its clips, and removes
   await expect
     .poll(async () => (await sceneFacts(page, assetId)).clips.at(-1))
     .toEqual(["beetle-turn.fbx//Armature|Turn", "beetle-turn.fbx"]);
-  expect((await sceneFacts(page, assetId)).composition).toBe("/samples/pebble-golem.arcue");
+  expect((await sceneFacts(page, assetId)).composition).toBe(
+    "/app-data/reviews/samples/pebble-golem.fbx/composition.json",
+  );
   await page.keyboard.press("Escape");
 
   await page
@@ -208,16 +211,13 @@ test("assigns a texture from the open dialog and restores the file's own", async
 
 test("shows a missing texture struck through and fills it with an image dropped on the view", async ({ page }) => {
   await page.goto("/");
-  const composition = JSON.stringify({
-    version: 1,
-    model: "crate.fbx",
-    materials: { Wood: { baseColor: "Textures/crate_wood.png" } },
-  });
-  await drop(page, "section.empty", [
-    { name: "crate.fbx", sample: "crate.fbx" },
-    { name: "crate.arcue", text: composition },
-  ]);
+  await drop(page, "section.empty", [{ name: "crate.fbx", sample: "crate.fbx" }]);
   const assetId = await readyAsset(page, "crate.fbx");
+  const composition = JSON.stringify({ version: 1, materials: { Wood: { baseColor: "Textures/crate_wood.png" } } });
+  await page.evaluate(
+    (text) => (window as unknown as { arcue: ArcueGlobal }).arcue.writeComposition("/files/crate/crate.fbx", text),
+    composition,
+  );
   await expect(page.locator(".sb-warn")).toContainText("Texture not found: crate_wood.png");
   await page.getByRole("button", { name: "Asset info" }).click();
   const wood = page.getByRole("region", { name: "Material Wood" });

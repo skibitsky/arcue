@@ -10,7 +10,6 @@ const HERO = "/work/Hero.fbx";
 const CRATE = "/work/Crate.fbx";
 const GOLEM = "/work/Golem.fbx";
 const BLOB = "/work/Blob.fbx";
-const VARIANT = "/work/Variant.arcue";
 
 /** A main process and a core in memory: each `connectCore` gets a fresh channel to the current core. */
 class FakeDesktop {
@@ -21,7 +20,6 @@ class FakeDesktop {
       [CRATE]: "fbx",
       [GOLEM]: "fbx",
       [BLOB]: "fbx",
-      [VARIANT]: JSON.stringify({ version: 1, model: "Hero.fbx" }),
     },
   });
   core: ArcueCore | null = null;
@@ -197,25 +195,6 @@ describe("WindowHost", () => {
     const assets = await window.client.query("asset.list", {});
     expect(assets.assets.map((asset) => asset.path)).toEqual([HERO, CRATE]);
     expect(desktop.readyCount).toBe(1);
-  });
-
-  it("saves a tab opened through a composition file by that file, and opens it the same way after a restart", async () => {
-    const desktop = new FakeDesktop({ platform: "linux", restore: null, adopt: null });
-    const window = await startHost(desktop);
-    await vi.waitFor(() => expect(desktop.readyCount).toBe(1));
-    await window.store.openPath(HERO);
-    await window.store.openPath(VARIANT);
-    await vi.waitFor(() => expect(window.tabs().tabs.map((tab) => tab.path)).toEqual([HERO, VARIANT]));
-
-    desktop.crash();
-    await vi.waitFor(async () => {
-      const { assets } = await window.client.query("asset.list", {});
-      expect(assets.map((asset) => [asset.path, asset.composition])).toEqual([
-        [HERO, undefined],
-        [HERO, VARIANT],
-      ]);
-    });
-    expect(window.tabs().tabs.map((tab) => tab.path)).toEqual([HERO, VARIANT]);
   });
 
   it("keeps every tab when the core crashes again while the window reopens them", async () => {

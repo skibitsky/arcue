@@ -27,6 +27,7 @@ const pathSchema = z.string().min(1).max(4096);
 const assetIdSchema = z.string().min(1).max(200);
 
 export const savedTabSchema = z.object({
+  /** The model's path, which opens the same asset again. */
   path: pathSchema,
   view: viewStateSchema.nullable(),
 });

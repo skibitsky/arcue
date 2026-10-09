@@ -33,7 +33,7 @@ export interface Harness {
   buildCreature(skin: boolean): SceneDescription;
   /** Imports a sample FBX file through the FBX importer, shows it framed in the rest pose and makes it `scene`. */
   loadSample(name: SampleName): Promise<SceneDescription>;
-  /** Imports the modular beetle's files, composes them as `beetle.arcue` says, and shows the result. */
+  /** Imports the modular beetle's files, composes them as its composition says, and shows the result. */
   loadBeetle(): Promise<SceneDescription>;
   /** Shows a scene, framed in the rest pose, and makes it `scene`. */
   showScene(scene: SceneDescription): Promise<void>;
@@ -252,16 +252,16 @@ async function main(): Promise<void> {
   };
   const loadBeetle = async () => {
     if (modelSelect instanceof HTMLSelectElement) modelSelect.value = BEETLE;
-    show("importing beetle.arcue");
+    show("importing the composed beetle");
     const scene = await importBeetle();
     await showScene(scene);
-    show("beetle.arcue");
+    show("composed beetle");
     return scene;
   };
   if (modelSelect instanceof HTMLSelectElement) {
     modelSelect.append(new Option("Creature", ""));
     for (const name of Object.keys(SAMPLES)) modelSelect.append(new Option(`${name}.fbx`, name));
-    modelSelect.append(new Option("beetle.arcue", BEETLE));
+    modelSelect.append(new Option("Composed beetle", BEETLE));
     modelSelect.addEventListener("change", () => {
       const name = modelSelect.value;
       void (name === BEETLE ? loadBeetle() : isSampleName(name) ? loadSample(name) : showScene(creature));

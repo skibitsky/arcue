@@ -1,4 +1,12 @@
 declare module "virtual:arcue-samples" {
-  const samples: readonly { id: string; file: string; description: string; files: readonly string[] }[];
+  import type { CompositionFile } from "@arcue/protocol";
+
+  const samples: readonly {
+    id: string;
+    file: string;
+    description: string;
+    files: readonly string[];
+    composition?: CompositionFile;
+  }[];
   export default samples;
 }

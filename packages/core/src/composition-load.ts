@@ -1,5 +1,5 @@
 import type { CompositionFile, VersionFile } from "@arcue/protocol";
-import { ArcueError } from "@arcue/protocol";
+import { ArcueError, COMPOSITION_FILE_NAME } from "@arcue/protocol";
 import type {
   CompositionMember,
   CompositionTexture,
@@ -29,7 +29,7 @@ import { Limit } from "./serial";
 /** One file read for a version: its path, its name in prefixes, and its bytes and id when it could be read. */
 export interface ReadFile {
   path: string;
-  /** Relative to the model's folder, as member prefixes and warnings write it. */
+  /** Relative to the model's folder, as member prefixes and warnings write it; "composition.json" for the composition. */
   label: string;
   bytes: Uint8Array | null;
   id: string | null;
@@ -40,14 +40,14 @@ export interface ReadFile {
 export interface TextureRead extends ReadFile {
   material: string;
   slot: TextureSlot;
-  /** As the composition file writes it. */
+  /** As the composition file writes it, relative to the model's folder. */
   written: string;
 }
 
 /** Everything a version of an asset is built from, read once, so the version id matches what gets parsed. */
 export interface AssetFiles {
   model: ReadFile & { bytes: Uint8Array; id: string; modifiedMs: number };
-  /** The composition file, when there is one and it names this model. */
+  /** The model's composition file, when there is one. */
   composition: { file: ReadFile & { id: string }; content: CompositionFile } | null;
   /** A composition file that could not be read, which the model loads without, and why. */
   unreadComposition: { label: string; reason: string } | null;
@@ -77,9 +77,10 @@ const encoder = new TextEncoder();
 
 /**
  * Reads the model, its composition file and every file the composition names, plus the "<stem>@<clip>.fbx" files
- * beside the model. Member files must be model files inside `readRoot` reached without symbolic links. Textures are
- * searched for like an importer's stale paths, starting from the path the composition writes, and each image is read
- * once however many slots use it. A missing model rejects; a missing member or texture is recorded with its problem.
+ * beside the model. The composition's paths are relative to the model's folder. Member files must be model files
+ * inside `readRoot` reached without symbolic links. Textures are searched for like an importer's stale paths, starting
+ * from the path the composition writes, and each image is read once however many slots use it. A missing model
+ * rejects; a missing member or texture is recorded with its problem.
  */
 export async function readAssetFiles(
   platform: Platform,
@@ -105,30 +106,28 @@ export async function readAssetFiles(
   let found: { text: string; composition: CompositionFile } | null = null;
   let unreadComposition: AssetFiles["unreadComposition"] = null;
   try {
-    found = await readComposition(platform, compositionPath, "invalid-input", label(compositionPath));
+    found = await readComposition(platform, compositionPath, "invalid-input");
   } catch (error) {
     const broken = error instanceof ArcueError && error.code === "invalid-input";
     if (!broken || options.brokenComposition === "reject") throw error;
-    unreadComposition = { label: label(compositionPath), reason: error.message };
+    unreadComposition = { label: COMPOSITION_FILE_NAME, reason: error.message };
   }
-  const content =
-    found && joinPath(dirname(compositionPath), found.composition.model) === modelPath ? found.composition : null;
-  const composition =
-    found && content
-      ? {
-          file: {
-            path: compositionPath,
-            label: label(compositionPath),
-            bytes: null,
-            id: versionIdOf(encoder.encode(found.text)),
-            problem: null,
-          },
-          content,
-        }
-      : null;
+  const content = found?.composition ?? null;
+  const composition = found
+    ? {
+        file: {
+          path: compositionPath,
+          label: COMPOSITION_FILE_NAME,
+          bytes: null,
+          id: versionIdOf(encoder.encode(found.text)),
+          problem: null,
+        },
+        content: found.composition,
+      }
+    : null;
 
-  const fromComposition = (file: string) => joinPath(dirname(compositionPath), file);
-  const animations = (content?.animations ?? []).map(fromComposition);
+  const fromModel = (file: string) => joinPath(folder, file);
+  const animations = (content?.animations ?? []).map(fromModel);
   for (const entry of await platform.list(folder)) {
     const path = joinPath(folder, entry.name);
     if (entry.kind === "file" && isConventionAnimation(modelPath, entry.name) && !animations.includes(path)) {
@@ -136,7 +135,7 @@ export async function readAssetFiles(
     }
   }
   const attach = (content?.attach ?? []).map((entry) => ({
-    path: fromComposition(entry.file),
+    path: fromModel(entry.file),
     node: entry.node ?? null,
     bone: entry.bone ?? null,
   }));
@@ -147,7 +146,7 @@ export async function readAssetFiles(
   }
 
   const textures: TextureRead[] = [];
-  const search = createFileSearch(platform, compositionPath, readRoot);
+  const search = createFileSearch(platform, modelPath, readRoot);
   const images = new Map<string, Promise<{ bytes: Uint8Array; id: string } | null>>();
   const readImage = (path: string) => {
     let image = images.get(path);
@@ -165,7 +164,7 @@ export async function readAssetFiles(
       const written = slots[slot];
       if (written === undefined) continue;
       const located = await search.locate(written);
-      const path = fromComposition(located ?? written);
+      const path = fromModel(located ?? written);
       const image = located === null ? null : await readImage(path);
       textures.push({
         material,

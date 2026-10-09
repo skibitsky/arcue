@@ -815,7 +815,7 @@ def build_rock_lods():
 
 # A creature spread over three files, as game pipelines split one asset: legs with the rig and a walk, two
 # alternative shells modelled in the rest pose over the Body bone, and an animation-only file with one more clip.
-# beetle.arcue puts them back together.
+# The manifest's composition for beetle.fbx puts them back together.
 
 BEETLE_LEG_ROWS = [("F", -0.08), ("M", 0.0), ("B", 0.08)]
 BEETLE_SIDES = [("L", 1), ("R", -1)]
@@ -963,30 +963,22 @@ def build_beetle_shells():
     return round_shell
 
 
-BEETLE_COMPOSITION = dict(
-    version=1,
-    model="beetle.fbx",
-    animations=["beetle-turn.fbx"],
-    attach=[
-        dict(file="beetle-shells.fbx", node="ShellRound", bone="Body"),
-        dict(file="beetle-shells.fbx", node="ShellSpiked", bone="Body"),
-    ],
-    hidden=["beetle-shells.fbx//ShellSpiked"],
-)
-
+# The beetle's composition, as Arcue keeps it in the model's review folder. The web preview writes it there before it
+# opens beetle.fbx.
 BEETLE_SET = dict(
-    file="beetle.arcue",
     model="beetle.fbx",
     description="Modular beetle in three files: legs with the rig and a walk, two alternative shells on the Body "
                 "bone, the second hidden, and an animation-only file with a turn.",
-    files=["beetle.fbx", "beetle-shells.fbx", "beetle-turn.fbx"],
+    composition=dict(
+        version=1,
+        animations=["beetle-turn.fbx"],
+        attach=[
+            dict(file="beetle-shells.fbx", node="ShellRound", bone="Body"),
+            dict(file="beetle-shells.fbx", node="ShellSpiked", bone="Body"),
+        ],
+        hidden=["beetle-shells.fbx//ShellSpiked"],
+    ),
 )
-
-
-def write_beetle_composition():
-    with open(os.path.join(OUT_DIR, BEETLE_SET["file"]), "w", encoding="utf-8") as fh:
-        json.dump(BEETLE_COMPOSITION, fh, indent=2)
-        fh.write("\n")
 
 
 def beetle_export_settings(object_types):
@@ -1359,8 +1351,6 @@ def main():
                 print("Building %s" % sample["name"])
                 build(sample["name"], texture_dir)
                 export_fbx(os.path.join(OUT_DIR, sample["name"] + ".fbx"), export_settings(sample))
-        if only is None or "beetle" in only:
-            write_beetle_composition()
     if do_manifest:
         entries = [describe(s) for s in SAMPLES]
         manifest = dict(

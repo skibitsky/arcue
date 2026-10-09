@@ -17,11 +17,12 @@ import {
 
 const FOLDER = "/work/game/Assets/Bug";
 const MODEL = `${FOLDER}/Bug.fbx`;
-const SIDECAR = `${FOLDER}/Bug.arcue`;
 const SHELLS = `${FOLDER}/BugShells.fbx`;
 const TURN = `${FOLDER}/Anim/BugTurn.fbx`;
 const TEXTURE = "/work/game/Assets/Textures/Shell.png";
-const REVIEW = "/work/game/.arcue/reviews/Assets/Bug/Bug.fbx/review.json";
+const REVIEW_FOLDER = "/work/game/.arcue/reviews/Assets/Bug/Bug.fbx";
+const COMPOSITION = `${REVIEW_FOLDER}/composition.json`;
+const REVIEW = `${REVIEW_FOLDER}/review.json`;
 
 const bug: FakeAssetSpec = {
   bones: [
@@ -48,7 +49,6 @@ const turn: FakeAssetSpec = {
 
 const composition: CompositionFile = {
   version: 1,
-  model: "Bug.fbx",
   animations: ["Anim/BugTurn.fbx"],
   attach: [
     { file: "BugShells.fbx", node: "ShellA", bone: "Body" },
@@ -64,7 +64,7 @@ function bugFiles(overrides: Record<string, string | Uint8Array | null> = {}): R
   const files: Record<string, string | Uint8Array | null> = {
     "/work/game/.git/HEAD": "ref: refs/heads/main",
     [MODEL]: fakeAsset(bug),
-    [SIDECAR]: JSON.stringify(composition),
+    [COMPOSITION]: JSON.stringify(composition),
     [SHELLS]: fakeAsset(shells),
     [TURN]: fakeAsset(turn),
     [TEXTURE]: pngBytes,
@@ -75,9 +75,9 @@ function bugFiles(overrides: Record<string, string | Uint8Array | null> = {}): R
   );
 }
 
-async function setup(overrides: Record<string, string | Uint8Array | null> = {}, path = MODEL) {
+async function setup(overrides: Record<string, string | Uint8Array | null> = {}) {
   const test = await startTestCore(bugFiles(overrides));
-  return { ...test, assetId: await openAsset(test, path) };
+  return { ...test, assetId: await openAsset(test, MODEL) };
 }
 
 async function sceneOf(test: TestCore, assetId: string): Promise<{ version: string; scene: SceneDescription }> {
@@ -100,11 +100,11 @@ async function settle(test: TestCore): Promise<void> {
 }
 
 describe("opening a composition", () => {
-  it("applies the composition file beside the model and loads the files it names", async () => {
+  it("applies the composition file in the model's review folder and loads the files it names", async () => {
     const test = await setup();
     const { assetId } = test;
     const { assets } = await test.core.client.query("asset.list", {});
-    expect(assets).toMatchObject([{ path: MODEL, status: "ready", composition: SIDECAR, error: null }]);
+    expect(assets).toMatchObject([{ path: MODEL, status: "ready", composition: COMPOSITION, error: null }]);
     const { scene } = await sceneOf(test, assetId);
 
     expect(scene.parts.map((part) => [part.id, part.hiddenByDefault ?? false])).toEqual([
@@ -139,7 +139,7 @@ describe("opening a composition", () => {
     expect(review.asset.path).toBe("Assets/Bug/Bug.fbx");
     expect(review.versions[0]?.files?.map((file) => file.file)).toEqual([
       "Bug.fbx",
-      "Bug.arcue",
+      "composition.json",
       "Anim/BugTurn.fbx",
       "BugShells.fbx",
       "../Textures/Shell.png",
@@ -152,32 +152,31 @@ describe("opening a composition", () => {
     ]);
   });
 
-  it("opens the model when the composition file is opened, as the same asset with the same review", async () => {
-    const test = await setup({}, SIDECAR);
-    const again = await openAsset(test, MODEL);
-    expect(again).toBe(test.assetId);
+  it("ignores a composition file beside the model", async () => {
+    const test = await setup({
+      [COMPOSITION]: null,
+      [`${FOLDER}/Bug.arcue`]: JSON.stringify({ version: 1, attach: [{ file: "BugShells.fbx" }] }),
+    });
+    const { scene } = await sceneOf(test, test.assetId);
+    expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs"]);
     const { assets } = await test.core.client.query("asset.list", {});
-    expect(assets).toMatchObject([{ path: MODEL, name: "Bug.fbx", composition: SIDECAR }]);
+    expect(assets[0]?.composition).toBeUndefined();
   });
 
-  it("refuses a composition file that is broken or names a model outside its workspace", async () => {
-    const test = await startTestCore(
-      bugFiles({
-        [`${FOLDER}/Broken.arcue`]: "{ not json",
-        [`${FOLDER}/Away.arcue`]: JSON.stringify({ version: 1, model: "../../../../elsewhere/Bug.fbx" }),
-      }),
+  it("names the other files in a copied prompt relative to the model's folder, without the composition file", async () => {
+    const test = await setup();
+    const { version } = await sceneOf(test, test.assetId);
+    await test.window.client.execute("comment.create", looseComment(test.assetId, "The legs are too thin.", version));
+    const { prompt } = await test.window.client.execute("round.copy", { assetId: test.assetId });
+    expect(prompt).toContain(
+      "Also loaded, relative to the model's folder: Anim/BugTurn.fbx, BugShells.fbx, ../Textures/Shell.png.",
     );
-    await expect(test.window.client.execute("asset.open", { path: `${FOLDER}/Broken.arcue` })).rejects.toMatchObject({
-      code: "invalid-input",
-    });
-    await expect(test.window.client.execute("asset.open", { path: `${FOLDER}/Away.arcue` })).rejects.toMatchObject({
-      code: "invalid-input",
-    });
+    expect(prompt).not.toContain("composition.json");
   });
 
   it("adds animation files named after the model with an @ and leaves other files alone", async () => {
     const test = await setup({
-      [SIDECAR]: null,
+      [COMPOSITION]: null,
       [`${FOLDER}/Bug@Idle.fbx`]: fakeAsset({
         ...turn,
         clips: [{ name: "Armature|Idle", frames: 11, bones: ["Body"] }],
@@ -201,7 +200,7 @@ describe("opening a composition", () => {
     expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs"]);
     expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.file])).toEqual([
       ["file-not-found", "BugShells.fbx", "BugShells.fbx"],
-      ["texture-not-found", "Shell.png", "Bug.arcue"],
+      ["texture-not-found", "Shell.png", "composition.json"],
       ["animation-bones-missing", "Armature|Turn", "Anim/BugTurn.fbx"],
       ["material-not-found", "Shell", undefined],
     ]);
@@ -221,36 +220,9 @@ describe("opening a composition", () => {
     const review = await test.core.client.query("review.get", { assetId: test.assetId });
     expect(review.versions[0]?.files?.map((file) => file.file)).toContain("Textures/shell.PNG");
   });
-
-  it("ignores a composition file that names another model", async () => {
-    const test = await setup({ [SIDECAR]: JSON.stringify({ ...composition, model: "Other.fbx" }) });
-    const { scene } = await sceneOf(test, test.assetId);
-    expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs"]);
-    const { assets } = await test.core.client.query("asset.list", {});
-    expect(assets[0]?.composition).toBeUndefined();
-  });
 });
 
-describe("the composition as part of the asset", () => {
-  const VARIANT = `${FOLDER}/Variant.arcue`;
-  const variant: CompositionFile = { version: 1, model: "Bug.fbx", attach: [{ file: "BugShells.fbx" }] };
-
-  it("opens a model once for each composition file, and focuses the tab of the same model and composition", async () => {
-    const test = await setup({ [VARIANT]: JSON.stringify(variant) });
-    const other = await openAsset(test, VARIANT);
-    expect(other).not.toBe(test.assetId);
-    await expect(openAsset(test, MODEL)).resolves.toBe(test.assetId);
-    await expect(openAsset(test, SIDECAR)).resolves.toBe(test.assetId);
-    await expect(openAsset(test, VARIANT)).resolves.toBe(other);
-    const { assets } = await test.core.client.query("asset.list", {});
-    expect(assets.map((asset) => [asset.assetId, asset.path, asset.composition])).toEqual([
-      [test.assetId, MODEL, SIDECAR],
-      [other, MODEL, VARIANT],
-    ]);
-    const { scene } = await sceneOf(test, other);
-    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk"]);
-  });
-
+describe("comments on the files of a composition", () => {
   it("keeps a comment on a file the version does not load as it was, until the file loads again", async () => {
     const test = await setup();
     const { assetId } = test;
@@ -265,13 +237,13 @@ describe("the composition as part of the asset", () => {
       context: pinContext,
       screenshot: png,
     });
-    await test.platform.writeFile(SIDECAR, JSON.stringify({ ...composition, attach: [], hidden: [] }));
+    await test.platform.writeFile(COMPOSITION, JSON.stringify({ ...composition, attach: [], hidden: [] }));
     await settle(test);
     let review = await test.core.client.query("review.get", { assetId });
     expect(review.versions).toHaveLength(2);
     expect(review.comments[0]).toMatchObject({ anchorState: "exact", anchorVersion: version });
 
-    await test.platform.writeFile(SIDECAR, JSON.stringify({ ...composition, hidden: [] }));
+    await test.platform.writeFile(COMPOSITION, JSON.stringify({ ...composition, hidden: [] }));
     await settle(test);
     review = await test.core.client.query("review.get", { assetId });
     const latest = review.versions.at(-1)?.id;
@@ -280,41 +252,52 @@ describe("the composition as part of the asset", () => {
   });
 });
 
-describe("a composition above its model, outside a git repository", () => {
+describe("a composition outside a git repository", () => {
+  const models = "/art/Models";
+  const outside = `/app-data/reviews/art/Models/Bug.fbx/composition.json`;
   const files = {
-    "/art/Bug.arcue": JSON.stringify({
+    [`${models}/Bug.fbx`]: fakeAsset(bug),
+    [`${models}/BugShells.fbx`]: fakeAsset(shells),
+    [`${models}/Spare.fbx`]: fakeAsset(shells),
+    [`${models}/Textures/Shell.png`]: pngBytes,
+    "/art/Props/Rock.fbx": fakeAsset(shells),
+    [outside]: JSON.stringify({
       version: 1,
-      model: "Models/Bug.fbx",
-      attach: [{ file: "Props/BugShells.fbx", node: "ShellA", bone: "Body" }],
+      attach: [{ file: "BugShells.fbx", node: "ShellA", bone: "Body" }, { file: "../Props/Rock.fbx" }],
       materials: { Shell: { baseColor: "Textures/Shell.png" } },
     }),
-    "/art/Models/Bug.fbx": fakeAsset(bug),
-    "/art/Props/BugShells.fbx": fakeAsset(shells),
-    "/art/Props/Spare.fbx": fakeAsset(shells),
-    "/art/Textures/Shell.png": pngBytes,
   };
 
-  it("loads, edits and inspects the files it names from the composition's folder", async () => {
+  it("keeps the file in the app data folder, and loads, edits and inspects files of the model's folder only", async () => {
     const test = await startTestCore(files);
-    const assetId = await openAsset(test, "/art/Bug.arcue");
+    const assetId = await openAsset(test, `${models}/Bug.fbx`);
     const { scene } = await sceneOf(test, assetId);
-    expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs", "../Props/BugShells.fbx//Hero/ShellA"]);
-    expect(scene.source.warnings.map((warning) => warning.code)).toEqual([]);
+    expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs", "BugShells.fbx//Hero/ShellA"]);
+    expect(scene.source.warnings.map((warning) => warning.message)).toEqual([
+      "File outside the workspace: ../Props/Rock.fbx",
+    ]);
     const material = scene.materials.find((entry) => entry.name === "Shell");
     expect(material?.textureOverrides?.baseColor?.found).toBe(true);
 
-    await expect(
-      test.window.client.execute("composition.addFile", { assetId, file: "Props/Spare.fbx", role: "set" }),
-    ).resolves.toEqual({ path: "/art/Bug.arcue", role: "set" });
-    expect(await readJson(test.platform, "/art/Bug.arcue")).toMatchObject({
-      attach: [{ file: "Props/BugShells.fbx", node: "ShellA", bone: "Body" }, { file: "Props/Spare.fbx" }],
+    const add = (file: string) => test.window.client.execute("composition.addFile", { assetId, file, role: "set" });
+    await expect(add("Spare.fbx")).resolves.toEqual({ path: outside, role: "set" });
+    await expect(add("../Props/Rock.fbx")).rejects.toMatchObject({ code: "invalid-input" });
+    expect(await readJson(test.platform, outside)).toMatchObject({
+      attach: [
+        { file: "BugShells.fbx", node: "ShellA", bone: "Body" },
+        { file: "../Props/Rock.fbx" },
+        { file: "Spare.fbx" },
+      ],
     });
+    expect(test.platform.writes.filter((write) => write.path.startsWith("/art/"))).toEqual([]);
 
-    const inspection = await test.core.client.query("asset.inspect", { path: "/art/Bug.arcue" });
+    const inspection = await test.core.client.query("asset.inspect", { path: `${models}/Bug.fbx` });
+    expect(inspection.composition).toBe(outside);
     expect(inspection.members.map((member) => [member.file, member.found])).toEqual([
-      ["../Props/BugShells.fbx", true],
-      ["../Props/Spare.fbx", true],
-      ["../Textures/Shell.png", true],
+      ["BugShells.fbx", true],
+      ["../Props/Rock.fbx", false],
+      ["Spare.fbx", true],
+      ["Textures/Shell.png", true],
     ]);
   });
 });
@@ -322,7 +305,7 @@ describe("a composition above its model, outside a git repository", () => {
 describe("a composition file that cannot be read", () => {
   it("opens the model alone with a warning that names the file, and applies the file once it is fixed", async () => {
     for (const broken of ["", "{ not json"]) {
-      const test = await setup({ [SIDECAR]: broken });
+      const test = await setup({ [COMPOSITION]: broken });
       const { assets } = await test.core.client.query("asset.list", {});
       expect(assets).toMatchObject([{ status: "ready", error: null }]);
       expect(assets[0]?.composition).toBeUndefined();
@@ -333,15 +316,15 @@ describe("a composition file that cannot be read", () => {
         expect.objectContaining({
           code: "composition-not-loaded",
           severity: "error",
-          subject: { kind: "file", name: "Bug.arcue" },
-          message: "Could not load: Bug.arcue",
-          file: "Bug.arcue",
-          detail: "Bug.arcue is not valid JSON.",
+          subject: { kind: "file", name: "composition.json" },
+          message: "Could not load: composition.json",
+          file: "composition.json",
+          detail: `${COMPOSITION} is not valid JSON.`,
           fix: { kind: "retry" },
         }),
       ]);
 
-      await test.platform.writeFile(SIDECAR, JSON.stringify(composition));
+      await test.platform.writeFile(COMPOSITION, JSON.stringify(composition));
       await settle(test);
       const fixed = await sceneOf(test, test.assetId);
       expect(fixed.scene.parts).toHaveLength(3);
@@ -350,13 +333,13 @@ describe("a composition file that cannot be read", () => {
   });
 
   it("opens the model alone when a folder sits where its composition file goes, and inspects it the same way", async () => {
-    const test = await setup({ [SIDECAR]: null, [`${SIDECAR}/notes.txt`]: "notes" });
+    const test = await setup({ [COMPOSITION]: null, [`${COMPOSITION}/notes.txt`]: "notes" });
     const { scene } = await sceneOf(test, test.assetId);
     expect(scene.source.warnings.map((warning) => [warning.code, warning.detail])).toEqual([
-      ["composition-not-loaded", "Bug.arcue is not a plain file."],
+      ["composition-not-loaded", `${COMPOSITION} is not a plain file.`],
     ]);
     const inspection = await test.core.client.query("asset.inspect", { path: MODEL });
-    expect(inspection.warnings.map((warning) => warning.message)).toEqual(["Could not load: Bug.arcue"]);
+    expect(inspection.warnings.map((warning) => warning.message)).toEqual(["Could not load: composition.json"]);
   });
 });
 
@@ -439,12 +422,12 @@ describe("reloading a composition", () => {
   it("reloads when the composition file changes or goes away", async () => {
     const test = await setup();
     const { assetId } = test;
-    await test.platform.writeFile(SIDECAR, JSON.stringify({ ...composition, hidden: [] }));
+    await test.platform.writeFile(COMPOSITION, JSON.stringify({ ...composition, hidden: [] }));
     await settle(test);
     let { scene } = await sceneOf(test, assetId);
     expect(scene.parts.some((part) => part.hiddenByDefault)).toBe(false);
 
-    await test.platform.remove(SIDECAR);
+    await test.platform.remove(COMPOSITION);
     await settle(test);
     ({ scene } = await sceneOf(test, assetId));
     expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs"]);
@@ -456,14 +439,14 @@ describe("reloading a composition", () => {
   it("keeps the previous version while the composition file is broken", async () => {
     const test = await setup();
     const { version } = await sceneOf(test, test.assetId);
-    await test.platform.writeFile(SIDECAR, "{ half written");
+    await test.platform.writeFile(COMPOSITION, "{ half written");
     await settle(test);
     const { assets } = await test.core.client.query("asset.list", {});
     expect(assets[0]).toMatchObject({ status: "failed", version });
-    expect(assets[0]?.error).toMatch(/Bug\.arcue is not valid JSON/);
+    expect(assets[0]?.error).toBe(`${COMPOSITION} is not valid JSON.`);
     await expect(sceneOf(test, test.assetId)).resolves.toMatchObject({ version });
 
-    await test.platform.writeFile(SIDECAR, JSON.stringify(composition));
+    await test.platform.writeFile(COMPOSITION, JSON.stringify(composition));
     await settle(test);
     await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
       assets: [{ status: "ready", version, error: null }],
@@ -494,10 +477,7 @@ describe("reloading a composition", () => {
       meshes: [{ name: "ShellC", grid: 2, offset: [0, 1, 0.01] as [number, number, number] }],
     };
     await test.platform.writeFile(SHELLS, fakeAsset(moved));
-    await test.platform.writeFile(
-      SIDECAR,
-      JSON.stringify({ version: 1, model: "Bug.fbx", attach: [{ file: "BugShells.fbx" }] }),
-    );
+    await test.platform.writeFile(COMPOSITION, JSON.stringify({ version: 1, attach: [{ file: "BugShells.fbx" }] }));
     await settle(test);
 
     const review = await test.core.client.query("review.get", { assetId });
@@ -511,14 +491,14 @@ describe("reloading a composition", () => {
 
 describe("composition commands", () => {
   async function plain(): Promise<TestCore & { assetId: string }> {
-    return setup({ [SIDECAR]: null });
+    return setup({ [COMPOSITION]: null });
   }
 
-  async function sidecar(test: TestCore): Promise<unknown> {
-    return readJson(test.platform, SIDECAR);
+  async function written(test: TestCore): Promise<unknown> {
+    return readJson(test.platform, COMPOSITION);
   }
 
-  it("creates the composition file on the first edit, writes it atomically and reloads", async () => {
+  it("creates the composition file in the review folder on the first edit, writes it atomically and reloads", async () => {
     const test = await plain();
     const { assetId } = test;
     await expect(
@@ -529,17 +509,19 @@ describe("composition commands", () => {
         node: "ShellA",
         bone: "Body",
       }),
-    ).resolves.toEqual({ path: SIDECAR, role: "attach" });
-    expect(await sidecar(test)).toEqual({
+    ).resolves.toEqual({ path: COMPOSITION, role: "attach" });
+    expect(await written(test)).toEqual({
       version: 1,
-      model: "Bug.fbx",
       attach: [{ file: "BugShells.fbx", node: "ShellA", bone: "Body" }],
     });
-    expect(test.platform.writes.filter((write) => write.path === SIDECAR)).toEqual([{ path: SIDECAR, atomic: true }]);
+    expect(test.platform.writes.filter((write) => write.path === COMPOSITION)).toEqual([
+      { path: COMPOSITION, atomic: true },
+    ]);
+    expect(test.platform.writes.filter((write) => write.path.startsWith("/work/game/Assets/"))).toEqual([]);
     const { scene } = await sceneOf(test, assetId);
     expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs", "BugShells.fbx//Hero/ShellA"]);
     const { assets } = await test.core.client.query("asset.list", {});
-    expect(assets[0]?.composition).toBe(SIDECAR);
+    expect(assets[0]?.composition).toBe(COMPOSITION);
   });
 
   it("adds animation and set files, and replaces an attached node's entry when it is added again", async () => {
@@ -552,9 +534,8 @@ describe("composition commands", () => {
     await add({ file: "BugShells.fbx", role: "attach", node: "ShellA", bone: "Body" });
     await add({ file: "./BugShells.fbx", role: "attach", node: "ShellA", bone: "Leg" });
     await add({ file: "BugShells.fbx", role: "set", node: "ShellB" });
-    expect(await sidecar(test)).toEqual({
+    expect(await written(test)).toEqual({
       version: 1,
-      model: "Bug.fbx",
       animations: ["Anim/BugTurn.fbx"],
       attach: [
         { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
@@ -576,7 +557,7 @@ describe("composition commands", () => {
     await expect(add({ file: "../Textures/Shell.png", role: "set" })).rejects.toMatchObject({ code: "invalid-input" });
     await expect(add({ file: "Missing.fbx", role: "set" })).rejects.toMatchObject({ code: "not-found" });
     await expect(add({ file: "Bug.fbx", role: "set" })).rejects.toMatchObject({ code: "invalid-input" });
-    await expect(test.platform.exists(SIDECAR)).resolves.toBe(false);
+    await expect(test.platform.exists(COMPOSITION)).resolves.toBe(false);
   });
 
   it("removes a file with its entries and hidden parts, but not a file that joins by its name", async () => {
@@ -584,9 +565,8 @@ describe("composition commands", () => {
     const remove = (file: string) =>
       test.window.client.execute("composition.removeFile", { assetId: test.assetId, file });
     await remove("BugShells.fbx");
-    expect(await sidecar(test)).toEqual({
+    expect(await written(test)).toEqual({
       version: 1,
-      model: "Bug.fbx",
       animations: ["Anim/BugTurn.fbx"],
       materials: { Shell: { baseColor: "../Textures/Shell.png" } },
     });
@@ -600,8 +580,8 @@ describe("composition commands", () => {
     const test = await setup();
     const attach = (input: Omit<CommandInput<"composition.attachFile">, "assetId">) =>
       test.core.registry.execute("composition.attachFile", { assetId: test.assetId, ...input });
-    await expect(attach({ file: "BugShells.fbx", bone: "Hero/Body/Leg" })).resolves.toEqual({ path: SIDECAR });
-    expect(await sidecar(test)).toMatchObject({
+    await expect(attach({ file: "BugShells.fbx", bone: "Hero/Body/Leg" })).resolves.toEqual({ path: COMPOSITION });
+    expect(await written(test)).toMatchObject({
       attach: [
         { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
         { file: "BugShells.fbx", node: "ShellB", bone: "Leg" },
@@ -612,7 +592,7 @@ describe("composition commands", () => {
     expect(parentOf("BugShells.fbx//Hero/ShellA")).toBe("Hero/Body/Leg");
 
     await attach({ file: "BugShells.fbx", nodes: ["Hero/ShellB"], bone: null });
-    expect(await sidecar(test)).toMatchObject({
+    expect(await written(test)).toMatchObject({
       attach: [
         { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
         { file: "BugShells.fbx", node: "ShellB" },
@@ -621,7 +601,7 @@ describe("composition commands", () => {
     ({ scene } = await sceneOf(test, test.assetId));
     expect(parentOf("BugShells.fbx//Hero/ShellB")).toBeUndefined();
     expect(parentOf("BugShells.fbx//Hero/ShellA")).toBe("Hero/Body/Leg");
-    expect(await sidecar(test)).toMatchObject({ hidden: ["BugShells.fbx//Hero/ShellB"] });
+    expect(await written(test)).toMatchObject({ hidden: ["BugShells.fbx//Hero/ShellB"] });
   });
 
   it("moves several nodes of a file in one edit, with one write, one reload and one undo step", async () => {
@@ -634,22 +614,22 @@ describe("composition commands", () => {
       nodes: ["ShellA", "Hero/ShellB"],
       bone: "Leg",
     });
-    expect(test.platform.writes.slice(writes).filter((write) => write.path === SIDECAR)).toHaveLength(1);
+    expect(test.platform.writes.slice(writes).filter((write) => write.path === COMPOSITION)).toHaveLength(1);
     const review = await test.core.client.query("review.get", { assetId: test.assetId });
     expect(review.versions).toHaveLength(versions + 1);
-    expect(await sidecar(test)).toMatchObject({
+    expect(await written(test)).toMatchObject({
       attach: [
         { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
         { file: "BugShells.fbx", node: "ShellB", bone: "Leg" },
       ],
     });
     await test.window.client.execute("review.undo", { assetId: test.assetId });
-    expect(await sidecar(test)).toMatchObject({ attach: composition.attach });
+    expect(await written(test)).toMatchObject({ attach: composition.attach });
   });
 
   it("refuses bones the model lacks, files it does not attach and animation files, without writing", async () => {
     const test = await setup();
-    const before = await test.platform.readText(SIDECAR);
+    const before = await test.platform.readText(COMPOSITION);
     const attach = (input: Omit<CommandInput<"composition.attachFile">, "assetId">) =>
       test.core.registry.execute("composition.attachFile", { assetId: test.assetId, ...input });
     await expect(attach({ file: "BugShells.fbx", bone: "Wing" })).rejects.toMatchObject({ code: "invalid-input" });
@@ -659,7 +639,7 @@ describe("composition commands", () => {
       code: "not-found",
     });
     await expect(attach({ file: "BugShells.fbx", bone: "" })).rejects.toMatchObject({ code: "invalid-input" });
-    await expect(test.platform.readText(SIDECAR)).resolves.toBe(before);
+    await expect(test.platform.readText(COMPOSITION)).resolves.toBe(before);
   });
 
   it("sets and clears a material's texture", async () => {
@@ -667,7 +647,7 @@ describe("composition commands", () => {
     const set = (input: Omit<CommandInput<"material.setTexture">, "assetId">) =>
       test.window.client.execute("material.setTexture", { assetId: test.assetId, ...input });
     await set({ material: "Shell", slot: "normal", file: "/work/game/Assets/Textures/Shell.png" });
-    expect(await sidecar(test)).toMatchObject({
+    expect(await written(test)).toMatchObject({
       materials: { Shell: { baseColor: "../Textures/Shell.png", normal: "../Textures/Shell.png" } },
     });
     const { scene } = await sceneOf(test, test.assetId);
@@ -675,7 +655,7 @@ describe("composition commands", () => {
 
     await set({ material: "Shell", slot: "normal", file: null });
     await set({ material: "Shell", slot: "baseColor", file: null });
-    expect(await sidecar(test)).not.toHaveProperty("materials");
+    expect(await written(test)).not.toHaveProperty("materials");
     await expect(set({ material: "Glass", slot: "baseColor", file: "../Textures/Shell.png" })).rejects.toMatchObject({
       code: "not-found",
     });
@@ -688,9 +668,8 @@ describe("composition commands", () => {
     const model = fakeAsset({ ...bug, meshes: [{ name: "Legs", grid: 3, material: 0 }], materials: ["constructor"] });
     const test = await setup({
       [MODEL]: model,
-      [SIDECAR]: JSON.stringify({
+      [COMPOSITION]: JSON.stringify({
         version: 1,
-        model: "Bug.fbx",
         materials: {
           constructor: { baseColor: "../Textures/Shell.png" },
           toString: { normal: "../Textures/Shell.png" },
@@ -711,7 +690,7 @@ describe("composition commands", () => {
       slot: "normal",
       file: TEXTURE,
     });
-    expect(await sidecar(test)).toMatchObject({
+    expect(await written(test)).toMatchObject({
       materials: { constructor: { normal: "../Textures/Shell.png" }, toString: { normal: "../Textures/Shell.png" } },
     });
     const { scene } = await sceneOf(test, test.assetId);
@@ -722,19 +701,29 @@ describe("composition commands", () => {
 
   it("never overwrites a composition file it cannot read", async () => {
     const test = await setup();
-    await test.platform.writeFile(SIDECAR, "{ broken");
+    await test.platform.writeFile(COMPOSITION, "{ broken");
     await expect(
       test.window.client.execute("composition.addFile", { assetId: test.assetId, file: TURN, role: "animation" }),
     ).rejects.toMatchObject({ code: "conflict" });
-    await expect(test.platform.readText(SIDECAR)).resolves.toBe("{ broken");
+    await expect(test.platform.readText(COMPOSITION)).resolves.toBe("{ broken");
     expect(await readJson(test.platform, REVIEW)).toMatchObject({ asset: { path: "Assets/Bug/Bug.fbx" } });
+  });
+
+  it("never writes a composition file through a review folder that became a symbolic link", async () => {
+    const test = await setup({ [COMPOSITION]: null, "/elsewhere/Bug/Bug.fbx/keep.txt": "" });
+    await test.platform.remove("/work/game/.arcue/reviews/Assets/Bug");
+    await test.platform.symlink("/work/game/.arcue/reviews/Assets/Bug", "/elsewhere/Bug");
+    await expect(
+      test.window.client.execute("composition.addFile", { assetId: test.assetId, file: TURN, role: "animation" }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(test.platform.exists("/elsewhere/Bug/Bug.fbx/composition.json")).resolves.toBe(false);
   });
 });
 
 describe("adding a file without naming its role", () => {
   async function plain(): Promise<TestCore & { assetId: string }> {
     return setup({
-      [SIDECAR]: null,
+      [COMPOSITION]: null,
       [`${FOLDER}/Empty.fbx`]: fakeAsset({ meshes: [] }),
       [`${FOLDER}/Broken.fbx`]: fakeAsset({ meshes: [], fail: "Not an FBX file." }),
     });
@@ -744,12 +733,11 @@ describe("adding a file without naming its role", () => {
     const test = await plain();
     const add = (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file });
     const parsed = test.platform.parsed.length;
-    await expect(add(TURN)).resolves.toEqual({ path: SIDECAR, role: "animation" });
-    await expect(add("BugShells.fbx")).resolves.toEqual({ path: SIDECAR, role: "set" });
+    await expect(add(TURN)).resolves.toEqual({ path: COMPOSITION, role: "animation" });
+    await expect(add("BugShells.fbx")).resolves.toEqual({ path: COMPOSITION, role: "set" });
     expect(test.platform.parsed.slice(parsed)).toEqual(["BugTurn.fbx", "BugShells.fbx"]);
-    expect(await readJson(test.platform, SIDECAR)).toEqual({
+    expect(await readJson(test.platform, COMPOSITION)).toEqual({
       version: 1,
-      model: "Bug.fbx",
       animations: ["Anim/BugTurn.fbx"],
       attach: [{ file: "BugShells.fbx" }],
     });
@@ -774,14 +762,14 @@ describe("adding a file without naming its role", () => {
       code: "invalid-input",
       message: "Shells.fbx is outside the asset's workspace.",
     });
-    await expect(test.platform.exists(SIDECAR)).resolves.toBe(false);
+    await expect(test.platform.exists(COMPOSITION)).resolves.toBe(false);
   });
 });
 
 describe("listing materials", () => {
   it("lists each material's slots with the composition's textures, found or missing, and always base color", async () => {
     const test = await setup({
-      [SIDECAR]: JSON.stringify({
+      [COMPOSITION]: JSON.stringify({
         ...composition,
         materials: { Shell: { baseColor: "../Textures/Shell.png", normal: "Lost.png" } },
       }),
@@ -801,7 +789,7 @@ describe("listing materials", () => {
 
 describe("undoing composition edits", () => {
   async function plain(): Promise<TestCore & { assetId: string }> {
-    return setup({ [SIDECAR]: null });
+    return setup({ [COMPOSITION]: null });
   }
 
   function history(test: TestCore & { assetId: string }) {
@@ -810,7 +798,7 @@ describe("undoing composition edits", () => {
       redo: () => test.window.client.execute("review.redo", { assetId: test.assetId }),
       add: (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file }),
       parts: async () => (await sceneOf(test, test.assetId)).scene.parts.map((part) => part.id),
-      text: async () => ((await test.platform.exists(SIDECAR)) ? test.platform.readText(SIDECAR) : null),
+      text: async () => ((await test.platform.exists(COMPOSITION)) ? test.platform.readText(COMPOSITION) : null),
     };
   }
 
@@ -830,7 +818,7 @@ describe("undoing composition edits", () => {
 
   it("writes back the file's earlier text as it was, and undoes texture and remove edits too", async () => {
     const original = `${JSON.stringify(composition)}\n`;
-    const test = await setup({ [SIDECAR]: original });
+    const test = await setup({ [COMPOSITION]: original });
     const steps = history(test);
     await test.window.client.execute("material.setTexture", {
       assetId: test.assetId,
@@ -848,7 +836,7 @@ describe("undoing composition edits", () => {
 
   it("undoes and redoes attaching a file to a bone, moving its nodes back each time", async () => {
     const original = `${JSON.stringify(composition)}\n`;
-    const test = await setup({ [SIDECAR]: original });
+    const test = await setup({ [COMPOSITION]: original });
     const steps = history(test);
     const parentOf = async (path: string) => {
       const { scene } = await sceneOf(test, test.assetId);
@@ -872,7 +860,7 @@ describe("undoing composition edits", () => {
 
   it("moves several nodes of a file in one edit, which one undo takes back", async () => {
     const original = `${JSON.stringify(composition)}\n`;
-    const test = await setup({ [SIDECAR]: original });
+    const test = await setup({ [COMPOSITION]: original });
     const steps = history(test);
     const attach = (nodes: string[]) =>
       test.window.client.execute("composition.attachFile", {
@@ -888,8 +876,8 @@ describe("undoing composition edits", () => {
     await expect(steps.text()).resolves.toBe(original);
     const writes = test.platform.writes.length;
     await attach(["Hero/ShellA", "ShellB"]);
-    expect(test.platform.writes.slice(writes).filter((write) => write.path === SIDECAR)).toHaveLength(1);
-    expect(await readJson(test.platform, SIDECAR)).toMatchObject({
+    expect(test.platform.writes.slice(writes).filter((write) => write.path === COMPOSITION)).toHaveLength(1);
+    expect(await readJson(test.platform, COMPOSITION)).toMatchObject({
       attach: [
         { file: "BugShells.fbx", node: "ShellA", bone: "Leg" },
         { file: "BugShells.fbx", node: "ShellB", bone: "Leg" },
@@ -903,8 +891,8 @@ describe("undoing composition edits", () => {
     const test = await plain();
     const steps = history(test);
     await steps.add("BugShells.fbx");
-    const changed = JSON.stringify({ version: 1, model: "Bug.fbx", animations: ["Anim/BugTurn.fbx"] });
-    await test.platform.writeFile(SIDECAR, changed);
+    const changed = JSON.stringify({ version: 1, animations: ["Anim/BugTurn.fbx"] });
+    await test.platform.writeFile(COMPOSITION, changed);
     const writes = test.platform.writes.length;
     await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
     await expect(steps.text()).resolves.toBe(changed);
@@ -917,8 +905,8 @@ describe("undoing composition edits", () => {
     const { version } = await sceneOf(test, test.assetId);
     await test.window.client.execute("comment.create", looseComment(test.assetId, "The legs are too thin.", version));
     await steps.add("BugShells.fbx");
-    const changed = JSON.stringify({ version: 1, model: "Bug.fbx", animations: ["Anim/BugTurn.fbx"] });
-    await test.platform.writeFile(SIDECAR, changed);
+    const changed = JSON.stringify({ version: 1, animations: ["Anim/BugTurn.fbx"] });
+    await test.platform.writeFile(COMPOSITION, changed);
     await expect(steps.undo()).rejects.toMatchObject({ code: "conflict" });
     await expect(steps.undo()).resolves.toEqual({ changed: true });
     const review = await test.core.client.query("review.get", { assetId: test.assetId });
@@ -933,7 +921,7 @@ describe("undoing composition edits", () => {
     const steps = history(test);
     await steps.add("BugShells.fbx");
     await steps.undo();
-    await test.platform.writeFile(SIDECAR, JSON.stringify({ version: 1, model: "Bug.fbx" }));
+    await test.platform.writeFile(COMPOSITION, JSON.stringify({ version: 1 }));
     await expect(steps.redo()).rejects.toMatchObject({ code: "conflict" });
   });
 
@@ -959,9 +947,8 @@ describe("undoing composition edits", () => {
     const test = await plain();
     const steps = history(test);
     await Promise.all([steps.add("BugShells.fbx"), steps.add(TURN), steps.undo(), steps.undo(), steps.redo()]);
-    expect(await readJson(test.platform, SIDECAR)).toEqual({
+    expect(await readJson(test.platform, COMPOSITION)).toEqual({
       version: 1,
-      model: "Bug.fbx",
       attach: [{ file: "BugShells.fbx" }],
     });
   });

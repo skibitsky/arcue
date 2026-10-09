@@ -1,11 +1,5 @@
-import type { CompositionFile, CoreClient, Peer } from "@arcue/protocol";
-import {
-  compositionFileSchema,
-  createPeer,
-  createRemoteClient,
-  IMAGE_FILE_EXTENSIONS,
-  portEndpoint,
-} from "@arcue/protocol";
+import type { CoreClient, Peer } from "@arcue/protocol";
+import { createPeer, createRemoteClient, IMAGE_FILE_EXTENSIONS, portEndpoint } from "@arcue/protocol";
 import type { FileHost, FileKind, SampleAsset, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore, isImageFile, isModelFile } from "@arcue/ui";
 import { chooseFiles } from "./choose-files";
@@ -19,6 +13,7 @@ import type {
   SeedFilesInput,
   StartImportWorker,
   StopImportWorker,
+  WriteCompositionInput,
 } from "./host-protocol";
 import { hostEvents, hostRequests, pageEvents } from "./host-protocol";
 
@@ -31,16 +26,6 @@ const ACCEPT: Record<FileKind, string> = { model: `.fbx,${IMAGE_ACCEPT}`, image:
 /** A script that fails to load fires a plain "error" event; an uncaught error inside a running worker fires an ErrorEvent. */
 function isLoadFailure(event: Event): boolean {
   return !(event instanceof ErrorEvent);
-}
-
-/** A picked composition file's content, or null when it is not one, which the core then reports when opening it. */
-async function readComposition(file: File): Promise<CompositionFile | null> {
-  try {
-    const parsed = compositionFileSchema.safeParse(JSON.parse(await file.text()));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
 }
 
 export interface OpenAt {
@@ -137,16 +122,11 @@ export class WebHost {
     return assetId;
   }
 
-  /**
-   * Writes each model or composition file into its own folder with copies of the files picked with it, then opens
-   * them. A composition file brings the models and textures it needs; see `planOpen`.
-   */
+  /** Writes each model into its own folder with copies of the files picked with it, then opens them; see `planOpen`. */
   async openFiles(files: readonly File[]): Promise<string[]> {
-    const { models, compositions } = partitionFiles(files);
+    const { models } = partitionFiles(files);
     if (models.length === 0) throw new Error("Choose an .fbx file. Its textures can come along with it.");
-    const contents = new Map<File, CompositionFile | null>();
-    for (const composition of compositions) contents.set(composition, await readComposition(composition));
-    const plans = planOpen(files, contents);
+    const plans = planOpen(files);
     const seeds = await Promise.all(
       plans.flatMap((plan) =>
         plan.files.map(async (file) => ({
@@ -192,6 +172,16 @@ export class WebHost {
     return output.files.map((placed) => placed.path);
   }
 
+  /**
+   * Writes a model's composition file where the core reads it, as an agent edits the file on disk in the desktop app.
+   * An open asset reloads with it.
+   */
+  async writeComposition(model: string, text: string): Promise<void> {
+    await this.#ready;
+    const input: WriteCompositionInput = { model, text };
+    await this.#host.request("command", hostRequests.writeComposition, input);
+  }
+
   #alert(error: unknown): void {
     this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" });
   }
@@ -229,10 +219,14 @@ export class WebHost {
     this.#importWorkers.delete(id);
   }
 
-  /** Downloads the sample's files, a composition's members with it, and writes them beside each other. */
+  /**
+   * Downloads the sample's files, its composition's members with it, and writes them beside each other, then writes its
+   * composition where the core reads it.
+   */
   async #seedSample(sample: SampleAsset): Promise<void> {
     const file = sample.path.slice(sample.path.lastIndexOf("/") + 1);
-    const files = this.#sampleInfo.find((info) => info.file === file)?.files ?? [file];
+    const info = this.#sampleInfo.find((entry) => entry.file === file);
+    const files = info?.files ?? [file];
     const seeds = await Promise.all(
       files.map(async (name) => {
         const response = await fetch(`${this.#baseUrl}samples/${encodeURIComponent(name)}`);
@@ -241,6 +235,7 @@ export class WebHost {
       }),
     );
     await this.#seed(seeds);
+    if (info?.composition) await this.writeComposition(sample.path, `${JSON.stringify(info.composition, null, 2)}\n`);
   }
 
   async #seed(files: SeedFile[]): Promise<void> {

@@ -7,7 +7,7 @@ import { fakeAsset, fakeScene } from "./test-support";
 
 const FOLDER = "/work/Bug";
 const MODEL = `${FOLDER}/Bug.fbx`;
-const SIDECAR = `${FOLDER}/Bug.arcue`;
+const COMPOSITION = "/app-data/reviews/work/Bug/Bug.fbx/composition.json";
 const IMAGE = `${FOLDER}/Textures/Atlas.png`;
 
 const model: FakeAssetSpec = {
@@ -41,7 +41,7 @@ describe("buildAssetScene", () => {
       Array.from({ length: 10 }, (_, index) => [`${FOLDER}/Bug@Clip${index}.fbx`, fakeAsset(clip(`Clip${index}`))]),
     );
     const platform = new MemoryPlatform({ files: { [MODEL]: fakeAsset(model), ...animations } });
-    const files = await readAssetFiles(platform, MODEL, SIDECAR, FOLDER, { brokenComposition: "reject" });
+    const files = await readAssetFiles(platform, MODEL, COMPOSITION, FOLDER, { brokenComposition: "reject" });
     let running = 0;
     let most = 0;
     const parsed: string[] = [];
@@ -68,16 +68,15 @@ describe("buildAssetScene", () => {
       files: {
         [MODEL]: fakeAsset(model),
         [IMAGE]: Uint8Array.of(0x89, 0x50, 0x4e, 0x47),
-        [SIDECAR]: JSON.stringify({
+        [COMPOSITION]: JSON.stringify({
           version: 1,
-          model: "Bug.fbx",
           materials: {
             Shell: { baseColor: "Textures/Atlas.png", emissive: "Textures/Atlas.png", normal: "Atlas.png" },
           },
         }),
       },
     });
-    const files = await readAssetFiles(platform, MODEL, SIDECAR, FOLDER, { brokenComposition: "reject" });
+    const files = await readAssetFiles(platform, MODEL, COMPOSITION, FOLDER, { brokenComposition: "reject" });
     expect(platform.reads.filter((path) => path === IMAGE)).toHaveLength(1);
     const scene = await buildAssetScene(files, async (file) => parseFake(file));
     expect(scene.textures).toHaveLength(1);

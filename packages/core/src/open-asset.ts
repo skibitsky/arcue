@@ -1,9 +1,10 @@
 import type { AssetStatus, AssetSummary, Comment, ReviewFile, ViewState } from "@arcue/protocol";
-import { ArcueError, defaultCompositionPath } from "@arcue/protocol";
+import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
 import { basename, dirname } from "./paths";
 import type { ReviewSession } from "./review-session";
 import type { ReviewLocation } from "./review-store";
+import { compositionFilePath } from "./review-store";
 import { Serial } from "./serial";
 
 /** Everything the core holds for one open asset. */
@@ -11,9 +12,8 @@ export class OpenAsset {
   readonly id: string;
   /** Normalized absolute path of the asset file. */
   readonly path: string;
-  /** The composition file the asset reads: the one it was opened through, or "<model stem>.arcue" beside it. */
+  /** The model's composition file, `composition.json` in its review folder. */
   readonly compositionPath: string;
-  readonly #ownComposition: boolean;
   readonly location: ReviewLocation;
   readonly session: ReviewSession;
   /** The composition file applied to the version on screen, or null for a plain model. */
@@ -40,18 +40,17 @@ export class OpenAsset {
   cancelStabilityCheck: () => void = () => undefined;
   stabilityCheck = 0;
 
-  constructor(id: string, path: string, location: ReviewLocation, session: ReviewSession, compositionPath: string) {
+  constructor(id: string, path: string, location: ReviewLocation, session: ReviewSession) {
     this.id = id;
     this.path = path;
     this.location = location;
     this.session = session;
-    this.compositionPath = compositionPath;
-    this.#ownComposition = compositionPath === defaultCompositionPath(path);
+    this.compositionPath = compositionFilePath(location);
   }
 
   /** The folder the asset's files may be read from; see `readRootFor`. */
   get readRoot(): string {
-    return readRootFor(this.location.workspaceRoot, this.compositionPath);
+    return readRootFor(this.location.workspaceRoot, this.path);
   }
 
   /** The scene parsed from these bytes of the file before, if any. */
@@ -73,8 +72,7 @@ export class OpenAsset {
       version: this.version,
       error: this.error,
     };
-    const composition = this.composition ?? (this.#ownComposition ? null : this.compositionPath);
-    if (composition !== null) summary.composition = composition;
+    if (this.composition !== null) summary.composition = this.composition;
     return summary;
   }
 
@@ -96,12 +94,9 @@ export class OpenAsset {
   }
 }
 
-/**
- * The folder an asset's files may be read from: its git repository, or outside one the folder of the composition file
- * it reads, which is the model's folder or one above it, since a composition names a model inside its own folder.
- */
-export function readRootFor(workspaceRoot: string | null, compositionPath: string): string {
-  return workspaceRoot ?? dirname(compositionPath);
+/** The folder an asset's files may be read from: its git repository, or outside one the model's own folder. */
+export function readRootFor(workspaceRoot: string | null, modelPath: string): string {
+  return workspaceRoot ?? dirname(modelPath);
 }
 
 export function findComment(review: ReviewFile, commentId: string): Comment {

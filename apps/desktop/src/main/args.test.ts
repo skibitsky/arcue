@@ -24,9 +24,9 @@ describe("assetPathsFromArgv", () => {
 });
 
 describe("isAssetPath", () => {
-  it("accepts FBX and composition files in any case", () => {
+  it("accepts FBX files in any case, and nothing else", () => {
     expect(isAssetPath("a/B.Fbx")).toBe(true);
-    expect(isAssetPath("a/B.arcue")).toBe(true);
+    expect(isAssetPath("a/B.arcue")).toBe(false);
     expect(isAssetPath("a/B.fbx.txt")).toBe(false);
   });
 });

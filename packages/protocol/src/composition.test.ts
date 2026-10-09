@@ -5,7 +5,6 @@ import { assetVersionSchema } from "./review";
 
 const bug = {
   version: 1,
-  model: "BoulderBug.fbx",
   animations: ["Animations/BoulderBugTurns.fbx"],
   attach: [
     { file: "BoulderBugShells.fbx", node: "Boulder1", bone: "Body" },
@@ -19,14 +18,15 @@ const bug = {
 };
 
 describe("compositionFileSchema", () => {
-  it("accepts a composition with every field, and one that names only its model", () => {
+  it("accepts a composition with every field, and one with only its version", () => {
     expect(compositionFileSchema.parse(bug)).toEqual(bug);
-    expect(compositionFileSchema.parse({ version: 1, model: "Rock.fbx" })).toEqual({ version: 1, model: "Rock.fbx" });
+    expect(compositionFileSchema.parse({ version: 1 })).toEqual({ version: 1 });
   });
 
   it("rejects other versions and unknown fields, so a typo does not pass unnoticed", () => {
     expect(compositionFileSchema.safeParse({ ...bug, version: 2 }).success).toBe(false);
     expect(compositionFileSchema.safeParse({ ...bug, animation: [] }).success).toBe(false);
+    expect(compositionFileSchema.safeParse({ ...bug, model: "BoulderBug.fbx" }).success).toBe(false);
     expect(compositionFileSchema.safeParse({ ...bug, attach: [{ file: "A.fbx", parent: "Body" }] }).success).toBe(
       false,
     );
@@ -36,10 +36,10 @@ describe("compositionFileSchema", () => {
   });
 
   it("takes only relative paths with forward slashes and no empty segments", () => {
-    for (const model of ["/work/Bug.fbx", "C:/work/Bug.fbx", "Models\\Bug.fbx", "Models//Bug.fbx", "Models/", ""]) {
-      expect(compositionFileSchema.safeParse({ version: 1, model }).success, model).toBe(false);
+    for (const file of ["/work/Bug.fbx", "C:/work/Bug.fbx", "Models\\Bug.fbx", "Models//Bug.fbx", "Models/", ""]) {
+      expect(compositionFileSchema.safeParse({ version: 1, animations: [file] }).success, file).toBe(false);
     }
-    expect(compositionFileSchema.safeParse({ version: 1, model: "./Models/../Bug.fbx" }).success).toBe(true);
+    expect(compositionFileSchema.safeParse({ version: 1, animations: ["./Models/../Bug.fbx"] }).success).toBe(true);
   });
 
   it("rejects a file, node or hidden part listed twice", () => {

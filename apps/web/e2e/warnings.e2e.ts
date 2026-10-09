@@ -7,6 +7,7 @@ import { UNLINKED_TEXTURE_FBX } from "../../../packages/import-fbx/test/ascii-fb
 interface ArcueGlobal {
   client: CoreClient;
   store: { session(assetId: string): { state: { get(): { highlight: WarningSubject | null } } } | null };
+  writeComposition(model: string, text: string): Promise<void>;
 }
 
 const SHOTS = fileURLToPath(new URL("../screenshots/", import.meta.url));
@@ -14,7 +15,6 @@ const SHOTS = fileURLToPath(new URL("../screenshots/", import.meta.url));
 /** A composition of the golem that names a missing animation file, texture, material and part. */
 const GOLEM_COMPOSITION = JSON.stringify({
   version: 1,
-  model: "pebble-golem.fbx",
   animations: ["pebble-golem-extra.fbx"],
   materials: { Stone: { baseColor: "Textures/Stone_BaseColor.png" }, Moss: { normal: "moss.png" } },
   hidden: ["Helmet"],
@@ -44,6 +44,21 @@ async function drop(page: Page, files: { name: string; sample?: string; text?: s
   await page.dispatchEvent("section.empty", "drop", { dataTransfer: transfer });
 }
 
+/** Drops the golem on the empty tab and gives it a composition that names missing files. */
+async function openGolemWithProblems(page: Page): Promise<string> {
+  await drop(page, [{ name: "pebble-golem.fbx", sample: "pebble-golem.fbx" }]);
+  const assetId = await readyAsset(page, "pebble-golem.fbx");
+  await page.evaluate(
+    (text) =>
+      (window as unknown as { arcue: ArcueGlobal }).arcue.writeComposition(
+        "/files/pebble-golem/pebble-golem.fbx",
+        text,
+      ),
+    GOLEM_COMPOSITION,
+  );
+  return assetId;
+}
+
 async function readyAsset(page: Page, file: string): Promise<string> {
   return page.evaluate(async (name) => {
     const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
@@ -70,11 +85,7 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
 }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/");
-  await drop(page, [
-    { name: "pebble-golem.fbx", sample: "pebble-golem.fbx" },
-    { name: "pebble-golem.arcue", text: GOLEM_COMPOSITION },
-  ]);
-  const assetId = await readyAsset(page, "pebble-golem.fbx");
+  const assetId = await openGolemWithProblems(page);
   const status = page.locator(".sb-warn");
   await expect(status).toHaveText(/\+4$/);
   await page.screenshot({ path: `${SHOTS}warnings-status.png` });
@@ -89,7 +100,7 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
   expect(await highlight(page, assetId)).toEqual({
     kind: "texture",
     name: "Stone_BaseColor.png",
-    file: "pebble-golem.arcue",
+    file: "composition.json",
   });
   await page.waitForTimeout(300);
   await page.screenshot({ path: `${SHOTS}warnings-list.png` });
@@ -162,11 +173,7 @@ test("offers an unused texture as the base color, after which the warning is gon
 test("fits the warnings list on a phone", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/");
-  await drop(page, [
-    { name: "pebble-golem.fbx", sample: "pebble-golem.fbx" },
-    { name: "pebble-golem.arcue", text: GOLEM_COMPOSITION },
-  ]);
-  await readyAsset(page, "pebble-golem.fbx");
+  await openGolemWithProblems(page);
   const status = page.locator(".sb-warn");
   await status.scrollIntoViewIfNeeded();
   await status.click();

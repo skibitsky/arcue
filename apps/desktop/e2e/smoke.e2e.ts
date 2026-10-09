@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -248,12 +248,15 @@ describe("the desktop app", () => {
     await answer([turn]);
     await page.getByRole("button", { name: "Add file" }).click();
     await expect.poll(async () => (await sceneOf(page, crateId)).clips).toEqual(["beetle-turn.fbx//Armature|Turn"]);
-    const composition = join(workDir, "samples", "crate.arcue");
-    expect(JSON.parse(readFileSync(composition, "utf8"))).toEqual({
-      version: 1,
-      model: "crate.fbx",
-      animations: ["beetle-turn.fbx"],
-    });
+    const composition = (await assets(page)).find((asset) => asset.assetId === crateId)?.composition ?? "";
+    expect(composition).toBe(join(userData, "reviews", crate.slice(1), "composition.json"));
+    expect(JSON.parse(readFileSync(composition, "utf8"))).toEqual({ version: 1, animations: ["beetle-turn.fbx"] });
+    expect(readdirSync(join(workDir, "samples")).sort()).toEqual([
+      "beetle-turn.fbx",
+      "blob.fbx",
+      "crate.fbx",
+      "pebble-golem.fbx",
+    ]);
 
     const clips = async () => (await sceneOf(page, crateId)).clips;
     await clickMenuItem(electron, "undo");

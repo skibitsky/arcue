@@ -1,8 +1,8 @@
 import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 
-/** Models, and composition files, which open their model. */
-export const ASSET_EXTENSIONS = [".fbx", ".arcue"];
+/** The model files Arcue opens. */
+export const ASSET_EXTENSIONS = [".fbx"];
 
 /** What a second launch hands the running instance through the single-instance lock. */
 export const launchDataSchema = z.object({ paths: z.array(z.string().min(1).max(4096)).max(100) });

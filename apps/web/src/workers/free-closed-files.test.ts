@@ -41,17 +41,14 @@ describe("freeClosedFiles", () => {
 
   it("keeps a folder while another asset in it is still open", async () => {
     const { platform, core, client } = await startCore();
-    const composition = JSON.stringify({ version: 1, model: "Hero.fbx" });
     await platform.writeFile(openedFilePath("Hero.fbx"), new Uint8Array([1]));
-    await platform.writeFile(openedFilePath("Hero.fbx", "Armored.arcue"), composition);
-    const { assetId: plain } = await client.execute("asset.open", { path: openedFilePath("Hero.fbx") });
-    const { assetId: armored } = await client.execute("asset.open", {
-      path: openedFilePath("Hero.fbx", "Armored.arcue"),
-    });
-    await client.execute("asset.close", { assetId: plain });
+    await platform.writeFile(openedFilePath("Hero.fbx", "Sword.fbx"), new Uint8Array([2]));
+    const { assetId: hero } = await client.execute("asset.open", { path: openedFilePath("Hero.fbx") });
+    const { assetId: sword } = await client.execute("asset.open", { path: openedFilePath("Hero.fbx", "Sword.fbx") });
+    await client.execute("asset.close", { assetId: hero });
     await core.idle();
     expect(await platform.exists(openedFilePath("Hero.fbx"))).toBe(true);
-    await client.execute("asset.close", { assetId: armored });
+    await client.execute("asset.close", { assetId: sword });
     await core.idle();
     expect(await platform.exists(openedFilePath("Hero.fbx"))).toBe(false);
   });

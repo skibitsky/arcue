@@ -5,7 +5,7 @@ import { importWarning } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import { inspectScene } from "./inspect";
 import type { TestCore } from "./test-support";
-import { fakeAsset, fakeScene, HERO, heroFiles, heroSpec, startTestCore } from "./test-support";
+import { fakeAsset, fakeScene, HERO, HERO_REVIEW, heroFiles, heroSpec, startTestCore } from "./test-support";
 
 const material = (name: string, overrides: Partial<Material> = {}): Material => ({
   name,
@@ -195,8 +195,9 @@ describe("asset.inspect", () => {
     expect(inspection.textures).toEqual([{ name: "../Textures/Body.png", found: true, mimeType: "image/png" }]);
   });
 
-  it("composes a model with its composition, as opening it would, from the model or the composition file", async () => {
+  it("composes a model with the composition in its review folder, as opening it would", async () => {
     const art = "/work/game/Assets/Art";
+    const composition = `${HERO_REVIEW}/composition.json`;
     const test = await startTestCore({
       ...heroFiles({
         ...heroSpec,
@@ -204,9 +205,8 @@ describe("asset.inspect", () => {
         bones: [{ name: "Spine" }],
         materials: ["Skin"],
       }),
-      [`${art}/Hero.arcue`]: JSON.stringify({
+      [composition]: JSON.stringify({
         version: 1,
-        model: "Hero.fbx",
         attach: [{ file: "Shield.fbx", bone: "Spine" }, { file: "Gone.fbx" }],
         materials: { Skin: { baseColor: "Skin.png" } },
       }),
@@ -214,10 +214,8 @@ describe("asset.inspect", () => {
       [`${art}/Hero@Idle.fbx`]: fakeAsset({ meshes: [], clips: [{ name: "Armature|Idle", frames: 11 }] }),
     });
     const fromModel = await test.core.client.query("asset.inspect", { path: HERO });
-    const fromComposition = await test.core.client.query("asset.inspect", { path: `${art}/Hero.arcue` });
-    expect(fromComposition).toEqual(fromModel);
     expect(fromModel.file.path).toBe(HERO);
-    expect(fromModel.composition).toBe(`${art}/Hero.arcue`);
+    expect(fromModel.composition).toBe(composition);
     expect(fromModel.members).toEqual([
       { file: "Hero@Idle.fbx", role: "animation", found: true },
       { file: "Shield.fbx", role: "attach", found: true },
@@ -234,7 +232,7 @@ describe("asset.inspect", () => {
       fromModel.warnings.map((warning) => [warning.code, warning.severity, warning.subject, warning.file]),
     ).toEqual([
       ["file-not-found", "error", { kind: "file", name: "Gone.fbx" }, "Gone.fbx"],
-      ["texture-not-found", "error", { kind: "texture", name: "Skin.png" }, "Hero.arcue"],
+      ["texture-not-found", "error", { kind: "texture", name: "Skin.png" }, "composition.json"],
     ]);
     expect(test.platform.writes).toEqual([]);
   });

@@ -1,5 +1,5 @@
 import type { Clock } from "@arcue/core";
-import { ArcueCore, MemoryPlatform } from "@arcue/core";
+import { ArcueCore, locateComposition, MemoryPlatform } from "@arcue/core";
 import { ArcueError, createPeer, portEndpoint } from "@arcue/protocol";
 import type {
   ConnectWindowInput,
@@ -9,6 +9,7 @@ import type {
   SeedFilesInput,
   StartImportWorker,
   StopImportWorker,
+  WriteCompositionInput,
 } from "../host-protocol";
 import { hostEvents, hostRequests, pageEvents } from "../host-protocol";
 import { closableEndpoint } from "./closable-endpoint";
@@ -68,6 +69,11 @@ const page = createPeer(portEndpoint(self), {
     }
     if (name === hostRequests.removeFiles) {
       for (const path of (input as RemoveFilesInput).paths) await platform.remove(path);
+      return null;
+    }
+    if (name === hostRequests.writeComposition) {
+      const { model, text } = input as WriteCompositionInput;
+      await platform.writeFile(await locateComposition(platform, model), text);
       return null;
     }
     throw new ArcueError("unknown-command", `The core worker does not handle "${name}".`);

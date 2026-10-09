@@ -20,7 +20,6 @@ export {
   assetSummarySchema,
   bytesSchema,
   commentIdSchema,
-  separateComposition,
 } from "./assets";
 export type { BridgeInfo, HandshakeOptions, LaunchInfo } from "./bridge";
 export {
@@ -37,11 +36,10 @@ export type { CommandArgs, CommandInput, CommandName, CommandOutput, Commands } 
 export { commands, isCommandName } from "./commands";
 export type { CompositionAttach, CompositionFile, MaterialTextures, MemberRole, TextureSlotName } from "./composition";
 export {
-  COMPOSITION_EXTENSION,
+  COMPOSITION_FILE_NAME,
   COMPOSITION_VERSION,
   compositionAttachSchema,
   compositionFileSchema,
-  defaultCompositionPath,
   IMAGE_FILE_EXTENSIONS,
   joinsByName,
   materialTexturesSchema,

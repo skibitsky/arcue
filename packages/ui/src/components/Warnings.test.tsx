@@ -147,9 +147,9 @@ describe("import warnings in the status bar", () => {
           ),
           importWarning(
             "composition-not-loaded",
-            { kind: "file", name: "StoneResonator.arcue" },
-            "Could not load: StoneResonator.arcue",
-            "StoneResonator.arcue",
+            { kind: "file", name: "composition.json" },
+            "Could not load: composition.json",
+            "composition.json",
           ),
         ],
       },
