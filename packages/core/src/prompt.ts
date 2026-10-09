@@ -27,7 +27,7 @@ export function renderPrompt({ data, assetPath, roundFolder, exportedAt, partNam
   const header = [
     `3D review · round ${data.round} · ${count} ${count === 1 ? "comment" : "comments"}`,
     `Asset: ${assetPath}`,
-    `Version ${data.asset.version}, exported ${exportedAt}`,
+    `Version ${data.asset.version.slice(0, 7)}, exported ${exportedAt}`,
     ...compositionLine(data),
     `Data and screenshots: ${roundFolder.endsWith("/") ? roundFolder : `${roundFolder}/`}`,
     `Meters, right-handed, ${up}. Frames count from each clip's first frame (0) at ${formatNumber(data.asset.fps)} fps.`,

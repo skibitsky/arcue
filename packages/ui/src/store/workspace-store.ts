@@ -111,6 +111,8 @@ export class WorkspaceStore {
   #nextToast = 1;
   #cancelToast: (() => void) | null = null;
   #stop: (() => void) | null = null;
+  #dropCleanup: Promise<void> = Promise.resolve();
+  #dropWork: Promise<void> = Promise.resolve();
 
   constructor(options: WorkspaceStoreOptions) {
     this.client = options.client;
@@ -523,20 +525,31 @@ export class WorkspaceStore {
    * Files dropped on an asset's 3D view at a point. Animation-only models join the view at once; other models ask
    * "New tab" or "Add to view" there. An image goes to the only slot whose texture is missing.
    */
-  async dropOnView(assetId: string, files: readonly File[], at: { x: number; y: number }): Promise<void> {
+  dropOnView(assetId: string, files: readonly File[], at: { x: number; y: number }): Promise<void> {
+    this.#dropWork = this.#dropWork.then(() => this.#placeDrop(assetId, files, at));
+    return this.#dropWork;
+  }
+
+  async #placeDrop(assetId: string, files: readonly File[], at: { x: number; y: number }): Promise<void> {
     const host = this.#files;
     if (!host) return;
     const { models, images } = sortDropped(files);
     try {
+      this.dismissDrop();
+      await this.#dropCleanup;
       if (models.length > 0) {
+        const session = this.#sessions.get(assetId);
         const placed = (await host.place(files, this.#assetPath(assetId))).filter(isModelFile);
         const roles = await this.#rolesOf(placed);
+        if (!session || this.#sessions.get(assetId) !== session) {
+          await host.discard?.(files);
+          return;
+        }
         if (placed.length > 0 && roles.every((role) => role === "animation")) {
           for (const model of placed) await this.#addFile(assetId, model, "animation");
           return;
         }
         const models = placed.map((path, index) => ({ path, role: roles[index] ?? null }));
-        this.dismissDrop();
         this.state.patch({ dropPrompt: { assetId, x: at.x, y: at.y, files: [...files], models } });
         return;
       }
@@ -571,7 +584,13 @@ export class WorkspaceStore {
     const prompt = this.state.get().dropPrompt;
     if (!prompt) return;
     this.state.patch({ dropPrompt: null });
-    this.#files?.discard?.(prompt.files);
+    try {
+      this.#dropCleanup = Promise.resolve(this.#files?.discard?.(prompt.files)).catch((error: unknown) => {
+        this.notify({ message: messageOf(error), kind: "alert" });
+      });
+    } catch (error) {
+      this.notify({ message: messageOf(error), kind: "alert" });
+    }
   }
 
   #assetPath(assetId: string): string {

@@ -169,6 +169,47 @@ function noComposition() {
   return { animations: [], attach: [], materials: {}, hidden: [] };
 }
 
+function morphScene(targets: { name: string; offset: Vec3; weight?: number }[], keys?: number[][]): SceneDescription {
+  const result = scene({
+    nodes: [{ name: "Face", mesh: {} }],
+    clips: keys ? [{ name: "Expression", animate: [] }] : [],
+  });
+  const mesh = result.meshes[0];
+  if (!mesh) throw new Error("Face has a mesh");
+  mesh.morphTargets = targets.map(({ name, offset, weight = 0 }) => ({
+    name,
+    defaultWeight: weight,
+    positions: Float32Array.from([...offset, ...offset, ...offset]),
+    normals: null,
+  }));
+  const clip = result.clips[0];
+  if (clip && keys) {
+    clip.tracks = [
+      {
+        node: 0,
+        property: "weights",
+        interpolation: "linear",
+        times: Float32Array.of(0, 1),
+        values: Float32Array.from(keys.flat()),
+      },
+    ];
+  }
+  return result;
+}
+
+function lastMorphPosition(scene: SceneDescription): Vec3 {
+  const mesh = scene.meshes[0];
+  const track = scene.clips.at(-1)?.tracks.find((track) => track.property === "weights");
+  if (!mesh || !track) throw new Error("Face has a morph track");
+  const weights = track.values.subarray(track.values.length - mesh.morphTargets.length);
+  const position: Vec3 = [mesh.positions[0] ?? 0, mesh.positions[1] ?? 0, mesh.positions[2] ?? 0];
+  mesh.morphTargets.forEach((target, index) => {
+    for (let axis = 0; axis < 3; axis++)
+      position[axis] = (position[axis] ?? 0) + (target.positions[axis] ?? 0) * (weights[index] ?? 0);
+  });
+  return position;
+}
+
 describe("member paths", () => {
   it("prefixes a node path with its file and splits it again at the first unescaped double slash", () => {
     const path = memberPath("../Shared/Shells.fbx", "Shells/A\\/B");
@@ -196,6 +237,57 @@ describe("findNode", () => {
 });
 
 describe("composeScene", () => {
+  it("animates the named morph when an animation file orders the targets differently", () => {
+    const smile = { name: "Smile", offset: [1, 0, 0] as Vec3 };
+    const blink = { name: "Blink", offset: [0, 1, 0] as Vec3 };
+    const model = morphScene([smile, blink]);
+    const animation = morphScene(
+      [blink, smile],
+      [
+        [0, 0],
+        [1, 0],
+      ],
+    );
+    const composed = composeScene(model, {
+      ...noComposition(),
+      animations: [{ file: "Face@Blink.fbx", scene: animation }],
+    });
+    expect(lastMorphPosition(composed)).toEqual([0, 1, 0]);
+    expect(composed.clips[0]?.tracks[0]?.values).toEqual(Float32Array.of(0, 0, 0, 1));
+    expect(animation.clips[0]?.tracks[0]?.values).toEqual(Float32Array.of(0, 0, 1, 0));
+  });
+
+  it("keeps defaults for unmatched or ambiguous morphs and warns about animation it cannot bind", () => {
+    const model = morphScene([
+      { name: "Smile", offset: [1, 0, 0] },
+      { name: "Blink", offset: [0, 4, 0], weight: 0.25 },
+      { name: "Extra", offset: [0, 0, 2], weight: 0.5 },
+      { name: "Duplicate", offset: [1, 0, 0], weight: 0.125 },
+      { name: "Duplicate", offset: [1, 0, 0], weight: 0.375 },
+    ]);
+    const animation = morphScene(
+      ["Smile", "Blink", "Blink", "Missing", "Duplicate"].map((name) => ({ name, offset: [1, 0, 0] })),
+      [
+        [0, 0, 0, 0, 0],
+        [1, 1, 0, 1, 1],
+      ],
+    );
+    const composed = composeScene(model, {
+      ...noComposition(),
+      animations: [{ file: "Face@Expression.fbx", scene: animation }],
+    });
+    expect(lastMorphPosition(composed)).toEqual([1.5, 1, 1]);
+    expect(composed.source.warnings).toEqual([
+      expect.objectContaining({
+        code: "invalid-data",
+        subject: { kind: "clip", name: "Expression" },
+        file: "Face@Expression.fbx",
+      }),
+    ]);
+    const detail = composed.source.warnings[0]?.detail;
+    for (const name of ["Blink", "Missing", "Duplicate"]) expect(detail).toContain(name);
+  });
+
   it("returns the model's scene when the composition adds nothing", () => {
     const composed = composeScene(legs, noComposition());
     expect(composed.nodes).toEqual(legs.nodes);
@@ -314,7 +406,14 @@ describe("composeScene", () => {
       "Cape.fbx//Armature/Body/Flap",
       "Cape.fbx//Armature/Spare",
     ]);
-    expect(composed.nodes.find((node) => node.path === "Cape.fbx//Armature/Body/Flap")?.parent).toBe(-1);
+    const flap = composed.nodes.findIndex((node) => node.path === "Cape.fbx//Armature/Body/Flap");
+    expect(composed.nodes[flap]?.parent).toBe(1);
+    expect(worldOf(composed, "Cape.fbx//Armature/Body/Flap")).toEqual(worldOf(cape, "Armature/Body/Flap"));
+    const before = restWorldMatrices(composed.nodes)[flap];
+    const moved = restWorldMatrices(
+      composed.nodes.map((node, index) => (index === 1 ? { ...node, translation: [0, 2, 0] } : node)),
+    )[flap];
+    expect((moved?.[13] ?? 0) - (before?.[13] ?? 0)).toBeCloseTo(1);
   });
 
   it("merges an attached file's bones into the model's, so their children follow the model's skeleton", () => {
@@ -333,6 +432,54 @@ describe("composeScene", () => {
     expect(node?.parent).toBe(1);
     expect(node?.translation).toEqual([0, 0.4, 0]);
     expect(composed.nodes.some((entry) => entry.path === "Helmet.fbx//Armature/Body")).toBe(false);
+  });
+
+  it.each([
+    ["mesh", "joint"],
+    ["joint", "mesh"],
+    ["mesh", "whole", "joint"],
+    ["whole", "mesh", "joint", "competing"],
+  ] as const)("keeps explicit joint placement and node ordering for %j", (...order) => {
+    const cape = scene({
+      nodes: [
+        { name: "Armature" },
+        { name: "Flap", parent: 0, kind: "bone", at: [0, 0.5, 0] },
+        { name: "End", parent: 1, kind: "bone", at: [0, 0.25, 0] },
+        { name: "Cape", parent: 0, mesh: { skin: [1, 2] } },
+      ],
+    });
+    const entries = {
+      mesh: { node: "Cape", bone: null },
+      joint: { node: "Flap", bone: "Body" },
+      whole: { node: null, bone: null },
+      competing: { node: "Flap", bone: "Leg" },
+    };
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: order.map((entry) => ({ member: { file: "Cape.fbx", scene: cape }, ...entries[entry] })),
+    });
+    const flap = composed.nodes.findIndex((node) => node.path === "Cape.fbx//Armature/Flap");
+    const end = composed.nodes.findIndex((node) => node.path === "Cape.fbx//Armature/Flap/End");
+    expect(composed.nodes[flap]?.parent).toBe(1);
+    expect(composed.nodes[end]?.parent).toBe(flap);
+    expect(composed.nodes.every((node, index) => node.parent < index)).toBe(true);
+    expect(composed.skeletons.at(-1)?.joints).toEqual([flap, end]);
+    expect(composed.parts.filter((part) => part.id === "Cape.fbx//Armature/Cape")).toHaveLength(1);
+  });
+
+  it("keeps meshes outside an attachment excluded when their nodes are skin dependencies", () => {
+    const member = scene({
+      nodes: [
+        { name: "Accessory", mesh: { skin: [1] } },
+        { name: "Unrelated", mesh: {} },
+      ],
+    });
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: [{ member: { file: "Accessory.fbx", scene: member }, node: "Accessory", bone: null }],
+    });
+    expect(composed.meshes).toHaveLength(legs.meshes.length + 1);
+    expect(composed.nodes.find((node) => node.path === "Accessory.fbx//Unrelated")?.mesh).toBeNull();
   });
 
   it("places a file's node entry before its whole-file entry, whichever the composition lists first", () => {

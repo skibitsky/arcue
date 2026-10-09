@@ -6,6 +6,9 @@ import { expect, test } from "@playwright/test";
 
 interface ArcueGlobal {
   client: CoreClient;
+  store: {
+    dropOnView(assetId: string, files: readonly File[], at: { x: number; y: number }): Promise<void>;
+  };
   writeComposition(model: string, text: string): Promise<void>;
 }
 
@@ -104,6 +107,20 @@ async function drop(
 }
 
 const VIEW = ".ws:not([hidden]) .viewport-area";
+
+test("adds a model after replacing a pending drop with the same file", async ({ page }) => {
+  await page.goto("/?sample=pebble-golem");
+  const assetId = await readyAsset(page, "pebble-golem.fbx");
+  await page.evaluate(async (id) => {
+    const { store } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+    const bytes = await (await fetch("samples/crate.fbx")).arrayBuffer();
+    for (let drop = 0; drop < 2; drop++) {
+      await store.dropOnView(id, [new File([bytes], "RepeatedCrate.fbx")], { x: 100, y: 100 });
+    }
+  }, assetId);
+  await page.getByRole("menu", { name: "Dropped file" }).getByRole("menuitem", { name: "Add to view" }).click();
+  await expect.poll(async () => (await sceneFacts(page, assetId)).parts).toContain("RepeatedCrate.fbx//Crate");
+});
 
 test("adds an animation file from the open dialog, groups its clips, and removes it again", async ({ page }) => {
   await page.goto("/?sample=pebble-golem");

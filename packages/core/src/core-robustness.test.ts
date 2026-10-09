@@ -240,6 +240,43 @@ describe("rounds and re-anchoring", () => {
 });
 
 describe("the review folder", () => {
+  it("refuses screenshot reads through a replaced review ancestor", async () => {
+    const test = await setup();
+    const { assetId } = test;
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
+    await test.platform.rename("/work/game/.arcue/reviews", "/outside/reviews");
+    await test.platform.symlink("/work/game/.arcue/reviews", "/outside/reviews");
+    await expect(test.core.client.query("comment.screenshot", { assetId, commentId })).rejects.toMatchObject({
+      code: "conflict",
+    });
+  });
+
+  it("refuses to open an outside-repository review through a link below app data", async () => {
+    const test = await startTestCore({ [HERO]: heroFiles()[HERO] ?? "" });
+    const assetId = await openAsset(test);
+    await test.core.client.execute("asset.close", { assetId });
+    await test.platform.rename("/app-data/reviews", "/outside/reviews");
+    await test.platform.symlink("/app-data/reviews", "/outside/reviews");
+    await expect(test.core.client.execute("asset.open", { path: HERO })).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it.each([true, false])("refuses to save through a replaced review ancestor (repository: %s)", async (repository) => {
+    const test = await startTestCore(repository ? heroFiles() : { [HERO]: heroFiles()[HERO] ?? "" });
+    const assetId = await openAsset(test);
+    const root = repository ? "/work/game/.arcue/reviews" : "/app-data/reviews";
+    const relative = repository ? "Assets/Art/Hero.fbx/review.json" : "work/game/Assets/Art/Hero.fbx/review.json";
+    await test.platform.rename(root, "/outside/reviews");
+    await test.platform.symlink(root, "/outside/reviews");
+    const original = await test.platform.readText(`/outside/reviews/${relative}`);
+    await expect(test.core.client.execute("comment.create", pinComment(assetId))).rejects.toMatchObject({
+      code: "conflict",
+    });
+    await expect(test.platform.readText(`/outside/reviews/${relative}`)).resolves.toBe(original);
+    await expect(
+      test.platform.exists(`/outside/reviews/${relative.replace("review.json", "screenshots")}`),
+    ).resolves.toBe(false);
+  });
+
   it("refuses to open an asset whose review folder goes through a symbolic link", async () => {
     const test = await startTestCore({ ...heroFiles(), "/elsewhere/keep.txt": "" });
     await test.platform.symlink("/work/game/.arcue", "/elsewhere");

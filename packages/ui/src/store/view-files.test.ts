@@ -87,7 +87,9 @@ function fakeHost(picked: Partial<Record<FileKind, string[]>> = {}) {
     pick: async (kind) => picked[kind] ?? [],
     place: async (files, assetPath) => files.map((file) => besideModel(assetPath, file.name)),
     open: (files) => opened.push(files.map((file) => file.name)),
-    discard: (files) => discarded.push(files.map((file) => file.name)),
+    discard: (files) => {
+      discarded.push(files.map((file) => file.name));
+    },
   };
   return { host, opened, discarded };
 }
@@ -258,6 +260,43 @@ describe("dropping files on a model's view", () => {
     expect(discarded).toEqual([["Shells.fbx"]]);
   });
 
+  it("discards a drop whose tab closes while its files are being placed", async () => {
+    const { host, discarded } = fakeHost();
+    const placement = Promise.withResolvers<void>();
+    const place = host.place;
+    host.place = async (...args) => {
+      await placement.promise;
+      return place(...args);
+    };
+    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    const dropped = store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
+    await flush();
+    await store.closeTab(session.assetId);
+    placement.resolve();
+    await dropped;
+    expect(store.state.get().dropPrompt).toBeNull();
+    expect(discarded).toEqual([["Shells.fbx"]]);
+  });
+
+  it("keeps the newest drop when an earlier placement finishes later", async () => {
+    const { host, discarded } = fakeHost();
+    const placement = Promise.withResolvers<void>();
+    const place = host.place;
+    host.place = async (files, path) => {
+      if (files[0]?.name === "Shells.fbx") await placement.promise;
+      return place(files, path);
+    };
+    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    const earlier = store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
+    await flush();
+    const latest = store.dropOnView(session.assetId, [file("Crate.fbx")], { x: 1, y: 1 });
+    await flush();
+    placement.resolve();
+    await Promise.all([earlier, latest]);
+    expect(store.state.get().dropPrompt?.models.map((model) => model.path)).toEqual([`${FOLDER}/Crate.fbx`]);
+    expect(discarded).toEqual([["Shells.fbx"]]);
+  });
+
   it("asks when a dropped model cannot be inspected, and then lets the core pick its role", async () => {
     const { client, store, session } = await openStone({ files: fakeHost().host });
     await store.dropOnView(session.assetId, [file("Odd.fbx")], { x: 0, y: 0 });
@@ -269,6 +308,19 @@ describe("dropping files on a model's view", () => {
   const withMissing = (missing: Material["missingTextures"][]) => (scene: SceneDescription) => ({
     ...scene,
     materials: missing.map((entry, index) => material(`M${index}`, entry ? { missingTextures: entry } : {})),
+  });
+
+  it("replaces a pending model drop when an image is dropped next", async () => {
+    const { host, discarded } = fakeHost();
+    const { store, session } = await openStone({
+      files: host,
+      inspect: () => inspection(1, 0),
+      scene: withMissing([{ normal: "Stone_N.png" }]),
+    });
+    await store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
+    await store.dropOnView(session.assetId, [file("Stone_N.png")], { x: 0, y: 0 });
+    expect(store.state.get().dropPrompt).toBeNull();
+    expect(discarded).toEqual([["Shells.fbx"]]);
   });
 
   it("puts a dropped image in the only missing slot", async () => {

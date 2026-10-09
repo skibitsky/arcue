@@ -19,6 +19,23 @@ async function savedSession(): Promise<{ platform: MemoryPlatform; session: Revi
 }
 
 describe("ReviewSession", () => {
+  it("does not run file rollback through an ancestor replaced while preparing a save", async () => {
+    const { platform, session } = await savedSession();
+    await platform.writeFile("/outside/work/Hero.fbx/keep.txt", "untouched");
+    await expect(
+      session.run((review) => ({
+        next: { ...review, dismissedWarnings: ["a:b:c"] },
+        result: undefined,
+        prepare: async () => {
+          await platform.rename("/app-data/reviews", "/original-reviews");
+          await platform.symlink("/app-data/reviews", "/outside");
+        },
+        rollback: () => platform.remove(location.folder),
+      })),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(platform.readText("/outside/work/Hero.fbx/keep.txt")).resolves.toBe("untouched");
+  });
+
   it("skips a save that would write the same text, keeping the revision", async () => {
     const { platform, session } = await savedSession();
     const before = await platform.readText(reviewFilePath(location));

@@ -91,6 +91,15 @@ function files(review: ReviewFile = reviewWith([comment({})])): Record<string, s
 const move = { from: at(OLD_MODEL), fromModel: OLD_MODEL, to: at(NEW_MODEL), toModel: NEW_MODEL };
 
 describe("moveReview", () => {
+  it("refuses a review root replaced by a symlink before moving a review", async () => {
+    const platform = new MemoryPlatform({ files: files() });
+    await platform.rename(`${REPO}/.arcue/reviews`, "/outside/reviews");
+    await platform.symlink(`${REPO}/.arcue/reviews`, "/outside/reviews");
+    await expect(moveReview(platform, move)).rejects.toMatchObject({ code: "conflict" });
+    await expect(platform.exists("/outside/reviews/Assets/Old/Hero.fbx/review.json")).resolves.toBe(true);
+    await expect(platform.exists("/outside/reviews/Assets/New/Striker.fbx")).resolves.toBe(false);
+  });
+
   it("moves the whole folder, writes the new asset path and removes the folders it left empty", async () => {
     const platform = new MemoryPlatform({ files: files() });
     await moveReview(platform, move);

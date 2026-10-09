@@ -9,6 +9,7 @@ import {
   heroFiles,
   heroSpec,
   openAsset,
+  pinComment,
   readJson,
   startTestCore,
 } from "./test-support";
@@ -19,6 +20,40 @@ const heroBytes = new TextEncoder().encode(fakeAsset(heroSpec));
 const run = fakeAsset({ meshes: [], clips: [{ name: "Run", frames: 11 }] });
 
 describe("file identity", () => {
+  it("keeps legacy short version references and immutable rounds when recording full identities", async () => {
+    const test = await startTestCore(heroFiles());
+    const first = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(first));
+    await test.core.client.execute("round.copy", { assetId: first });
+    const saved = await test.core.client.query("review.get", { assetId: first });
+    await test.core.client.execute("asset.close", { assetId: first });
+    const short = HERO_VERSION.slice(0, 7);
+    const reviewPath = `${HERO_REVIEW}/review.json`;
+    const roundPath = `${HERO_REVIEW}/rounds/round-1/round.json`;
+    await test.platform.writeFile(
+      reviewPath,
+      JSON.stringify({
+        ...saved,
+        versions: saved.versions.map((version) => ({ ...version, id: short })),
+        comments: saved.comments.map((comment) => ({ ...comment, madeOnVersion: short, anchorVersion: short })),
+        rounds: saved.rounds.map((round) => ({ ...round, version: short })),
+      }),
+    );
+    const oldRound = (await test.platform.readText(roundPath)).replaceAll(HERO_VERSION, short);
+    await test.platform.writeFile(roundPath, oldRound);
+    const assetId = await openAsset(test);
+    const review = await test.core.client.query("review.get", { assetId });
+    expect(review.versions.map((version) => version.id)).toEqual([short, HERO_VERSION]);
+    expect(review.rounds[0]?.version).toBe(short);
+    expect(review.comments[0]).toMatchObject({
+      madeOnVersion: short,
+      anchorVersion: HERO_VERSION,
+      anchorState: "exact",
+      target: { vertices: [4, 5, 7] },
+    });
+    await expect(test.platform.readText(roundPath)).resolves.toBe(oldRound);
+  });
+
   it("records the model's full hash and size with each version, and its Unity GUID on the asset", async () => {
     const test = await startTestCore({ ...heroFiles(), [`${HERO}.meta`]: `fileFormatVersion: 2\nguid: ${GUID}\n` });
     await openAsset(test);
@@ -29,7 +64,7 @@ describe("file identity", () => {
       hash: contentHash(heroBytes),
       size: heroBytes.byteLength,
     });
-    expect(review.versions[0]?.hash?.slice(0, 7)).toBe(HERO_VERSION);
+    expect(review.versions[0]?.hash).toBe(HERO_VERSION);
   });
 
   it("records each file of a composition with its hash, size and GUID", async () => {
@@ -44,7 +79,7 @@ describe("file identity", () => {
       { file: "Hero.fbx", id: HERO_VERSION, hash: contentHash(heroBytes), size: heroBytes.byteLength },
       {
         file: "Hero@Run.fbx",
-        id: contentHash(new TextEncoder().encode(run)).slice(0, 7),
+        id: contentHash(new TextEncoder().encode(run)),
         hash: contentHash(new TextEncoder().encode(run)),
         size: run.length,
         guid: MEMBER_GUID,

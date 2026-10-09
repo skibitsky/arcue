@@ -18,7 +18,7 @@ export interface FileHost {
   /** Opens dropped files in new tabs, as a drop on an empty tab does. */
   open(files: readonly File[]): void;
   /** Removes what `place` made for dropped files that neither open nor join the view. */
-  discard?(files: readonly File[]): void;
+  discard?(files: readonly File[]): void | Promise<void>;
 }
 
 /** A model dropped on a tab that shows a model, waiting for "New tab" or "Add to view". */

@@ -359,7 +359,9 @@ describe("Workspace", () => {
       pick: async () => [],
       place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
       open: () => {},
-      discard: (dropped) => discarded.push(dropped.map((entry) => entry.name)),
+      discard: (dropped) => {
+        discarded.push(dropped.map((entry) => entry.name));
+      },
     };
     const { store } = await renderStone({ files });
     const view = screen.getByRole("region", { name: "3D view" });

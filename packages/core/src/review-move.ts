@@ -6,7 +6,16 @@ import { insideWithoutLinks } from "./links";
 import { basename, dirname, joinPath, pathInside, relativePath, stemOf } from "./paths";
 import type { Platform } from "./platform";
 import type { ReviewLocation } from "./review-store";
-import { compositionFilePath, parseReview, prepareArcueFolder, reviewFilePath, serializeReview } from "./review-store";
+import {
+  checkReviewPath,
+  compositionFilePath,
+  parseReview,
+  prepareArcueFolder,
+  removeReviewFile,
+  reviewFilePath,
+  serializeReview,
+  writeReviewFile,
+} from "./review-store";
 
 /** A review folder to move from one model's path to another's. */
 export interface ReviewMove {
@@ -34,12 +43,8 @@ export interface ReviewMove {
 export async function moveReview(platform: Platform, move: ReviewMove): Promise<void> {
   const { from, to } = move;
   const source = reviewFilePath(from);
-  if (
-    !(await insideWithoutLinks(platform, from.root, source)) ||
-    !(await insideWithoutLinks(platform, to.root, to.folder))
-  ) {
-    throw new ArcueError("conflict", `The review of ${basename(move.fromModel)} is reached through a symbolic link.`);
-  }
+  await checkReviewPath(platform, from, source);
+  await checkReviewPath(platform, to, to.folder);
   if ((await platform.stat(source))?.kind !== "file") {
     throw new ArcueError("not-found", `${basename(move.fromModel)} has no review to move.`);
   }
@@ -50,21 +55,28 @@ export async function moveReview(platform: Platform, move: ReviewMove): Promise<
   await platform.rename(from.folder, to.folder);
   const compositionPath = compositionFilePath(to);
   try {
-    if (composition.text !== null) await platform.writeFileAtomic(compositionPath, composition.text);
+    if (composition.text !== null) await writeReviewFile(platform, to, compositionPath, composition.text);
     const moved = relabelMembers({ ...review, asset: { ...review.asset, path: to.assetPath } }, composition.labels);
-    await platform.writeFileAtomic(reviewFilePath(to), serializeReview({ ...moved, revision: review.revision + 1 }));
+    await writeReviewFile(
+      platform,
+      to,
+      reviewFilePath(to),
+      serializeReview({ ...moved, revision: review.revision + 1 }),
+    );
   } catch (error) {
     const undo = async () => {
       if (composition.text !== null) {
-        if (composition.original === null) await platform.remove(compositionPath);
-        else await platform.writeFileAtomic(compositionPath, composition.original);
+        if (composition.original === null) await removeReviewFile(platform, to, compositionPath);
+        else await writeReviewFile(platform, to, compositionPath, composition.original);
       }
+      await checkReviewPath(platform, to, to.folder);
+      await checkReviewPath(platform, from, from.folder);
       await platform.rename(to.folder, from.folder);
     };
     await undo().catch(() => undefined);
     throw error;
   }
-  await removeEmptyFolders(platform, from.folder, from.root);
+  await removeEmptyFolders(platform, from);
 }
 
 /** Whether a review holds nothing but versions: no comments, rounds or dismissed warnings. */
@@ -92,7 +104,7 @@ async function clearTarget(platform: Platform, move: ReviewMove): Promise<void> 
       );
     }
   }
-  await platform.remove(folder);
+  await removeReviewFile(platform, move.to, folder);
 }
 
 async function untouchedReview(platform: Platform, location: ReviewLocation): Promise<boolean> {
@@ -278,9 +290,10 @@ function renameWarningId(id: string, rename: (label: string) => string): string 
 }
 
 /** Removes the folders above `folder` that the move left empty, up to the reviews root, one empty folder at a time. */
-async function removeEmptyFolders(platform: Platform, folder: string, root: string): Promise<void> {
+async function removeEmptyFolders(platform: Platform, location: ReviewLocation): Promise<void> {
   try {
-    for (let current = dirname(folder); pathInside(root, current); current = dirname(current)) {
+    for (let current = dirname(location.folder); pathInside(location.root, current); current = dirname(current)) {
+      if (!(await insideWithoutLinks(platform, location.workspaceRoot ?? platform.appDataDir, current))) return;
       await platform.removeEmptyFolder(current);
     }
   } catch {

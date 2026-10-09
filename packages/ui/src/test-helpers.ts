@@ -40,6 +40,7 @@ export class TestViewport implements Viewport {
   clip: string | null = null;
   seconds = 0;
   playing = false;
+  active = true;
   speed = 1;
   loop = true;
   range: PlaybackRange | null = null;
@@ -66,6 +67,9 @@ export class TestViewport implements Viewport {
   }
   setPlaying(playing: boolean) {
     this.playing = playing;
+  }
+  setActive(active: boolean) {
+    this.active = active;
   }
   setSpeed(speed: number) {
     this.speed = speed;

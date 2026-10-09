@@ -41,7 +41,7 @@ export async function findEarlierReviews(
   skip: ReadonlySet<string>,
 ): Promise<{ reviews: EarlierReview[]; complete: boolean }> {
   const { root, workspaceRoot } = location;
-  if (workspaceRoot !== null && !(await insideWithoutLinks(platform, workspaceRoot, root))) {
+  if (!(await insideWithoutLinks(platform, workspaceRoot ?? platform.appDataDir, root))) {
     return { reviews: [], complete: true };
   }
   const reviews: EarlierReview[] = [];

@@ -1,5 +1,6 @@
 import type { ReviewFile } from "@arcue/protocol";
 import { ArcueError, COMPOSITION_FILE_NAME, reviewFileSchema } from "@arcue/protocol";
+import { insideWithoutLinks } from "./links";
 import { joinPath, normalizePath, pathInside } from "./paths";
 import type { Platform } from "./platform";
 
@@ -68,6 +69,28 @@ function rootless(path: string): string {
 
 export function reviewFilePath(location: ReviewLocation): string {
   return joinPath(location.folder, "review.json");
+}
+
+export async function checkReviewPath(platform: Platform, location: ReviewLocation, path: string): Promise<void> {
+  const root = location.workspaceRoot ?? platform.appDataDir;
+  if (pathInside(location.folder, path) === null || !(await insideWithoutLinks(platform, root, path))) {
+    throw new ArcueError("conflict", `${path} is outside the review folder or reached through a symbolic link.`);
+  }
+}
+
+export async function writeReviewFile(
+  platform: Platform,
+  location: ReviewLocation,
+  path: string,
+  data: string | Uint8Array,
+): Promise<void> {
+  await checkReviewPath(platform, location, path);
+  await platform.writeFileAtomic(path, data);
+}
+
+export async function removeReviewFile(platform: Platform, location: ReviewLocation, path: string): Promise<void> {
+  await checkReviewPath(platform, location, path);
+  await platform.remove(path);
 }
 
 /**
@@ -142,6 +165,7 @@ export async function loadReview(
   location: ReviewLocation,
 ): Promise<{ review: ReviewFile; text: string | null }> {
   const path = reviewFilePath(location);
+  await checkReviewPath(platform, location, path);
   const stat = await platform.stat(path);
   if (stat === null) return { review: emptyReview(location.assetPath), text: null };
   if (stat.kind !== "file") throw new ArcueError("conflict", `${path} is not a plain file.`);

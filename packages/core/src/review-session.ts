@@ -5,7 +5,7 @@ import type { ReviewEdit } from "./history";
 import { ReviewHistory } from "./history";
 import type { Platform } from "./platform";
 import type { ReviewLocation } from "./review-store";
-import { parseReview, prepareArcueFolder, reviewFilePath, serializeReview } from "./review-store";
+import { checkReviewPath, parseReview, prepareArcueFolder, reviewFilePath, serializeReview } from "./review-store";
 import { Serial } from "./serial";
 
 /** What one command does to the review. */
@@ -92,9 +92,12 @@ export class ReviewSession {
         await prepareArcueFolder(this.#platform, this.#location);
         try {
           await change.prepare?.();
+          await checkReviewPath(this.#platform, this.#location, this.#path);
           await this.#platform.writeFileAtomic(this.#path, text);
         } catch (error) {
-          await change.rollback?.().catch(() => undefined);
+          await checkReviewPath(this.#platform, this.#location, this.#location.folder)
+            .then(() => change.rollback?.())
+            .catch(() => undefined);
           throw error;
         }
         this.#diskHash = textHash(text);
@@ -181,6 +184,7 @@ export class ReviewSession {
   }
 
   async #readDisk(): Promise<{ text: string | null; hash: string | null }> {
+    await checkReviewPath(this.#platform, this.#location, this.#path);
     const stat = await this.#platform.stat(this.#path);
     if (stat === null) return { text: null, hash: null };
     if (stat.kind !== "file") throw new ArcueError("conflict", `${this.#path} is not a plain file.`);

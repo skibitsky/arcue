@@ -1,6 +1,7 @@
 import type { AssetStatus, AssetSummary, Comment, ReviewCandidate, ReviewFile, ViewState } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
+import type { ImportFiles } from "./import-files";
 import { basename, dirname } from "./paths";
 import type { EarlierReview } from "./relink";
 import type { ReviewSession } from "./review-session";
@@ -50,7 +51,7 @@ export class OpenAsset {
   /** Watchers of the composition file and the files it names, by path. */
   readonly compositionWatchers = new Map<string, () => void>();
   /** Parsed files by path with the id of the bytes they came from, so a reload parses only what changed. */
-  readonly imported = new Map<string, { id: string; scene: SceneDescription }>();
+  readonly imported = new Map<string, { id: string; scene: SceneDescription; files: ImportFiles }>();
   /** Serializes edits of the composition file. */
   readonly compositionEdits = new Serial();
   cancelStabilityCheck: () => void = () => undefined;

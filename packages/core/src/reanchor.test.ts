@@ -114,6 +114,75 @@ describe("Reanchorer", () => {
     ]);
   });
 
+  it("keeps lowest source indices on equal-distance region matches across repeated comments", () => {
+    const next = fakeScene({ meshes: [body({ grid: 32, size: 2 })] });
+    const mesh = next.meshes[0];
+    if (!mesh) throw new Error("Body has a mesh");
+    mesh.restPositions.set([0, 0, 0], 100 * 3);
+    mesh.restPositions.set([0, 0, 0], 900 * 3);
+    const index = new Reanchorer([version("v1", v1), version("v2", next)], "v2", next);
+    const original = commentOn(v1, "v1", region);
+    original.anchorRestPositions = [[0, 0, 0]];
+    for (let number = 1; number <= 3; number++) {
+      const moved = index.reanchor({ ...original, id: `c${number}` });
+      expect(moved).toMatchObject({
+        anchorState: "moved",
+        anchorVersion: "v2",
+        target: { kind: "region", vertices: [[0, 0]] },
+      });
+      expect(moved.anchorRestPositions).toEqual([[0, 0, 0]]);
+    }
+  });
+
+  it("reanchors a tiny region without paying the coordinate work of building a spatial index", () => {
+    const next = fakeScene({ meshes: [body({ grid: 64, size: 2 })] });
+    const mesh = next.meshes[0];
+    if (!mesh) throw new Error("Body has a mesh");
+    let coordinateReads = 0;
+    mesh.restPositions = new Proxy(mesh.restPositions, {
+      get(target, key) {
+        if (typeof key === "string" && /^\d+$/.test(key)) coordinateReads++;
+        return Reflect.get(target, key, target);
+      },
+    });
+    const original = commentOn(v1, "v1", region);
+    original.anchorRestPositions = [[0, 0, 0]];
+    const moved = reanchor(next, original);
+    expect(moved).toMatchObject({ anchorState: "moved", target: { kind: "region", vertices: [[0, 0]] } });
+    expect(coordinateReads).toBeLessThan(mesh.restPositions.length * 2);
+  });
+
+  it("reuses an existing spatial index when a large region is followed by a tiny one", () => {
+    const previous = fakeScene({ meshes: [body({ grid: 65, size: 2 })] });
+    const next = fakeScene({ meshes: [body({ grid: 64, size: 2 })] });
+    const mesh = next.meshes[0];
+    if (!mesh) throw new Error("Body has a mesh");
+    let coordinateReads = 0;
+    mesh.restPositions = new Proxy(mesh.restPositions, {
+      get(target, key) {
+        if (typeof key === "string" && /^\d+$/.test(key)) coordinateReads++;
+        return Reflect.get(target, key, target);
+      },
+    });
+    const index = new Reanchorer([version("v1", previous), version("v2", next)], "v2", next);
+    const large = commentOn(previous, "v1", {
+      kind: "region",
+      mesh: "Hero/Body",
+      triangles: [[0, 255]],
+      vertices: [[0, 255]],
+    });
+    expect(index.reanchor(large).anchorState).toBe("moved");
+    coordinateReads = 0;
+    const tiny = commentOn(previous, "v1", {
+      kind: "region",
+      mesh: "Hero/Body",
+      triangles: [[0, 0]],
+      vertices: [[0, 0]],
+    });
+    expect(index.reanchor(tiny)).toMatchObject({ anchorState: "moved", target: { vertices: [[0, 0]] } });
+    expect(coordinateReads).toBeLessThan(mesh.restPositions.length / 20);
+  });
+
   it("detaches a target with no surface within 2% of the model's size, keeping its old anchor", () => {
     const v2 = fakeScene({ meshes: [body({ offset: [0, 0, 0.2], grid: 4 })] });
     const original = commentOn(v1, "v1", pin);

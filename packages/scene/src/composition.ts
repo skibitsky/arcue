@@ -84,6 +84,7 @@ const LISTED_NAMES = 5;
 export function composeScene(model: SceneDescription, composition: Composition): SceneDescription {
   const builder = new SceneBuilder(model, composition.warnings ?? []);
   for (const attachment of attachOrder(composition.attach)) builder.attach(attachment);
+  builder.addMemberMeshes();
   builder.addMemberParts();
   builder.addClips(composition.animations);
   builder.hide(composition.hidden);
@@ -218,7 +219,6 @@ class SceneBuilder {
       }
     }
     const included = subtree(source, roots);
-    const added: number[] = [];
     source.forEach((entry, index) => {
       if (!included[index] || state.nodes.has(index)) return;
       if (entry.kind === "bone") {
@@ -235,15 +235,18 @@ class SceneBuilder {
           ? { parent: memberParent, transform: entry }
           : { parent, transform: this.#placeUnder(parent, state.worlds[index]) };
       state.nodes.set(index, this.#addNode(member.file, entry, placed.parent, placed.transform));
-      added.push(index);
     });
-    for (const index of added) {
-      const mesh = source[index]?.mesh ?? null;
-      const composed = state.nodes.get(index);
-      if (mesh === null || composed === undefined) continue;
-      const meshIndex = this.#addMesh(state, mesh);
-      const target = this.#nodes[composed];
-      if (meshIndex !== null && target) this.#nodes[composed] = { ...target, mesh: meshIndex };
+  }
+
+  addMemberMeshes(): void {
+    for (const state of this.#members.values()) {
+      for (const [index, composed] of [...state.nodes]) {
+        const mesh = state.member.scene.nodes[index]?.mesh ?? null;
+        if (mesh === null || state.merged.has(index)) continue;
+        const meshIndex = this.#addMesh(state, mesh);
+        const target = this.#nodes[composed];
+        if (meshIndex !== null && target) this.#nodes[composed] = { ...target, mesh: meshIndex };
+      }
     }
   }
 
@@ -365,21 +368,68 @@ class SceneBuilder {
     for (const member of animations) {
       for (const clip of member.scene.clips) {
         const missing = new Set<string>();
+        const unmatchedMorphs = new Set<string>();
         const tracks: Track[] = [];
         for (const track of clip.tracks) {
           const node = member.scene.nodes[track.node];
           if (!node) continue;
           const target = this.#lookup.byName(node.name, node.kind === "bone");
-          if (target !== null) tracks.push({ ...track, node: target });
-          else if (node.kind === "bone") missing.add(node.name);
+          if (target !== null) {
+            tracks.push(
+              track.property === "weights"
+                ? this.#morphTrack(member.scene, track, target, unmatchedMorphs)
+                : { ...track, node: target },
+            );
+          } else if (node.kind === "bone") missing.add(node.name);
         }
         let displayName = clip.displayName;
         for (let suffix = 2; shown.has(displayName); suffix++) displayName = `${clip.displayName} (${suffix})`;
         shown.add(displayName);
         this.#clips.push({ ...clip, name: memberPath(member.file, clip.name), displayName, tracks, file: member.file });
         if (missing.size > 0) this.#warnMissingBones(member.file, clip.name, displayName, [...missing]);
+        if (unmatchedMorphs.size > 0) {
+          this.#warn(
+            importWarning(
+              "invalid-data",
+              { kind: "clip", name: clip.name },
+              `Morph targets not matched: ${displayName}`,
+              member.file,
+              {
+                detail: `Missing or ambiguous morph targets: ${[...unmatchedMorphs].join(", ")}`,
+              },
+            ),
+          );
+        }
       }
     }
+  }
+
+  #morphTrack(source: SceneDescription, track: Track, node: number, unmatched: Set<string>): Track {
+    const sourceMesh = source.meshes[source.nodes[track.node]?.mesh ?? -1];
+    const targetMesh = this.#model.meshes[this.#model.nodes[node]?.mesh ?? -1];
+    const sourceTargets = sourceMesh?.morphTargets ?? [];
+    const targetTargets = targetMesh?.morphTargets ?? [];
+    const sourceNames = uniqueNames(sourceTargets);
+    const targetNames = uniqueNames(targetTargets);
+    for (const target of sourceTargets) {
+      if ((sourceNames.get(target.name) ?? -1) < 0 || (targetNames.get(target.name) ?? -1) < 0) {
+        unmatched.add(`${source.nodes[track.node]?.name ?? "(unnamed)"}/${target.name || "(unnamed)"}`);
+      }
+    }
+    const indices = targetTargets.map((target) =>
+      (targetNames.get(target.name) ?? -1) < 0 ? -1 : (sourceNames.get(target.name) ?? -1),
+    );
+    const values = new Float32Array(track.times.length * targetTargets.length);
+    for (let key = 0; key < track.times.length; key++) {
+      targetTargets.forEach((target, index) => {
+        const sourceIndex = indices[index] ?? -1;
+        values[key * targetTargets.length + index] =
+          sourceIndex < 0
+            ? target.defaultWeight
+            : (track.values[key * sourceTargets.length + sourceIndex] ?? target.defaultWeight);
+      });
+    }
+    return { ...track, node, values };
   }
 
   #warnMissingBones(file: string, clip: string, displayName: string, bones: readonly string[]): void {
@@ -459,6 +509,14 @@ class SceneBuilder {
       bounds: defaultViewBounds(this.#meshes, this.#parts),
     };
   }
+}
+
+function uniqueNames(items: readonly { name: string }[]): Map<string, number> {
+  const names = new Map<string, number>();
+  items.forEach(({ name }, index) => {
+    names.set(name, name === "" || names.has(name) ? -1 : index);
+  });
+  return names;
 }
 
 /**

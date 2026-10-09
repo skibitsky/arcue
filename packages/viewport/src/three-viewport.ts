@@ -122,6 +122,7 @@ export class ThreeViewport implements Viewport {
   private sceneToken = 0;
   private loadToken = 0;
   private disposed = false;
+  private active = true;
 
   private clip: Clip | null = null;
   private time = 0;
@@ -333,6 +334,20 @@ export class ThreeViewport implements Viewport {
     this.speed = clampSpeed(speed);
   }
 
+  setActive(active: boolean): void {
+    if (active === this.active) return;
+    this.active = active;
+    this.lastTick = 0;
+    if (!active) {
+      cancelAnimationFrame(this.frameRequest);
+      this.frameRequest = 0;
+      this.cancelGesture();
+      return;
+    }
+    this.resize();
+    this.requestRender();
+  }
+
   setLoop(loop: boolean): void {
     this.loop = loop;
   }
@@ -356,9 +371,15 @@ export class ThreeViewport implements Viewport {
   }
 
   setDisplayMode(mode: DisplayMode): void {
+    if (mode === this.displayMode) return;
     this.displayMode = mode;
     this.model?.setDisplayMode(mode);
+    this.viewStamp++;
+    this.idPass.invalidate();
+    this.surfaceVisibility.clear();
+    this.visibilityVersion = -1;
     this.requestRender();
+    this.scheduleHover();
   }
 
   setSkeletonVisible(visible: boolean): void {
@@ -402,7 +423,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setCamera(camera: CameraAnchor, options?: { animate?: boolean }): void {
-    this.rig.setAnchor(camera, options?.animate ?? false);
+    this.rig.setAnchor(camera, this.active && (options?.animate ?? false));
     this.requestRender();
   }
 
@@ -410,7 +431,7 @@ export class ThreeViewport implements Viewport {
     const model = this.model;
     if (!model) return;
     this.ensurePose();
-    const animate = options?.animate ?? false;
+    const animate = this.active && (options?.animate ?? false);
     const extent = extentOf(model.scene.bounds);
     const resolved = target ? resolveAnchor(model, target) : null;
     if (resolved?.kind === "surface") {
@@ -621,13 +642,13 @@ export class ThreeViewport implements Viewport {
   }
 
   private requestRender(): void {
-    if (this.frameRequest || this.disposed || this.contextLost) return;
+    if (this.frameRequest || this.disposed || this.contextLost || !this.active) return;
     this.frameRequest = requestAnimationFrame((now) => this.tick(now));
   }
 
   private tick(now: number): void {
     this.frameRequest = 0;
-    if (this.disposed) return;
+    if (this.disposed || !this.active) return;
     const dt = this.lastTick ? Math.min((now - this.lastTick) / 1000, 0.1) : 0;
     this.lastTick = now;
     let again = false;
@@ -782,7 +803,7 @@ export class ThreeViewport implements Viewport {
    * is hidden.
    */
   private checkVisibility(): void {
-    if (this.contextLost || !this.model) return;
+    if (this.contextLost || !this.model || !this.active) return;
     const version = this.viewVersion();
     if (this.visibilityInFlight || version === this.visibilityVersion) return;
     const now = performance.now();
@@ -967,7 +988,7 @@ export class ThreeViewport implements Viewport {
   }
 
   private scheduleHover(): void {
-    if (this.hoverScheduled || this.disposed) return;
+    if (this.hoverScheduled || this.disposed || !this.active) return;
     this.hoverScheduled = true;
     requestAnimationFrame(() => {
       this.hoverScheduled = false;
@@ -977,7 +998,8 @@ export class ThreeViewport implements Viewport {
 
   /** Reads the ID pass under the cursor without stalling and reports the surface there. Draws no frame. */
   private probeHover(): void {
-    if (!this.model || !this.pointer.inside || this.gesture || this.disposed || this.contextLost) return;
+    if (!this.model || !this.pointer.inside || this.gesture || this.disposed || this.contextLost || !this.active)
+      return;
     if (this.hoverInFlight) {
       this.hoverAgain = true;
       return;

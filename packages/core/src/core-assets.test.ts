@@ -51,7 +51,7 @@ describe("asset.open", () => {
     await test.core.idle();
 
     const version = versionIdOf(new TextEncoder().encode(fakeAsset(heroSpec)));
-    expect(version).toMatch(/^[0-9a-f]{7}$/);
+    expect(version).toMatch(/^[0-9a-f]{16}$/);
     expect(statuses(events)).toEqual(["loading", "ready"]);
     await expect(test.core.client.query("asset.list", {})).resolves.toEqual({
       assets: [{ assetId, path: HERO, name: "Hero.fbx", status: "ready", version, error: null }],
@@ -152,6 +152,97 @@ describe("asset.open", () => {
 });
 
 describe("loading versions", () => {
+  it("keeps the last scene and reports a dependency read failure during reload", async () => {
+    const texture = "/work/game/Assets/Art/base.png";
+    const test = await startTestCore({
+      ...heroFiles({ ...heroSpec, textures: ["base.png"] }),
+      [texture]: Uint8Array.of(1),
+    });
+    const assetId = await openAsset(test);
+    const before = await test.core.client.query("scene.get", { assetId });
+    test.platform.beforeRead = (path) => {
+      if (path === texture) throw new Error("Image read denied.");
+    };
+    await expect(test.core.client.execute("asset.reload", { assetId })).rejects.toThrow("Image read denied.");
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ status: "failed", version: before.version, error: "Image read denied." }],
+    });
+    expect((await test.core.client.query("scene.get", { assetId })).scene.textures[0]?.bytes).toEqual(Uint8Array.of(1));
+    test.platform.beforeRead = null;
+    await test.core.client.execute("asset.reload", { assetId });
+    expect((await test.core.client.query("asset.list", {})).assets[0]?.status).toBe("ready");
+  });
+
+  it("watches images discovered by stored filename, including initially missing search paths", async () => {
+    const texture = "/work/game/Assets/Textures/base.png";
+    const test = await startTestCore(heroFiles({ ...heroSpec, foundTextures: ["/artist/export/base.png"] }));
+    const assetId = await openAsset(test);
+    for (const value of [1, 2, null]) {
+      if (value === null) await test.platform.remove(texture);
+      else await test.platform.writeFile(texture, Uint8Array.of(value));
+      await flush();
+      await test.core.idle();
+      test.clock.advance(300);
+      await test.core.idle();
+      const current = await test.core.client.query("scene.get", { assetId });
+      expect(current.scene.textures.map((image) => image.bytes)).toEqual(value === null ? [] : [Uint8Array.of(value)]);
+    }
+  });
+
+  it("watches missing external images and reflects creation, replacement and removal", async () => {
+    const texture = "/work/game/Assets/Art/base.png";
+    const test = await startTestCore(heroFiles({ ...heroSpec, textures: ["base.png"] }));
+    const assetId = await openAsset(test);
+    let previous = (await test.core.client.query("scene.get", { assetId })).version;
+    for (const value of [1, 2, null]) {
+      if (value === null) await test.platform.remove(texture);
+      else await test.platform.writeFile(texture, Uint8Array.of(value));
+      await flush();
+      await test.core.idle();
+      test.clock.advance(300);
+      await test.core.idle();
+      const current = await test.core.client.query("scene.get", { assetId });
+      expect(current.scene.textures.map((image) => image.bytes)).toEqual(value === null ? [] : [Uint8Array.of(value)]);
+      expect(current.version).not.toBe(previous);
+      previous = current.version;
+    }
+  });
+
+  it("reloads an external image without changing its model and publishes a new scene version", async () => {
+    const texture = "/work/game/Assets/Art/base.png";
+    const test = await startTestCore({
+      ...heroFiles({ ...heroSpec, textures: ["base.png"] }),
+      [texture]: Uint8Array.of(1),
+    });
+    const assetId = await openAsset(test);
+    const before = await test.core.client.query("scene.get", { assetId });
+    await test.platform.writeFile(texture, Uint8Array.of(2));
+    await test.core.client.execute("asset.reload", { assetId });
+    const after = await test.core.client.query("scene.get", { assetId });
+    expect(after.scene.textures[0]?.bytes).toEqual(Uint8Array.of(2));
+    expect(after.version).not.toBe(before.version);
+    expect((await test.core.client.query("asset.list", {})).assets[0]?.version).toBe(after.version);
+    expect((await test.core.client.query("review.get", { assetId })).versions).toHaveLength(2);
+    await expect(test.core.client.execute("asset.reload", { assetId })).resolves.toEqual({ version: after.version });
+  });
+
+  it("reloads distinct exports whose content hashes share their first seven digits", async () => {
+    const first = { ...heroSpec, meshes: [{ name: "Body", grid: 3, size: 3.287 }] };
+    const second = { ...heroSpec, meshes: [{ name: "Body", grid: 3, size: 6.4265 }] };
+    const test = await startTestCore(heroFiles(first));
+    const assetId = await openAsset(test);
+    const before = await test.core.client.query("scene.get", { assetId });
+    await test.core.client.execute("comment.create", pinComment(assetId, "Keep this point.", before.version));
+    await test.platform.writeFile(HERO, fakeAsset(second));
+    await test.core.client.execute("asset.reload", { assetId });
+    const after = await test.core.client.query("scene.get", { assetId });
+    expect(after.scene.meshes[0]?.restPositions[6]).toBeCloseTo(6.4265);
+    expect(after.version).not.toBe(before.version);
+    const review = await test.core.client.query("review.get", { assetId });
+    expect(review.versions).toHaveLength(2);
+    expect(review.comments[0]).toMatchObject({ anchorState: "exact", anchorVersion: after.version });
+  });
+
   it("reports a failed first parse and has no scene", async () => {
     const test = await startTestCore(heroFiles({ ...heroSpec, fail: "Not an FBX file." }));
     const assetId = await openAsset(test);

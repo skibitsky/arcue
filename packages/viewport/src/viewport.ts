@@ -108,6 +108,8 @@ export interface Viewport {
   setClip(clip: string | null): void;
   setTime(seconds: number): void;
   setPlaying(playing: boolean): void;
+  /** Inactive views freeze playback and stop automatic drawing; explicit queries and screenshots still work. */
+  setActive(active: boolean): void;
   /** From 0.25 to 2. */
   setSpeed(speed: number): void;
   setLoop(loop: boolean): void;

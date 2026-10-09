@@ -518,6 +518,22 @@ describe("an open model whose file is renamed", () => {
 });
 
 describe("asset.relink", () => {
+  it("resolves external images from the model's new folder after relinking", async () => {
+    const moved = "/work/game/Assets/New/Hero.fbx";
+    const test = await startTestCore({
+      ...heroFiles({ ...heroSpec, textures: ["base.png"] }),
+      [`${ART}/base.png`]: Uint8Array.of(1),
+      "/work/game/Assets/New/base.png": Uint8Array.of(2),
+    });
+    const assetId = await openAsset(test);
+    const before = await test.core.client.query("scene.get", { assetId });
+    await test.platform.rename(HERO, moved);
+    await test.core.client.execute("asset.relink", { assetId, path: moved });
+    const after = await test.core.client.query("scene.get", { assetId });
+    expect(after.scene.textures[0]?.bytes).toEqual(Uint8Array.of(2));
+    expect(after.version).not.toBe(before.version);
+  });
+
   it("points an asset whose model is gone at the file the person chose, and moves its review", async () => {
     const test = await startTestCore(heroFiles());
     const assetId = await openAsset(test);
@@ -590,6 +606,36 @@ describe("asset.relink", () => {
       assets: [{ assetId, path: STRIKER, status: "ready" }],
     });
     expect((await test.core.client.query("asset.list", {})).assets).toHaveLength(1);
+  });
+
+  it("copies a round into the relocated review when copying overlaps a model relink", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
+    const screenshot = await test.core.client.query("comment.screenshot", { assetId, commentId });
+    await test.platform.rename(HERO, STRIKER);
+    const blocked = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    test.platform.beforeRead = async (path) => {
+      if (path !== `${HERO_REVIEW}/review.json`) return;
+      test.platform.beforeRead = null;
+      blocked.resolve();
+      await held.promise;
+    };
+    const relinking = test.core.client.execute("asset.relink", { assetId, path: STRIKER });
+    await blocked.promise;
+    const copying = test.core.client.execute("round.copy", { assetId });
+    await flush();
+    held.resolve();
+    await relinking;
+    const { round, prompt } = await copying;
+    expect(prompt).toContain(`${STRIKER_REVIEW}/rounds/round-${round}/`);
+    await expect(test.platform.exists(`${STRIKER_REVIEW}/rounds/round-${round}/round.json`)).resolves.toBe(true);
+    await expect(test.platform.exists(HERO_REVIEW)).resolves.toBe(false);
+    await expect(test.core.client.query("comment.screenshot", { assetId, commentId })).resolves.toEqual(screenshot);
+    expect((await test.core.client.query("review.get", { assetId })).comments[0]?.context.screenshot).toBe(
+      `rounds/round-${round}/${commentId}.png`,
+    );
   });
 
   it("refuses a file that is not a model, and one whose reviews live in another repository", async () => {
@@ -691,6 +737,21 @@ describe("a renamed file of a composition", () => {
     const [comment] = (await test.core.client.query("review.get", { assetId })).comments;
     expect(comment?.time).toMatchObject({ clip: "Anim/Running.fbx//Run", frame: 5 });
     expect(await codes(test, assetId)).toEqual([]);
+  });
+
+  it("ends undo history when a member relink would make its saved references obsolete", async () => {
+    const { test, assetId } = await composed();
+    const comment = (await test.core.client.query("review.get", { assetId })).comments[0];
+    if (!comment) throw new Error("Expected the frame comment.");
+    await test.core.client.execute("comment.update", { assetId, commentId: comment.id, text: "Lift them further." });
+    await test.platform.rename(run, `${ART}/Anim/Running.fbx`);
+    await settle(test);
+    await expect(test.core.client.execute("review.undo", { assetId })).resolves.toEqual({ changed: false });
+    await expect(test.core.client.execute("review.redo", { assetId })).resolves.toEqual({ changed: false });
+    expect((await test.core.client.query("review.get", { assetId })).comments[0]).toMatchObject({
+      text: "Lift them further.",
+      time: { clip: "Anim/Running.fbx//Run", frame: 5 },
+    });
   });
 
   it("finds a member renamed and exported again by its Unity GUID", async () => {

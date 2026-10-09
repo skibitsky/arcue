@@ -28,7 +28,12 @@ export interface FileSearch {
  * and at most `MAX_SEARCHED_FOLDERS` of them; names match regardless of case, an exact match first. The search stays
  * inside `readRoot`, skips folders reached through a symbolic link and files that are links, and reads only images.
  */
-export function createFileSearch(platform: Platform, assetPath: string, readRoot: string): FileSearch {
+export function createFileSearch(
+  platform: Platform,
+  assetPath: string,
+  readRoot: string,
+  onCandidate?: (path: string) => void,
+): FileSearch {
   const root = normalizePath(readRoot);
   const assetFolder = dirname(assetPath);
   const stem = stemOf(assetPath);
@@ -48,12 +53,18 @@ export function createFileSearch(platform: Platform, assetPath: string, readRoot
   };
 
   const entry = async (folder: string, name: string, kind: EntryKind): Promise<string | null> => {
+    if (onCandidate && kind === "file" && (await insideWithoutLinks(platform, root, joinPath(folder, name)))) {
+      onCandidate?.(joinPath(folder, name));
+    }
     const lower = name.toLowerCase();
     const matches = (await list(folder)).filter(
       (candidate) => candidate.kind === kind && candidate.name.toLowerCase() === lower,
     );
     const match = matches.find((candidate) => candidate.name === name) ?? matches[0];
-    return match ? joinPath(folder, match.name) : null;
+    if (!match) return null;
+    const path = joinPath(folder, match.name);
+    if (kind === "file") onCandidate?.(path);
+    return path;
   };
 
   function* folders(relative: string | null): Generator<Promise<string | null>> {
@@ -62,12 +73,13 @@ export function createFileSearch(platform: Platform, assetPath: string, readRoot
       if (pathInside(root, target) !== null) yield Promise.resolve(dirname(target));
     }
     yield Promise.resolve(assetFolder);
-    yield entry(assetFolder, `${stem}.fbm`, "directory");
-    yield entry(assetFolder, "Textures", "directory");
+    yield entry(assetFolder, `${stem}.fbm`, "directory").then((path) => path ?? joinPath(assetFolder, `${stem}.fbm`));
+    yield entry(assetFolder, "Textures", "directory").then((path) => path ?? joinPath(assetFolder, "Textures"));
     for (let folder = assetFolder; folder !== root && pathInside(root, folder) !== null; ) {
       folder = dirname(folder);
       yield Promise.resolve(folder);
-      yield entry(folder, "Textures", "directory");
+      const textures = joinPath(folder, "Textures");
+      yield entry(folder, "Textures", "directory").then((path) => path ?? textures);
     }
   }
 

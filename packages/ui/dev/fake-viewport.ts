@@ -473,6 +473,7 @@ export class FakeViewport implements Viewport {
   #clip: string | null = null;
   #seconds = 0;
   #playing = false;
+  #active = true;
   #speed = 1;
   #loop = true;
   #range: PlaybackRange | null = null;
@@ -552,6 +553,16 @@ export class FakeViewport implements Viewport {
 
   setSpeed(speed: number): void {
     this.#speed = speed;
+  }
+
+  setActive(active: boolean): void {
+    this.#active = active;
+    this.#lastTick = 0;
+    if (active) this.#requestRender();
+    else {
+      cancelAnimationFrame(this.#frameRequest);
+      this.#frameRequest = 0;
+    }
   }
 
   setLoop(loop: boolean): void {
@@ -709,7 +720,7 @@ export class FakeViewport implements Viewport {
   }
 
   #requestRender(): void {
-    if (this.#frameRequest || this.#disposed) return;
+    if (this.#frameRequest || this.#disposed || !this.#active) return;
     this.#frameRequest = requestAnimationFrame((now) => {
       this.#frameRequest = 0;
       this.#tick(now);

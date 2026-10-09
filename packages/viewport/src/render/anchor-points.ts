@@ -1,6 +1,6 @@
 import type { RegionAnchor, SpatialAnchor, SurfaceAnchor, Vec3 } from "@arcue/scene";
 import type { Camera } from "three";
-import { Vector3 } from "three";
+import { DoubleSide, Vector3 } from "three";
 import type { AnchorVertices } from "../math/context";
 import { anchorVertices } from "../math/context";
 import { findTriangle, regionTriangles } from "../math/regions";
@@ -125,11 +125,17 @@ export function triangleCorners(runtime: MeshRuntime, triangle: number): [Vec3, 
 
 /**
  * Whether the triangle under a pin faces the camera in the current pose, by the same rule the GPU culls with: the
- * winding in scene space, flipped when the mesh's node is mirrored. Double-sided meshes, regions and a pin whose
+ * winding in scene space, flipped when the mesh's node is mirrored. Double-sided triangles, regions and a pin whose
  * vertices form no triangle count as facing, so only the ID pass decides whether they are hidden.
  */
 export function facesCamera(resolved: ResolvedAnchor, camera: Camera): boolean {
-  if (resolved.kind !== "surface" || resolved.triangle < 0 || resolved.runtime.doubleSided) return true;
+  if (resolved.kind !== "surface" || resolved.triangle < 0) return true;
+  const { display } = resolved.runtime;
+  const group = display.geometry.groups.find(
+    (entry) => resolved.triangle * 3 >= entry.start && resolved.triangle * 3 < entry.start + entry.count,
+  );
+  const material = Array.isArray(display.material) ? display.material[group?.materialIndex ?? 0] : display.material;
+  if (material?.side === DoubleSide) return true;
   const [p0, p1, p2] = triangleCorners(resolved.runtime, resolved.triangle);
   const e1 = new Vector3(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
   const e2 = new Vector3(p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]);

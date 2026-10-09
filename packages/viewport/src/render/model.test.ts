@@ -1,10 +1,11 @@
 import type { SceneDescription, Material as SceneMaterial } from "@arcue/scene";
 import { describeParts, visibleMeshes } from "@arcue/scene";
 import type { Material } from "three";
+import { PerspectiveCamera, Raycaster, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
 import { stripScene } from "../math/test-fixture";
-import { resolveAnchor } from "./anchor-points";
-import { Model } from "./model";
+import { facesCamera, resolveAnchor } from "./anchor-points";
+import { Model, PICK_LAYER } from "./model";
 import { DEFAULT_PALETTE } from "./palette";
 
 const cutout: SceneMaterial = {
@@ -31,6 +32,59 @@ function alphaTests(material: Material | Material[]): number[] {
 }
 
 describe("Model pick materials", () => {
+  it("hides a pin on a single-sided back face and restores it in clay mode", async () => {
+    const scene = stripScene();
+    const mesh = scene.meshes[0];
+    if (!mesh) throw new Error("the strip has a mesh");
+    mesh.groups = [
+      { start: 0, triangleCount: 2, material: 0 },
+      { start: 2, triangleCount: 2, material: 1 },
+    ];
+    scene.materials = [
+      { ...cutout, alphaMode: "opaque", doubleSided: false },
+      { ...cutout, alphaMode: "opaque", doubleSided: true },
+    ];
+    const model = await Model.build(scene, DEFAULT_PALETTE, 1);
+    const anchor = resolveAnchor(model, {
+      kind: "surface",
+      mesh: "Strip",
+      vertices: [0, 1, 3],
+      weights: [0.3, 0.3, 0.4],
+    });
+    if (!anchor) throw new Error("the pin resolves");
+    const camera = new PerspectiveCamera();
+    camera.position.set(0, 0.5, -1);
+    camera.updateMatrixWorld();
+    expect(facesCamera(anchor, camera)).toBe(false);
+    model.setDisplayMode("clay");
+    expect(facesCamera(anchor, camera)).toBe(true);
+    model.dispose();
+  });
+
+  it("passes through a single-sided group's back face while retaining double-sided groups", async () => {
+    const scene = stripScene();
+    const mesh = scene.meshes[0];
+    if (!mesh) throw new Error("the strip has a mesh");
+    mesh.groups = [
+      { start: 0, triangleCount: 2, material: 0 },
+      { start: 2, triangleCount: 2, material: 1 },
+    ];
+    scene.materials = [
+      { ...cutout, alphaMode: "opaque", doubleSided: false },
+      { ...cutout, alphaMode: "opaque", doubleSided: true },
+    ];
+    const model = await Model.build(scene, DEFAULT_PALETTE, 1);
+    const ray = new Raycaster(new Vector3(0, 0.4, -1), new Vector3(0, 0, 1));
+    ray.layers.set(PICK_LAYER);
+    expect(ray.intersectObject(model.root)).toHaveLength(0);
+    ray.ray.origin.y = 1.4;
+    expect(ray.intersectObject(model.root).length).toBeGreaterThan(0);
+    model.setDisplayMode("clay");
+    ray.ray.origin.y = 0.4;
+    expect(ray.intersectObject(model.root).length).toBeGreaterThan(0);
+    model.dispose();
+  });
+
   it("cuts out alpha-mask texels in the ID pass only while the display cuts them out", async () => {
     const model = await Model.build({ ...stripScene(), materials: [cutout] }, DEFAULT_PALETTE, 1);
     const runtime = model.meshes[0];

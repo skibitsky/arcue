@@ -51,6 +51,7 @@ import type { CompositionEdit } from "./history";
 import { applySnapshot, editBetween, withDismissedWarnings } from "./history";
 import { fileIdentity, filesMatching } from "./identity";
 import { importAsset } from "./import";
+import { ImportFiles } from "./import-files";
 import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
 import type { LostFile } from "./lost-files";
@@ -76,12 +77,15 @@ import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
 import type { ReviewLocation } from "./review-store";
 import {
+  checkReviewPath,
   compositionFilePath,
   loadReview,
   locateReview,
   prepareArcueFolder,
+  removeReviewFile,
   reviewFilePath,
   reviewLocationIn,
+  writeReviewFile,
 } from "./review-store";
 import { buildRoundData } from "./round-data";
 import {
@@ -243,7 +247,9 @@ export class ArcueCore {
       ),
       registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])),
       registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)),
-      registry.handleCommand("round.copy", (args, context) => this.#copyRound(args.assetId, context.user)),
+      registry.handleCommand("round.copy", (args, context) =>
+        this.#inCompositionLine(this.#asset(args.assetId), () => this.#copyRound(args.assetId, context.user)),
+      ),
       registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")),
       registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")),
       registry.handleCommand("review.relink", (args) => this.#relinkReview(args.assetId, args.from)),
@@ -290,8 +296,9 @@ export class ArcueCore {
         return { prompt: warningPrompt(asset.path, this.#warnings(asset)) };
       }),
       registry.handleQuery("asset.inspect", (args) => this.#track(this.#inspect(args.path))),
-      registry.handleQuery("comment.screenshot", (args) => {
+      registry.handleQuery("comment.screenshot", async (args) => {
         const asset = this.#asset(args.assetId);
+        await checkReviewPath(this.#platform, asset.location, asset.location.folder);
         const comment = findComment(asset.session.review, args.commentId);
         return readScreenshot(this.#platform, asset.location.folder, comment.id, comment.context.screenshot);
       }),
@@ -414,9 +421,7 @@ export class ArcueCore {
     if (window === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
     const location = await locateReview(this.#platform, path);
     const reviewPath = reviewFilePath(location);
-    if (location.workspaceRoot && !(await insideWithoutLinks(this.#platform, location.workspaceRoot, reviewPath))) {
-      throw new ArcueError("conflict", `The review folder ${location.folder} goes through a symbolic link.`);
-    }
+    await checkReviewPath(this.#platform, location, reviewPath);
     const earlier = await this.#earlierReview(location, path, stat.size);
     const loaded = await loadReview(this.#platform, location);
     const id = `a${this.#nextAssetNumber++}`;
@@ -696,8 +701,9 @@ export class ArcueCore {
         return {
           next: relabelMembers(review, labels),
           result: true,
-          prepare: () => this.#platform.writeFileAtomic(path, text),
-          rollback: () => this.#platform.writeFileAtomic(path, found.text),
+          clearHistory: true,
+          prepare: () => writeReviewFile(this.#platform, asset.location, path, text),
+          rollback: () => writeReviewFile(this.#platform, asset.location, path, found.text),
         };
       }),
     );
@@ -793,12 +799,7 @@ export class ArcueCore {
             `${basename(path)} is not in the same repository as ${asset.name}, so the review cannot move to it.`,
           );
         }
-        if (
-          location.workspaceRoot &&
-          !(await insideWithoutLinks(this.#platform, location.workspaceRoot, location.folder))
-        ) {
-          throw new ArcueError("conflict", `The review folder ${location.folder} goes through a symbolic link.`);
-        }
+        await checkReviewPath(this.#platform, location, location.folder);
         await asset.session.moveTo(location, async () => {
           if (!(await this.#platform.exists(reviewFilePath(asset.location)))) return;
           await moveReview(this.#platform, {
@@ -840,6 +841,7 @@ export class ArcueCore {
       files = await readAssetFiles(this.#platform, asset.path, asset.compositionPath, asset.readRoot, {
         brokenComposition: asset.composition === null ? "warn" : "reject",
       });
+      await this.#refreshImports(asset, files);
     } catch (error) {
       this.#failed(asset, error);
       throw error;
@@ -847,10 +849,11 @@ export class ArcueCore {
     asset.missing = false;
     const named = files.siblings.filter((name) => hasExtension(name, [extensionOf(asset.name)]));
     asset.siblings = named.length <= MAX_RENAME_CANDIDATES ? new Set(named) : null;
-    this.#watchComposition(asset, files.watch);
+    this.#watchComposition(asset, [...files.watch, ...asset.compositionWatchers.keys()]);
     this.#searchLostFiles(asset, files);
-    const versionId = files.versionId;
+    let versionId = this.#versionWithDependencies(asset, files);
     if (versionId === asset.version && !force) {
+      this.#watchImportedFiles(asset, files);
       if (asset.status !== "ready") {
         asset.status = "ready";
         asset.error = null;
@@ -865,6 +868,8 @@ export class ArcueCore {
       const scene = await buildAssetScene(files, (file) => this.#importFile(asset, file), {
         parsed: (file) => asset.parsed(file.path, file.id),
       });
+      versionId = this.#versionWithDependencies(asset, files);
+      this.#watchImportedFiles(asset, files);
       meshes = meshesOf(scene).map((entry) => ({ mesh: entry.path, topology: entry.mesh.topology }));
       await asset.session.run((review) => {
         const record: AssetVersion = {
@@ -914,12 +919,43 @@ export class ArcueCore {
   async #importFile(asset: OpenAsset, file: ReadFile & { bytes: Uint8Array; id: string }): Promise<SceneDescription> {
     const cached = asset.parsed(file.path, file.id);
     if (cached) return cached;
+    const dependencies = new ImportFiles(this.#platform, file.path, asset.readRoot);
     const scene = await importAsset(this.#platform, file.path, file.bytes, {
+      files: dependencies,
       readRoot: asset.readRoot,
       timeoutMs: this.#importTimeoutMs,
     });
-    asset.imported.set(file.path, { id: file.id, scene });
+    asset.imported.set(file.path, { id: file.id, scene, files: dependencies });
     return scene;
+  }
+
+  async #refreshImports(asset: OpenAsset, files: AssetFiles): Promise<void> {
+    for (const file of [files.model, ...files.members.values()]) {
+      const cached = asset.imported.get(file.path);
+      if (!cached || cached.id !== file.id) continue;
+      const current = await cached.files.refresh(file.path, asset.readRoot);
+      if (current.identity !== cached.files.identity) asset.imported.delete(file.path);
+      else cached.files = current;
+    }
+  }
+
+  #versionWithDependencies(asset: OpenAsset, files: AssetFiles): string {
+    const dependencies = [files.model, ...files.members.values()].flatMap((file) => {
+      const cached = asset.imported.get(file.path);
+      const identity = cached?.id === file.id ? cached.files.identity : null;
+      return identity === null ? [] : [[file.label, identity]];
+    });
+    return dependencies.length === 0
+      ? files.versionId
+      : versionIdOf(new TextEncoder().encode(JSON.stringify([files.versionId, dependencies])));
+  }
+
+  #watchImportedFiles(asset: OpenAsset, files: AssetFiles): void {
+    const imported = [files.model, ...files.members.values()].flatMap((file) => {
+      const cached = asset.imported.get(file.path);
+      return cached?.id === file.id ? [...cached.files.watch] : [];
+    });
+    this.#watchComposition(asset, [...files.watch, ...imported]);
   }
 
   #failed(asset: OpenAsset, error: unknown): void {
@@ -937,20 +973,19 @@ export class ArcueCore {
       relative = `screenshots/${commentId}-${copy}.png`;
     }
     const path = joinPath(folder, relative);
-    if (!(await insideWithoutLinks(this.#platform, folder, path))) {
-      throw new ArcueError("conflict", `${dirname(path)} is a symbolic link.`);
-    }
+    await checkReviewPath(this.#platform, asset.location, path);
     return { relative, path };
   }
 
   #screenshotWrite(
+    asset: OpenAsset,
     slot: { path: string } | null,
     png: Uint8Array | null | undefined,
   ): Pick<ReviewChange<unknown>, "prepare" | "rollback"> {
     if (!slot || !png) return {};
     return {
-      prepare: () => this.#platform.writeFileAtomic(slot.path, png),
-      rollback: () => this.#platform.remove(slot.path),
+      prepare: () => writeReviewFile(this.#platform, asset.location, slot.path, png),
+      rollback: () => removeReviewFile(this.#platform, asset.location, slot.path),
     };
   }
 
@@ -984,7 +1019,7 @@ export class ArcueCore {
       const text = serializeComposition(change(current, same));
       if (text === serializeComposition(current)) return { next: null, result: false };
       await prepareArcueFolder(this.#platform, asset.location);
-      await this.#platform.writeFileAtomic(path, text);
+      await writeReviewFile(this.#platform, asset.location, path, text);
       return {
         next: null,
         result: true,
@@ -997,10 +1032,7 @@ export class ArcueCore {
 
   /** Refuses a composition file reached through a link, as opening refuses a review folder reached through one. */
   async #checkCompositionPath(asset: OpenAsset): Promise<void> {
-    const root = asset.location.workspaceRoot ?? asset.location.folder;
-    if (!(await insideWithoutLinks(this.#platform, root, asset.compositionPath))) {
-      throw new ArcueError("conflict", `${asset.compositionPath} is reached through a symbolic link.`);
-    }
+    await checkReviewPath(this.#platform, asset.location, asset.compositionPath);
   }
 
   /**
@@ -1020,10 +1052,10 @@ export class ArcueCore {
       throw new ArcueError("conflict", `${basename(edit.path)} changed since then, so it was left as it is.`);
     }
     if (restored === null) {
-      await this.#platform.remove(edit.path);
+      await removeReviewFile(this.#platform, asset.location, edit.path);
     } else {
       await prepareArcueFolder(this.#platform, asset.location);
-      await this.#platform.writeFileAtomic(edit.path, restored);
+      await writeReviewFile(this.#platform, asset.location, edit.path, restored);
     }
   }
 
@@ -1204,7 +1236,7 @@ export class ArcueCore {
         next,
         result: { commentId: id },
         edit: editBetween(review, next, { comments: [id] }),
-        ...this.#screenshotWrite(slot, args.screenshot),
+        ...this.#screenshotWrite(asset, slot, args.screenshot),
       };
     });
   }
@@ -1249,7 +1281,7 @@ export class ArcueCore {
         next,
         result: undefined,
         edit: editBetween(review, next, { comments: [comment.id] }),
-        ...this.#screenshotWrite(slot, args.screenshot),
+        ...this.#screenshotWrite(asset, slot, args.screenshot),
       };
     });
   }
@@ -1421,9 +1453,7 @@ export class ArcueCore {
       let round = Math.max(0, ...review.rounds.map((entry) => entry.number)) + 1;
       while (await this.#platform.exists(folderOf(round))) round++;
       const folder = folderOf(round);
-      if (!(await insideWithoutLinks(this.#platform, reviewFolder, joinPath(folder, "round.json")))) {
-        throw new ArcueError("conflict", `${dirname(folder)} is a symbolic link.`);
-      }
+      await checkReviewPath(this.#platform, asset.location, joinPath(folder, "round.json"));
 
       const screenshots = new Map<string, Uint8Array>();
       const queued: Comment[] = [];
@@ -1468,11 +1498,16 @@ export class ArcueCore {
         clearHistory: true,
         prepare: async () => {
           for (const [id, bytes] of screenshots)
-            await this.#platform.writeFileAtomic(joinPath(folder, `${id}.png`), bytes);
-          await this.#platform.writeFileAtomic(joinPath(folder, "round.json"), `${JSON.stringify(data, null, 2)}\n`);
-          await this.#platform.writeFileAtomic(joinPath(folder, "prompt.md"), prompt);
+            await writeReviewFile(this.#platform, asset.location, joinPath(folder, `${id}.png`), bytes);
+          await writeReviewFile(
+            this.#platform,
+            asset.location,
+            joinPath(folder, "round.json"),
+            `${JSON.stringify(data, null, 2)}\n`,
+          );
+          await writeReviewFile(this.#platform, asset.location, joinPath(folder, "prompt.md"), prompt);
         },
-        rollback: () => this.#platform.remove(folder),
+        rollback: () => removeReviewFile(this.#platform, asset.location, folder),
       };
     });
     let copiedToClipboard = false;
@@ -1498,6 +1533,7 @@ export class ArcueCore {
   #removeUnusedScreenshots(asset: OpenAsset): Promise<void> {
     return asset.session.run(async (review) => {
       const folder = joinPath(asset.location.folder, "screenshots");
+      await checkReviewPath(this.#platform, asset.location, folder);
       const stat = await this.#platform.stat(folder);
       if (stat?.kind !== "directory" || !(await insideWithoutLinks(this.#platform, asset.location.folder, folder))) {
         return { next: null, result: undefined };
@@ -1506,7 +1542,8 @@ export class ArcueCore {
       for (const comment of review.comments) if (comment.context.screenshot) kept.add(comment.context.screenshot);
       for (const entry of await this.#platform.list(folder)) {
         if (entry.kind !== "file" || !UNSENT_SCREENSHOT_NAME.test(entry.name)) continue;
-        if (!kept.has(`screenshots/${entry.name}`)) await this.#platform.remove(joinPath(folder, entry.name));
+        if (!kept.has(`screenshots/${entry.name}`))
+          await removeReviewFile(this.#platform, asset.location, joinPath(folder, entry.name));
       }
       return { next: null, result: undefined };
     });

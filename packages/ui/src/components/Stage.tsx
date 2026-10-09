@@ -2,7 +2,7 @@ import { fileNameOf } from "@arcue/scene";
 import type { CreateViewport } from "@arcue/viewport";
 import { DropdownMenu } from "radix-ui";
 import type { DragEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AssetSession } from "../store/asset-session";
 import { useSelect } from "../store/observable";
 import type { WorkspaceStore } from "../store/workspace-store";
@@ -15,10 +15,12 @@ import { Toolbar } from "./Toolbar";
 export function Stage({
   store,
   session,
+  active,
   createViewport,
 }: {
   store: WorkspaceStore;
   session: AssetSession;
+  active: boolean;
   createViewport: CreateViewport;
 }) {
   const [over, setOver] = useState(false);
@@ -54,7 +56,7 @@ export function Stage({
             if (files.length > 0) void store.dropOnView(session.assetId, files, at);
           }}
         >
-          <ViewportHost session={session} createViewport={createViewport} />
+          <ViewportHost session={session} active={active} createViewport={createViewport} />
           <ViewportStatus session={session} />
           <RelinkOffer session={session} />
           <CommentBoxLayer session={session} />
@@ -113,20 +115,34 @@ function DropMenu({ store, assetId }: { store: WorkspaceStore; assetId: string }
 }
 
 /** Mounts the asset's 3D view and connects it to the session. */
-export function ViewportHost({ session, createViewport }: { session: AssetSession; createViewport: CreateViewport }) {
+export function ViewportHost({
+  session,
+  active,
+  createViewport,
+}: {
+  session: AssetSession;
+  active: boolean;
+  createViewport: CreateViewport;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const factoryRef = useRef(createViewport);
   factoryRef.current = createViewport;
+  const activeRef = useRef(active);
+  activeRef.current = active;
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const viewport = factoryRef.current({ container });
+    viewport.setActive(activeRef.current);
     const detach = session.attachViewport(viewport, container);
     return () => {
       detach();
       viewport.dispose();
     };
   }, [session]);
+  useLayoutEffect(() => {
+    session.viewport?.setActive(active);
+  }, [active, session]);
   return <div className="viewport" ref={containerRef} data-testid="viewport" />;
 }
 

@@ -64,6 +64,7 @@ export interface FakeAssetSpec {
   fail?: string;
   /** Paths the importer asks the core for; the ones it gets become textures. */
   textures?: string[];
+  foundTextures?: string[];
   /** The import warnings the scene reports. */
   warnings?: ImportWarning[];
 }
@@ -75,7 +76,7 @@ export function fakeAsset(spec: FakeAssetSpec): string {
 export const fakeImporter: Importer = {
   format: "fbx",
   extensions: [".fbx"],
-  async import({ bytes, readFile }) {
+  async import({ bytes, readFile, findFile }) {
     const spec = JSON.parse(new TextDecoder().decode(bytes)) as FakeAssetSpec;
     if (spec.fail) throw new Error(spec.fail);
     const scene = fakeScene(spec);
@@ -83,6 +84,17 @@ export const fakeImporter: Importer = {
       const texture = await readFile(path);
       if (texture)
         scene.textures.push({ name: path, mimeType: "image/png", bytes: texture, storedPath: path, foundPath: path });
+    }
+    for (const path of spec.foundTextures ?? []) {
+      const found = await findFile(path);
+      if (found)
+        scene.textures.push({
+          name: path,
+          mimeType: "image/png",
+          bytes: found.bytes,
+          storedPath: path,
+          foundPath: found.path,
+        });
     }
     return scene;
   },

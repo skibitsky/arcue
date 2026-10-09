@@ -49,8 +49,6 @@ export interface MeshRuntime {
   wireFill: MeshStandardMaterial;
   wireLines: MeshBasicMaterial;
   tint: RegionTint;
-  /** Some material of the mesh is double-sided, so either side of a triangle is visible surface. */
-  doubleSided: boolean;
   /** The mesh's node has a negative determinant in the current pose, so the GPU flips which winding faces front. */
   mirrored: boolean;
   /** The part view draws the mesh. A hidden mesh is drawn by neither pass. */
@@ -158,10 +156,10 @@ export class Model {
     const wireFill = withRegionTint(wireFillMaterial(palette, side), tint.uniforms);
     const wireLines = wireLineMaterial(palette);
     const pickSolid = idMaterial(index, side);
-    const pickCutouts = lit.some((material) => material.alphaTest > 0)
-      ? lit.map((material) => idMaterial(index, side, material))
+    const pickGroups = lit.some((material) => material.alphaTest > 0 || material.side !== side)
+      ? lit.map((material) => idMaterial(index, material.side, material))
       : null;
-    this.materials.push(...lit, clay, wireFill, wireLines, pickSolid, ...(pickCutouts ?? []));
+    this.materials.push(...lit, clay, wireFill, wireLines, pickSolid, ...(pickGroups ?? []));
 
     const skeleton = mesh.skeleton === null ? undefined : skeletons[mesh.skeleton];
     const skinned = skeleton !== undefined && mesh.bindMatrix !== null && mesh.joints !== null && mesh.weights !== null;
@@ -176,7 +174,7 @@ export class Model {
     };
     const display = create(lit);
     display.castShadow = true;
-    const pickLit = pickCutouts ?? pickSolid;
+    const pickLit = pickGroups ?? pickSolid;
     const pick = create(pickLit);
     pick.layers.set(PICK_LAYER);
     const wire = create(wireLines);
@@ -209,7 +207,6 @@ export class Model {
       wireFill,
       wireLines,
       tint,
-      doubleSided: side === DoubleSide,
       mirrored: false,
       visible: true,
       representatives,

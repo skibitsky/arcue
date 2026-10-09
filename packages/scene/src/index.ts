@@ -77,3 +77,4 @@ export {
   mergeKeyTimes,
   secondsToFrame,
 } from "./time";
+export { VertexIndex } from "./vertex-index";

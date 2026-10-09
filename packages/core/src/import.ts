@@ -7,34 +7,14 @@ import {
   importRequests,
 } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
-import { createFileSearch, isReadableImage } from "./file-search";
-import { insideWithoutLinks } from "./links";
-import { basename, dirname, joinPath, pathInside } from "./paths";
+import { ImportFiles } from "./import-files";
+import { basename, dirname } from "./paths";
 import type { Platform } from "./platform";
 
-/**
- * Reads a file an asset references, answering an import worker's "import.readFile". The path is relative to the
- * asset's folder and may leave it, as Unity's "../Textures/" layout does, but it must stay inside `readRoot` and name
- * an image file. An absolute or drive path, a path that leaves the root, a path through a symbolic link, another kind
- * of file and a missing file all get null. `readRoot` is the workspace root, or the asset's folder when the asset is outside a git repository.
- */
-export async function readReferencedFile(
-  platform: Platform,
-  assetPath: string,
-  relativePath: string,
-  readRoot: string = dirname(assetPath),
-): Promise<Uint8Array | null> {
-  const slashed = relativePath.replaceAll("\\", "/");
-  if (slashed === "" || slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
-  const resolved = joinPath(dirname(assetPath), slashed);
-  if (!pathInside(readRoot, resolved)) return null;
-  if (!isReadableImage(basename(resolved))) return null;
-  if (!(await insideWithoutLinks(platform, readRoot, resolved))) return null;
-  const stat = await platform.stat(resolved);
-  return stat?.kind === "file" ? platform.readFile(resolved) : null;
-}
+export { readReferencedFile } from "./import-files";
 
 export interface ImportAssetOptions {
+  files?: ImportFiles;
   /** Gives up with a "timeout" error when the worker has not finished within this many milliseconds. */
   timeoutMs?: number;
   /**
@@ -56,7 +36,7 @@ export async function importAsset(
   options: ImportAssetOptions = {},
 ): Promise<SceneDescription> {
   const readRoot = options.readRoot ?? (await platform.findWorkspaceRoot(assetPath)) ?? dirname(assetPath);
-  const search = createFileSearch(platform, assetPath, readRoot);
+  const files = options.files ?? new ImportFiles(platform, assetPath, readRoot);
   const worker = platform.startImportWorker();
   const peer = createPeer(worker.endpoint, {
     requestTimeout:
@@ -66,11 +46,11 @@ export async function importAsset(
     handleRequest: ({ name, input }) => {
       if (name === importRequests.readFile) {
         const { relativePath } = importReadFileInputSchema.parse(input);
-        return readReferencedFile(platform, assetPath, relativePath, readRoot);
+        return files.read(relativePath);
       }
-      if (name === importRequests.findFile) return search.find(importFindFileInputSchema.parse(input).storedPath);
+      if (name === importRequests.findFile) return files.find(importFindFileInputSchema.parse(input).storedPath);
       if (name === importRequests.locateFile) {
-        return search.locate(importFindFileInputSchema.parse(input).storedPath);
+        return files.locate(importFindFileInputSchema.parse(input).storedPath);
       }
       throw new ArcueError("unknown-command", `The core has no "${name}".`);
     },

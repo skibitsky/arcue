@@ -21,14 +21,12 @@ export function contentHash(bytes: Uint8Array): string {
   return hex32(h1) + hex32(h2);
 }
 
-/** The short id of a file version, such as "3f9a2c1": the first seven hex digits of its content hash. */
 export function versionIdOf(bytes: Uint8Array): string {
   return versionIdOfHash(contentHash(bytes));
 }
 
-/** The short id for a content hash already computed. */
 export function versionIdOfHash(hash: string): string {
-  return hash.slice(0, 7);
+  return hash;
 }
 
 function hex32(value: number): string {

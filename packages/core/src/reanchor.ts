@@ -7,12 +7,15 @@ import {
   sameTopology,
   sourceIndices,
   splitMemberPath,
+  VertexIndex,
 } from "@arcue/scene";
 import type { MeshAtPath } from "./scene-lookup";
 import { anchorRestPositions, meshesOf, modelSize, weightedPoint } from "./scene-lookup";
 
 /** A target farther than this share of the model's size from every surface is detached. */
 export const DETACH_SHARE = 0.02;
+
+const INDEX_MIN_QUERIES = 128;
 
 /**
  * Moves comment anchors onto a new version of the asset. A mesh whose topology fingerprint matches the one in the
@@ -30,6 +33,7 @@ export class Reanchorer {
   readonly #files: ReadonlySet<string | null>;
   readonly #threshold: number;
   readonly #triangles = new Map<number, Uint32Array>();
+  readonly #vertices = new Map<number, VertexIndex>();
 
   constructor(versions: readonly AssetVersion[], versionId: string, scene: SceneDescription) {
     this.#versions = new Map(versions.map((version) => [version.id, version]));
@@ -106,10 +110,15 @@ export class Reanchorer {
   #moveRegion(comment: Comment, candidates: readonly MeshAtPath[]): { entry: MeshAtPath; target: RegionAnchor } | null {
     let best: { entry: MeshAtPath; kept: Set<number>; total: number } | null = null;
     for (const entry of candidates) {
+      let vertices = this.#vertices.get(entry.index);
+      if (!vertices && comment.anchorRestPositions.length >= INDEX_MIN_QUERIES) {
+        vertices = new VertexIndex(entry.mesh.restPositions);
+        this.#vertices.set(entry.index, vertices);
+      }
       const kept = new Set<number>();
       let total = 0;
       for (const position of comment.anchorRestPositions) {
-        const found = nearestVertex(entry.mesh.restPositions, position);
+        const found = vertices ? vertices.nearest(position) : nearestVertex(entry.mesh.restPositions, position);
         if (!found || found.distance > this.#threshold) continue;
         kept.add(found.vertex);
         total += found.distance;

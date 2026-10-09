@@ -92,9 +92,7 @@ export class WebHost {
           .then(() => this.openFiles(dropped))
           .catch((error: unknown) => this.#alert(error));
       },
-      discard: (dropped) => {
-        this.#removeCopies(dropped).catch((error: unknown) => this.#alert(error));
-      },
+      discard: (dropped) => this.#removeCopies(dropped),
     };
     store = createWorkspaceStore({ client: this.client, files });
     this.store = store;

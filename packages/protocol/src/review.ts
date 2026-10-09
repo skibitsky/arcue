@@ -113,7 +113,7 @@ export const versionFileSchema = z.object({
    * itself is "composition.json".
    */
   file: z.string().min(1),
-  /** Short hash of that file's bytes. */
+  /** Content hash of that file's bytes; older reviews use a seven-character prefix. */
   id: z.string().min(1),
   /** Full hash of that file's bytes; absent for the composition file and in versions older builds recorded. */
   hash: contentHashSchema.optional(),
@@ -124,7 +124,7 @@ export const versionFileSchema = z.object({
 });
 
 export const assetVersionSchema = z.object({
-  /** Short hash of the file's bytes, such as "3f9a2c1", or of the files of a composition. */
+  /** Content identity of the asset and its dependencies; older reviews use a seven-character prefix. */
   id: z.string().min(1),
   fileModifiedAt: timestampSchema,
   loadedAt: timestampSchema,
