@@ -12,15 +12,13 @@ export interface SampleAsset {
   description?: string;
 }
 
-const DEFAULT_DROP_HINT = "Arcue reloads it every time you export.";
-
 export function EmptyState({
   store,
   samples,
   onOpenFile,
   onDropFiles,
   onOpenSample,
-  dropHint = DEFAULT_DROP_HINT,
+  dropHint,
   tabId,
 }: {
   store: WorkspaceStore;
@@ -58,7 +56,7 @@ export function EmptyState({
       <div className="drop">
         <Icon name="upload" />
         <strong>Drop an FBX file</strong>
-        <span>{dropHint}</span>
+        {dropHint ? <span>{dropHint}</span> : null}
         {onOpenFile ? (
           <button type="button" className="btn btn-open" onClick={onOpenFile}>
             <Icon name="folder" />

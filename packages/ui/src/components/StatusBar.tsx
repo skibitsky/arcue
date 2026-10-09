@@ -106,15 +106,14 @@ export function StatusBar({
           {watch.text}
         </span>
       </Tip>
-      {summary.version ? <span className="sb-version">{summary.version}</span> : null}
       <span className="grow" />
       <CoordinatesMenu store={store} />
       {stats ? (
         <span className="sb-stats">
-          <span>{formatCount(stats.triangles)} tris</span>
-          <span>{plural(stats.bones, "bone")}</span>
-          <span>{plural(stats.clips, "clip")}</span>
-          <span>{formatHeight(stats.height)}</span>
+          {stats.triangles > 0 ? <span>{formatCount(stats.triangles)} tris</span> : null}
+          {stats.bones > 0 ? <span>{plural(stats.bones, "bone")}</span> : null}
+          {stats.clips > 0 ? <span className="sb-clips">{plural(stats.clips, "clip")}</span> : null}
+          {stats.height > 0 ? <span>{formatHeight(stats.height)}</span> : null}
         </span>
       ) : null}
     </footer>

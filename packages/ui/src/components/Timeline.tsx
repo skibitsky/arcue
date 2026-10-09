@@ -28,6 +28,7 @@ export function Timeline({ session }: { session: AssetSession }) {
   const range = useSelect(session.state, (state) => state.range);
   const playing = useSelect(session.time, (state) => state.playing);
   const clip = useMemo(() => scene?.clips.find((candidate) => candidate.name === clipName) ?? null, [scene, clipName]);
+  if (scene && scene.clips.length === 0) return null;
   return (
     <section className="timeline" aria-label="Timeline">
       <div className="tl-bar">
@@ -64,7 +65,7 @@ export function Timeline({ session }: { session: AssetSession }) {
             <span>{rangeLabel(range)}</span>
             <Tip label="Clear range" shortcut="Esc">
               <button type="button" className="chip-x" aria-label="Clear range" onClick={() => session.setRange(null)}>
-                <Icon name="x" />
+                <Icon name="trash" />
               </button>
             </Tip>
           </span>
@@ -222,7 +223,7 @@ function Track({ session, clip }: { session: AssetSession; clip: Clip | null }) 
           <Playhead session={session} clip={clip} />
         </>
       ) : (
-        <div className="tl-rest">Rest pose has no timeline</div>
+        <div className="tl-rest" />
       )}
     </div>
   );
@@ -285,29 +286,27 @@ function Ruler({ session, clip, width }: { session: AssetSession; clip: Clip; wi
   const minorHeight = 3.5;
   const baseline = 24;
   return (
-    <Tip label="Drag to scrub">
-      <div className="tl-ruler" onPointerDown={onPointerDown}>
-        <svg className="ruler-svg" width="100%" height={baseline} aria-hidden="true">
-          {ruler.ticks.map((tick) => {
-            const x = `${((tick.frame / last) * 100).toFixed(3)}%`;
-            const height = ruler.mode === "keys" ? 5 : tick.major ? tickHeight : minorHeight;
-            const kind = ruler.mode === "keys" ? "tk tk-key" : tick.major ? "tk tk-major" : "tk";
-            return <line key={tick.frame} x1={x} x2={x} y1={baseline - height} y2={baseline} className={kind} />;
-          })}
-          {ruler.labels.map((frame) => (
-            <text
-              key={frame}
-              x={`${((frame / last) * 100).toFixed(3)}%`}
-              y={baseline - tickHeight - 3}
-              className="tk-label"
-              textAnchor={frame === 0 ? "start" : frame === last ? "end" : "middle"}
-            >
-              {frame}
-            </text>
-          ))}
-        </svg>
-      </div>
-    </Tip>
+    <div className="tl-ruler" onPointerDown={onPointerDown}>
+      <svg className="ruler-svg" width="100%" height={baseline} aria-hidden="true">
+        {ruler.ticks.map((tick) => {
+          const x = `${((tick.frame / last) * 100).toFixed(3)}%`;
+          const height = ruler.mode === "keys" ? 5 : tick.major ? tickHeight : minorHeight;
+          const kind = ruler.mode === "keys" ? "tk tk-key" : tick.major ? "tk tk-major" : "tk";
+          return <line key={tick.frame} x1={x} x2={x} y1={baseline - height} y2={baseline} className={kind} />;
+        })}
+        {ruler.labels.map((frame) => (
+          <text
+            key={frame}
+            x={`${((frame / last) * 100).toFixed(3)}%`}
+            y={baseline - tickHeight - 3}
+            className="tk-label"
+            textAnchor={frame === 0 ? "start" : frame === last ? "end" : "middle"}
+          >
+            {frame}
+          </text>
+        ))}
+      </svg>
+    </div>
   );
 }
 
@@ -331,36 +330,34 @@ function Lane({ session, clip }: { session: AssetSession; clip: Clip }) {
     },
   );
   return (
-    <Tip label="Drag to select a range">
-      <div className="tl-lane" onPointerDown={onPointerDown}>
-        {bars.map((bar) => (
+    <div className="tl-lane" onPointerDown={onPointerDown}>
+      {bars.map((bar) => (
+        <MarkerButton
+          key={bar.id}
+          session={session}
+          marker={bar}
+          shape="bar"
+          style={{ left: percentOf(bar.start, last), width: percentOf(bar.end - bar.start, last) }}
+        />
+      ))}
+      {dots.map(({ frame, markers }) =>
+        markers.length === 1 && markers[0] ? (
           <MarkerButton
-            key={bar.id}
+            key={markers[0].id}
             session={session}
-            marker={bar}
-            shape="bar"
-            style={{ left: percentOf(bar.start, last), width: percentOf(bar.end - bar.start, last) }}
+            marker={markers[0]}
+            shape="dot"
+            style={{ left: percentOf(frame, last) }}
           />
-        ))}
-        {dots.map(({ frame, markers }) =>
-          markers.length === 1 && markers[0] ? (
-            <MarkerButton
-              key={markers[0].id}
-              session={session}
-              marker={markers[0]}
-              shape="dot"
-              style={{ left: percentOf(frame, last) }}
-            />
-          ) : (
-            <span key={`group-${frame}`} className="mk mk-group" style={{ left: percentOf(frame, last) }}>
-              {markers.map((marker) => (
-                <MarkerButton key={marker.id} session={session} marker={marker} shape="dot" />
-              ))}
-            </span>
-          ),
-        )}
-      </div>
-    </Tip>
+        ) : (
+          <span key={`group-${frame}`} className="mk mk-group" style={{ left: percentOf(frame, last) }}>
+            {markers.map((marker) => (
+              <MarkerButton key={marker.id} session={session} marker={marker} shape="dot" />
+            ))}
+          </span>
+        ),
+      )}
+    </div>
   );
 }
 

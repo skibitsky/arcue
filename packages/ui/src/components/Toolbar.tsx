@@ -24,7 +24,7 @@ export function Toolbar({ session }: { session: AssetSession }) {
       <fieldset className="seg" aria-label="Tool">
         <IconButton
           icon="view"
-          label="View: drag to orbit"
+          label="View"
           shortcut="V"
           tipSide="bottom"
           pressed={tool === "view"}
@@ -32,7 +32,7 @@ export function Toolbar({ session }: { session: AssetSession }) {
         />
         <IconButton
           icon="comment"
-          label="Comment: click to pin, drag to paint"
+          label="Comment"
           shortcut="C"
           tipSide="bottom"
           pressed={tool === "comment"}

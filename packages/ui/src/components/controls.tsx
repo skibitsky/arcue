@@ -75,7 +75,7 @@ export function Chip({
       {onRemove && removeLabel ? (
         <Tip label={removeLabel}>
           <button type="button" className="chip-x" aria-label={removeLabel} onClick={onRemove}>
-            <Icon name="x" />
+            <Icon name="trash" />
           </button>
         </Tip>
       ) : null}
