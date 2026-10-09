@@ -9,6 +9,7 @@ import {
   CENTIMETER_ROOT_SCALE_FBX,
   EXTERNAL_TEXTURE_FBX,
   IN_BETWEEN_FBX,
+  LAYERED_TEXTURE_FBX,
   LEFT_HANDED_FBX,
   LOD_FBX,
   METAL_ROUGH_FBX,
@@ -648,6 +649,11 @@ describe("export checks", () => {
         foundPath: "textures/Body_BaseColor.png",
       },
     ]);
+  });
+
+  it("counts every file of a layered texture as used", async () => {
+    const scene = await importText("layered.fbx", LAYERED_TEXTURE_FBX, findAnyPng);
+    expect(scene.source.warnings).toEqual([]);
   });
 
   it("does not report a texture that a material links to a slot the preview does not show", async () => {

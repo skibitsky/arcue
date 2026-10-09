@@ -697,8 +697,14 @@ static bool *texture_files_linked(const ufbx_scene *scene) {
 	for (size_t m = 0; m < scene->materials.count; m++) {
 		const ufbx_material *material = scene->materials.data[m];
 		for (size_t t = 0; t < material->textures.count; t++) {
-			int64_t file = texture_file_of(material->textures.data[t].texture);
+			const ufbx_texture *texture = material->textures.data[t].texture;
+			int64_t file = texture_file_of(texture);
 			if (file >= 0 && (size_t)file < scene->texture_files.count) linked[file] = true;
+			if (!texture) continue;
+			for (size_t l = 0; l < texture->file_textures.count; l++) {
+				const ufbx_texture *layer = texture->file_textures.data[l];
+				if (layer->has_file && layer->file_index < scene->texture_files.count) linked[layer->file_index] = true;
+			}
 		}
 	}
 	return linked;

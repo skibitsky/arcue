@@ -30,13 +30,13 @@
     "INCOMING_MODULE_JS_API=[]"
   ],
   "inputs": {
-    "native/arcue_ufbx.c": "711cbf32dd3bd06c1e0d4c67f86c8c291a829a05f7022b8131e705aec745b21a",
+    "native/arcue_ufbx.c": "fc776dcf945577d4f43e01c4c7602a6781df825877b89485f364db5b419dccab",
     "scripts/build-wasm.mjs": "fb18944afb597c926c836c4427a3eb41c0c986004eb403d5e1f47a5317bed465",
     "vendor/ufbx/ufbx.c": "4a956c26a708e40d82ecb0aeaee54da709d5ba7c144c9642174970059bda7e1d",
     "vendor/ufbx/ufbx.h": "f787be529af577efc04f3e3e735844a08556718dbb613d1211c2b313d72895dc"
   },
   "outputs": {
     "wasm/arcue-ufbx.js": "37d852327b3551e2cfe5defb4a0106edd53f1e0e21917374690fe77da690d884",
-    "wasm/arcue-ufbx.wasm": "ee9ff22fe44ed11d1a9e1d67b244f5334e9a6000c2ebdc5dba9fec3ab70d1a14"
+    "wasm/arcue-ufbx.wasm": "0042592d2648a22ba5f9eff7c521c83588f2808095ab8c2ae7f6f6f2ca989217"
   }
 }
