@@ -5,7 +5,7 @@ import type { ReviewEdit } from "./history";
 import { ReviewHistory } from "./history";
 import type { Platform } from "./platform";
 import type { ReviewLocation } from "./review-store";
-import { parseReview, reviewFilePath, serializeReview } from "./review-store";
+import { parseReview, prepareArcueFolder, reviewFilePath, serializeReview } from "./review-store";
 import { Serial } from "./serial";
 
 /** What one command does to the review. */
@@ -81,6 +81,7 @@ export class ReviewSession {
           if (attempt < ATTEMPTS) continue;
           throw new ArcueError("conflict", "review.json keeps changing on disk; try again.");
         }
+        await prepareArcueFolder(this.#platform, this.#location);
         try {
           await change.prepare?.();
           await this.#platform.writeFileAtomic(this.#path, text);

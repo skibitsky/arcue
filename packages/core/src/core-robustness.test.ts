@@ -255,3 +255,56 @@ describe("the review folder", () => {
     await expect(second.client.execute("asset.open", { path: HERO })).resolves.toEqual({ assetId: test.assetId });
   });
 });
+
+describe("keeping a repository's .arcue folder out of git", () => {
+  const ARCUE = "/work/game/.arcue";
+  const writesIn = (test: TestCore, folder: string) =>
+    test.platform.writes.filter((write) => write.path.startsWith(`${folder}/`)).map((write) => write.path);
+
+  it("writes .arcue/.gitignore with * before anything else when it creates the folder, never the repository's own", async () => {
+    const test = await startTestCore({ ...heroFiles(), "/work/game/.gitignore": "Library/\n" });
+    await openAsset(test);
+    await expect(test.platform.readText(`${ARCUE}/.gitignore`)).resolves.toBe("*\n");
+    expect(writesIn(test, ARCUE)[0]).toBe(`${ARCUE}/.gitignore`);
+    await expect(test.platform.readText("/work/game/.gitignore")).resolves.toBe("Library/\n");
+    expect(test.platform.writes.some((write) => write.path === "/work/game/.gitignore")).toBe(false);
+  });
+
+  it("never adds .gitignore to an .arcue folder that exists, as when someone deleted it to share reviews", async () => {
+    const test = await startTestCore({
+      ...heroFiles(),
+      [`${ARCUE}/reviews/Assets/Art/Crate.fbx/review.json`]: "{}",
+    });
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    await test.core.client.execute("round.copy", { assetId });
+    await expect(test.platform.exists(`${ARCUE}/.gitignore`)).resolves.toBe(false);
+  });
+
+  it("writes .gitignore into an empty .arcue folder that a failed first write left behind", async () => {
+    const test = await startTestCore(heroFiles());
+    await test.platform.mkdir(ARCUE);
+    await openAsset(test);
+    await expect(test.platform.readText(`${ARCUE}/.gitignore`)).resolves.toBe("*\n");
+  });
+
+  it("writes .gitignore first when a comment's screenshot recreates a deleted .arcue folder", async () => {
+    const test = await setup();
+    await test.platform.remove(ARCUE);
+    await test.core.idle();
+    const writes = test.platform.writes.length;
+    await test.core.client.execute("comment.create", pinComment(test.assetId));
+    expect(test.platform.writes.slice(writes).map((write) => write.path)).toEqual([
+      `${ARCUE}/.gitignore`,
+      `${HERO_REVIEW}/screenshots/c1.png`,
+      REVIEW_JSON,
+    ]);
+  });
+
+  it("writes no .gitignore outside a repository", async () => {
+    const test = await startTestCore({ "/art/Hero.fbx": fakeAsset(heroSpec) });
+    const assetId = await openAsset(test, "/art/Hero.fbx");
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    expect(test.platform.writes.filter((write) => write.path.endsWith("/.gitignore"))).toEqual([]);
+  });
+});

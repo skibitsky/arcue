@@ -709,6 +709,15 @@ describe("composition commands", () => {
     expect(await readJson(test.platform, REVIEW)).toMatchObject({ asset: { path: "Assets/Bug/Bug.fbx" } });
   });
 
+  it("writes .arcue/.gitignore when the first edit recreates a deleted .arcue folder", async () => {
+    const test = await setup({ [COMPOSITION]: null });
+    await test.platform.remove("/work/game/.arcue");
+    await test.core.idle();
+    await test.window.client.execute("composition.addFile", { assetId: test.assetId, file: TURN, role: "animation" });
+    await expect(test.platform.readText("/work/game/.arcue/.gitignore")).resolves.toBe("*\n");
+    expect(await written(test)).toEqual({ version: 1, animations: ["Anim/BugTurn.fbx"] });
+  });
+
   it("never writes a composition file through a review folder that became a symbolic link", async () => {
     const test = await setup({ [COMPOSITION]: null, "/elsewhere/Bug/Bug.fbx/keep.txt": "" });
     await test.platform.remove("/work/game/.arcue/reviews/Assets/Bug");
@@ -914,6 +923,18 @@ describe("undoing composition edits", () => {
     await expect(steps.text()).resolves.toBe(changed);
     await expect(steps.redo()).resolves.toEqual({ changed: true });
     await expect(steps.redo()).resolves.toEqual({ changed: false });
+  });
+
+  it("writes .arcue/.gitignore when a redo recreates a deleted .arcue folder", async () => {
+    const test = await plain();
+    const steps = history(test);
+    await steps.add("BugShells.fbx");
+    await steps.undo();
+    await test.platform.remove("/work/game/.arcue");
+    await test.core.idle();
+    await expect(steps.redo()).resolves.toEqual({ changed: true });
+    await expect(test.platform.readText("/work/game/.arcue/.gitignore")).resolves.toBe("*\n");
+    await expect(steps.parts()).resolves.toHaveLength(3);
   });
 
   it("refuses a redo when the file changed since the undo", async () => {

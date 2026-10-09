@@ -56,7 +56,7 @@ import type { CallContext } from "./registry";
 import { CommandRegistry } from "./registry";
 import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
-import { compositionFilePath, loadReview, locateReview, reviewFilePath } from "./review-store";
+import { compositionFilePath, loadReview, locateReview, prepareArcueFolder, reviewFilePath } from "./review-store";
 import { buildRoundData } from "./round-data";
 import {
   anchorRestPositions,
@@ -621,6 +621,7 @@ export class ArcueCore {
       const same = (target: string) => (written: string) => joinPath(folder, written) === target;
       const text = serializeComposition(change(current, same));
       if (text === serializeComposition(current)) return { next: null, result: false };
+      await prepareArcueFolder(this.#platform, asset.location);
       await this.#platform.writeFileAtomic(path, text);
       return {
         next: null,
@@ -656,8 +657,12 @@ export class ArcueCore {
     if (current !== expected) {
       throw new ArcueError("conflict", `${basename(edit.path)} changed since then, so it was left as it is.`);
     }
-    if (restored === null) await this.#platform.remove(edit.path);
-    else await this.#platform.writeFileAtomic(edit.path, restored);
+    if (restored === null) {
+      await this.#platform.remove(edit.path);
+    } else {
+      await prepareArcueFolder(this.#platform, asset.location);
+      await this.#platform.writeFileAtomic(edit.path, restored);
+    }
   }
 
   /** A path a composition command names: absolute, or relative to the model's folder. */

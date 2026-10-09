@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { MemoryPlatform } from "./memory-platform";
-import { emptyReview, loadReview, locateReview, parseReview, serializeReview } from "./review-store";
+import {
+  emptyReview,
+  loadReview,
+  locateReview,
+  parseReview,
+  prepareArcueFolder,
+  serializeReview,
+} from "./review-store";
 
 describe("locateReview", () => {
   const platform = new MemoryPlatform({
@@ -83,5 +90,18 @@ describe("loadReview and serializeReview", () => {
     expect(() => serializeReview({ ...emptyReview("Hero.fbx"), queue: ["c1"] })).toThrow(
       expect.objectContaining({ code: "internal" }),
     );
+  });
+});
+
+describe("prepareArcueFolder", () => {
+  it("writes nothing through an .arcue link, even to an empty folder", async () => {
+    const platform = new MemoryPlatform({
+      files: { "/work/game/.git/HEAD": "ref" },
+      symlinks: { "/work/game/.arcue": "/elsewhere" },
+    });
+    await platform.mkdir("/elsewhere");
+    const location = await locateReview(platform, "/work/game/Assets/Hero.fbx");
+    await prepareArcueFolder(platform, location);
+    await expect(platform.list("/elsewhere")).resolves.toEqual([]);
   });
 });

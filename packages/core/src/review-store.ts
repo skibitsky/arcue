@@ -5,6 +5,9 @@ import type { Platform } from "./platform";
 
 export const REVIEW_SCHEMA_VERSION = 1;
 
+/** The folder at a repository's root that holds Arcue's review data. */
+export const ARCUE_FOLDER = ".arcue";
+
 /** Where one asset's review data lives. */
 export interface ReviewLocation {
   /** The git repository root, or null when the asset is outside any repository. */
@@ -24,7 +27,7 @@ export async function locateReview(platform: Platform, assetPath: string): Promi
   const workspaceRoot = await platform.findWorkspaceRoot(path);
   const relative = workspaceRoot === null ? null : pathInside(workspaceRoot, path);
   if (workspaceRoot !== null && relative) {
-    return { workspaceRoot, folder: joinPath(workspaceRoot, ".arcue", "reviews", relative), assetPath: relative };
+    return { workspaceRoot, folder: joinPath(workspaceRoot, ARCUE_FOLDER, "reviews", relative), assetPath: relative };
   }
   return { workspaceRoot: null, folder: joinPath(platform.appDataDir, "reviews", rootless(path)), assetPath: path };
 }
@@ -38,6 +41,20 @@ function rootless(path: string): string {
 
 export function reviewFilePath(location: ReviewLocation): string {
   return joinPath(location.folder, "review.json");
+}
+
+/**
+ * Call before writing into a review folder. When the repository has no `.arcue/` folder yet, or only an empty one that
+ * a failed first write left behind, it writes `.arcue/.gitignore` containing `*`, so git ignores the reviews until
+ * someone deletes that file to share them. An `.arcue/` folder with anything in it, or a link, is left as it is, the
+ * repository's own `.gitignore` is never touched, and outside a repository nothing happens.
+ */
+export async function prepareArcueFolder(platform: Platform, location: ReviewLocation): Promise<void> {
+  if (location.workspaceRoot === null) return;
+  const folder = joinPath(location.workspaceRoot, ARCUE_FOLDER);
+  const stat = await platform.stat(folder);
+  if (stat !== null && (stat.kind !== "directory" || (await platform.list(folder)).length > 0)) return;
+  await platform.writeFileAtomic(joinPath(folder, ".gitignore"), "*\n");
 }
 
 /** The asset's composition file, which the review folder keeps beside `review.json`, so nothing lands beside the model. */
