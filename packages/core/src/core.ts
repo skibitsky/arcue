@@ -513,6 +513,7 @@ export class ArcueCore {
 
   /** Watches the model file, its review file, and its composition file until it loads the files that one names. */
   #watchAsset(asset: OpenAsset): void {
+    if (asset.closed) return;
     for (const stop of asset.stopWatching.splice(0)) stop();
     asset.stopWatching.push(
       this.#platform.watch(asset.path, () => this.#fileChanged(asset)),
@@ -756,6 +757,7 @@ export class ArcueCore {
         if (!(await this.#platform.exists(reviewFilePath(asset.location)))) return;
         await moveReview(this.#platform, { from: asset.location, fromModel: from, to: location, toModel: path });
       });
+      if (asset.closed) return;
       asset.cancelStabilityCheck();
       asset.stabilityCheck++;
       asset.relocate(path, location);
