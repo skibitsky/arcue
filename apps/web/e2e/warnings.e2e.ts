@@ -132,6 +132,8 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
   await status.click();
   await list.getByRole("button", { name: "Dismiss all" }).click();
   await expect(status).toBeHidden();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(status).toHaveText(/\+4$/);
 });
 
 test("offers an unused texture as the base color, after which the warning is gone", async ({ page }) => {

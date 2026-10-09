@@ -1089,6 +1089,16 @@ export class AssetSession {
     await this.#run(() => this.#client.execute("warning.dismissAll", { assetId: this.assetId }));
   }
 
+  /** Takes back the asset's last comment, warning or composition edit. */
+  async undo(): Promise<void> {
+    await this.#run(() => this.#client.execute("review.undo", { assetId: this.assetId }));
+  }
+
+  /** Applies again the edit undo took back last. */
+  async redo(): Promise<void> {
+    await this.#run(() => this.#client.execute("review.redo", { assetId: this.assetId }));
+  }
+
   /** Adds a draft about the warning, which the queue flashes. */
   async commentOnWarning(warningId: string): Promise<void> {
     await this.#run(async () => {

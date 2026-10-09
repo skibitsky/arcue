@@ -89,6 +89,47 @@ describe("import warnings in the status bar", () => {
     expect(screen.queryByRole("dialog", { name: "Import warnings" })).toBeNull();
   });
 
+  it("brings dismissed warnings back with Ctrl+Z and dismisses them again with Ctrl+Y or Ctrl+Shift+Z", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    await user.click(screen.getByRole("button", { name: "Dismiss all" }));
+    await act(() => flush());
+    expect(document.querySelector(".sb-warn")).toBeNull();
+    await user.keyboard("{Control>}z{/Control}");
+    await act(() => flush());
+    expect(statusItem().textContent).toBe("Texture not found: Eyes.png+3");
+    await user.keyboard("{Control>}y{/Control}");
+    await act(() => flush());
+    expect(document.querySelector(".sb-warn")).toBeNull();
+    await user.keyboard("{Control>}z{/Control}{Control>}{Shift>}z{/Shift}{/Control}");
+    await act(() => flush());
+    expect(document.querySelector(".sb-warn")).toBeNull();
+  });
+
+  it("undoes with Cmd+Z on macOS, where Ctrl+Z and Cmd+Y do nothing", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      const { client } = await renderStone();
+      const user = userEvent.setup();
+      const undos = () => client.calls.filter((call) => call.name === "review.undo" || call.name === "review.redo");
+      await user.keyboard("{Control>}z{/Control}{Meta>}y{/Meta}");
+      expect(undos()).toHaveLength(0);
+      await user.keyboard("{Meta>}z{/Meta}{Meta>}{Shift>}z{/Shift}{/Meta}");
+      expect(undos().map((call) => call.name)).toEqual(["review.undo", "review.redo"]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("leaves Ctrl+Z to a focused text field", async () => {
+    const { client } = await renderStone();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("textbox", { name: /comment/i }));
+    await user.keyboard("{Control>}z{/Control}");
+    expect(client.calls.some((call) => call.name === "review.undo")).toBe(false);
+  });
+
   it("chooses an image for the slot a missing texture names, through the host's open dialog", async () => {
     const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Eyes.png");
     const files: FileHost = { pick: vi.fn(async () => [picked]), place: async () => [], open: () => {} };
