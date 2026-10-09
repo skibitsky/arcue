@@ -1,0 +1,708 @@
+{
+  "generator": "tools/samples/generate.py",
+  "license": "CC0-1.0",
+  "notes": [
+    "All facts are measured from the exported files, by parsing the FBX and by re-importing it in Blender with default import settings.",
+    "Mesh control_points is Blender's vertex count after import. triangles counts each polygon as (corners - 2).",
+    "shape_keys omits the Basis key that Blender's importer adds.",
+    "A clip spanning frames 0..N has N+1 sampled frames and lasts N / fps seconds. Looping clips repeat frame 0 at frame N.",
+    "clips[].curve_count counts every AnimationCurve in the take: 9 per animated object or bone (including the armature or mesh object's own transform) and 2 per shape key, because the exporter writes each shape-key curve twice. total_keys sums keys over all of them.",
+    "keys_on_every_frame means each curve has exactly one key per frame from frame_start to frame_end. Key times may sit up to max_key_offset_ticks FBX ticks before the exact frame time, because the exporter truncates float times to integer ticks.",
+    "axes are the GlobalSettings UpAxis, FrontAxis and CoordAxis values as written by the exporter.",
+    "rest_bounds_m is measured in a Y-up frame after unit conversion; the models face +Z there."
+  ],
+  "files": [
+    {
+      "file": "crate.fbx",
+      "description": "Static prop: beveled 1 m wooden crate with metal bands. One mesh, two materials, no textures, hard edges from smooth-by-angle normals.",
+      "size_bytes": 32956,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": false,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "Crate",
+          "control_points": 392,
+          "polygons": 378,
+          "triangles": 756,
+          "materials": [
+            "Wood",
+            "Metal"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": false
+        }
+      ],
+      "armature": null,
+      "clips": [],
+      "blender_import_action_names": [],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.515,
+          0.0,
+          -0.515
+        ],
+        "max": [
+          0.515,
+          1.004,
+          0.515
+        ]
+      }
+    },
+    {
+      "file": "pebble-golem.fbx",
+      "description": "Rigged creature: one fused stone mesh, 27 deform bones with fingers and thumbs on both hands, automatic weights, four clips baked with a key on every frame.",
+      "size_bytes": 1630796,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": true,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0,
+        "bake_anim_use_all_bones": true,
+        "bake_anim_use_nla_strips": false,
+        "bake_anim_use_all_actions": true,
+        "bake_anim_force_startend_keying": true,
+        "bake_anim_step": 1.0,
+        "bake_anim_simplify_factor": 0.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "PebbleGolem",
+          "control_points": 9002,
+          "polygons": 18000,
+          "triangles": 18000,
+          "materials": [
+            "Stone",
+            "Glow"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": true
+        }
+      ],
+      "armature": {
+        "name": "Armature",
+        "bone_count": 27,
+        "bone_names": [
+          "Hips",
+          "Spine",
+          "Chest",
+          "Neck",
+          "Head",
+          "Shoulder.L",
+          "UpperArm.L",
+          "Forearm.L",
+          "Hand.L",
+          "Thumb.L",
+          "Index.L",
+          "Middle.L",
+          "Ring.L",
+          "Shoulder.R",
+          "UpperArm.R",
+          "Forearm.R",
+          "Hand.R",
+          "Thumb.R",
+          "Index.R",
+          "Middle.R",
+          "Ring.R",
+          "Thigh.L",
+          "Shin.L",
+          "Foot.L",
+          "Thigh.R",
+          "Shin.R",
+          "Foot.R"
+        ],
+        "root_bone": "Hips"
+      },
+      "clips": [
+        {
+          "take_name": "Armature|Hit",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 15,
+          "duration_seconds": 0.5,
+          "keys_on_every_frame": true,
+          "curve_count": 252,
+          "total_keys": 4032,
+          "keys_per_curve_min": 16,
+          "keys_per_curve_max": 16,
+          "keyed_frames_union": 16,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "Armature|Idle",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 60,
+          "duration_seconds": 2.0,
+          "keys_on_every_frame": true,
+          "curve_count": 252,
+          "total_keys": 15372,
+          "keys_per_curve_min": 61,
+          "keys_per_curve_max": 61,
+          "keyed_frames_union": 61,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "Armature|Walk",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 30,
+          "duration_seconds": 1.0,
+          "keys_on_every_frame": true,
+          "curve_count": 252,
+          "total_keys": 7812,
+          "keys_per_curve_min": 31,
+          "keys_per_curve_max": 31,
+          "keyed_frames_union": 31,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "Armature|Wave",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 45,
+          "duration_seconds": 1.5,
+          "keys_on_every_frame": true,
+          "curve_count": 252,
+          "total_keys": 11592,
+          "keys_per_curve_min": 46,
+          "keys_per_curve_max": 46,
+          "keyed_frames_union": 46,
+          "max_key_offset_ticks": 1
+        }
+      ],
+      "blender_import_action_names": [
+        "Armature|Armature|Hit",
+        "Armature|Armature|Idle",
+        "Armature|Armature|Walk",
+        "Armature|Armature|Wave"
+      ],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.7849,
+          0.0,
+          -0.225
+        ],
+        "max": [
+          0.7846,
+          1.5927,
+          0.1999
+        ]
+      }
+    },
+    {
+      "file": "pebble-golem-sparse.fbx",
+      "description": "The pebble golem exported with key simplification, so curves have sparse, irregularly spaced keys.",
+      "size_bytes": 1363612,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": true,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0,
+        "bake_anim_use_all_bones": true,
+        "bake_anim_use_nla_strips": false,
+        "bake_anim_use_all_actions": true,
+        "bake_anim_force_startend_keying": true,
+        "bake_anim_step": 1.0,
+        "bake_anim_simplify_factor": 1.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "PebbleGolem",
+          "control_points": 9002,
+          "polygons": 18000,
+          "triangles": 18000,
+          "materials": [
+            "Stone",
+            "Glow"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": true
+        }
+      ],
+      "armature": {
+        "name": "Armature",
+        "bone_count": 27,
+        "bone_names": [
+          "Hips",
+          "Spine",
+          "Chest",
+          "Neck",
+          "Head",
+          "Shoulder.L",
+          "UpperArm.L",
+          "Forearm.L",
+          "Hand.L",
+          "Thumb.L",
+          "Index.L",
+          "Middle.L",
+          "Ring.L",
+          "Shoulder.R",
+          "UpperArm.R",
+          "Forearm.R",
+          "Hand.R",
+          "Thumb.R",
+          "Index.R",
+          "Middle.R",
+          "Ring.R",
+          "Thigh.L",
+          "Shin.L",
+          "Foot.L",
+          "Thigh.R",
+          "Shin.R",
+          "Foot.R"
+        ],
+        "root_bone": "Hips"
+      },
+      "clips": [
+        {
+          "take_name": "Armature|Hit",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 15,
+          "duration_seconds": 0.5,
+          "keys_on_every_frame": false,
+          "curve_count": 252,
+          "total_keys": 1117,
+          "keys_per_curve_min": 2,
+          "keys_per_curve_max": 14,
+          "keyed_frames_union": 14,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "Armature|Idle",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 60,
+          "duration_seconds": 2.0,
+          "keys_on_every_frame": false,
+          "curve_count": 252,
+          "total_keys": 3037,
+          "keys_per_curve_min": 2,
+          "keys_per_curve_max": 61,
+          "keyed_frames_union": 61,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "Armature|Walk",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 30,
+          "duration_seconds": 1.0,
+          "keys_on_every_frame": false,
+          "curve_count": 252,
+          "total_keys": 1323,
+          "keys_per_curve_min": 2,
+          "keys_per_curve_max": 31,
+          "keyed_frames_union": 31,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "Armature|Wave",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 45,
+          "duration_seconds": 1.5,
+          "keys_on_every_frame": false,
+          "curve_count": 252,
+          "total_keys": 1116,
+          "keys_per_curve_min": 2,
+          "keys_per_curve_max": 46,
+          "keyed_frames_union": 46,
+          "max_key_offset_ticks": 1
+        }
+      ],
+      "blender_import_action_names": [
+        "Armature|Armature|Hit",
+        "Armature|Armature|Idle",
+        "Armature|Armature|Walk",
+        "Armature|Armature|Wave"
+      ],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.7849,
+          0.0,
+          -0.225
+        ],
+        "max": [
+          0.7846,
+          1.5927,
+          0.1999
+        ]
+      }
+    },
+    {
+      "file": "blob.fbx",
+      "description": "Shape keys: one mesh with Squash and Blink shape keys and one 30-frame clip that animates them.",
+      "size_bytes": 85596,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": true,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0,
+        "bake_anim_use_all_bones": true,
+        "bake_anim_use_nla_strips": false,
+        "bake_anim_use_all_actions": false,
+        "bake_anim_force_startend_keying": true,
+        "bake_anim_step": 1.0,
+        "bake_anim_simplify_factor": 0.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "Blob",
+          "control_points": 1054,
+          "polygons": 1120,
+          "triangles": 2096,
+          "materials": [
+            "Slime",
+            "Eye"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [
+            "Squash",
+            "Blink"
+          ],
+          "skinned": false
+        }
+      ],
+      "armature": null,
+      "clips": [
+        {
+          "take_name": "Bounce",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 30,
+          "duration_seconds": 1.0,
+          "keys_on_every_frame": true,
+          "curve_count": 13,
+          "total_keys": 403,
+          "keys_per_curve_min": 31,
+          "keys_per_curve_max": 31,
+          "keyed_frames_union": 31,
+          "max_key_offset_ticks": 1
+        }
+      ],
+      "blender_import_action_names": [
+        "Blob|Bounce",
+        "Key|Bounce"
+      ],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.3,
+          0.0,
+          -0.3
+        ],
+        "max": [
+          0.3,
+          0.4274,
+          0.3
+        ]
+      }
+    },
+    {
+      "file": "textured-rock.fbx",
+      "description": "Embedded texture: a rock with a 512x512 PNG base-color texture baked from procedural noise and embedded in the FBX.",
+      "size_bytes": 534748,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": false,
+        "path_mode": "COPY",
+        "embed_textures": true,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "Rock",
+          "control_points": 2562,
+          "polygons": 5120,
+          "triangles": 5120,
+          "materials": [
+            "Rock"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": false
+        }
+      ],
+      "armature": null,
+      "clips": [],
+      "blender_import_action_names": [],
+      "textures": [
+        {
+          "name": "rock_basecolor",
+          "relative_filename": "textured-rock.fbm/rock_basecolor.png",
+          "embedded_bytes": 351965,
+          "blender_image": {
+            "name": "rock_basecolor",
+            "size": [
+              512,
+              512
+            ],
+            "packed": true
+          }
+        }
+      ],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.4373,
+          0.0,
+          -0.3574
+        ],
+        "max": [
+          0.4581,
+          0.483,
+          0.3805
+        ]
+      }
+    },
+    {
+      "file": "zup-centimeters.fbx",
+      "description": "Axis and unit conversion: a 15 cm mushroom exported with Z up and centimeter units (vertex positions are in centimeters, UnitScaleFactor 1).",
+      "size_bytes": 32668,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": true,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": false,
+        "path_mode": "AUTO",
+        "embed_textures": false,
+        "axis_forward": "Y",
+        "axis_up": "Z",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_NONE",
+        "global_scale": 1.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Z",
+        "front": "-Y",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 1.0,
+        "original_unit_scale_factor": 1.0,
+        "meters_per_file_unit": 0.01
+      },
+      "fps": 30.0,
+      "fbx_time_mode": 6,
+      "meshes": [
+        {
+          "name": "Mushroom",
+          "control_points": 530,
+          "polygons": 538,
+          "triangles": 1052,
+          "materials": [
+            "Cap",
+            "Stem"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": false
+        }
+      ],
+      "armature": null,
+      "clips": [],
+      "blender_import_action_names": [],
+      "textures": [],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -0.075,
+          0.0,
+          -0.075
+        ],
+        "max": [
+          0.075,
+          0.1462,
+          0.075
+        ]
+      }
+    }
+  ]
+}
