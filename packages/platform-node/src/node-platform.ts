@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { FSWatcher, Stats } from "node:fs";
-import { unwatchFile, watchFile, watch as watchFolder } from "node:fs";
+import type { Stats } from "node:fs";
+import { unwatchFile, watchFile } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { Clock, DirectoryEntry, EntryKind, FileChange, FileStat, ImportWorker, Platform } from "@arcue/core";
 import { basename, dirname, findGitRoot, joinPath, normalizePath } from "@arcue/core";
 import { ArcueError } from "@arcue/protocol";
+import { FolderWatchers, isFolder } from "./folder-watchers";
 import type { PathStyle } from "./native-paths";
 import { hostPathStyle, toNativePath } from "./native-paths";
 
@@ -37,6 +38,7 @@ export class NodePlatform implements Platform {
   readonly #startImportWorker: () => ImportWorker;
   readonly #writeClipboard: ((text: string) => Promise<void>) | null;
   readonly #style: PathStyle;
+  readonly #folders = new FolderWatchers();
 
   constructor(options: NodePlatformOptions) {
     this.#style = options.pathStyle ?? hostPathStyle;
@@ -101,7 +103,7 @@ export class NodePlatform implements Platform {
   }
 
   watch(path: string, listener: (change: FileChange) => void): () => void {
-    return watchPath(normalizePath(path), (native) => this.#native(native), listener);
+    return watchPath(normalizePath(path), (native) => this.#native(native), this.#folders, listener);
   }
 
   findWorkspaceRoot(path: string): Promise<string | null> {
@@ -185,12 +187,17 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 /**
  * Watches the folder that holds `path`, which also sees an atomic replace, as a removal and creation or as a rename.
  * While that folder does not exist yet, it watches the nearest folder above it and moves down as folders appear.
- * When the system cannot watch at all, it polls.
+ * Files in one folder share its watch. When the system cannot watch at all, it polls.
  */
-function watchPath(path: string, native: (path: string) => string, listener: (change: FileChange) => void): () => void {
+function watchPath(
+  path: string,
+  native: (path: string) => string,
+  folders: FolderWatchers,
+  listener: (change: FileChange) => void,
+): () => void {
   const name = basename(path);
   const parent = dirname(path);
-  let watcher: FSWatcher | null = null;
+  let unlisten: (() => void) | null = null;
   let watching: string | null = null;
   let polling = false;
   let stopped = false;
@@ -218,14 +225,11 @@ function watchPath(path: string, native: (path: string) => string, listener: (ch
     watchFile(native(path), { interval: POLL_INTERVAL_MS }, report);
   };
 
-  /** Linux ends the watch on a removed folder without an error, so watching moves up when the folder is gone. */
-  const rearmIfGone = async (folder: string) => {
-    if ((await isFolder(native(folder))) || stopped || watching !== folder) return;
-    watcher?.close();
-    watcher = null;
+  /** The folder's watch ended, as when Linux drops the watch of a removed folder, so watching moves up. */
+  const ended = () => {
+    unlisten = null;
     watching = null;
-    await arm();
-    report();
+    if (!stopped) void arm().then(report);
   };
 
   const arm = async () => {
@@ -236,25 +240,13 @@ function watchPath(path: string, native: (path: string) => string, listener: (ch
       folder = up;
     }
     if (stopped || folder === watching) return;
-    watcher?.close();
+    unlisten?.();
+    unlisten = null;
     watching = folder;
+    const changed = folder === parent ? report : () => void arm().then(report);
     try {
-      watcher = watchFolder(native(folder), { persistent: false }, (_event, changed) => {
-        if (folder !== parent) {
-          void arm().then(report);
-          return;
-        }
-        if (changed === null || changed.toString() === name) report();
-        else void rearmIfGone(folder);
-      });
-      watcher.on("error", () => {
-        watcher?.close();
-        watcher = null;
-        watching = null;
-        void arm();
-      });
+      unlisten = folders.listen(native(folder), { name: folder === parent ? name : null, changed, ended });
     } catch {
-      watcher = null;
       watching = null;
       poll();
     }
@@ -271,15 +263,7 @@ function watchPath(path: string, native: (path: string) => string, listener: (ch
   void arm();
   return () => {
     stopped = true;
-    watcher?.close();
+    unlisten?.();
     if (polling) unwatchFile(native(path), report);
   };
-}
-
-async function isFolder(path: string): Promise<boolean> {
-  try {
-    return (await lstat(path)).isDirectory();
-  } catch {
-    return false;
-  }
 }
