@@ -28,6 +28,8 @@ interface WireNode {
   name: string;
   parent: number;
   kind: NodeKind;
+  /** The node holds an FBX LOD group, whose children are its levels in order. */
+  lodGroup: boolean;
   translation: Vec3;
   rotation: Quat;
   scale: Vec3;

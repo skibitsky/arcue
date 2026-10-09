@@ -1,8 +1,9 @@
 import type { Clip, Material, Mesh, Quat, SceneDescription, SceneNode, Track, Vec3 } from "@arcue/scene";
 import {
-  boundsOfPoints,
   buildNodePaths,
   clipNames,
+  defaultViewBounds,
+  describeParts,
   displayNames,
   frameCountFor,
   isKeyedEveryFrame,
@@ -471,6 +472,7 @@ export function buildCreature(textures: CreatureTextures, detail = 1): SceneDesc
     };
   });
 
+  const parts = describeParts(sceneNodes);
   return {
     source: {
       format: "fbx",
@@ -499,6 +501,7 @@ export function buildCreature(textures: CreatureTextures, detail = 1): SceneDesc
       ...(textures.badge ? [{ name: "badge.png", mimeType: "image/png", bytes: textures.badge }] : []),
     ],
     clips,
-    bounds: boundsOfPoints(meshes.map((mesh) => mesh.restPositions)),
+    parts,
+    bounds: defaultViewBounds(meshes, parts),
   };
 }

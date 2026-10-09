@@ -1,6 +1,6 @@
 import type { Comment, CommentContext, ReviewFile } from "@arcue/protocol";
 import type { CameraAnchor, Clip, SceneDescription, SceneNode, SpatialAnchor, Vec3 } from "@arcue/scene";
-import { buildNodePaths, countInRanges, frameCountFor, SCENE_SPACE } from "@arcue/scene";
+import { buildNodePaths, countInRanges, describeParts, frameCountFor, SCENE_SPACE } from "@arcue/scene";
 
 export interface SceneSpec {
   root: string;
@@ -127,6 +127,7 @@ export function fakeScene(spec: SceneSpec): SceneDescription {
     materials: [],
     textures: [],
     clips: spec.clips.map(([name, seconds]) => clipFor(name, seconds, spec)),
+    parts: describeParts(nodes),
     bounds: { min: [-0.62, 0, -0.38], max: [0.62, spec.height, 0.38] },
   };
 }

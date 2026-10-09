@@ -41,6 +41,7 @@ function emptyScene(textureNames: string[]): SceneDescription {
     materials: [],
     textures: textureNames.map((name) => ({ name, mimeType: "image/png", bytes: new Uint8Array(4) })),
     clips: [],
+    parts: [],
     bounds: { min: [0, 0, 0], max: [0, 0, 0] },
   };
 }

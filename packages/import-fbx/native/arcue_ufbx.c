@@ -485,6 +485,8 @@ static void write_nodes(Context *ctx) {
 		json_int(json, node_emitted(ctx, node->parent) ? ctx->node_index[node->parent->typed_id] : -1);
 		json_key(json, "kind");
 		json_cstring(json, node_kind(ctx, node));
+		json_key(json, "lodGroup");
+		json_bool(json, node->attrib_type == UFBX_ELEMENT_LOD_GROUP);
 		double translation[3] = { t.translation.x, t.translation.y, t.translation.z };
 		double rotation[4] = { t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w };
 		double scale[3] = { t.scale.x, t.scale.y, t.scale.z };

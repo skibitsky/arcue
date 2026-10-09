@@ -3,6 +3,7 @@ import type { Material, Texture } from "./material";
 import type { Bounds } from "./math";
 import type { Mesh } from "./mesh";
 import type { SceneNode } from "./node";
+import type { ScenePart } from "./parts";
 import type { Skeleton } from "./skeleton";
 import type { SourceInfo } from "./source";
 
@@ -19,7 +20,9 @@ export interface SceneDescription {
   materials: Material[];
   textures: Texture[];
   clips: Clip[];
-  /** Rest-pose bounds of all meshes in scene space. */
+  /** The meshes grouped into parts by `describeParts`: LOD groups, collision helpers, sockets and plain meshes. */
+  parts: ScenePart[];
+  /** Rest-pose bounds in scene space of the meshes a default view draws, from `defaultViewBounds`. */
   bounds: Bounds;
 }
 

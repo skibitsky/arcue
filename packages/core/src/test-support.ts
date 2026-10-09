@@ -11,9 +11,10 @@ import type {
   Vec3,
 } from "@arcue/scene";
 import {
-  boundsOfPoints,
   buildNodePaths,
   clipNames,
+  defaultViewBounds,
+  describeParts,
   displayNames,
   SCENE_SPACE,
   topologyFingerprint,
@@ -96,6 +97,7 @@ export function fakeScene(spec: FakeAssetSpec): SceneDescription {
       keyedEveryFrame: false,
     };
   });
+  const parts = describeParts(nodes);
   return {
     source: {
       format: "fbx",
@@ -111,7 +113,8 @@ export function fakeScene(spec: FakeAssetSpec): SceneDescription {
     materials: [],
     textures: [],
     clips,
-    bounds: boundsOfPoints(meshes.map((mesh) => mesh.restPositions)),
+    parts,
+    bounds: defaultViewBounds(meshes, parts),
   };
 }
 

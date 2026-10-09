@@ -44,6 +44,7 @@ function sceneWithSharedBuffer(): { scene: SceneDescription; shared: ArrayBuffer
     materials: [],
     textures: [{ name: "albedo.png", mimeType: "image/png", bytes: new Uint8Array(8) }],
     clips: [],
+    parts: [],
     bounds: { min: [0, 0, 0], max: [0, 0, 0] },
   };
   return { scene, shared };

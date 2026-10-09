@@ -13,6 +13,20 @@ export { boundsOfPoints } from "./math";
 export type { MaterialGroup, Mesh, MorphTarget, SkinWeights, UvSet } from "./mesh";
 export type { NamedNode, NodeKind, SceneNode } from "./node";
 export { buildNodePaths, UNNAMED_NODE } from "./node";
+export type { PartLevel, PartNode, PartRole, PartView, ScenePart } from "./parts";
+export {
+  defaultPartView,
+  defaultViewBounds,
+  describeParts,
+  isDefaultPartView,
+  levelFor,
+  lodLevels,
+  partRoleOf,
+  partShown,
+  shownByDefault,
+  visibleMeshes,
+  withPartVisible,
+} from "./parts";
 export { countInRanges, decodeRanges, encodeRanges, rangesContain, rangesWithin } from "./ranges";
 export type { SceneDescription } from "./scene";
 export { collectTransferables } from "./scene";
