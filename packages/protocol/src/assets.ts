@@ -19,7 +19,10 @@ export const assetSummarySchema = z.object({
   version: z.string().nullable(),
   /** Why the latest load failed; the previous version stays on screen. */
   error: z.string().nullable(),
-  /** Absolute path of the composition file applied to the asset, when there is one. */
+  /**
+   * Absolute path of the composition file the asset reads: always for one it was opened through, and for the model's
+   * own "<stem>.arcue" while that applies. The model with this file is the asset, so opening the pair again finds it.
+   */
   composition: z.string().min(1).optional(),
 });
 

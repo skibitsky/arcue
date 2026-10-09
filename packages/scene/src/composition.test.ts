@@ -380,4 +380,29 @@ describe("composeScene", () => {
       ["material-not-found", "Missing"],
     ]);
   });
+
+  it("adds a texture that several slots share once, and points every slot at it", () => {
+    const texture: Texture = {
+      name: "Atlas",
+      mimeType: "image/png",
+      bytes: Uint8Array.of(1, 2),
+      storedPath: "Atlas.png",
+      foundPath: "Atlas.png",
+    };
+    const slot = { path: "Atlas.png", texture };
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: [{ member: { file: "Shells.fbx", scene: shells }, node: null, bone: null }],
+      materials: { Shell: { baseColor: slot, emissive: slot }, Spikes: { roughness: slot } },
+    });
+    expect(composed.textures.filter((entry) => entry === texture)).toHaveLength(1);
+    const index = composed.textures.indexOf(texture);
+    const shell = composed.materials.find((entry) => entry.name === "Shell");
+    const spikes = composed.materials.find((entry) => entry.name === "Spikes");
+    expect([
+      shell?.baseColorTexture?.texture,
+      shell?.emissiveTexture?.texture,
+      spikes?.roughnessTexture?.texture,
+    ]).toEqual([index, index, index]);
+  });
 });

@@ -34,6 +34,7 @@ export {
   COMPOSITION_VERSION,
   compositionAttachSchema,
   compositionFileSchema,
+  defaultCompositionPath,
   IMAGE_FILE_EXTENSIONS,
   joinsByName,
   materialTexturesSchema,

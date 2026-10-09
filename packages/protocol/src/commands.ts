@@ -25,7 +25,7 @@ const compositionOutput = z.object({
 export const commands = {
   "asset.open": command({
     description:
-      'Open an asset in a tab, or focus its tab when it is already open. A ".arcue" composition file opens its model with the files it lists. Optionally show a clip, by its name in the file, and a frame.',
+      'Open an asset in a tab, or focus its tab when it is already open. A ".arcue" composition file opens its model with the files it lists, in a tab of its own unless it is the model\'s "<stem>.arcue". Optionally show a clip, by its name in the file, and a frame.',
     runsIn: "core",
     input: z.object({
       path: z.string().min(1),

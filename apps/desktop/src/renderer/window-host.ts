@@ -1,3 +1,5 @@
+import type { AssetSummary } from "@arcue/protocol";
+import { defaultCompositionPath } from "@arcue/protocol";
 import type { FileHost, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore } from "@arcue/ui";
 import type { DesktopBridge, MenuCommand, SavedTab, WindowTabs } from "../shared/ipc";
@@ -122,7 +124,7 @@ export class WindowHost {
     let activeIndex: number | null = null;
     for (const tab of tabs) {
       const session = tab.kind === "asset" ? this.store.session(tab.id) : null;
-      const path = session?.state.get().summary.path ?? "";
+      const path = session ? reopenPath(session.state.get().summary) : "";
       if (!session || path === "") continue;
       if (tab.id === active) activeIndex = saved.length;
       saved.push({ path, view: session.viewState() });
@@ -192,9 +194,10 @@ export class WindowHost {
     if (generation !== this.#generation) return;
     const wanted = this.#wantActive;
     this.#wantActive = null;
-    const active = this.store.state
-      .get()
-      .tabs.find((tab) => tab.kind === "asset" && this.store.session(tab.id)?.state.get().summary.path === wanted);
+    const active = this.store.state.get().tabs.find((tab) => {
+      const summary = tab.kind === "asset" ? this.store.session(tab.id)?.state.get().summary : undefined;
+      return summary !== undefined && reopenPath(summary) === wanted;
+    });
     if (active) this.store.activate(active.id);
   }
 
@@ -270,4 +273,13 @@ export class WindowHost {
     cancel = this.#setTimer(REPORT_INTERVAL_MS, loop);
     return () => cancel();
   }
+}
+
+/**
+ * The path that opens the same asset again: the composition file it was opened through, or the model when it reads
+ * the model's own composition file.
+ */
+function reopenPath(summary: AssetSummary): string {
+  const { composition, path } = summary;
+  return composition !== undefined && path !== "" && composition !== defaultCompositionPath(path) ? composition : path;
 }

@@ -407,7 +407,17 @@ class SceneBuilder {
     }
   }
 
+  /** Puts each slot's texture on the materials of its name. A texture several slots share is added once. */
   overrideTextures(materials: Composition["materials"]): void {
+    const added = new Map<Texture, number>();
+    const indexOf = (texture: Texture): number => {
+      let index = added.get(texture);
+      if (index === undefined) {
+        index = this.#textures.push(texture) - 1;
+        added.set(texture, index);
+      }
+      return index;
+    };
     for (const [name, slots] of Object.entries(materials)) {
       const targets = this.#materials.flatMap((material, index) => (material.name === name ? [index] : []));
       if (targets.length === 0) {
@@ -419,11 +429,9 @@ class SceneBuilder {
       for (const slot of TEXTURE_SLOTS) {
         const entry = slots[slot];
         if (!entry) continue;
-        let ref: TextureRef | null = null;
-        if (entry.texture) {
-          this.#textures.push(entry.texture);
-          ref = { texture: this.#textures.length - 1, uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null };
-        }
+        const ref: TextureRef | null = entry.texture
+          ? { texture: indexOf(entry.texture), uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null }
+          : null;
         for (const target of targets) {
           const material = this.#materials[target];
           if (!material) continue;

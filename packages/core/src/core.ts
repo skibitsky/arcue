@@ -49,7 +49,7 @@ import { applySnapshot, editBetween, withDismissedWarnings } from "./history";
 import { importAsset } from "./import";
 import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
-import { findComment, OpenAsset } from "./open-asset";
+import { findComment, OpenAsset, readRootFor } from "./open-asset";
 import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
 import type { FileStat, Platform } from "./platform";
 import { renderPrompt } from "./prompt";
@@ -346,7 +346,9 @@ export class ArcueCore {
       compositionPath = path;
       path = await this.#modelOf(path);
     }
-    const existing = [...this.#assets.values()].find((asset) => asset.path === path && !asset.closing);
+    const existing = [...this.#assets.values()].find(
+      (asset) => asset.path === path && asset.compositionPath === compositionPath && !asset.closing,
+    );
     if (existing) {
       await this.#showAsset(existing, this.#windowFor(existing, context), args);
       return { assetId: existing.id };
@@ -432,8 +434,9 @@ export class ArcueCore {
     if (stat.kind !== "file") throw new ArcueError("invalid-input", `${path} is not an asset file.`);
     const composition = isCompositionPath(path);
     const model = composition ? await this.#modelOf(path) : path;
-    const readRoot = (await this.#platform.findWorkspaceRoot(model)) ?? dirname(model);
-    const files = await readAssetFiles(this.#platform, model, composition ? path : compositionPathFor(model), readRoot);
+    const compositionPath = composition ? path : compositionPathFor(model);
+    const readRoot = readRootFor(await this.#platform.findWorkspaceRoot(model), compositionPath);
+    const files = await readAssetFiles(this.#platform, model, compositionPath, readRoot, { brokenComposition: "warn" });
     const bytes = files.model.bytes.byteLength;
     const scene = await buildAssetScene(files, (file) =>
       importAsset(this.#platform, file.path, file.bytes, { readRoot, timeoutMs: this.#importTimeoutMs }),
@@ -510,7 +513,9 @@ export class ArcueCore {
     if (asset.closed) throw new ArcueError("not-found", `${asset.name} is closed.`);
     let files: AssetFiles;
     try {
-      files = await readAssetFiles(this.#platform, asset.path, asset.compositionPath, asset.readRoot);
+      files = await readAssetFiles(this.#platform, asset.path, asset.compositionPath, asset.readRoot, {
+        brokenComposition: asset.composition === null ? "warn" : "reject",
+      });
     } catch (error) {
       this.#failed(asset, error);
       throw error;
@@ -528,7 +533,9 @@ export class ArcueCore {
     asset.status = "loading";
     this.registry.emit("asset.updated", { asset: asset.summary });
     try {
-      const scene = await buildAssetScene(files, (file) => this.#importFile(asset, file));
+      const scene = await buildAssetScene(files, (file) => this.#importFile(asset, file), {
+        parsed: (file) => asset.parsed(file.path, file.id),
+      });
       await asset.session.run((review) => {
         const record: AssetVersion = {
           id: versionId,
@@ -567,8 +574,8 @@ export class ArcueCore {
 
   /** Parses one file of the asset, or takes the scene parsed from the same bytes before. */
   async #importFile(asset: OpenAsset, file: ReadFile & { bytes: Uint8Array; id: string }): Promise<SceneDescription> {
-    const cached = asset.imported.get(file.path);
-    if (cached?.id === file.id) return cached.scene;
+    const cached = asset.parsed(file.path, file.id);
+    if (cached) return cached;
     const scene = await importAsset(this.#platform, file.path, file.bytes, {
       readRoot: asset.readRoot,
       timeoutMs: this.#importTimeoutMs,

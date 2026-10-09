@@ -39,6 +39,23 @@ describe("freeClosedFiles", () => {
     expect(errors).toEqual([]);
   });
 
+  it("keeps a folder while another asset in it is still open", async () => {
+    const { platform, core, client } = await startCore();
+    const composition = JSON.stringify({ version: 1, model: "Hero.fbx" });
+    await platform.writeFile(openedFilePath("Hero.fbx"), new Uint8Array([1]));
+    await platform.writeFile(openedFilePath("Hero.fbx", "Armored.arcue"), composition);
+    const { assetId: plain } = await client.execute("asset.open", { path: openedFilePath("Hero.fbx") });
+    const { assetId: armored } = await client.execute("asset.open", {
+      path: openedFilePath("Hero.fbx", "Armored.arcue"),
+    });
+    await client.execute("asset.close", { assetId: plain });
+    await core.idle();
+    expect(await platform.exists(openedFilePath("Hero.fbx"))).toBe(true);
+    await client.execute("asset.close", { assetId: armored });
+    await core.idle();
+    expect(await platform.exists(openedFilePath("Hero.fbx"))).toBe(false);
+  });
+
   it("keeps samples, which the page fetches only once", async () => {
     const { platform, core, client } = await startCore();
     await platform.writeFile(samplePath("blob.fbx"), new Uint8Array([1]));
