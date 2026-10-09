@@ -1,0 +1,90 @@
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
+import { flush, NOW, setup, TestViewport, withWarnings } from "../test-helpers";
+import { Workspace } from "./Workspace";
+
+async function renderStone(scene = withWarnings) {
+  const context = setup({ scene });
+  const viewport = new TestViewport();
+  render(<Workspace store={context.store} createViewport={() => viewport} now={() => NOW} />);
+  await act(async () => {
+    await context.client.execute("asset.open", { path: STONE_RESONATOR_PATH });
+    await flush(10);
+  });
+  return { ...context, viewport };
+}
+
+const rows = () => within(screen.getByRole("dialog", { name: "Import warnings" })).getAllByRole("listitem");
+const statusItem = () => screen.getByRole("button", { name: /^Texture not found: Eyes\.png/ });
+
+describe("import warnings in the status bar", () => {
+  it("shows nothing for a clean import", async () => {
+    await renderStone((scene) => scene);
+    expect(document.querySelector(".sb-warn")).toBeNull();
+  });
+
+  it("shows the first error and a count, and opens the list with its header", async () => {
+    await renderStone();
+    expect(statusItem().textContent).toBe("Texture not found: Eyes.png+3");
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    const list = screen.getByRole("dialog", { name: "Import warnings" });
+    expect(within(list).getByText("Warnings")).toBeTruthy();
+    expect(within(list).getByRole("button", { name: "Copy as prompt" })).toBeTruthy();
+    expect(within(list).getByRole("button", { name: "Dismiss all" })).toBeTruthy();
+    const items = within(list).getAllByRole("listitem");
+    expect(items.map((row) => row.querySelector(".warn-msg")?.textContent)).toEqual([
+      "Texture not found: Eyes.png",
+      "Root scale of 100 on Armature",
+      "Texture not used: Stone_BaseColor.png",
+      "Run animates bones the model lacks: Tail",
+    ]);
+    expect(within(items[2] as HTMLElement).getByText("Texture · Stone_BaseColor.png")).toBeTruthy();
+    expect(within(items[2] as HTMLElement).getByRole("button", { name: "Use as base color" })).toBeTruthy();
+    expect(within(items[3] as HTMLElement).getByRole("button", { name: "Show clip" })).toBeTruthy();
+    expect(within(list).queryByRole("button", { name: /close/i })).toBeNull();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Import warnings" })).toBeNull();
+  });
+
+  it("tints the subject while a row is pointed at, and clears it when the pointer leaves", async () => {
+    const { viewport } = await renderStone();
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    const row = rows().find((item) => item.textContent?.includes("Eyes.png"));
+    if (!row) throw new Error("No row for Eyes.png.");
+    await user.hover(row);
+    expect(viewport.highlighted?.length).toBe(1);
+    await user.unhover(row);
+    expect(viewport.highlighted).toBeNull();
+  });
+
+  it("adds a row as a comment, after which the row shows the draft's number", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    const row = () => rows().find((item) => item.textContent?.includes("Eyes.png"));
+    await user.click(within(row() as HTMLElement).getByRole("button", { name: "Add as comment" }));
+    await act(() => flush());
+    const drafts = within(screen.getByRole("list", { name: "Drafts" })).getAllByRole("listitem");
+    expect(within(row() as HTMLElement).queryByRole("button", { name: "Add as comment" })).toBeNull();
+    expect(row()?.querySelector(".warn-draft")?.textContent).toBe(String(drafts.length));
+  });
+
+  it("dismisses one row with its trash button and the rest with the header's", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    const first = rows()[0] as HTMLElement;
+    await user.click(within(first).getByRole("button", { name: "Dismiss" }));
+    await act(() => flush());
+    expect(screen.getByRole("button", { name: /^Root scale of 100 on Armature/ }).textContent).toContain("+2");
+    await user.click(screen.getByRole("button", { name: "Dismiss all" }));
+    await act(() => flush());
+    expect(document.querySelector(".sb-warn")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Import warnings" })).toBeNull();
+  });
+});

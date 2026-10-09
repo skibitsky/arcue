@@ -123,16 +123,6 @@ function AssetInfo({ session }: { session: AssetSession }) {
             <dd>{version?.exporter ?? exporterOf(scene) ?? "Unknown"}</dd>
             {scene ? <SceneFacts scene={scene} /> : null}
           </dl>
-          {scene && scene.source.warnings.length > 0 ? (
-            <ul className="info-warnings" aria-label="Import warnings">
-              {scene.source.warnings.map((warning) => (
-                <li key={`${warning.code}:${warning.subject.kind}:${warning.subject.name}:${warning.message}`}>
-                  <Icon name="alert" />
-                  <span>{warning.message}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
           {summary.error ? (
             <p className="info-error">
               <Icon name="alert" />

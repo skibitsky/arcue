@@ -1,5 +1,6 @@
 import type { ComputedContext, TimeSelection } from "@arcue/protocol";
-import type { CameraAnchor, PartView, SceneDescription, SpatialAnchor, SurfaceAnchor } from "@arcue/scene";
+import type { CameraAnchor, Material, PartView, SceneDescription, SpatialAnchor, SurfaceAnchor } from "@arcue/scene";
+import { importWarning } from "@arcue/scene";
 import type {
   CommentOverlay,
   PlaybackRange,
@@ -38,6 +39,7 @@ export class TestViewport implements Viewport {
   parts: PartView | null = null;
   camera: CameraAnchor = { position: [0, 1, 4], target: [0, 1, 0], up: [0, 1, 0], fov: 30 };
   overlays: readonly CommentOverlay[] = [];
+  highlighted: readonly string[] | null = null;
   screenshots: ScreenshotOptions[] = [];
   framed: (SpatialAnchor | null)[] = [];
   readonly #listeners = new Map<string, Set<(payload: never) => void>>();
@@ -89,6 +91,9 @@ export class TestViewport implements Viewport {
   }
   setOverlays(overlays: readonly CommentOverlay[]) {
     this.overlays = overlays;
+  }
+  setHighlight(meshes: readonly string[] | null) {
+    this.highlighted = meshes ? [...meshes] : null;
   }
   screenPosition(): ScreenPosition {
     return { x: 200, y: 150, visible: true };
@@ -198,4 +203,61 @@ export async function openStone(options: SetupOptions = {}) {
   session.attachViewport(viewport, document.createElement("div"));
   await flush();
   return { ...context, assetId, session, viewport };
+}
+
+function material(name: string): Material {
+  return {
+    name,
+    baseColor: [0.8, 0.8, 0.8, 1],
+    baseColorTexture: null,
+    metallic: 0,
+    roughness: 0.5,
+    metallicRoughnessTexture: null,
+    roughnessTexture: null,
+    metalnessTexture: null,
+    normalTexture: null,
+    normalScale: 1,
+    occlusionTexture: null,
+    emissive: [0, 0, 0],
+    emissiveTexture: null,
+    alphaMode: "opaque",
+    alphaCutoff: 0.5,
+    doubleSided: false,
+  };
+}
+
+/** The Stone Resonator with one material and a warning of each kind the list treats differently. */
+export function withWarnings(scene: SceneDescription): SceneDescription {
+  return {
+    ...scene,
+    materials: [material("Stone")],
+    source: {
+      ...scene.source,
+      warnings: [
+        importWarning("root-scale", { kind: "node", name: "Armature" }, "Root scale of 100 on Armature"),
+        importWarning(
+          "texture-not-used",
+          { kind: "texture", name: "Stone_BaseColor.png" },
+          "Texture not used: Stone_BaseColor.png",
+          undefined,
+          { detail: "Stored path: Textures/Stone_BaseColor.png", foundPath: "Textures/Stone_BaseColor.png" },
+        ),
+        importWarning(
+          "animation-bones-missing",
+          { kind: "clip", name: "Armature|Run" },
+          "Run animates bones the model lacks: Tail",
+        ),
+        importWarning(
+          "texture-not-found",
+          { kind: "texture", name: "Eyes.png" },
+          "Texture not found: Eyes.png",
+          undefined,
+          {
+            detail: "Stored path: C:/art/Eyes.png",
+            materials: ["Stone"],
+          },
+        ),
+      ],
+    },
+  };
 }

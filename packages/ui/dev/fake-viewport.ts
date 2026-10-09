@@ -482,6 +482,7 @@ export class FakeViewport implements Viewport {
   #brushRadius = 22;
   #camera: CameraAnchor = DEFAULT_CAMERA;
   #overlays: readonly CommentOverlay[] = [];
+  highlighted: readonly string[] = [];
   #stroke: Vec3[] = [];
   #frameRequest = 0;
   #lastTick = 0;
@@ -611,6 +612,11 @@ export class FakeViewport implements Viewport {
   setOverlays(overlays: readonly CommentOverlay[]): void {
     this.#overlays = structuredClone([...overlays]);
     this.#requestRender();
+  }
+
+  /** The placeholder figure has no meshes to tint; the paths are kept for tests and the console. */
+  setHighlight(meshes: readonly string[] | null): void {
+    this.highlighted = meshes ? [...meshes] : [];
   }
 
   screenPosition(anchor: SpatialAnchor): ScreenPosition | null {

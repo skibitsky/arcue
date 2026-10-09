@@ -1,5 +1,6 @@
 import type {
   AssetSummary,
+  AssetWarning,
   CommandInput,
   Comment,
   CoreClient,
@@ -9,10 +10,19 @@ import type {
   ReviewFile,
   TimeSelection,
   ViewState,
+  WarningSubject,
 } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { CameraAnchor, Clip, SceneDescription, SpatialAnchor, TimeAnchor } from "@arcue/scene";
-import { defaultPartView, frameToSeconds, lastFrame, lodLevels, secondsToFrame, withPartVisible } from "@arcue/scene";
+import {
+  defaultPartView,
+  frameToSeconds,
+  lastFrame,
+  lodLevels,
+  secondsToFrame,
+  subjectMeshes,
+  withPartVisible,
+} from "@arcue/scene";
 import type { CommentOverlay, ScreenPosition, ToolId, Viewport } from "@arcue/viewport";
 import { plural } from "../format";
 import { currentMessage, lastRound, pendingFollowUp, queuedComments } from "./history";
@@ -42,7 +52,8 @@ export interface SessionHost {
   notify(toast: ToastInput): void;
   /** Writes the prompt to the clipboard; false when the browser blocks it. */
   writeClipboard(text: string): Promise<boolean>;
-  showCopySheet(sheet: { round: number; prompt: string }): void;
+  /** Shows the prompt in a sheet with its text selected; `round` names the round it was saved as, when there is one. */
+  showCopySheet(sheet: { round: number | null; prompt: string }): void;
   setTimer(delayMs: number, callback: () => void): () => void;
 }
 
@@ -96,6 +107,10 @@ export interface SessionState {
   box: CommentBox | null;
   /** A draft that was just added, which the queue flashes. */
   added: string | null;
+  /** The import warnings of the version on screen, errors first, as `warning.list` gives them. */
+  warnings: readonly AssetWarning[];
+  /** The subject the 3D view tints, as when pointing at a warning. */
+  highlight: WarningSubject | null;
 }
 
 export interface TimeState {
@@ -136,6 +151,7 @@ export class AssetSession {
   readonly #thumbnailKeys = new Map<string, string>();
   readonly #thumbnailAttempts = new Map<string, number>();
   #copying = false;
+  #warningSequence = 0;
   #disposed = false;
 
   constructor(summary: AssetSummary, host: SessionHost) {
@@ -160,6 +176,8 @@ export class AssetSession {
       selection: null,
       box: null,
       added: null,
+      warnings: [],
+      highlight: null,
     });
   }
 
@@ -191,6 +209,7 @@ export class AssetSession {
     const summary = list?.assets.find((asset) => asset.assetId === this.assetId);
     if (summary) this.setSummary(summary);
     else await this.#loadScene();
+    void this.refreshWarnings();
     return list === null || summary !== undefined;
   }
 
@@ -207,6 +226,7 @@ export class AssetSession {
     this.state.patch({ review, selection: keepSelection, box: this.#refreshBox(box, review) });
     this.#dropThumbnails(review);
     this.#syncOverlays();
+    void this.refreshWarnings();
   }
 
   /** An edit box follows its comment's stored time and target until the user changes them in the box. */
@@ -249,6 +269,7 @@ export class AssetSession {
       const result = await this.#client.query("scene.get", { assetId: this.assetId });
       if (this.#disposed || sequence !== this.#loadSequence) return;
       this.state.patch({ scene: result.scene, version: result.version, sceneError: null });
+      void this.refreshWarnings();
       await this.#applyScene();
     } catch (error) {
       if (sequence === this.#loadSequence) this.state.patch({ sceneError: messageOf(error) });
@@ -271,6 +292,7 @@ export class AssetSession {
     viewport.setBrushSize(brushSize);
     viewport.setSpeed(speed);
     viewport.setLoop(loop);
+    viewport.setHighlight(this.#highlightedMeshes());
     const unsubscribers = [
       viewport.on("pinPlaced", ({ anchor }) => this.#openNew(anchor)),
       viewport.on("regionPainted", ({ overlayId, anchor }) => this.#onRegionPainted(overlayId, anchor)),
@@ -321,6 +343,7 @@ export class AssetSession {
       this.#reconcileClip(scene, viewport);
     }
     this.state.patch({ viewportReady: true });
+    viewport.setHighlight(this.#highlightedMeshes());
     this.#syncOverlays(true);
   }
 
@@ -953,6 +976,96 @@ export class AssetSession {
     }
   }
 
+  /** Reads the warnings of the version on screen again. An answer older than the latest request is dropped. */
+  async refreshWarnings(): Promise<void> {
+    const sequence = ++this.#warningSequence;
+    try {
+      const { warnings } = await this.#client.query("warning.list", { assetId: this.assetId });
+      if (!this.#disposed && sequence === this.#warningSequence) this.state.patch({ warnings });
+    } catch {
+      if (!this.#disposed && sequence === this.#warningSequence && this.state.get().summary.version === null) {
+        this.state.patch({ warnings: [] });
+      }
+    }
+  }
+
+  /** Tints a warning's subject in the 3D view, or clears the tint for null. */
+  highlightSubject(subject: WarningSubject | null): void {
+    this.state.patch({ highlight: subject });
+    this.#viewport?.setHighlight(this.#highlightedMeshes());
+  }
+
+  #highlightedMeshes(): string[] | null {
+    const { highlight, scene } = this.state.get();
+    return highlight && scene ? subjectMeshes(scene, highlight) : null;
+  }
+
+  /** Pointing at a warning tints its subject; a clip's warning shows that clip instead. Null clears the tint. */
+  pointAtWarning(warning: AssetWarning | null): void {
+    if (warning?.fix?.kind === "show-clip") {
+      if (this.state.get().clip !== warning.fix.clip) this.setClip(warning.fix.clip);
+      this.highlightSubject(null);
+      return;
+    }
+    this.highlightSubject(warning ? subjectOf(warning) : null);
+  }
+
+  /** Runs the warning's quick fix: shows its clip, loads the files again, or uses the texture as the base color. */
+  async fixWarning(warning: AssetWarning): Promise<void> {
+    const fix = warning.fix;
+    if (fix?.kind === "show-clip") {
+      this.setClip(fix.clip);
+    } else if (fix?.kind === "retry") {
+      await this.#run(() => this.#client.execute("asset.reload", { assetId: this.assetId }));
+    } else if (fix?.kind === "use-as-base-color") {
+      const input = { assetId: this.assetId, material: fix.material, slot: "baseColor" as const, file: fix.file };
+      await this.#run(() => this.#client.execute("material.setTexture", input));
+    }
+  }
+
+  async dismissWarning(warningId: string): Promise<void> {
+    this.highlightSubject(null);
+    await this.#run(() => this.#client.execute("warning.dismiss", { assetId: this.assetId, warningId }));
+  }
+
+  async dismissAllWarnings(): Promise<void> {
+    this.highlightSubject(null);
+    await this.#run(() => this.#client.execute("warning.dismissAll", { assetId: this.assetId }));
+  }
+
+  /** Adds a draft about the warning, which the queue flashes. */
+  async commentOnWarning(warningId: string): Promise<void> {
+    await this.#run(async () => {
+      const { commentId } = await this.#client.execute("comment.createFromWarning", {
+        assetId: this.assetId,
+        warningId,
+      });
+      this.#flashAdded(commentId);
+    });
+  }
+
+  /** Copies the prompt for the listed warnings, with the copy sheet when the clipboard is blocked. */
+  async copyWarnings(): Promise<void> {
+    await this.#run(async () => {
+      const count = listedWarnings(this.state.get()).length;
+      const { prompt } = await this.#client.query("warning.prompt", { assetId: this.assetId });
+      if (await this.#host.writeClipboard(prompt)) {
+        this.#host.notify({ message: `Copied ${plural(count, "warning")}`, kind: "copied" });
+      } else {
+        this.#host.notify({ message: "Copy the selected text.", kind: "info" });
+        this.#host.showCopySheet({ round: null, prompt });
+      }
+    });
+  }
+
+  async #run(action: () => Promise<unknown>): Promise<void> {
+    try {
+      await action();
+    } catch (error) {
+      this.#host.notify({ message: messageOf(error), kind: "alert" });
+    }
+  }
+
   /** What the view draws: drafts with their numbers, the selected sent or resolved comment, and the box's target. */
   overlays(): CommentOverlay[] {
     const { review, selection, box } = this.state.get();
@@ -1088,6 +1201,17 @@ export class AssetSession {
     this.#viewport = null;
     for (const url of Object.values(this.thumbnails.get().urls)) if (url) URL.revokeObjectURL(url);
   }
+}
+
+/** The warnings the status bar lists: those not dismissed, errors first. */
+export function listedWarnings(state: Pick<SessionState, "warnings">): AssetWarning[] {
+  return state.warnings.filter((warning) => !warning.dismissed);
+}
+
+export function subjectOf(warning: AssetWarning): WarningSubject {
+  const subject: WarningSubject = { kind: warning.subject.kind, name: warning.subject.name };
+  if (warning.file !== undefined) subject.file = warning.file;
+  return subject;
 }
 
 export function selectionOf(time: TimeAnchor): TimeSelection {

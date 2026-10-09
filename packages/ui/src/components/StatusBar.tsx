@@ -6,6 +6,7 @@ import { useSelect } from "../store/observable";
 import type { WorkspaceStore } from "../store/workspace-store";
 import { Tip } from "./controls";
 import { Icon } from "./Icon";
+import { WarningsStatus } from "./Warnings";
 
 type WatchState = { tone: "live" | "idle" | "alert"; text: string; tip: string };
 
@@ -106,6 +107,7 @@ export function StatusBar({
           {watch.text}
         </span>
       </Tip>
+      <WarningsStatus session={session} />
       <span className="grow" />
       <CoordinatesMenu store={store} />
       {stats ? (

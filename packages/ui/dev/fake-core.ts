@@ -1,5 +1,6 @@
 import type {
   AssetSummary,
+  AssetWarning,
   CommandArgs,
   CommandInput,
   CommandName,
@@ -19,7 +20,7 @@ import type {
   TimeSelection,
   ViewState,
 } from "@arcue/protocol";
-import { ArcueError, commands, queries, reviewFileSchema } from "@arcue/protocol";
+import { ArcueError, commands, queries, reviewFileSchema, warningId } from "@arcue/protocol";
 import type { SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
 import { countInRanges, isDefaultPartView, shownByDefault } from "@arcue/scene";
 
@@ -324,6 +325,47 @@ export class FakeCoreClient implements CoreClient {
     return lines.join("\n");
   }
 
+  /** The seed scene's warnings as the core lists them: errors first, with ids, dismissals, comments and fixes. */
+  #warnings(asset: FakeAsset): AssetWarning[] {
+    const scene = asset.seed?.scene;
+    if (!scene || asset.summary.version === null) return [];
+    const dismissed = new Set(asset.review.dismissedWarnings ?? []);
+    const untextured = scene.materials.filter((material) => material.baseColorTexture === null);
+    const folder = asset.summary.path.slice(0, asset.summary.path.lastIndexOf("/"));
+    const listed = scene.source.warnings.map((warning): AssetWarning => {
+      const id = warningId(warning);
+      const comment = asset.review.comments.filter((entry) => entry.warning?.id === id).at(-1);
+      let fix: AssetWarning["fix"] = null;
+      if (warning.subject.kind === "clip" && scene.clips.some((clip) => clip.name === warning.subject.name)) {
+        fix = { kind: "show-clip", clip: warning.subject.name };
+      } else if (warning.subject.kind === "file" && warning.file !== undefined) {
+        fix = { kind: "retry" };
+      } else if (warning.code === "texture-not-used" && warning.foundPath && untextured.length === 1) {
+        fix = {
+          kind: "use-as-base-color",
+          material: untextured[0]?.name ?? "",
+          file: `${folder}/${warning.foundPath}`,
+        };
+      }
+      return { id, ...warning, dismissed: dismissed.has(id), commentId: comment?.id ?? null, fix };
+    });
+    return [...listed.filter((entry) => entry.severity === "error"), ...listed.filter((e) => e.severity !== "error")];
+  }
+
+  #warning(asset: FakeAsset, id: string): AssetWarning {
+    const warning = this.#warnings(asset).find((entry) => entry.id === id);
+    if (!warning) throw new ArcueError("not-found", `No import warning "${id}".`);
+    return warning;
+  }
+
+  #dismiss(asset: FakeAsset, ids: readonly string[]): void {
+    const current = asset.review.dismissedWarnings ?? [];
+    const added = ids.filter((id) => !current.includes(id));
+    if (added.length === 0) return;
+    asset.review = { ...asset.review, dismissedWarnings: [...current, ...added] };
+    this.#emitReview(asset);
+  }
+
   readonly #commands: CommandHandlers = {
     "asset.open": (args) => this.#openAsset(args),
     "asset.close": ({ assetId }) => {
@@ -486,6 +528,59 @@ export class FakeCoreClient implements CoreClient {
       this.#emit("round.copied", { assetId, round });
       return { round, prompt, copiedToClipboard: this.#options.coreClipboard ?? false };
     },
+    "comment.createFromWarning": ({ assetId, warningId: id }) => {
+      const asset = this.#asset(assetId);
+      const warning = this.#warning(asset, id);
+      const queued = asset.review.comments.find((entry) => entry.id === warning.commentId && entry.status === "draft");
+      if (queued) return { commentId: queued.id };
+      const commentId = `c${asset.review.nextCommentNumber}`;
+      const now = this.#now().toISOString();
+      const version = asset.summary.version ?? "unknown";
+      const comment: Comment = {
+        id: commentId,
+        text: warning.message,
+        status: "draft",
+        createdAt: now,
+        updatedAt: now,
+        madeOnVersion: version,
+        time: { kind: "none" },
+        target: null,
+        anchorVersion: version,
+        anchorRestPositions: [],
+        camera: asset.viewState?.camera ?? { position: [0, 1, 4], target: [0, 1, 0], up: [0, 1, 0], fov: 30 },
+        context: { vertexCount: 0, bones: [], centroid: null, joints: [], viewLabel: "", screenshot: null },
+        anchorState: "exact",
+        followUps: [],
+        rounds: [],
+        reopenedFrom: null,
+        warning: {
+          id,
+          code: warning.code,
+          subject: warning.subject,
+          ...(warning.file !== undefined ? { file: warning.file } : {}),
+          ...(warning.detail !== undefined ? { detail: warning.detail } : {}),
+        },
+      };
+      asset.review = {
+        ...asset.review,
+        comments: [...asset.review.comments, comment],
+        queue: [...asset.review.queue, commentId],
+        nextCommentNumber: asset.review.nextCommentNumber + 1,
+      };
+      this.#emitReview(asset);
+      return { commentId };
+    },
+    "warning.dismiss": ({ assetId, warningId: id }) => {
+      const asset = this.#asset(assetId);
+      this.#dismiss(asset, [this.#warning(asset, id).id]);
+    },
+    "warning.dismissAll": ({ assetId }) => {
+      const asset = this.#asset(assetId);
+      this.#dismiss(
+        asset,
+        this.#warnings(asset).flatMap((warning) => (warning.dismissed ? [] : [warning.id])),
+      );
+    },
     "composition.addFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "composition.removeFile": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
     "material.setTexture": ({ assetId }) => ({ path: this.#compositionPath(assetId) }),
@@ -519,6 +614,7 @@ export class FakeCoreClient implements CoreClient {
     "view.setPartVisible": () => {},
     "view.isolatePart": () => {},
     "view.setLod": () => {},
+    "view.highlightSubject": () => {},
     "view.selectComment": () => {},
     "view.screenshot": () => ({ png: new Uint8Array() }),
   };
@@ -557,6 +653,17 @@ export class FakeCoreClient implements CoreClient {
           levels: [],
         })),
       };
+    },
+    "warning.list": ({ assetId }) => ({ warnings: this.#warnings(this.#asset(assetId)) }),
+    "warning.prompt": ({ assetId }) => {
+      const asset = this.#asset(assetId);
+      const listed = this.#warnings(asset).filter((warning) => !warning.dismissed);
+      const lines = [`Fix these import warnings in ${asset.summary.path}, then export it again.`];
+      listed.forEach((warning, index) => {
+        const subject = `${warning.subject.kind} "${warning.subject.name}"`;
+        lines.push(`${index + 1}. ${[warning.message, subject, warning.detail].filter(Boolean).join(" · ")}`);
+      });
+      return { prompt: lines.join("\n") };
     },
     "asset.inspect": () => {
       throw new ArcueError("unavailable", "The catalog does not inspect files.");
