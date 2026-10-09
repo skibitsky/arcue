@@ -24,7 +24,7 @@ export interface ReadFile {
   label: string;
   bytes: Uint8Array | null;
   id: string | null;
-  /** Why the file could not be read. */
+  /** Why the file could not be read, as a warning names the problem, such as "File not found". */
   problem: string | null;
 }
 
@@ -167,11 +167,11 @@ export async function readAssetFiles(
 
 async function readMember(platform: Platform, path: string, label: string, readRoot: string): Promise<ReadFile> {
   const missing = (problem: string): ReadFile => ({ path, label, bytes: null, id: null, problem });
-  if (pathInside(readRoot, path) === null) return missing("is outside the workspace");
-  if (!hasExtension(path, MODEL_EXTENSIONS)) return missing("is not a model file");
-  if (!(await insideWithoutLinks(platform, readRoot, path))) return missing("is reached through a symbolic link");
+  if (pathInside(readRoot, path) === null) return missing("File outside the workspace");
+  if (!hasExtension(path, MODEL_EXTENSIONS)) return missing("Not a model file");
+  if (!(await insideWithoutLinks(platform, readRoot, path))) return missing("File reached through a link");
   const stat = await platform.stat(path);
-  if (stat?.kind !== "file") return missing("was not found");
+  if (stat?.kind !== "file") return missing("File not found");
   const bytes = await platform.readFile(path);
   return { path, label, bytes, id: versionIdOf(bytes), problem: null };
 }
@@ -203,15 +203,13 @@ export async function buildAssetScene(
       scenes.set(file.path, { file: file.label, scene });
       continue;
     }
+    const subject = { kind: "file", name: file.label } as const;
     warnings.push(
       error === null
-        ? importWarning(
-            "file-not-found",
-            { kind: "file", name: file.label },
-            `${file.label} ${file.problem ?? "was not found"}`,
-            file.label,
-          )
-        : importWarning("invalid-data", { kind: "file", name: file.label }, error, file.label),
+        ? importWarning("file-not-found", subject, `${file.problem ?? "File not found"}: ${file.label}`, file.label)
+        : importWarning("invalid-data", subject, `File could not be parsed: ${file.label}`, file.label, {
+            detail: error,
+          }),
     );
   }
   const materials: Record<string, Partial<Record<TextureSlot, CompositionTexture>>> = {};

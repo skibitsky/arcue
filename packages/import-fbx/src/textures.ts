@@ -73,7 +73,7 @@ export function createTextureResolver(
         problems.push({
           code: "texture-path-absolute",
           subject,
-          message: `Texture path is absolute: ${file.absolute}`,
+          message: `Absolute texture path: ${subject.name}`,
           detail: `Stored path: ${file.absolute}`,
           file: index,
         });

@@ -265,7 +265,8 @@ describe("handedness", () => {
         code: "left-handed-axes",
         severity: "warning",
         subject: { kind: "file", name: "left.fbx" },
-        message: "Left-handed axes, mirrored along X",
+        message: "Left-handed axes: left.fbx",
+        detail: "The scene is mirrored along X",
       },
     ]);
     expect(restPoseError(scene, 0)).toBeLessThan(1e-6);
@@ -437,7 +438,8 @@ describe("animation", () => {
         code: "inbetween-shapes",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "In-between shape keys of Tri use their final shape",
+        message: "In-between shape keys: Tri",
+        detail: "They show their final shape",
       },
     ]);
   });
@@ -506,7 +508,8 @@ describe("skinning", () => {
         code: "unweighted-vertices",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "Some vertices of Tri have no skin weights",
+        message: "Unweighted vertices: Tri",
+        detail: "Some vertices have no skin weights",
       },
     ]);
     expect(restPoseError(scene, 0)).toBeLessThan(1e-6);
@@ -521,7 +524,7 @@ describe("export checks", () => {
         code: "root-scale",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "Root scale of 100 on Tri",
+        message: "Root scale x100: Tri",
       },
     ]);
   });
@@ -534,7 +537,7 @@ describe("export checks", () => {
         code: "root-scale",
         severity: "warning",
         subject: { kind: "node", name: "Armature" },
-        message: "Root scale of 0.01 on Armature",
+        message: "Root scale x0.01: Armature",
       },
     ]);
   });
@@ -547,7 +550,7 @@ describe("export checks", () => {
         code: "root-rotation",
         severity: "warning",
         subject: { kind: "node", name: "Tri" },
-        message: "Root rotation of -90° about X on Tri",
+        message: "Root rotated -90° on X: Tri",
       },
     ]);
   });
@@ -578,7 +581,7 @@ describe("export checks", () => {
         code: "texture-path-absolute",
         severity: "warning",
         subject: { kind: "texture", name: "StoneStriker-BaseColor.png" },
-        message: "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
+        message: "Absolute texture path: StoneStriker-BaseColor.png",
         detail: "Stored path: /private/tmp/striker-staging/StoneStriker-BaseColor.png, used as base color of Stone",
         materials: ["Stone"],
         uses: [{ material: "Stone", slot: "baseColor" }],
@@ -593,11 +596,7 @@ describe("export checks", () => {
       baseColor: "/private/tmp/striker-staging/StoneStriker-BaseColor.png",
     });
     expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
-      [
-        "texture-path-absolute",
-        "warning",
-        "Texture path is absolute: /private/tmp/striker-staging/StoneStriker-BaseColor.png",
-      ],
+      ["texture-path-absolute", "warning", "Absolute texture path: StoneStriker-BaseColor.png"],
       ["texture-not-found", "error", "Texture not found: StoneStriker-BaseColor.png"],
     ]);
   });

@@ -98,7 +98,7 @@ test("lists import warnings above the status bar, tints a row's subject, and tur
   await expect(texture.locator(".warn-draft")).toHaveText("1");
   const panel = page.getByRole("complementary", { name: "Comments" });
   await expect(panel.getByRole("button", { name: /^Comment 1: Texture not found/ })).toBeVisible();
-  await rows.filter({ hasText: "pebble-golem-extra.fbx was not found" }).hover();
+  await rows.filter({ hasText: "File not found: pebble-golem-extra.fbx" }).hover();
   await expect(rows.filter({ hasText: "pebble-golem-extra.fbx" }).getByRole("button", { name: "Retry" })).toBeVisible();
   await page.screenshot({ path: `${SHOTS}warnings-draft.png` });
 
