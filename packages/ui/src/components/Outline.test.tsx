@@ -3,11 +3,12 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
+import type { FileHost } from "../store/view-files";
 import { composedStone, flush, lodStone, NOW, POINT, setup, stoneBone, TestViewport } from "../test-helpers";
 import { Workspace } from "./Workspace";
 
-async function renderStone(scene?: (scene: SceneDescription) => SceneDescription) {
-  const context = setup(scene ? { scene } : {});
+async function renderStone(scene?: (scene: SceneDescription) => SceneDescription, files?: FileHost) {
+  const context = setup({ ...(scene ? { scene } : {}), ...(files ? { files } : {}) });
   const viewports: TestViewport[] = [];
   render(
     <Workspace
@@ -63,6 +64,42 @@ describe("the outline", () => {
     await user.click(button);
     expect(session.state.get().outlineOpen).toBe(false);
     expect(screen.queryByRole("complementary", { name: "Outline" })).toBeNull();
+  });
+
+  it("adds a file through the host's open dialog from the plus in its header", async () => {
+    const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "beetle-turn.fbx");
+    const files: FileHost = { pick: vi.fn(async () => [picked]), place: async () => [], open: () => {} };
+    const { client } = await renderStone(composedStone(), files);
+    const user = userEvent.setup();
+    await user.keyboard("o");
+    await user.click(within(drawer()).getByRole("button", { name: "Add file" }));
+    await act(() => flush());
+    expect(files.pick).toHaveBeenCalledWith("model", STONE_RESONATOR_PATH);
+    expect(client.calls.find((call) => call.name === "composition.addFile")?.input).toMatchObject({ file: picked });
+  });
+
+  it("removes an added file from the view with its row's trash button or the Delete key", async () => {
+    const { client } = await renderStone(composedStone());
+    const user = userEvent.setup();
+    await user.keyboard("o");
+    const removals = () => client.calls.filter((call) => call.name === "composition.removeFile");
+    const shells = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "beetle-shells.fbx");
+    await user.click(within(drawer()).getByRole("button", { name: "Remove beetle-shells.fbx from view" }));
+    await act(() => flush());
+    expect(removals().at(-1)?.input).toMatchObject({ file: shells });
+    expect(within(drawer()).queryByRole("button", { name: "Remove StoneResonator.fbx from view" })).toBeNull();
+    const row = within(drawer()).getByRole("treeitem", { name: "beetle-shells.fbx" });
+    act(() => row.focus());
+    await user.keyboard("{Delete}");
+    await act(() => flush());
+    expect(removals()).toHaveLength(2);
+  });
+
+  it("has no plus without a host to add files from", async () => {
+    await renderStone(composedStone());
+    const user = userEvent.setup();
+    await user.keyboard("o");
+    expect(within(drawer()).queryByRole("button", { name: "Add file" })).toBeNull();
   });
 
   it("stays away for a model with one part", async () => {

@@ -16,7 +16,8 @@ import {
   outlineTree,
   treeKey,
 } from "../store/outline";
-import { Tip } from "./controls";
+import type { WorkspaceStore } from "../store/workspace-store";
+import { IconButton, Tip } from "./controls";
 import type { IconName } from "./Icon";
 import { Icon } from "./Icon";
 
@@ -39,7 +40,7 @@ function iconOf(item: OutlineItem): IconName {
 }
 
 /** The outline drawer: the model's files, the bones they hang on and their parts, docked left of the 3D view. */
-export function OutlineDrawer({ session }: { session: AssetSession }) {
+export function OutlineDrawer({ store, session }: { store: WorkspaceStore; session: AssetSession }) {
   const scene = useSelect(session.state, (state) => state.scene);
   const open = useSelect(session.state, (state) => state.outlineOpen);
   const modelName = useSelect(session.state, (state) => state.summary.name);
@@ -99,6 +100,12 @@ export function OutlineDrawer({ session }: { session: AssetSession }) {
       const action = treeKey(rows, focusKey, event.key);
       if (action && "toggle" in action) toggleRow(action.toggle);
       else if (action) moveFocus(action.focus);
+    } else if (event.key === "Delete" || event.key === "Backspace") {
+      const row = rows.find((candidate) => candidate.item.key === focusKey);
+      if (row?.item.kind === "file") {
+        event.preventDefault();
+        void store.removeFileFromView(session.assetId, row.item.file);
+      }
     } else if (event.key === " ") {
       event.preventDefault();
       const row = rows.find((candidate) => candidate.item.key === focusKey);
@@ -127,29 +134,42 @@ export function OutlineDrawer({ session }: { session: AssetSession }) {
 
   return (
     <aside className="outline" aria-label="Outline" hidden={!open}>
-      {showFilter ? (
+      {showFilter || store.canAddFiles ? (
         <div className="dr-head">
-          <label className="dr-filter">
-            <Icon name="search" />
-            <input
-              type="text"
-              value={filter}
-              placeholder="Filter"
-              aria-label="Filter"
-              spellCheck={false}
-              onChange={(event) => setFilter(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  if (filter !== "") setFilter("");
-                  else event.currentTarget.blur();
-                } else if (event.key === "ArrowDown" && rows[0]) {
-                  event.preventDefault();
-                  moveFocus(rows[0].item.key);
-                }
-              }}
+          {showFilter ? (
+            <label className="dr-filter">
+              <Icon name="search" />
+              <input
+                type="text"
+                value={filter}
+                placeholder="Filter"
+                aria-label="Filter"
+                spellCheck={false}
+                onChange={(event) => setFilter(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    if (filter !== "") setFilter("");
+                    else event.currentTarget.blur();
+                  } else if (event.key === "ArrowDown" && rows[0]) {
+                    event.preventDefault();
+                    moveFocus(rows[0].item.key);
+                  }
+                }}
+              />
+            </label>
+          ) : (
+            <span className="grow" />
+          )}
+          {store.canAddFiles ? (
+            <IconButton
+              small
+              icon="plus"
+              label="Add file"
+              tipSide="bottom"
+              onClick={() => void store.addFileToView(session.assetId)}
             />
-          </label>
+          ) : null}
         </div>
       ) : null}
       <div
@@ -182,6 +202,7 @@ export function OutlineDrawer({ session }: { session: AssetSession }) {
             onFocus={() => setFocused(row.item.key)}
             onToggle={() => toggleRow(row.item.key)}
             onEye={toggleEye}
+            onRemove={(file) => void store.removeFileFromView(session.assetId, file.file)}
             onDragStart={(event, item) => {
               event.dataTransfer.setData(OUTLINE_DRAG_TYPE, item.key);
               event.dataTransfer.effectAllowed = "move";
@@ -208,6 +229,7 @@ interface TreeRowProps {
   onFocus: () => void;
   onToggle: () => void;
   onEye: (part: ScenePart, alt: boolean) => void;
+  onRemove: (file: OutlineFile) => void;
   onDragStart: (event: DragEvent, item: OutlineFile) => void;
   onDragEnd: () => void;
   onDragOver: (event: DragEvent) => void;
@@ -265,6 +287,23 @@ function TreeRow(props: TreeRowProps) {
       <span className="tr-name">{item.name}</span>
       {item.kind === "part" ? (
         <EyeButton part={item.part} shown={shown} isolated={isolated} onEye={props.onEye} />
+      ) : null}
+      {file ? (
+        <Tip label="Remove from view" side="right">
+          <button
+            type="button"
+            className="tr-eye tr-remove"
+            tabIndex={-1}
+            aria-label={`Remove ${file.name} from view`}
+            onMouseDown={(event: MouseEvent) => event.preventDefault()}
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onRemove(file);
+            }}
+          >
+            <Icon name="trash" />
+          </button>
+        </Tip>
       ) : null}
     </div>
   );

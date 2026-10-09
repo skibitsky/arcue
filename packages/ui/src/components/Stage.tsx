@@ -26,7 +26,7 @@ export function Stage({
     <section className="stage">
       <Toolbar store={store} session={session} />
       <div className="stage-row">
-        <OutlineDrawer session={session} />
+        <OutlineDrawer store={store} session={session} />
         <section
           className={`viewport-area${over ? " is-drop" : ""}`}
           aria-label="3D view"

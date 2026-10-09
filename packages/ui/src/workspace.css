@@ -662,6 +662,21 @@
   background: var(--surface-raised-strong);
 }
 
+.tr-remove {
+  opacity: 0;
+}
+
+.tr:hover .tr-remove,
+.tr:focus .tr-remove {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .tr-remove {
+    opacity: 1;
+  }
+}
+
 .viewport-area {
   position: relative;
   flex: 1;
