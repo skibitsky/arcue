@@ -24,6 +24,7 @@ import { isQueryName } from "./queries";
 import type { ReviewFile } from "./review";
 import { reviewFileSchema } from "./review";
 import { roundDataSchema } from "./round";
+import { viewStateSchema } from "./view-state";
 
 const specRoundExample = {
   round: 4,
@@ -329,6 +330,13 @@ describe("reviewFileSchema", () => {
     expect(reviewFileSchema.safeParse(review({ comments: [comment("c1", "draft"), sent] })).success).toBe(false);
   });
 
+  it("keeps a comment's parts view and accepts comments without one", () => {
+    const parts = { hidden: ["Rocks/Boulder2"], shown: [], isolated: null, lod: 1 };
+    const parsed = reviewFileSchema.parse(review({ comments: [{ ...comment("c1", "draft"), parts }] }));
+    expect(parsed.comments[0]?.parts).toEqual(parts);
+    expect(reviewFileSchema.parse(review()).comments[0]?.parts).toBeUndefined();
+  });
+
   it("rejects repeated comment and version ids", () => {
     const [version] = review().versions;
     if (!version) throw new Error("The fixture has a version.");
@@ -336,6 +344,13 @@ describe("reviewFileSchema", () => {
     expect(
       reviewFileSchema.safeParse(review({ comments: [comment("c1", "draft"), comment("c1", "sent")] })).success,
     ).toBe(false);
+  });
+});
+
+describe("viewStateSchema", () => {
+  it("gives a view state saved before parts existed the default parts view", () => {
+    const saved = { camera, clip: null, frame: 0, range: null, display: { mode: "lit", skeleton: false } };
+    expect(viewStateSchema.parse(saved).parts).toEqual({ hidden: [], shown: [], isolated: null, lod: 0 });
   });
 });
 

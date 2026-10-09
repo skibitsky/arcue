@@ -21,7 +21,7 @@ import type {
 } from "@arcue/protocol";
 import { ArcueError, commands, queries, reviewFileSchema } from "@arcue/protocol";
 import type { SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
-import { countInRanges } from "@arcue/scene";
+import { countInRanges, isDefaultPartView } from "@arcue/scene";
 
 export interface FakeAssetSeed {
   scene: SceneDescription;
@@ -353,6 +353,7 @@ export class FakeCoreClient implements CoreClient {
         followUps: [],
         rounds: [],
         reopenedFrom: null,
+        ...(args.parts && !isDefaultPartView(args.parts) ? { parts: args.parts } : {}),
       };
       asset.screenshots.set(id, args.screenshot);
       asset.review = {
@@ -507,6 +508,9 @@ export class FakeCoreClient implements CoreClient {
     "view.frame": () => {},
     "view.setDisplayMode": () => {},
     "view.setSkeleton": () => {},
+    "view.setPartVisible": () => {},
+    "view.isolatePart": () => {},
+    "view.setLod": () => {},
     "view.selectComment": () => {},
     "view.screenshot": () => ({ png: new Uint8Array() }),
   };
@@ -532,6 +536,11 @@ export class FakeCoreClient implements CoreClient {
       const asset = this.#asset(assetId);
       if (!asset.seed || asset.summary.version === null) throw new ArcueError("not-found", "No scene is loaded.");
       return { version: asset.summary.version, scene: asset.seed.scene };
+    },
+    "scene.parts": ({ assetId }) => {
+      const asset = this.#asset(assetId);
+      if (!asset.seed) throw new ArcueError("not-found", "No scene is loaded.");
+      return { parts: asset.seed.scene.parts.map(({ id, name, role }) => ({ id, name, role, levels: [] })) };
     },
   };
 }

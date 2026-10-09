@@ -35,7 +35,7 @@ import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
 import { loadReview, locateReview, reviewFilePath } from "./review-store";
 import { buildRoundData } from "./round-data";
-import { anchorRestPositions, checkTarget, meshesOf, resolveTime } from "./scene-lookup";
+import { anchorRestPositions, checkTarget, meshesOf, partsOf, resolveTime, storedPartView } from "./scene-lookup";
 import { readScreenshot, UNSENT_SCREENSHOT_NAME } from "./screenshots";
 import { Serial } from "./serial";
 import type { ServeOptions } from "./serve";
@@ -184,6 +184,7 @@ export class ArcueCore {
       registry.handleQuery("review.get", (args) => this.#asset(args.assetId).session.review),
       registry.handleQuery("viewState.get", (args) => this.#asset(args.assetId).viewState),
       registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()),
+      registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })),
       registry.handleQuery("settings.get", () => this.#settings.current),
       registry.handleQuery("comment.screenshot", (args) => {
         const asset = this.#asset(args.assetId);
@@ -491,6 +492,8 @@ export class ArcueCore {
         rounds: [],
         reopenedFrom: null,
       };
+      const parts = storedPartView(scene, args.parts);
+      if (parts) comment.parts = parts;
       const next: ReviewFile = {
         ...review,
         comments: [...review.comments, comment],
@@ -532,6 +535,11 @@ export class ArcueCore {
           updated.anchorRestPositions = entry ? anchorRestPositions(entry.mesh, args.target) : [];
           updated.anchorState = "exact";
         }
+      }
+      if (args.parts !== undefined) {
+        const parts = storedPartView(asset.loaded().scene, args.parts);
+        if (parts) updated.parts = parts;
+        else delete updated.parts;
       }
       const slot = args.screenshot ? await this.#screenshotSlot(asset, comment.id) : null;
       const screenshot = args.screenshot === undefined ? comment.context.screenshot : (slot?.relative ?? null);
@@ -645,6 +653,7 @@ export class ArcueCore {
         assetPath: asset.path,
         roundFolder: folder,
         exportedAt: fileModifiedAt ? this.#formatClockTime(Date.parse(fileModifiedAt)) : "at an unknown time",
+        partNames: new Map(scene.parts.map((part) => [part.id, part.name])),
       });
 
       const now = this.#now();

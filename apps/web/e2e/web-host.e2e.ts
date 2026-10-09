@@ -6,6 +6,7 @@ import { readSampleEntries } from "../samples-plugin.ts";
 
 interface ArcueGlobal {
   client: CoreClient;
+  store: { session(assetId: string): { addTextComment(text: string): Promise<boolean> } | null };
   openSample(id: string, at?: { clip?: string; frame?: number }): Promise<string>;
 }
 
@@ -104,6 +105,45 @@ test("copies a round with a comment made through window.arcue", async ({ page, c
   expect(prompt).toContain('1. Clip "Walk", frame 12 · no surface target');
   expect(prompt).toContain("Plant the left foot earlier.");
   await page.screenshot({ path: `${SHOTS}copied-round.png` });
+});
+
+test("hides a part through view commands, keeps it in the view state and names it in the prompt", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/?sample=pebble-golem");
+  const { assetId } = await readyAsset(page, "pebble-golem.fbx");
+  const result = await page.evaluate(async (assetId) => {
+    const { client, store } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+    const { parts } = await client.query("scene.parts", { assetId });
+    const part = parts[0];
+    if (!part) throw new Error("The golem has no parts.");
+    for (let tries = 0; ; tries++) {
+      try {
+        await client.execute("view.setPartVisible", { assetId, part: part.id, visible: false });
+        break;
+      } catch (error) {
+        if (tries > 100) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    let reported = await client.query("viewState.get", { assetId });
+    for (let tries = 0; tries < 100 && !reported?.parts.hidden.includes(part.id); tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      reported = await client.query("viewState.get", { assetId });
+    }
+    await store.session(assetId)?.addTextComment("The hidden part leaves a gap.");
+    const review = await client.query("review.get", { assetId });
+    return { part, reported: reported?.parts ?? null, stored: review.comments.at(-1)?.parts ?? null };
+  }, assetId);
+  expect(result.part.role).toBe("model");
+  expect(result.reported).toEqual({ hidden: [result.part.id], shown: [], isolated: null, lod: 0 });
+  expect(result.stored).toEqual(result.reported);
+  await page.getByRole("button", { name: /Copy prompt/ }).click();
+  await expect(page.getByText("Copied 1 comment as round 1")).toBeVisible();
+  const prompt = await page.evaluate(() => navigator.clipboard.readText());
+  expect(prompt).toContain(`· no surface target · ${result.part.name} hidden\n`);
 });
 
 test("shows the prompt in a sheet when the browser blocks the clipboard", async ({ page }) => {

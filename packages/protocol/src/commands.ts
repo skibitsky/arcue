@@ -5,7 +5,7 @@ import { computedContextSchema } from "./context";
 import type { CommandDefinition } from "./definitions";
 import { command } from "./definitions";
 import { settingsSchema } from "./settings";
-import { displayModeSchema, viewStateSchema } from "./view-state";
+import { displayModeSchema, partIdSchema, partViewSchema, viewStateSchema } from "./view-state";
 
 const assetRef = { assetId: assetIdSchema };
 const commentRef = { assetId: assetIdSchema, commentId: commentIdSchema };
@@ -53,6 +53,8 @@ export const commands = {
       camera: cameraAnchorSchema,
       context: computedContextSchema,
       screenshot: bytesSchema.nullable(),
+      /** The parts the view showed. The core stores it only when it differs from the default view. */
+      parts: partViewSchema.optional(),
     }),
     output: z.object({ commentId: commentIdSchema }),
   }),
@@ -70,6 +72,7 @@ export const commands = {
         camera: cameraAnchorSchema.optional(),
         context: computedContextSchema.optional(),
         screenshot: bytesSchema.nullable().optional(),
+        parts: partViewSchema.optional(),
       })
       .refine(
         (input) =>
@@ -224,8 +227,28 @@ export const commands = {
     input: z.object({ ...assetRef, visible: z.boolean() }),
     output: z.void(),
   }),
+  "view.setPartVisible": command({
+    description:
+      "Show or hide a part by its id from scene.parts. Collision helpers are hidden until shown; sockets draw no mesh.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, part: partIdSchema, visible: z.boolean() }),
+    output: z.void(),
+  }),
+  "view.isolatePart": command({
+    description: "Show only one part, by its id from scene.parts, or every part again when part is null.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, part: partIdSchema.nullable() }),
+    output: z.void(),
+  }),
+  "view.setLod": command({
+    description: "Show a LOD level. A part without that level shows its nearest lower one.",
+    runsIn: "view",
+    input: z.object({ ...assetRef, level: indexSchema }),
+    output: z.void(),
+  }),
   "view.selectComment": command({
-    description: "Select a comment, jump to its time and restore its camera. Null clears the selection.",
+    description:
+      "Select a comment, jump to its time and restore its camera and the parts it showed. Null clears the selection.",
     runsIn: "view",
     input: z.object({ ...assetRef, commentId: commentIdSchema.nullable() }),
     output: z.void(),

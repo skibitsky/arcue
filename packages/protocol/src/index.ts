@@ -86,5 +86,5 @@ export type { IncomingRequest, Peer, PeerOptions, RequestHandler, SetTimer } fro
 export { createPeer, withTransfer } from "./transport/peer";
 export type { RemoteClientOptions } from "./transport/remote-client";
 export { createRemoteClient } from "./transport/remote-client";
-export type { DisplayMode, ViewState } from "./view-state";
-export { displayModeSchema, viewStateSchema } from "./view-state";
+export type { DisplayMode, PartView, ViewState } from "./view-state";
+export { displayModeSchema, partIdSchema, partViewSchema, viewStateSchema } from "./view-state";

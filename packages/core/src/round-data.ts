@@ -3,7 +3,7 @@ import { roundDataSchema } from "@arcue/protocol";
 import type { SceneDescription, Vec3 } from "@arcue/scene";
 import { countInRanges } from "@arcue/scene";
 import { toConvention, upAxisOf } from "./coordinates";
-import { findClip, meshAtPath, weightedPoint } from "./scene-lookup";
+import { findClip, meshAtPath, nameInPath, weightedPoint } from "./scene-lookup";
 
 export interface RoundInput {
   round: number;
@@ -56,7 +56,7 @@ function roundComment(comment: Comment, number: number, scene: SceneDescription,
   };
   let target: RoundComment["target"] = null;
   if (comment.target) {
-    const mesh = meshAtPath(scene, comment.target.mesh)?.name ?? lastSegment(comment.target.mesh);
+    const mesh = meshAtPath(scene, comment.target.mesh)?.name ?? nameInPath(comment.target.mesh);
     const meshRef = { mesh, meshPath: comment.target.mesh };
     target =
       comment.target.kind === "surface"
@@ -99,6 +99,7 @@ function roundComment(comment: Comment, number: number, scene: SceneDescription,
     anchorState: comment.target ? comment.anchorState : null,
     anchorVersion: comment.target ? comment.anchorVersion : null,
     earlierMessages,
+    ...(comment.parts ? { parts: comment.parts } : {}),
   } satisfies RoundComment;
 }
 
@@ -121,9 +122,4 @@ function mean(points: readonly Vec3[]): Vec3 {
   }
   const count = Math.max(1, points.length);
   return [sum[0] / count, sum[1] / count, sum[2] / count];
-}
-
-function lastSegment(path: string): string {
-  const segments = path.split(/(?<!\\)\//);
-  return (segments.at(-1) ?? path).replace(/#\d+$/, "").replace(/\\(.)/g, "$1");
 }

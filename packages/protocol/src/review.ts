@@ -9,6 +9,7 @@ import {
 } from "./anchors";
 import { commentIdSchema } from "./assets";
 import { commentContextSchema } from "./context";
+import { partViewSchema } from "./view-state";
 
 const timestampSchema = z.iso.datetime();
 const roundNumberSchema = z.int().positive();
@@ -56,6 +57,8 @@ export const commentSchema = z
      * draft drops the follow-up and restores this status. Null otherwise.
      */
     reopenedFrom: z.enum(["sent", "resolved"]).nullable(),
+    /** The parts the view showed when the comment was made, present only when that differs from the default view. */
+    parts: partViewSchema.optional(),
   })
   .refine((comment) => comment.anchorRestPositions.length === anchoredVertexCount(comment.target), {
     message: "There must be one rest position per anchored vertex.",

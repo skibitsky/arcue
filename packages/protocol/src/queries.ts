@@ -5,7 +5,7 @@ import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
 import { reviewFileSchema } from "./review";
 import { settingsSchema } from "./settings";
-import { viewStateSchema } from "./view-state";
+import { partIdSchema, viewStateSchema } from "./view-state";
 
 const assetRef = { assetId: assetIdSchema };
 
@@ -42,6 +42,21 @@ export const queries = {
     description: "Get the parsed scene of the asset version on screen, with that version's id.",
     input: z.object(assetRef),
     output: z.object({ version: z.string().min(1), scene: sceneDescriptionSchema }),
+  }),
+  "scene.parts": query({
+    description:
+      "List the parts of the asset version on screen: meshes, LOD groups with their levels, collision helpers and sockets, with the triangles of each level.",
+    input: z.object(assetRef),
+    output: z.object({
+      parts: z.array(
+        z.object({
+          id: partIdSchema,
+          name: z.string(),
+          role: z.enum(["model", "collision", "socket"]),
+          levels: z.array(z.object({ level: z.int().nonnegative(), meshes: z.array(z.string()), triangles: z.int() })),
+        }),
+      ),
+    }),
   }),
 } satisfies Record<string, QueryDefinition>;
 
