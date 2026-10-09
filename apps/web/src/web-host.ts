@@ -1,9 +1,16 @@
 import type { CompositionFile, CoreClient, Peer } from "@arcue/protocol";
-import { compositionFileSchema, createPeer, createRemoteClient, portEndpoint } from "@arcue/protocol";
-import type { SampleAsset, WorkspaceStore } from "@arcue/ui";
-import { createWorkspaceStore } from "@arcue/ui";
+import {
+  compositionFileSchema,
+  createPeer,
+  createRemoteClient,
+  IMAGE_FILE_EXTENSIONS,
+  portEndpoint,
+} from "@arcue/protocol";
+import type { FileHost, FileKind, SampleAsset, WorkspaceStore } from "@arcue/ui";
+import { createWorkspaceStore, isImageFile, isModelFile } from "@arcue/ui";
+import { chooseFiles } from "./choose-files";
 import type { SampleInfo } from "./files";
-import { openedFilePath, partitionFiles, planOpen, samplePath } from "./files";
+import { besideAsset, openedFilePath, partitionFiles, planOpen, samplePath } from "./files";
 import type {
   ImportWorkerFailed,
   SeedFile,
@@ -14,6 +21,10 @@ import type {
 import { hostEvents, hostRequests, pageEvents } from "./host-protocol";
 
 const RELOAD_HINT = "reload the page to get the current version.";
+
+const IMAGE_ACCEPT = IMAGE_FILE_EXTENSIONS.join(",");
+/** Models come with the textures picked beside them, since the page cannot read the folder they were in. */
+const ACCEPT: Record<FileKind, string> = { model: `.fbx,${IMAGE_ACCEPT}`, image: IMAGE_ACCEPT };
 
 /** A script that fails to load fires a plain "error" event; an uncaught error inside a running worker fires an ErrorEvent. */
 function isLoadFailure(event: Event): boolean {
@@ -80,7 +91,19 @@ export class WebHost {
       },
     });
     this.client = createRemoteClient(windowPeer);
-    store = createWorkspaceStore({ client: this.client });
+    const files: FileHost = {
+      pick: async (kind, assetPath) => {
+        const chosen = await chooseFiles({ accept: ACCEPT[kind], multiple: kind === "model" });
+        return chosen.length > 0 ? this.placeFiles(chosen, assetPath) : [];
+      },
+      place: (dropped, assetPath) => this.placeFiles(dropped, assetPath),
+      open: (dropped) => {
+        this.openFiles(dropped).catch((error: unknown) =>
+          this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" }),
+        );
+      },
+    };
+    store = createWorkspaceStore({ client: this.client, files });
     this.store = store;
     this.#ready = this.#host.request("command", hostRequests.connectWindow, { port: channel.port2 }, [channel.port2]);
   }
@@ -132,6 +155,22 @@ export class WebHost {
       opened.push(assetId);
     }
     return opened;
+  }
+
+  /**
+   * Copies models and images into the core's in-memory workspace beside an opened asset, where its composition may
+   * name them, and returns their paths in order. Other files are left out.
+   */
+  async placeFiles(files: readonly File[], assetPath: string): Promise<string[]> {
+    const usable = files.filter((file) => isModelFile(file.name) || isImageFile(file.name));
+    const seeds = await Promise.all(
+      usable.map(async (file) => ({
+        path: besideAsset(assetPath, file.name),
+        bytes: new Uint8Array(await file.arrayBuffer()),
+      })),
+    );
+    await this.#seed(seeds);
+    return seeds.map((seed) => seed.path);
   }
 
   #startImportWorker({ id, port }: StartImportWorker): void {

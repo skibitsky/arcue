@@ -11,6 +11,8 @@ function textureName(path: string): string {
 export interface TextureResolver {
   /** Index into `textures` for the texture file, or null when its image could not be found. */
   resolve(file: number): Promise<number | null>;
+  /** The path the file stores for the texture file, relative when it has one. */
+  storedPath(file: number): string;
   readonly textures: Texture[];
   readonly warnings: ImportWarning[];
 }
@@ -28,9 +30,11 @@ export function createTextureResolver(
   const warnings: ImportWarning[] = [];
   const resolved = new Map<number, Promise<number | null>>();
 
+  const storedPathOf = (file: TextureFile) => parseStoredPath(file.relative).relative ?? file.absolute;
+
   const load = async (file: TextureFile): Promise<number | null> => {
     const relative = parseStoredPath(file.relative);
-    const storedPath = relative.relative ?? file.absolute;
+    const storedPath = storedPathOf(file);
     const subject = { kind: "texture", name: fileNameOf(storedPath) || fileNameOf(file.relative) } as const;
     let bytes = file.content;
     let foundPath: string | null = null;
@@ -65,6 +69,10 @@ export function createTextureResolver(
   return {
     textures,
     warnings,
+    storedPath(index) {
+      const file = files[index];
+      return file ? storedPathOf(file) : "";
+    },
     resolve(index) {
       const file = files[index];
       if (!file) return Promise.resolve(null);

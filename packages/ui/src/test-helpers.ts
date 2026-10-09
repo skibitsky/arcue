@@ -1,4 +1,4 @@
-import type { ComputedContext, TimeSelection } from "@arcue/protocol";
+import type { AssetInspection, ComputedContext, TimeSelection } from "@arcue/protocol";
 import type { CameraAnchor, PartView, SceneDescription, SpatialAnchor, SurfaceAnchor } from "@arcue/scene";
 import type {
   CommentOverlay,
@@ -18,6 +18,7 @@ import {
   STONE_VERSION,
   stoneResonatorReview,
 } from "../dev/sample-data";
+import type { FileHost } from "./store/view-files";
 import { createWorkspaceStore } from "./store/workspace-store";
 
 export const NOW = new Date(2026, 9, 8, 15, 0, 0);
@@ -165,11 +166,19 @@ interface SetupOptions {
   clipboard?: "ok" | "blocked";
   /** Changes the Stone Resonator's scene before the fake core serves it. */
   scene?: SceneChange;
+  /** The host's open dialog and dropped files. */
+  files?: FileHost;
+  /** What `asset.inspect` reports for a path. */
+  inspect?: (path: string) => AssetInspection | null;
 }
 
 export function setup(options: SetupOptions = {}) {
   const timers = new ManualTimers();
-  const client = new FakeCoreClient({ catalog: (path) => stoneCatalog(path, options.scene), now: () => NOW });
+  const client = new FakeCoreClient({
+    catalog: (path) => stoneCatalog(path, options.scene),
+    now: () => NOW,
+    ...(options.inspect ? { inspect: options.inspect } : {}),
+  });
   const copied: string[] = [];
   const store = createWorkspaceStore({
     client,
@@ -178,6 +187,7 @@ export function setup(options: SetupOptions = {}) {
       if (options.clipboard === "blocked") throw new Error("Blocked.");
       copied.push(text);
     },
+    ...(options.files ? { files: options.files } : {}),
   });
   client.connectWindow(store.handleRequest);
   store.start();

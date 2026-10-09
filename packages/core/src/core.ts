@@ -18,12 +18,13 @@ import {
   COMPOSITION_VERSION,
   commands,
   isCommandName,
+  memberRoleFor,
   reportListenerError,
   viewStateSchema,
   withTransfer,
 } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
-import { splitMemberPath } from "@arcue/scene";
+import { materialSlots, splitMemberPath } from "@arcue/scene";
 import {
   compositionPathFor,
   hasExtension,
@@ -40,6 +41,8 @@ import {
 import type { AssetFiles, ReadFile } from "./composition-load";
 import { buildAssetScene, readAssetFiles } from "./composition-load";
 import { readableImageExtensions } from "./file-search";
+import { versionIdOf } from "./hash";
+import type { CompositionEdit } from "./history";
 import { applySnapshot, editBetween } from "./history";
 import { importAsset } from "./import";
 import { exporterName, inspectMembers, inspectScene } from "./inspect";
@@ -208,6 +211,12 @@ export class ArcueCore {
       registry.handleQuery("viewState.get", (args) => this.#asset(args.assetId).viewState),
       registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()),
       registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })),
+      registry.handleQuery("scene.materials", (args) => ({
+        materials: materialSlots(this.#asset(args.assetId).loaded().scene).map(({ material, slots }) => ({
+          material,
+          slots: slots.map(({ slot, state, path, overridden }) => ({ slot, state, path, overridden })),
+        })),
+      })),
       registry.handleQuery("settings.get", () => this.#settings.current),
       registry.handleQuery("asset.inspect", (args) => this.#track(this.#inspect(args.path))),
       registry.handleQuery("comment.screenshot", (args) => {
@@ -581,20 +590,29 @@ export class ArcueCore {
   }
 
   /**
-   * Changes the asset's composition file, creating it beside the model on the first change, and reloads the asset.
-   * The file is read fresh for each change; one that cannot be read is never overwritten.
+   * Runs a composition command after the asset's earlier composition edits and undo steps, and before later ones, so
+   * each checks its input against the version the edit before it loaded.
    */
-  #editComposition(
+  #inCompositionLine<Result>(asset: OpenAsset, task: () => Promise<Result>): Promise<Result> {
+    return asset.compositionEdits.run(async () => {
+      if (asset.closing) throw new ArcueError("conflict", `${asset.name} is closing.`);
+      return task();
+    });
+  }
+
+  /**
+   * Changes the asset's composition file, creating it beside the model on the first change, records the change in the
+   * asset's undo history and reloads the asset. It works on the file as it is on disk, and never overwrites a file it
+   * cannot read. Call it inside `#inCompositionLine`.
+   */
+  async #editComposition(
     asset: OpenAsset,
     change: (composition: CompositionFile, same: (path: string) => (written: string) => boolean) => CompositionFile,
   ): Promise<{ path: string }> {
-    return asset.compositionEdits.run(async () => {
-      if (asset.closing) throw new ArcueError("conflict", `${asset.name} is closing.`);
-      const path = asset.compositionPath;
-      const folder = dirname(path);
-      if (!(await insideWithoutLinks(this.#platform, asset.readRoot, path))) {
-        throw new ArcueError("conflict", `${path} is outside the workspace or reached through a symbolic link.`);
-      }
+    const path = asset.compositionPath;
+    const folder = dirname(path);
+    const changed = await asset.session.run<boolean>(async () => {
+      await this.#checkCompositionPath(asset);
       const found = await readComposition(this.#platform, path, "conflict");
       if (found && joinPath(folder, found.composition.model) !== asset.path) {
         throw new ArcueError("conflict", `${basename(path)} belongs to ${found.composition.model}, not ${asset.name}.`);
@@ -605,12 +623,45 @@ export class ArcueCore {
       };
       const same = (target: string) => (written: string) => joinPath(folder, written) === target;
       const text = serializeComposition(change(current, same));
-      if (text !== serializeComposition(current)) {
-        await this.#platform.writeFileAtomic(path, text);
-        await this.#load(asset).catch(() => undefined);
-      }
-      return { path };
+      if (text === serializeComposition(current)) return { next: null, result: false };
+      await this.#platform.writeFileAtomic(path, text);
+      return {
+        next: null,
+        result: true,
+        edit: { kind: "composition", path, before: found?.text ?? null, after: text },
+      };
     });
+    if (changed) await this.#load(asset).catch(() => undefined);
+    return { path };
+  }
+
+  async #checkCompositionPath(asset: OpenAsset): Promise<void> {
+    if (!(await insideWithoutLinks(this.#platform, asset.readRoot, asset.compositionPath))) {
+      throw new ArcueError(
+        "conflict",
+        `${asset.compositionPath} is outside the workspace or reached through a symbolic link.`,
+      );
+    }
+  }
+
+  /**
+   * Puts back the composition file's text from one side of an edit, or removes the file where it did not exist. It
+   * writes only when the file still holds the other side's text, so a change made since then is never lost.
+   */
+  async #restoreComposition(asset: OpenAsset, edit: CompositionEdit, direction: "undo" | "redo"): Promise<void> {
+    const expected = direction === "undo" ? edit.after : edit.before;
+    const restored = direction === "undo" ? edit.before : edit.after;
+    await this.#checkCompositionPath(asset);
+    const stat = await this.#platform.stat(edit.path);
+    if (stat !== null && stat.kind !== "file") {
+      throw new ArcueError("conflict", `${edit.path} is not a plain file.`);
+    }
+    const current = stat === null ? null : await this.#platform.readText(edit.path);
+    if (current !== expected) {
+      throw new ArcueError("conflict", `${basename(edit.path)} changed since then, so it was left as it is.`);
+    }
+    if (restored === null) await this.#platform.remove(edit.path);
+    else await this.#platform.writeFileAtomic(edit.path, restored);
   }
 
   /** A path a composition command names: absolute, or relative to the composition file. */
@@ -631,15 +682,16 @@ export class ArcueCore {
     extensions: readonly string[],
   ): Promise<{ path: string; written: string }> {
     const path = this.#resolveCompositionPath(asset, file);
+    const name = basename(path);
     const written = relativePath(dirname(asset.compositionPath), path);
     if (written === null || pathInside(asset.readRoot, path) === null) {
-      throw new ArcueError("invalid-input", `${file} is outside the asset's workspace.`);
+      throw new ArcueError("invalid-input", `${name} is outside the asset's workspace.`);
     }
     if (!hasExtension(path, extensions)) {
-      throw new ArcueError("invalid-input", `${basename(path)} is not one of ${extensions.join(", ")}.`);
+      throw new ArcueError("invalid-input", `${name} is not one of ${extensions.join(", ")}.`);
     }
     if (!(await insideWithoutLinks(this.#platform, asset.readRoot, path))) {
-      throw new ArcueError("invalid-input", `${file} is reached through a symbolic link.`);
+      throw new ArcueError("invalid-input", `${name} is reached through a symbolic link.`);
     }
     if ((await this.#platform.stat(path))?.kind !== "file") {
       throw new ArcueError("not-found", `${path} does not exist.`);
@@ -647,46 +699,69 @@ export class ArcueCore {
     return { path, written };
   }
 
-  async #addCompositionFile(args: CommandArgs<"composition.addFile">): Promise<{ path: string }> {
+  #addCompositionFile(args: CommandArgs<"composition.addFile">): Promise<CommandOutput<"composition.addFile">> {
     const asset = this.#asset(args.assetId);
-    const { path, written } = await this.#newCompositionFile(asset, args.file, MODEL_EXTENSIONS);
-    if (path === asset.path) throw new ArcueError("invalid-input", `${asset.name} is the model itself.`);
-    const bone = args.bone;
-    const model = asset.imported.get(asset.path)?.scene;
-    if (bone !== undefined && model && !model.nodes.some((node) => node.name === bone || node.path === bone)) {
-      throw new ArcueError("invalid-input", `${asset.name} has no bone "${bone}".`);
-    }
-    return this.#editComposition(asset, (composition, same) =>
-      withMember(composition, { file: written, role: args.role, node: args.node, bone }, same(path)),
-    );
-  }
-
-  async #removeCompositionFile(args: CommandArgs<"composition.removeFile">): Promise<{ path: string }> {
-    const asset = this.#asset(args.assetId);
-    const path = this.#resolveCompositionPath(asset, args.file);
-    const label = relativePath(dirname(asset.path), path);
-    return this.#editComposition(asset, (composition, same) => {
-      if (!listsMember(composition, same(path))) {
-        if (dirname(path) === dirname(asset.path) && isConventionAnimation(asset.path, basename(path))) {
-          throw new ArcueError(
-            "invalid-input",
-            `${basename(path)} joins by its name. Rename or move it to take it out of the view.`,
-          );
-        }
-        throw new ArcueError("not-found", `${args.file} is not in the composition.`);
+    return this.#inCompositionLine(asset, async () => {
+      const { path, written } = await this.#newCompositionFile(asset, args.file, MODEL_EXTENSIONS);
+      if (path === asset.path) throw new ArcueError("invalid-input", `${asset.name} is the model itself.`);
+      const bone = args.bone;
+      const model = asset.imported.get(asset.path)?.scene;
+      if (bone !== undefined && model && !model.nodes.some((node) => node.name === bone || node.path === bone)) {
+        throw new ArcueError("invalid-input", `${asset.name} has no bone "${bone}".`);
       }
-      return withoutMember(composition, same(path), (id) => label !== null && splitMemberPath(id).file === label);
+      const role = args.role ?? (await this.#roleOf(asset, path));
+      const result = await this.#editComposition(asset, (composition, same) =>
+        withMember(composition, { file: written, role, node: args.node, bone }, same(path)),
+      );
+      return { ...result, role };
     });
   }
 
-  async #setMaterialTexture(args: CommandArgs<"material.setTexture">): Promise<{ path: string }> {
+  /** How a file joins the view when the caller names no role, from what the file holds. */
+  async #roleOf(asset: OpenAsset, path: string): Promise<"animation" | "set"> {
+    const bytes = await this.#platform.readFile(path);
+    const scene = await this.#importFile(asset, {
+      path,
+      label: basename(path),
+      bytes,
+      id: versionIdOf(bytes),
+      problem: null,
+    });
+    const role = memberRoleFor({ meshes: scene.meshes.length, clips: scene.clips.length });
+    if (role === null) throw new ArcueError("invalid-input", `${basename(path)} has no meshes or clips.`);
+    return role;
+  }
+
+  #removeCompositionFile(args: CommandArgs<"composition.removeFile">): Promise<{ path: string }> {
     const asset = this.#asset(args.assetId);
-    if (!asset.loaded().scene.materials.some((material) => material.name === args.material)) {
-      throw new ArcueError("not-found", `${asset.name} has no material "${args.material}".`);
-    }
-    const written =
-      args.file === null ? null : (await this.#newCompositionFile(asset, args.file, readableImageExtensions)).written;
-    return this.#editComposition(asset, (composition) => withTexture(composition, args.material, args.slot, written));
+    const path = this.#resolveCompositionPath(asset, args.file);
+    const label = relativePath(dirname(asset.path), path);
+    return this.#inCompositionLine(asset, () =>
+      this.#editComposition(asset, (composition, same) => {
+        if (!listsMember(composition, same(path))) {
+          if (dirname(path) === dirname(asset.path) && isConventionAnimation(asset.path, basename(path))) {
+            throw new ArcueError(
+              "invalid-input",
+              `${basename(path)} joins by its name. Rename or move it to take it out of the view.`,
+            );
+          }
+          throw new ArcueError("not-found", `${args.file} is not in the composition.`);
+        }
+        return withoutMember(composition, same(path), (id) => label !== null && splitMemberPath(id).file === label);
+      }),
+    );
+  }
+
+  #setMaterialTexture(args: CommandArgs<"material.setTexture">): Promise<{ path: string }> {
+    const asset = this.#asset(args.assetId);
+    return this.#inCompositionLine(asset, async () => {
+      if (!asset.loaded().scene.materials.some((material) => material.name === args.material)) {
+        throw new ArcueError("not-found", `${asset.name} has no material "${args.material}".`);
+      }
+      const written =
+        args.file === null ? null : (await this.#newCompositionFile(asset, args.file, readableImageExtensions)).written;
+      return this.#editComposition(asset, (composition) => withTexture(composition, args.material, args.slot, written));
+    });
   }
 
   #createComment(args: CommandArgs<"comment.create">): Promise<CommandOutput<"comment.create">> {
@@ -833,17 +908,30 @@ export class ArcueCore {
     });
   }
 
+  /**
+   * Steps the asset's history back or forward. It runs in line with composition edits, so a composition step and an
+   * edit never interleave, and reloads the asset after a composition step.
+   */
   #undo(assetId: string, direction: "undo" | "redo"): Promise<{ changed: boolean }> {
     const asset = this.#asset(assetId);
     const history = asset.session.history;
-    return asset.session.run<{ changed: boolean }>((review) => {
-      const edit = direction === "undo" ? history.peekUndo() : history.peekRedo();
-      if (!edit) return { next: null, result: { changed: false } };
-      return {
-        next: applySnapshot(review, direction === "undo" ? edit.before : edit.after),
-        result: { changed: true },
-        apply: () => (direction === "undo" ? history.undone() : history.redone()),
-      };
+    return asset.compositionEdits.run(async () => {
+      const step = await asset.session.run<{ changed: boolean; reload: boolean }>(async (review) => {
+        const edit = direction === "undo" ? history.peekUndo() : history.peekRedo();
+        if (!edit) return { next: null, result: { changed: false, reload: false } };
+        const apply = () => (direction === "undo" ? history.undone() : history.redone());
+        if (edit.kind === "composition") {
+          await this.#restoreComposition(asset, edit, direction);
+          return { next: null, result: { changed: true, reload: true }, apply };
+        }
+        return {
+          next: applySnapshot(review, direction === "undo" ? edit.before : edit.after),
+          result: { changed: true, reload: false },
+          apply,
+        };
+      });
+      if (step.reload) await this.#load(asset).catch(() => undefined);
+      return { changed: step.changed };
     });
   }
 

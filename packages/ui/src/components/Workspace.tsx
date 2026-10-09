@@ -148,8 +148,8 @@ function AssetView({
       role="tabpanel"
       aria-labelledby={tabDomId(session.assetId)}
     >
-      <Stage session={session} createViewport={createViewport} />
-      <Timeline session={session} />
+      <Stage store={store} session={session} createViewport={createViewport} />
+      <Timeline store={store} session={session} />
       <CommentsPanel session={session} now={now} />
       <StatusBar store={store} session={session} connection={connection} />
     </main>

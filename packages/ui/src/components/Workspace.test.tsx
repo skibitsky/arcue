@@ -1,12 +1,14 @@
+import type { Clip, Material, SceneDescription } from "@arcue/scene";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
+import type { FileHost } from "../store/view-files";
 import { flush, NOW, setup, TestViewport } from "../test-helpers";
 import { Workspace } from "./Workspace";
 
-async function renderStone() {
-  const context = setup();
+async function renderStone(options: Parameters<typeof setup>[0] = {}) {
+  const context = setup(options);
   const viewports: TestViewport[] = [];
   const view = render(
     <Workspace
@@ -215,5 +217,106 @@ describe("Workspace", () => {
     view.rerender(<Workspace store={store} createViewport={() => new TestViewport()} now={() => NOW} />);
     expect(viewports).toHaveLength(count);
     expect(store.activeSession()?.viewport).toBe(viewports.at(-1));
+  });
+
+  it("groups the clip menu by file and removes an added file from its group", async () => {
+    const withFiles = (scene: SceneDescription): SceneDescription => {
+      const [first] = scene.clips;
+      if (!first) return scene;
+      const from = (name: string, file: string): Clip => ({
+        ...first,
+        name: `Armature|${name}`,
+        displayName: name,
+        file,
+      });
+      return {
+        ...scene,
+        clips: [...scene.clips, from("TurnLeft", "Turns.fbx"), from("Idle", "StoneResonator@Idle.fbx")],
+      };
+    };
+    const { client } = await renderStone({ scene: withFiles });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Clip: Charge" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("group", { name: "Turns.fbx" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitemradio", { name: /TurnLeft/ })).toBeTruthy();
+    expect(within(menu).queryByRole("button", { name: "Remove StoneResonator@Idle.fbx from the view" })).toBeNull();
+    await user.click(within(menu).getByRole("button", { name: "Remove Turns.fbx from the view" }));
+    await act(() => flush());
+    expect(client.calls.find((call) => call.name === "composition.removeFile")?.input).toMatchObject({
+      file: STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Turns.fbx"),
+    });
+  });
+
+  it("lists texture slots in asset info, picks an image for one and restores an overridden one", async () => {
+    const base: Material = {
+      name: "Stone",
+      baseColor: [1, 1, 1, 1],
+      baseColorTexture: null,
+      metallic: 0,
+      roughness: 0.5,
+      metallicRoughnessTexture: null,
+      roughnessTexture: null,
+      metalnessTexture: null,
+      normalTexture: null,
+      normalScale: 1,
+      occlusionTexture: null,
+      emissive: [0, 0, 0],
+      emissiveTexture: null,
+      alphaMode: "opaque",
+      alphaCutoff: 0.5,
+      doubleSided: false,
+    };
+    const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Stone.png");
+    const files: FileHost = { pick: async () => [picked], place: async () => [], open: () => {} };
+    const { client } = await renderStone({
+      files,
+      scene: (scene) => ({
+        ...scene,
+        materials: [
+          {
+            ...base,
+            missingTextures: { baseColor: "C:/art/Stone_BaseColor.png" },
+            textureOverrides: { normal: { path: "Stone_N.png", found: false } },
+          },
+        ],
+      }),
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Asset info" }));
+    const stone = screen.getByRole("region", { name: "Material Stone" });
+    expect(within(stone).getByText("C:/art/Stone_BaseColor.png")).toBeTruthy();
+    await user.click(within(stone).getByRole("button", { name: "Base color: Stone_BaseColor.png, not found" }));
+    await act(() => flush());
+    expect(client.calls.find((call) => call.name === "material.setTexture")?.input).toMatchObject({
+      material: "Stone",
+      slot: "baseColor",
+      file: picked,
+    });
+    await user.click(within(stone).getByRole("button", { name: "Use the file's normal texture" }));
+    await act(() => flush());
+    expect(client.calls.filter((call) => call.name === "material.setTexture").at(-1)?.input).toMatchObject({
+      slot: "normal",
+      file: null,
+    });
+  });
+
+  it("asks where a model dropped on the 3D view goes", async () => {
+    const files: FileHost = {
+      pick: async () => [],
+      place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
+      open: () => {},
+    };
+    const { store } = await renderStone({ files });
+    const view = screen.getByRole("region", { name: "3D view" });
+    await act(async () => {
+      fireEvent.drop(view, { dataTransfer: { files: [new File(["x"], "Crate.fbx")], types: ["Files"] } });
+      await flush();
+    });
+    expect(store.state.get().dropPrompt?.models).toEqual(["/work/Crate.fbx"]);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("menuitem", { name: "Add to view" }));
+    await act(() => flush());
+    expect(store.state.get().dropPrompt).toBeNull();
   });
 });

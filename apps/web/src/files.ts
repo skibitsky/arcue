@@ -38,6 +38,17 @@ export function openedModelFolder(model: string): string {
   return `${FILES_FOLDER}/${dot > 0 ? name.slice(0, dot) : name}`;
 }
 
+/**
+ * Where a file added to an opened asset's view goes: beside the model in its folder, as a file next to a model on
+ * disk would sit. A file with the model's own name is refused, since it would replace the model.
+ */
+export function besideAsset(assetPath: string, file: string): string {
+  const slash = assetPath.lastIndexOf("/");
+  const name = safeName(file);
+  if (name === assetPath.slice(slash + 1)) throw new Error(`${name} is the model itself.`);
+  return `${assetPath.slice(0, slash)}/${name}`;
+}
+
 function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();

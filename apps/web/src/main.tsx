@@ -10,6 +10,7 @@ import { Workspace } from "@arcue/ui";
 import { createViewport } from "@arcue/viewport";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { chooseFiles } from "./choose-files";
 import { parseDeepLink } from "./deep-link";
 import type { OpenAt } from "./web-host";
 import { WebHost } from "./web-host";
@@ -38,12 +39,9 @@ function openFiles(files: readonly File[]): void {
 }
 
 function pickFiles(): void {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.multiple = true;
-  input.accept = ".fbx,.arcue,image/*";
-  input.addEventListener("change", () => openFiles([...(input.files ?? [])]));
-  input.click();
+  void chooseFiles({ accept: ".fbx,.arcue,image/*", multiple: true }).then((files) => {
+    if (files.length > 0) openFiles(files);
+  });
 }
 
 const root = document.getElementById("app");

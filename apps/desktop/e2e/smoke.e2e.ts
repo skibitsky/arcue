@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -43,6 +43,8 @@ let userData: string;
 let crate: string;
 let golem: string;
 let blob: string;
+let turn: string;
+let outside: string;
 let app: ElectronApplication | null = null;
 
 function launch(): Promise<ElectronApplication> {
@@ -174,10 +176,13 @@ beforeAll(() => {
   userData = join(workDir, "user-data");
   const samples = join(workDir, "samples");
   mkdirSync(samples);
-  [crate, golem, blob] = ["crate.fbx", "pebble-golem.fbx", "blob.fbx"].map((name) => {
+  [crate, golem, blob, turn] = ["crate.fbx", "pebble-golem.fbx", "blob.fbx", "beetle-turn.fbx"].map((name) => {
     cpSync(join(repo, "samples", name), join(samples, name));
     return join(samples, name);
-  }) as [string, string, string];
+  }) as [string, string, string, string];
+  outside = join(workDir, "elsewhere", "Elsewhere.fbx");
+  mkdirSync(join(workDir, "elsewhere"));
+  cpSync(join(repo, "samples", "beetle-turn.fbx"), outside);
 });
 
 afterAll(async () => {
@@ -214,6 +219,39 @@ describe("the desktop app", () => {
     expect(crateSummary).toMatchObject({ assetId: crateId, status: "ready", name: "crate.fbx" });
     expect(await sceneOf(page, crateId)).toMatchObject({ meshes: ["Crate"] });
     await expect.poll(() => brightShare(electron, page)).toBeGreaterThan(0.05);
+  });
+
+  it("adds a file to the view from the native open dialog, and says why it refuses one", async () => {
+    const electron = app;
+    if (!electron) throw new Error("The app is not running.");
+    const page = await connectedWindow(electron);
+    const crateId = (await assets(page)).find((asset) => asset.path === crate)?.assetId ?? "";
+    const answer = (paths: string[]) =>
+      electron.evaluate(({ dialog }, filePaths) => {
+        dialog.showOpenDialog = (async () => ({ canceled: false, filePaths })) as typeof dialog.showOpenDialog;
+      }, paths);
+    await page.getByRole("button", { name: "Asset info" }).filter({ visible: true }).click();
+
+    await answer([outside]);
+    await page.getByRole("button", { name: "Add file" }).click();
+    await expect.poll(() => page.getByText("Elsewhere.fbx is outside the asset's workspace.").count()).toBe(1);
+
+    await answer([turn]);
+    await page.getByRole("button", { name: "Add file" }).click();
+    await expect.poll(async () => (await sceneOf(page, crateId)).clips).toEqual(["Armature|Turn"]);
+    const composition = join(workDir, "samples", "crate.arcue");
+    expect(JSON.parse(readFileSync(composition, "utf8"))).toEqual({
+      version: 1,
+      model: "crate.fbx",
+      animations: ["beetle-turn.fbx"],
+    });
+
+    await page.evaluate(async (id) => {
+      await (globalThis as WindowProbe).arcueWindow?.client.execute("review.undo", { assetId: id });
+    }, crateId);
+    expect(existsSync(composition)).toBe(false);
+    expect((await sceneOf(page, crateId)).clips).toEqual([]);
+    await page.keyboard.press("Escape");
   });
 
   it("adds a tab at the clip and frame that arcue open names", async () => {

@@ -6,6 +6,43 @@ export const COMPOSITION_EXTENSION = ".arcue";
 
 export const COMPOSITION_VERSION = 1;
 
+/** Extensions of the images a composition may name and an importer may read beside a model. */
+export const IMAGE_FILE_EXTENSIONS: readonly string[] = [
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".tga",
+  ".tif",
+  ".tiff",
+  ".bmp",
+  ".dds",
+  ".exr",
+  ".hdr",
+  ".webp",
+];
+
+/** How a file joins a model's view: its clips, its nodes on a bone, or its nodes in place. */
+export const memberRoleSchema = z.enum(["animation", "attach", "set"]);
+
+export type MemberRole = z.output<typeof memberRoleSchema>;
+
+/**
+ * How a file joins a model's view when nobody names its role: a file with clips and no meshes is an animation file;
+ * any other file with meshes comes along in place, its bones merging into the model's bones of the same name, so a
+ * skinned mesh binds to the model's rig. Null for a file with neither.
+ */
+export function memberRoleFor(content: { meshes: number; clips: number }): Exclude<MemberRole, "attach"> | null {
+  if (content.meshes > 0) return "set";
+  return content.clips > 0 ? "animation" : null;
+}
+
+/** Whether a file beside the model joins it by its name, "<model stem>@<anything>.fbx", rather than through the composition. */
+export function joinsByName(modelName: string, fileName: string): boolean {
+  const dot = modelName.lastIndexOf(".");
+  const prefix = `${dot > 0 ? modelName.slice(0, dot) : modelName}@`;
+  return fileName.startsWith(prefix) && fileName.length > prefix.length && fileName.toLowerCase().endsWith(".fbx");
+}
+
 function isRelativeFile(path: string): boolean {
   if (path.includes("\\") || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
   return path.split("/").every((segment) => segment !== "");

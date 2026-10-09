@@ -16,12 +16,14 @@ import {
   SPEEDS,
   timelineMarkers,
 } from "../store/timeline";
+import { clipGroups } from "../store/view-files";
+import type { WorkspaceStore } from "../store/workspace-store";
 import { IconButton, Tip } from "./controls";
 import { Icon } from "./Icon";
 
 const REST_VALUE = "";
 
-export function Timeline({ session }: { session: AssetSession }) {
+export function Timeline({ store, session }: { store: WorkspaceStore; session: AssetSession }) {
   const scene = useSelect(session.state, (state) => state.scene);
   const clipName = useSelect(session.state, (state) => state.clip);
   const loop = useSelect(session.state, (state) => state.loop);
@@ -32,7 +34,7 @@ export function Timeline({ session }: { session: AssetSession }) {
   return (
     <section className="timeline" aria-label="Timeline">
       <div className="tl-bar">
-        <ClipPicker session={session} clip={clip} />
+        <ClipPicker store={store} session={session} clip={clip} />
         <span className="tb-sep" />
         <IconButton
           icon="stepBack"
@@ -78,10 +80,21 @@ export function Timeline({ session }: { session: AssetSession }) {
   );
 }
 
-function ClipPicker({ session, clip }: { session: AssetSession; clip: Clip | null }) {
+function ClipPicker({ store, session, clip }: { store: WorkspaceStore; session: AssetSession; clip: Clip | null }) {
   const scene = useSelect(session.state, (state) => state.scene);
   const review = useSelect(session.state, (state) => state.review);
+  const modelName = useSelect(session.state, (state) => state.summary.name);
   const counts = useMemo(() => draftCountsByClip(review), [review]);
+  const groups = useMemo(() => clipGroups(scene?.clips ?? [], modelName), [scene, modelName]);
+  const item = (candidate: Clip) => (
+    <MenuItem
+      key={candidate.name}
+      value={candidate.name}
+      label={candidate.displayName}
+      count={counts.get(candidate.name) ?? 0}
+      detail={`${lastFrame(candidate)} f`}
+    />
+  );
   const restCount = counts.get(null) ?? 0;
   const name = clip?.displayName ?? "Rest pose";
   return (
@@ -104,19 +117,52 @@ function ClipPicker({ session, clip }: { session: AssetSession; clip: Clip | nul
           >
             <MenuItem value={REST_VALUE} label="Rest pose" count={restCount} />
             <DropdownMenu.Separator className="menu-sep" />
-            {scene?.clips.map((candidate) => (
-              <MenuItem
-                key={candidate.name}
-                value={candidate.name}
-                label={candidate.displayName}
-                count={counts.get(candidate.name) ?? 0}
-                detail={`${lastFrame(candidate)} f`}
-              />
-            ))}
+            {groups.length > 1
+              ? groups.map((group, index) => (
+                  <DropdownMenu.Group key={group.file ?? ""} aria-label={group.file ?? modelName}>
+                    {index > 0 ? <DropdownMenu.Separator className="menu-sep" /> : null}
+                    {group.file !== null ? (
+                      <ClipGroupLabel
+                        file={group.file}
+                        onRemove={
+                          group.removable
+                            ? () => void store.removeFileFromView(session.assetId, group.file ?? "")
+                            : undefined
+                        }
+                      />
+                    ) : null}
+                    {group.clips.map(item)}
+                  </DropdownMenu.Group>
+                ))
+              : scene?.clips.map(item)}
           </DropdownMenu.RadioGroup>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+}
+
+/** An added file's name over its clips; hovering it shows a trash button when the file can leave the view. */
+function ClipGroupLabel({ file, onRemove }: { file: string; onRemove: (() => void) | undefined }) {
+  return (
+    <DropdownMenu.Label className="menu-label clip-group">
+      <span className="mi-label" title={file}>
+        {file}
+      </span>
+      {onRemove ? (
+        <Tip label="Remove from view">
+          <button
+            type="button"
+            className="ibtn ibtn-sm clip-remove"
+            aria-label={`Remove ${file} from the view`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onRemove}
+          >
+            <Icon name="trash" />
+          </button>
+        </Tip>
+      ) : null}
+    </DropdownMenu.Label>
   );
 }
 

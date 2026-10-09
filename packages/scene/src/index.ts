@@ -1,8 +1,8 @@
 export type { CameraAnchor, IndexRange, RegionAnchor, SpatialAnchor, SurfaceAnchor, TimeAnchor } from "./anchor";
 export type { Clip, Interpolation, Track, TrackProperty } from "./clip";
 export { cleanClipName, clipNames, displayNames, UNNAMED_CLIP } from "./clip";
-export type { Composition, CompositionAttachment, CompositionMember, TextureSlot } from "./composition";
-export { composeScene, MEMBER_SEPARATOR, memberPath, splitMemberPath, TEXTURE_SLOTS } from "./composition";
+export type { Composition, CompositionAttachment, CompositionMember, CompositionTexture } from "./composition";
+export { composeScene, MEMBER_SEPARATOR, memberPath, splitMemberPath } from "./composition";
 export type { TopologyFingerprint, TopologyInput } from "./fingerprint";
 export { sameTopology, topologyFingerprint } from "./fingerprint";
 export type { Barycentric, NearestVertex, SurfacePoint } from "./geometry";
@@ -10,7 +10,19 @@ export { closestPointOnTriangle, closestSurfacePoint, nearestVertex, sourceIndic
 export { fileNameOf, imageMimeType } from "./image";
 export type { FoundFile, Importer, ImportRequest, StoredPath } from "./importer";
 export { findImporter, parseStoredPath } from "./importer";
-export type { AlphaMode, Material, Texture, TextureRef, UvTransform, WrapMode } from "./material";
+export type {
+  AlphaMode,
+  Material,
+  Texture,
+  TextureOverride,
+  TextureRef,
+  TextureSlot,
+  UvTransform,
+  WrapMode,
+} from "./material";
+export { TEXTURE_SLOTS } from "./material";
+export type { MaterialSlot, MaterialSlots, SlotState } from "./material-slots";
+export { materialSlots, missingSlots } from "./material-slots";
 export type { Bounds, Quat, Vec3, Vec4 } from "./math";
 export { boundsOfPoints } from "./math";
 export type { MaterialGroup, Mesh, MorphTarget, SkinWeights, UvSet } from "./mesh";

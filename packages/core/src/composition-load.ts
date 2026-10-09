@@ -1,6 +1,6 @@
 import type { CompositionFile, VersionFile } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
-import type { CompositionMember, ImportWarning, SceneDescription, Texture, TextureSlot } from "@arcue/scene";
+import type { CompositionMember, CompositionTexture, ImportWarning, SceneDescription, TextureSlot } from "@arcue/scene";
 import { composeScene, fileNameOf, imageMimeType, importWarning, splitMemberPath, TEXTURE_SLOTS } from "@arcue/scene";
 import { hasExtension, isConventionAnimation, MODEL_EXTENSIONS, readComposition } from "./composition-file";
 import { createFileSearch } from "./file-search";
@@ -206,12 +206,12 @@ export async function buildAssetScene(
         : importWarning("invalid-data", { kind: "file", name: file.label }, error, file.label),
     );
   }
-  const materials: Record<string, Partial<Record<TextureSlot, Texture | null>>> = {};
+  const materials: Record<string, Partial<Record<TextureSlot, CompositionTexture>>> = {};
   for (const texture of files.textures) {
     const slots = materials[texture.material] ?? {};
     materials[texture.material] = slots;
     if (texture.bytes === null) {
-      slots[texture.slot] = null;
+      slots[texture.slot] = { path: texture.written, texture: null };
       const name = fileNameOf(texture.written);
       warnings.push(
         importWarning(
@@ -224,11 +224,14 @@ export async function buildAssetScene(
       continue;
     }
     slots[texture.slot] = {
-      name: stemOf(texture.path),
-      mimeType: imageMimeType(texture.bytes, texture.path),
-      bytes: texture.bytes,
-      storedPath: texture.written,
-      foundPath: texture.label,
+      path: texture.written,
+      texture: {
+        name: stemOf(texture.path),
+        mimeType: imageMimeType(texture.bytes, texture.path),
+        bytes: texture.bytes,
+        storedPath: texture.written,
+        foundPath: texture.label,
+      },
     };
   }
   const member = (path: string) => scenes.get(path);

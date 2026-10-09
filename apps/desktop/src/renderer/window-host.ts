@@ -1,4 +1,4 @@
-import type { WorkspaceStore } from "@arcue/ui";
+import type { FileHost, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore } from "@arcue/ui";
 import type { DesktopBridge, MenuCommand, SavedTab, WindowTabs } from "../shared/ipc";
 import type { CoreChannel } from "./reconnecting-client";
@@ -15,6 +15,7 @@ export interface WindowHostOptions {
 }
 
 const REPORT_DELAY_MS = 300;
+const FROM_DISK_ONLY = "Arcue can open files from your disk only.";
 const REPORT_INTERVAL_MS = 5000;
 
 const defaultTimer = (delayMs: number, callback: () => void) => {
@@ -56,7 +57,12 @@ export class WindowHost {
       onLost: () => this.#bridge.connectCore(),
       onListenerError: (error) => console.error(error),
     });
-    this.store = createWorkspaceStore({ client: this.client, setTimer: this.#setTimer });
+    const files: FileHost = {
+      pick: (kind) => this.#bridge.pickFiles(kind),
+      place: async (dropped) => this.#paths(dropped),
+      open: (dropped) => this.openFiles(dropped),
+    };
+    this.store = createWorkspaceStore({ client: this.client, setTimer: this.#setTimer, files });
   }
 
   async start(): Promise<void> {
@@ -95,8 +101,15 @@ export class WindowHost {
 
   openFiles(files: readonly File[]): void {
     const paths = files.map((file) => this.#bridge.pathForFile(file)).filter((path) => path !== "");
-    if (paths.length === 0) this.store.notify({ message: "Arcue can open files from your disk only.", kind: "alert" });
+    if (paths.length === 0) this.store.notify({ message: FROM_DISK_ONLY, kind: "alert" });
     for (const path of paths) void this.store.openPath(path);
+  }
+
+  /** The paths of dropped files, which the core reads where they are. */
+  #paths(files: readonly File[]): string[] {
+    const paths = files.map((file) => this.#bridge.pathForFile(file)).filter((path) => path !== "");
+    if (paths.length === 0) throw new Error(FROM_DISK_ONLY);
+    return paths;
   }
 
   /**

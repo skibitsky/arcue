@@ -10,7 +10,7 @@ import { Serial } from "./serial";
 
 /** What one command does to the review. */
 export interface ReviewChange<Result> {
-  /** The review to save, or null when nothing changes. */
+  /** The review to save, or null when it does not change, as when only the composition file changed. */
   next: ReviewFile | null;
   result: Result;
   /** Makes the change undoable. */
@@ -73,6 +73,7 @@ export class ReviewSession {
         const change = await compute(this.#review);
         if (change.next === null) {
           change.apply?.();
+          if (change.edit) this.history.record(change.edit);
           return change.result;
         }
         const text = serializeReview(change.next);
