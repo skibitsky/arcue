@@ -14,7 +14,14 @@ export {
   vec3Schema,
 } from "./anchors";
 export type { AssetStatus, AssetSummary } from "./assets";
-export { assetIdSchema, assetStatusSchema, assetSummarySchema, bytesSchema, commentIdSchema } from "./assets";
+export {
+  assetIdSchema,
+  assetStatusSchema,
+  assetSummarySchema,
+  bytesSchema,
+  commentIdSchema,
+  separateComposition,
+} from "./assets";
 export type { BridgeInfo, HandshakeOptions, LaunchInfo } from "./bridge";
 export {
   acceptBridge,

@@ -202,6 +202,22 @@ describe("Workspace", () => {
     expect(client.calls.some((call) => call.name === "asset.close")).toBe(false);
   });
 
+  it("names a tab after the composition file it was opened through, unless that is the model's own", async () => {
+    const armored = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Armored.arcue");
+    const own = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "StoneResonator.arcue");
+    const { client, store } = setup({ compositions: { [armored]: STONE_RESONATOR_PATH, [own]: STONE_RESONATOR_PATH } });
+    render(<Workspace store={store} createViewport={() => new TestViewport()} now={() => NOW} />);
+    await act(async () => {
+      for (const path of [own, armored, STONE_RESONATOR_PATH]) await client.execute("asset.open", { path });
+      await flush(10);
+    });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["StoneResonator.fbx", "Armored.arcue"]);
+    expect(store.state.get().active).toBe(store.state.get().tabs[0]?.id);
+    expect(screen.getByRole("tab", { name: "Armored.arcue" }).querySelector(".tab-name")?.getAttribute("title")).toBe(
+      armored,
+    );
+  });
+
   it("shows a reopen box's time and target without remove buttons", async () => {
     const { session } = await renderStone();
     act(() => session.reopen("c5"));

@@ -21,7 +21,15 @@ import type {
   TimeSelection,
   ViewState,
 } from "@arcue/protocol";
-import { ArcueError, commands, queries, reviewFileSchema, warningId } from "@arcue/protocol";
+import {
+  ArcueError,
+  commands,
+  defaultCompositionPath,
+  queries,
+  reviewFileSchema,
+  separateComposition,
+  warningId,
+} from "@arcue/protocol";
 import type { SceneDescription, SpatialAnchor, TimeAnchor, Vec3 } from "@arcue/scene";
 import { countInRanges, isDefaultPartView, materialSlots, shownByDefault } from "@arcue/scene";
 
@@ -42,6 +50,8 @@ export interface FakeCoreOptions {
   coreClipboard?: boolean;
   /** What `asset.inspect` reports for a path, or null when it cannot. */
   inspect?: (path: string) => AssetInspection | null;
+  /** The model each composition file names, by the composition's path, so opening one opens that model through it. */
+  compositions?: Readonly<Record<string, string>>;
   now?: () => Date;
 }
 
@@ -270,7 +280,13 @@ export class FakeCoreClient implements CoreClient {
   async #openAsset(args: CommandArgs<"asset.open">): Promise<CommandOutput<"asset.open">> {
     const window = this.#window;
     if (!window) throw new ArcueError("unavailable", "No window is connected.");
-    const existing = [...this.#assets.values()].find((asset) => asset.summary.path === args.path);
+    const model = this.#options.compositions?.[args.path];
+    const path = model ?? args.path;
+    const composition = model === undefined ? undefined : args.path;
+    const separate = composition !== undefined && composition !== defaultCompositionPath(path) ? composition : null;
+    const existing = [...this.#assets.values()].find(
+      (asset) => asset.summary.path === path && separateComposition(asset.summary) === separate,
+    );
     const show = (assetId: string) =>
       window({
         kind: "command",
@@ -286,14 +302,22 @@ export class FakeCoreClient implements CoreClient {
       return { assetId: existing.summary.assetId };
     }
     const assetId = `a${this.#nextAsset++}`;
-    const seed = this.#options.catalog(args.path);
-    const name = args.path.split("/").pop() ?? args.path;
+    const seed = this.#options.catalog(path);
+    const name = path.split("/").pop() ?? path;
     const asset: FakeAsset = {
-      summary: { assetId, path: args.path, name, status: "loading", version: null, error: null },
+      summary: {
+        assetId,
+        path,
+        name,
+        status: "loading",
+        version: null,
+        error: null,
+        ...(composition === undefined ? {} : { composition }),
+      },
       seed,
       review: seed?.review ?? {
         schemaVersion: 1,
-        asset: { path: args.path },
+        asset: { path },
         versions: [],
         comments: [],
         queue: [],

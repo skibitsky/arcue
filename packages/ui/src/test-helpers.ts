@@ -300,6 +300,8 @@ interface SetupOptions {
   files?: FileHost;
   /** What `asset.inspect` reports for a path. */
   inspect?: (path: string) => AssetInspection | null;
+  /** The model each composition file names, by the composition's path. */
+  compositions?: Readonly<Record<string, string>>;
 }
 
 export function setup(options: SetupOptions = {}) {
@@ -308,6 +310,7 @@ export function setup(options: SetupOptions = {}) {
     catalog: (path) => stoneCatalog(path, options.scene),
     now: () => NOW,
     ...(options.inspect ? { inspect: options.inspect } : {}),
+    ...(options.compositions ? { compositions: options.compositions } : {}),
   });
   const copied: string[] = [];
   const store = createWorkspaceStore({

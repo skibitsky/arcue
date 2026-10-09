@@ -1,3 +1,4 @@
+import { separateComposition } from "@arcue/protocol";
 import type { DragEvent, KeyboardEvent, ReactNode } from "react";
 import { modShortcut } from "../format";
 import type { AssetSession } from "../store/asset-session";
@@ -163,11 +164,12 @@ function Tab({
 
 function AssetTabLabel({ session }: { session: AssetSession }) {
   const summary = useSelect(session.state, (state) => state.summary);
-  const name = summary.name || fileName(summary.path) || "Loading";
+  const composition = separateComposition(summary);
+  const name = (composition && fileName(composition)) || summary.name || fileName(summary.path) || "Loading";
   return (
     <>
       <Icon name="cube" className={`tab-ic${summary.status === "failed" ? " is-alert" : ""}`} />
-      <span className="tab-name" title={summary.path}>
+      <span className="tab-name" title={composition ?? summary.path}>
         {name}
       </span>
     </>

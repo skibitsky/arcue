@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { defaultCompositionPath } from "./composition";
 
 export const assetIdSchema = z.string().min(1);
 
@@ -28,3 +29,12 @@ export const assetSummarySchema = z.object({
 
 export type AssetStatus = z.output<typeof assetStatusSchema>;
 export type AssetSummary = z.output<typeof assetSummarySchema>;
+
+/**
+ * The composition file an asset was opened through when that is not the model's own "<stem>.arcue", which makes the
+ * asset a separate view of the model with a tab of its own; null otherwise.
+ */
+export function separateComposition(summary: Pick<AssetSummary, "path" | "composition">): string | null {
+  const { composition, path } = summary;
+  return composition !== undefined && composition !== defaultCompositionPath(path) ? composition : null;
+}

@@ -1,5 +1,5 @@
 import type { AssetSummary } from "@arcue/protocol";
-import { defaultCompositionPath } from "@arcue/protocol";
+import { separateComposition } from "@arcue/protocol";
 import type { FileHost, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore } from "@arcue/ui";
 import type { DesktopBridge, MenuCommand, SavedTab, WindowTabs } from "../shared/ipc";
@@ -280,6 +280,5 @@ export class WindowHost {
  * the model's own composition file.
  */
 function reopenPath(summary: AssetSummary): string {
-  const { composition, path } = summary;
-  return composition !== undefined && path !== "" && composition !== defaultCompositionPath(path) ? composition : path;
+  return summary.path === "" ? "" : (separateComposition(summary) ?? summary.path);
 }
