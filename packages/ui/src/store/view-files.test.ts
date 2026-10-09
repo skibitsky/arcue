@@ -82,12 +82,14 @@ function inspection(meshes: number, clips: number): AssetInspection {
 /** A host whose dialog answers with `picked` and that places dropped files beside the model by name. */
 function fakeHost(picked: Partial<Record<FileKind, string[]>> = {}) {
   const opened: string[][] = [];
+  const discarded: string[][] = [];
   const host: FileHost = {
     pick: async (kind) => picked[kind] ?? [],
     place: async (files, assetPath) => files.map((file) => besideModel(assetPath, file.name)),
     open: (files) => opened.push(files.map((file) => file.name)),
+    discard: (files) => discarded.push(files.map((file) => file.name)),
   };
-  return { host, opened };
+  return { host, opened, discarded };
 }
 
 const file = (name: string) => new File(["x"], name);
@@ -198,7 +200,7 @@ describe("dropping files on a model's view", () => {
   });
 
   it("asks at the drop point for a file with meshes, then adds it with its role or opens it in a new tab", async () => {
-    const { host, opened } = fakeHost();
+    const { host, opened, discarded } = fakeHost();
     const { client, store, session } = await openStone({
       files: host,
       inspect: (path) => (path.endsWith("Turn.fbx") ? inspection(0, 1) : inspection(1, 0)),
@@ -228,9 +230,32 @@ describe("dropping files on a model's view", () => {
     expect(opened).toEqual([["Shells.fbx", "Turn.fbx", "Shell.png"]]);
     expect(callsOf(client, "composition.addFile")).toHaveLength(2);
 
+    expect(discarded).toEqual([]);
+
     await store.dropOnView(session.assetId, dropped, { x: 30, y: 40 });
     store.dismissDrop();
     expect(store.state.get().dropPrompt).toBeNull();
+    expect(discarded).toEqual([["Shells.fbx", "Turn.fbx", "Shell.png"]]);
+    store.dismissDrop();
+    expect(discarded).toHaveLength(1);
+  });
+
+  it("discards an unanswered drop's files when another drop replaces its prompt", async () => {
+    const { host, discarded } = fakeHost();
+    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    await store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
+    await store.dropOnView(session.assetId, [file("Crate.fbx")], { x: 0, y: 0 });
+    expect(discarded).toEqual([["Shells.fbx"]]);
+    expect(store.state.get().dropPrompt?.models.map((model) => model.path)).toEqual([`${FOLDER}/Crate.fbx`]);
+  });
+
+  it("discards the dropped files when their tab closes while the prompt is open", async () => {
+    const { host, discarded } = fakeHost();
+    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    await store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
+    await store.closeTab(session.assetId);
+    expect(store.state.get().dropPrompt).toBeNull();
+    expect(discarded).toEqual([["Shells.fbx"]]);
   });
 
   it("asks when a dropped model cannot be inspected, and then lets the core pick its role", async () => {

@@ -104,9 +104,10 @@ export class WebHost {
       open: (dropped) => {
         this.#removeCopies(dropped)
           .then(() => this.openFiles(dropped))
-          .catch((error: unknown) =>
-            this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" }),
-          );
+          .catch((error: unknown) => this.#alert(error));
+      },
+      discard: (dropped) => {
+        this.#removeCopies(dropped).catch((error: unknown) => this.#alert(error));
       },
     };
     store = createWorkspaceStore({ client: this.client, files });
@@ -191,7 +192,11 @@ export class WebHost {
     return output.files.map((placed) => placed.path);
   }
 
-  /** Removes the copies dropped files made beside an asset, once they open in a tab of their own instead. */
+  #alert(error: unknown): void {
+    this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" });
+  }
+
+  /** Removes the copies dropped files made beside an asset, once they open in a tab of their own or are dismissed. */
   async #removeCopies(files: readonly File[]): Promise<void> {
     const paths = files.flatMap((file) => {
       const copy = this.#copies.get(file);

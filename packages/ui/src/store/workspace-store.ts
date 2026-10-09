@@ -263,13 +263,10 @@ export class WorkspaceStore {
     const { tabs, active, dropPrompt } = this.state.get();
     const index = tabs.findIndex((tab) => tab.id === id);
     if (index === -1) return;
+    if (dropPrompt?.assetId === id) this.dismissDrop();
     const remaining = tabs.filter((tab) => tab.id !== id);
     const neighbor = remaining[Math.min(index, remaining.length - 1)]?.id ?? null;
-    this.state.patch({
-      tabs: remaining,
-      active: active === id ? neighbor : active,
-      dropPrompt: dropPrompt?.assetId === id ? null : dropPrompt,
-    });
+    this.state.patch({ tabs: remaining, active: active === id ? neighbor : active });
   }
 
   async openPath(path: string): Promise<void> {
@@ -517,6 +514,7 @@ export class WorkspaceStore {
           return;
         }
         const models = placed.map((path, index) => ({ path, role: roles[index] ?? null }));
+        this.dismissDrop();
         this.state.patch({ dropPrompt: { assetId, x: at.x, y: at.y, files: [...files], models } });
         return;
       }
@@ -546,8 +544,12 @@ export class WorkspaceStore {
     }
   }
 
+  /** Closes the drop prompt without an answer, and lets the host remove the files it placed for the drop. */
   dismissDrop(): void {
+    const prompt = this.state.get().dropPrompt;
+    if (!prompt) return;
     this.state.patch({ dropPrompt: null });
+    this.#files?.discard?.(prompt.files);
   }
 
   #assetPath(assetId: string): string {

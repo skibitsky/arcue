@@ -338,22 +338,33 @@ describe("Workspace", () => {
     });
   });
 
-  it("asks where a model dropped on the 3D view goes", async () => {
+  it("asks where a model dropped on the 3D view goes, and discards the placed copy when Escape dismisses it", async () => {
+    const discarded: string[][] = [];
     const files: FileHost = {
       pick: async () => [],
       place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
       open: () => {},
+      discard: (dropped) => discarded.push(dropped.map((entry) => entry.name)),
     };
     const { store } = await renderStone({ files });
     const view = screen.getByRole("region", { name: "3D view" });
-    await act(async () => {
-      fireEvent.drop(view, { dataTransfer: { files: [new File(["x"], "Crate.fbx")], types: ["Files"] } });
-      await flush();
-    });
+    const drop = () =>
+      act(async () => {
+        fireEvent.drop(view, { dataTransfer: { files: [new File(["x"], "Crate.fbx")], types: ["Files"] } });
+        await flush();
+      });
+    await drop();
     expect(store.state.get().dropPrompt?.models).toEqual([{ path: "/work/Crate.fbx", role: null }]);
     const user = userEvent.setup();
     await user.click(screen.getByRole("menuitem", { name: "Add to view" }));
     await act(() => flush());
     expect(store.state.get().dropPrompt).toBeNull();
+    expect(discarded).toEqual([]);
+
+    await drop();
+    await user.keyboard("{Escape}");
+    await act(() => flush());
+    expect(store.state.get().dropPrompt).toBeNull();
+    expect(discarded).toEqual([["Crate.fbx"]]);
   });
 });
