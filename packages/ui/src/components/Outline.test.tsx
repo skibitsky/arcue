@@ -2,7 +2,7 @@ import type { SceneDescription } from "@arcue/scene";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
+import { fakeScene, STONE_RESONATOR, STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import type { FileHost } from "../store/view-files";
 import { composedStone, flush, lodStone, NOW, POINT, setup, stoneBone, TestViewport } from "../test-helpers";
 import { Workspace } from "./Workspace";
@@ -95,6 +95,82 @@ describe("the outline", () => {
     expect(removals()).toHaveLength(2);
   });
 
+  it("closes with O from inside the drawer and gives the focus back to the outline button", async () => {
+    await renderStone(composedStone());
+    const user = userEvent.setup();
+    await user.keyboard("o");
+    act(() => within(drawer()).getByRole("treeitem", { name: "StoneResonator" }).focus());
+    await user.keyboard("o");
+    expect(screen.queryByRole("complementary", { name: "Outline" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Outline" }));
+
+    await user.keyboard("o");
+    const row = within(drawer()).getByRole("treeitem", { name: "StoneResonator" });
+    act(() => row.focus());
+    act(() => row.blur());
+    await act(() => flush());
+    await user.keyboard("o");
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("keeps the focus in the tree when Delete removes a file, and on the toolbar when the outline goes", async () => {
+    const { client, session } = await renderStone(composedStone());
+    const user = userEvent.setup();
+    await user.keyboard("o");
+    act(() => within(drawer()).getByRole("treeitem", { name: "beetle-shells.fbx" }).focus());
+    await user.keyboard("{Delete}");
+    await act(() => flush());
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Bone_1");
+
+    act(() => within(drawer()).getByRole("treeitem", { name: "beetle-shells.fbx" }).focus());
+    await act(async () => {
+      await client.simulateExport(session.assetId, { scene: fakeScene(STONE_RESONATOR) });
+      await flush(10);
+    });
+    expect(screen.queryByRole("button", { name: "Outline" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "View" }));
+  });
+
+  it("attaches, detaches and removes a file from its row's menu, which the keyboard opens", async () => {
+    const { client, session } = await renderStone(composedStone());
+    const user = userEvent.setup();
+    await user.keyboard("o");
+    const scene = session.state.get().scene as SceneDescription;
+    act(() => within(drawer()).getByRole("treeitem", { name: "beetle-shells.fbx" }).focus());
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    const menu = screen.getByRole("menu", { name: "beetle-shells.fbx" });
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Attach to bone", "Detach", "Remove from view"]);
+    expect(document.activeElement?.textContent).toBe("Attach to bone");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("beetle-shells.fbx");
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.keyboard("{ArrowRight}");
+    const bones = screen.getAllByRole("menu").at(-1) as HTMLElement;
+    expect(within(bones).queryByRole("menuitem", { name: "Bone_1" })).toBeNull();
+    await user.click(within(bones).getByRole("menuitem", { name: "Bone_7" }));
+    await act(() => flush());
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.contextMenu(within(drawer()).getByRole("treeitem", { name: "beetle-shells.fbx" }));
+    await user.click(screen.getByRole("menuitem", { name: "Detach" }));
+    await act(() => flush());
+    fireEvent.contextMenu(within(drawer()).getByRole("treeitem", { name: "beetle-shells.fbx" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove from view" }));
+    await act(() => flush());
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Bone_1");
+    const calls = client.calls.filter((call) => /^composition\.(attach|remove)File$/.test(call.name));
+    expect(calls.map((call) => [call.name, (call.input as { bone?: string | null }).bone])).toEqual([
+      ["composition.attachFile", scene.nodes[stoneBone(scene, "Bone_7")]?.path],
+      ["composition.attachFile", null],
+      ["composition.removeFile", undefined],
+    ]);
+  });
+
   it("has no plus without a host to add files from", async () => {
     await renderStone(composedStone());
     const user = userEvent.setup();
@@ -179,7 +255,7 @@ describe("the outline", () => {
     ]);
   });
 
-  it("filters a long tree, which scrolls inside the drawer", async () => {
+  it("filters a long tree", async () => {
     const { session } = await renderStone(composedStone());
     const user = userEvent.setup();
     act(() => session.setOutlineOpen(true));

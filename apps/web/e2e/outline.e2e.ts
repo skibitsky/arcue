@@ -197,4 +197,11 @@ test("under 760 px the drawer sits between the toolbar and the 3D view, which ke
   expect(after?.height).toBeCloseTo(before?.height ?? 0, 0);
   expect(after?.width).toBe(375);
   await page.screenshot({ path: `${SHOTS}outline-narrow.png` });
+
+  await page.getByRole("button", { name: "Skeleton" }).click();
+  const tree = outline(page).getByRole("tree");
+  const sizes = await tree.evaluate((element) => ({ scroll: element.scrollHeight, client: element.clientHeight }));
+  expect(sizes.scroll).toBeGreaterThan(sizes.client);
+  const open = await outline(page).boundingBox();
+  expect((open?.y ?? 0) + (open?.height ?? 0)).toBeLessThanOrEqual(812);
 });

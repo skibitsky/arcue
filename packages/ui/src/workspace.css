@@ -556,7 +556,16 @@
 }
 
 .tr.is-file {
+  position: relative;
   cursor: grab;
+}
+
+.tr-menu-anchor {
+  position: absolute;
+  right: var(--space-4);
+  bottom: 0;
+  width: 0;
+  height: 0;
 }
 
 .tr.is-drop {
@@ -1174,6 +1183,17 @@
 
 .menu-narrow {
   min-width: 96px;
+}
+
+.menu-bones {
+  min-width: min(180px, var(--radix-dropdown-menu-content-available-width, 180px));
+  max-width: var(--radix-dropdown-menu-content-available-width, none);
+}
+
+.menu-bones .mi-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .menu-item {

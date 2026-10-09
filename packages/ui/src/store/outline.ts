@@ -69,6 +69,11 @@ function partNode(part: ScenePart): OutlineNode {
   return { item: { kind: "part", key: `p:${part.id}`, name: part.name, part }, children: [] };
 }
 
+/** The key of a file's row under a bone, by its node index, or at the top as a set piece for null. */
+export function fileRowKey(file: string, bone: number | null): string {
+  return `f:${file}:${bone ?? -1}`;
+}
+
 /**
  * The outline of a scene: the model file with its parts and bones, each added file under the bone it hangs on with
  * its parts, then the added files that stay in place. `bones` "all" lists the whole bone tree; "attached" lists only
@@ -105,7 +110,7 @@ export function outlineTree(scene: SceneDescription, modelName: string, bones: "
   const groupNode = (group: Group): OutlineNode => ({
     item: {
       kind: "file",
-      key: `f:${group.file}:${group.anchor}`,
+      key: fileRowKey(group.file, group.anchor >= 0 ? group.anchor : null),
       name: group.file,
       file: group.file,
       bone: group.anchor >= 0 ? group.anchor : null,
