@@ -98,6 +98,26 @@ describe("NodePlatform files", () => {
     await expect(platform.remove(at("nothing/here"))).resolves.toBeUndefined();
     await expect(platform.remove("/")).rejects.toMatchObject({ code: "invalid-input" });
   });
+
+  it("renames a folder with everything in it, creating the folders above the new name", async () => {
+    await platform.writeFile(at("r/Hero.fbx/review.json"), "{}");
+    await platform.writeFile(at("r/Hero.fbx/rounds/round-1/prompt.md"), "p");
+    await platform.rename(at("r/Hero.fbx"), at("r/New/Striker.fbx"));
+    await expect(platform.exists(at("r/Hero.fbx"))).resolves.toBe(false);
+    await expect(platform.readText(at("r/New/Striker.fbx/review.json"))).resolves.toBe("{}");
+    await expect(platform.readText(at("r/New/Striker.fbx/rounds/round-1/prompt.md"))).resolves.toBe("p");
+  });
+
+  it("never renames over an existing file or folder, or from a missing path", async () => {
+    await platform.writeFile(at("r/a/review.json"), "a");
+    await platform.writeFile(at("r/b.txt"), "b");
+    await platform.mkdir(at("r/empty"));
+    await expect(platform.rename(at("r/a"), at("r/empty"))).rejects.toMatchObject({ code: "conflict" });
+    await expect(platform.rename(at("r/a/review.json"), at("r/b.txt"))).rejects.toMatchObject({ code: "conflict" });
+    await expect(platform.rename(at("r/missing"), at("r/c"))).rejects.toMatchObject({ code: "not-found" });
+    await expect(platform.readText(at("r/a/review.json"))).resolves.toBe("a");
+    await expect(platform.readText(at("r/b.txt"))).resolves.toBe("b");
+  });
 });
 
 describe("NodePlatform symbolic links", () => {

@@ -112,6 +112,26 @@ export class MemoryPlatform implements Platform {
     }
   }
 
+  async rename(from: string, to: string): Promise<void> {
+    const source = this.#resolve(from, false);
+    const target = this.#resolve(to, false);
+    if (!this.#entries.has(source)) throw notFound(source);
+    if (this.#entries.has(target)) throw new ArcueError("conflict", `${target} already exists.`);
+    if (pathInside(source, target) !== null) throw new ArcueError("invalid-input", `${target} is inside ${source}.`);
+    this.#ensureDirectory(dirname(target));
+    const moved = [...this.#entries].flatMap(([path, entry]) => {
+      const relative = pathInside(source, path);
+      return relative === null ? [] : [{ path, entry, next: joinPath(target, relative) }];
+    });
+    for (const { path } of moved) this.#entries.delete(path);
+    for (const { next, entry } of moved) this.#entries.set(next, entry);
+    for (const { path, next, entry } of moved) {
+      if (entry.kind !== "file") continue;
+      this.#notify(path, "removed");
+      this.#notify(next, "created");
+    }
+  }
+
   /** Creates a symbolic link at `path` to `target`, which is absolute or relative to the link's folder. */
   async symlink(path: string, target: string): Promise<void> {
     this.#link(path, target);

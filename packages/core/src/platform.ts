@@ -58,6 +58,11 @@ export interface Platform {
   /** Removes a file, or a folder with everything in it. Does nothing when the path does not exist. */
   remove(path: string): Promise<void>;
   /**
+   * Moves a file, or a folder with everything in it, in one step, and creates the missing folders above `to`. It never
+   * replaces anything: when `to` exists it rejects with "conflict" and moves nothing. A link at `from` moves as a link.
+   */
+  rename(from: string, to: string): Promise<void>;
+  /**
    * Calls the listener when the file at `path` is created, changed or removed. The returned function stops watching.
    * Changes arrive asynchronously, possibly more than once for one write, and an atomic replace may arrive as a
    * removal followed by a creation, so the core treats every change as "check the file again".

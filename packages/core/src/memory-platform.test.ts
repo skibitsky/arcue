@@ -81,6 +81,26 @@ describe("MemoryPlatform files", () => {
     await expect(platform.remove("/nothing/here")).resolves.toBeUndefined();
     await expect(platform.remove("/")).rejects.toMatchObject({ code: "invalid-input" });
   });
+
+  it("renames a folder with everything in it, creating the folders above the new name", async () => {
+    const platform = new MemoryPlatform();
+    await platform.writeFile("/r/Hero.fbx/review.json", "{}");
+    await platform.writeFile("/r/Hero.fbx/rounds/round-1/prompt.md", "p");
+    await platform.rename("/r/Hero.fbx", "/r/New/Striker.fbx");
+    await expect(platform.exists("/r/Hero.fbx")).resolves.toBe(false);
+    await expect(platform.readText("/r/New/Striker.fbx/review.json")).resolves.toBe("{}");
+    await expect(platform.readText("/r/New/Striker.fbx/rounds/round-1/prompt.md")).resolves.toBe("p");
+  });
+
+  it("never renames over an existing path, into itself, or from a missing one", async () => {
+    const platform = new MemoryPlatform();
+    await platform.writeFile("/r/a/review.json", "a");
+    await platform.mkdir("/r/b");
+    await expect(platform.rename("/r/a", "/r/b")).rejects.toMatchObject({ code: "conflict" });
+    await expect(platform.rename("/r/a", "/r/a/inner")).rejects.toMatchObject({ code: "invalid-input" });
+    await expect(platform.rename("/r/missing", "/r/c")).rejects.toMatchObject({ code: "not-found" });
+    await expect(platform.readText("/r/a/review.json")).resolves.toBe("a");
+  });
 });
 
 describe("MemoryPlatform watching", () => {
@@ -111,6 +131,20 @@ describe("MemoryPlatform watching", () => {
       { kind: "created", path: "/work/Hero.fbx" },
       { kind: "changed", path: "/work/Hero.fbx" },
       { kind: "removed", path: "/work/Hero.fbx" },
+    ]);
+  });
+
+  it("reports a rename as a removal of the old name and a creation of the new one", async () => {
+    const platform = new MemoryPlatform({ files: { "/work/Hero.fbx": "v1" } });
+    await Promise.resolve();
+    const changes: FileChange[] = [];
+    platform.watch("/work/Hero.fbx", (change) => changes.push(change));
+    platform.watch("/work/Striker.fbx", (change) => changes.push(change));
+    await platform.rename("/work/Hero.fbx", "/work/Striker.fbx");
+    await Promise.resolve();
+    expect(changes).toEqual([
+      { kind: "removed", path: "/work/Hero.fbx" },
+      { kind: "created", path: "/work/Striker.fbx" },
     ]);
   });
 });

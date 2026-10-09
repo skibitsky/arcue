@@ -102,6 +102,12 @@ export class NodePlatform implements Platform {
     await this.#call(target, (native) => rm(native, { recursive: true, force: true }));
   }
 
+  async rename(from: string, to: string): Promise<void> {
+    if (await this.#lstat(to)) throw new ArcueError("conflict", `${to} already exists.`);
+    await this.mkdir(dirname(to));
+    await this.#call(from, (native) => renameWithRetry(native, this.#native(to)));
+  }
+
   watch(path: string, listener: (change: FileChange) => void): () => void {
     return watchPath(normalizePath(path), (native) => this.#native(native), this.#folders, listener);
   }
