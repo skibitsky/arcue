@@ -28,6 +28,14 @@ ARCUE_E2E_SOFTWARE=1 pnpm --filter @arcue/web test:e2e --workers=1
 
 Software rendering has a longer test budget because shader compilation and screenshots can block for several seconds. The same assertions run with either renderer; failures retain traces and screenshots, which CI uploads as artifacts.
 
+## Build the desktop app
+
+```sh
+pnpm --filter @arcue/desktop package
+```
+
+This builds an app for the current platform and architecture in `apps/desktop/out/`. On Apple Silicon, open `apps/desktop/out/Arcue-darwin-arm64/Arcue.app`. macOS builds use local ad-hoc signing and do not need an Apple developer certificate. It uses the app icon in `assets/branding/`; `pnpm icons` regenerates the icon formats from the approved master image.
+
 ## License
 
 [MIT](LICENSE)
