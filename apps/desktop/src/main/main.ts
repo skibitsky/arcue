@@ -60,6 +60,8 @@ async function run(): Promise<void> {
   });
 
   await app.whenReady();
+  const icon = join(here, "icons", process.platform === "win32" ? "arcue.ico" : "arcue.png");
+  if (!app.isPackaged) app.dock?.setIcon(icon);
   const userData = app.getPath("userData");
   const logs = join(userData, "logs");
   mkdirSync(logs, { recursive: true });
@@ -96,6 +98,7 @@ async function run(): Promise<void> {
     core,
     log,
     preload: join(here, "preload.cjs"),
+    icon,
     rendererUrl: devServer ?? `${RENDERER_ORIGIN}/index.html`,
     devServer,
     onSessionChange: () => {

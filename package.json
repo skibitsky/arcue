@@ -8,6 +8,7 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "icons": "node scripts/generate-icons.mjs",
     "dev": "pnpm --filter @arcue/web dev",
     "typecheck": "tsc -p tsconfig.json && pnpm -r --no-bail typecheck",
     "lint": "biome check .",
@@ -17,6 +18,7 @@
   "devDependencies": {
     "@biomejs/biome": "catalog:",
     "@types/node": "catalog:",
+    "sharp": "^0.35.5",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

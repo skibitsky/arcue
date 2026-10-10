@@ -3,13 +3,15 @@ import { join } from "node:path";
 import type { CompositionFile } from "@arcue/protocol";
 import type { Plugin } from "vite";
 
-/** A sample the web host serves at "samples/<file>" and lists in the empty state. */
+/** A sample the web host serves at "samples/<file>" and, unless `gallery` is false, lists in the empty state. */
 export interface SampleEntry {
   /** The file name without its extension, used by the `?sample=` link parameter. */
   id: string;
   /** The model to open. */
   file: string;
   description: string;
+  /** Whether the empty state lists it. A test fixture opens only by id. */
+  gallery: boolean;
   /** Every file to fetch, `file` first. */
   files: string[];
   /** The model's composition, which the web host writes where the core reads it before opening the model. */
@@ -19,6 +21,7 @@ export interface SampleEntry {
 interface ManifestFile {
   file: string;
   description: string;
+  gallery?: boolean;
 }
 
 /** A model that opens with other files, and the composition that names them, as its review folder would keep it. */
@@ -45,7 +48,7 @@ export function readSampleEntries(folder: string): SampleEntry[] {
   return manifest.files
     .filter((entry) => /\.fbx$/i.test(entry.file) && present(entry.file))
     .map((entry) => {
-      const sample = { id: entry.file.replace(/\.fbx$/i, ""), file: entry.file };
+      const sample = { id: entry.file.replace(/\.fbx$/i, ""), file: entry.file, gallery: entry.gallery !== false };
       const set = manifest.compositions?.find((candidate) => candidate.model === entry.file);
       const members = set ? namedFiles(set.composition) : [];
       if (!set || !members.every(present)) return { ...sample, description: entry.description, files: [entry.file] };

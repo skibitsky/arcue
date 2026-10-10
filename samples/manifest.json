@@ -88,8 +88,398 @@
       }
     },
     {
+      "file": "stone-striker.fbx",
+      "description": "Game character: the Stone Striker from Iza. Three skinned LODs on a 62-bone rig, a 2048x2048 base-color texture embedded in the FBX, and 13 clips at 60 fps.",
+      "size_bytes": 9128060,
+      "export_settings": {
+        "use_selection": false,
+        "object_types": [
+          "ARMATURE",
+          "MESH"
+        ],
+        "use_mesh_modifiers": true,
+        "mesh_smooth_type": "FACE",
+        "use_tspace": false,
+        "add_leaf_bones": false,
+        "use_armature_deform_only": false,
+        "primary_bone_axis": "Y",
+        "secondary_bone_axis": "X",
+        "bake_anim": true,
+        "path_mode": "COPY",
+        "embed_textures": true,
+        "axis_forward": "-Z",
+        "axis_up": "Y",
+        "apply_unit_scale": true,
+        "apply_scale_options": "FBX_SCALE_ALL",
+        "global_scale": 1.0,
+        "bake_anim_use_all_bones": true,
+        "bake_anim_use_nla_strips": false,
+        "bake_anim_use_all_actions": true,
+        "bake_anim_force_startend_keying": true,
+        "bake_anim_step": 1.0,
+        "bake_anim_simplify_factor": 0.0
+      },
+      "fbx_version": 7400,
+      "axes": {
+        "up": "+Y",
+        "front": "+Z",
+        "coord": "+X"
+      },
+      "units": {
+        "unit_scale_factor": 100.0,
+        "original_unit_scale_factor": 100.0,
+        "meters_per_file_unit": 1.0
+      },
+      "fps": 60.0,
+      "fbx_time_mode": 3,
+      "meshes": [
+        {
+          "name": "Body_LOD0",
+          "control_points": 5374,
+          "polygons": 10720,
+          "triangles": 10720,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": true
+        },
+        {
+          "name": "Body_LOD1",
+          "control_points": 2691,
+          "polygons": 5360,
+          "triangles": 5360,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": true
+        },
+        {
+          "name": "Body_LOD2",
+          "control_points": 1349,
+          "polygons": 2680,
+          "triangles": 2680,
+          "materials": [
+            "Stone"
+          ],
+          "uv_sets": [
+            "UVMap"
+          ],
+          "has_uvs": true,
+          "shape_keys": [],
+          "skinned": true
+        }
+      ],
+      "armature": {
+        "name": "StoneResonatorRig",
+        "bone_count": 62,
+        "bone_names": [
+          "Root",
+          "Hips",
+          "Spine",
+          "Chest",
+          "UpperChest",
+          "Neck",
+          "Neck_Twist_A",
+          "Head",
+          "Left_Eye",
+          "Right_Eye",
+          "Left_Shoulder",
+          "Left_UpperArm",
+          "Left_LowerArm",
+          "Left_Hand",
+          "Left_ThumbProximal",
+          "Left_ThumbIntermediate",
+          "Left_ThumbDistal",
+          "Left_ThumbDistalEnd",
+          "Left_IndexProximal",
+          "Left_IndexIntermediate",
+          "Left_IndexDistal",
+          "Left_MiddleProximal",
+          "Left_MiddleIntermediate",
+          "Left_MiddleDistal",
+          "Left_MiddleDistalEnd",
+          "Left_RingProximal",
+          "Left_RingIntermediate",
+          "Left_RingDistal",
+          "Left_RingDistalEnd",
+          "Left_PinkyProximal",
+          "Left_PinkyIntermediate",
+          "Left_PinkyDistal",
+          "Right_Shoulder",
+          "Right_UpperArm",
+          "Right_LowerArm",
+          "Right_Hand",
+          "Right_ThumbProximal",
+          "Right_ThumbIntermediate",
+          "Right_ThumbDistal",
+          "Right_ThumbDistalEnd",
+          "Right_IndexProximal",
+          "Right_IndexIntermediate",
+          "Right_IndexDistal",
+          "Right_MiddleProximal",
+          "Right_MiddleIntermediate",
+          "Right_MiddleDistal",
+          "Right_RingProximal",
+          "Right_RingIntermediate",
+          "Right_RingDistal",
+          "Right_PinkyProximal",
+          "Right_PinkyIntermediate",
+          "Right_PinkyDistal",
+          "Left_UpperLeg",
+          "Left_LowerLeg",
+          "Left_Foot",
+          "Left_Toes",
+          "Left_ToesEnd",
+          "Right_UpperLeg",
+          "Right_LowerLeg",
+          "Right_Foot",
+          "Right_Toes",
+          "Right_ToesEnd"
+        ],
+        "root_bone": "Root"
+      },
+      "clips": [
+        {
+          "take_name": "StoneResonatorRig|Charge",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 96,
+          "duration_seconds": 1.6,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 54999,
+          "keys_per_curve_min": 97,
+          "keys_per_curve_max": 97,
+          "keyed_frames_union": 97,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Dead",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 60,
+          "duration_seconds": 1.0,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 34587,
+          "keys_per_curve_min": 61,
+          "keys_per_curve_max": 61,
+          "keyed_frames_union": 61,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Death",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 54,
+          "duration_seconds": 0.9,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 31185,
+          "keys_per_curve_min": 55,
+          "keys_per_curve_max": 55,
+          "keyed_frames_union": 55,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Displaced",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 96,
+          "duration_seconds": 1.6,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 54999,
+          "keys_per_curve_min": 97,
+          "keys_per_curve_max": 97,
+          "keyed_frames_union": 97,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Idle",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 120,
+          "duration_seconds": 2.0,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 68607,
+          "keys_per_curve_min": 121,
+          "keys_per_curve_max": 121,
+          "keyed_frames_union": 121,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Locked",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 48,
+          "duration_seconds": 0.8,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 27783,
+          "keys_per_curve_min": 49,
+          "keys_per_curve_max": 49,
+          "keyed_frames_union": 49,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Reassess",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 120,
+          "duration_seconds": 2.0,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 68607,
+          "keys_per_curve_min": 121,
+          "keys_per_curve_max": 121,
+          "keyed_frames_union": 121,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Recover",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 96,
+          "duration_seconds": 1.6,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 54999,
+          "keys_per_curve_min": 97,
+          "keys_per_curve_max": 97,
+          "keyed_frames_union": 97,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Release",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 6,
+          "duration_seconds": 0.1,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 3969,
+          "keys_per_curve_min": 7,
+          "keys_per_curve_max": 7,
+          "keyed_frames_union": 7,
+          "max_key_offset_ticks": 0
+        },
+        {
+          "take_name": "StoneResonatorRig|Run",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 36,
+          "duration_seconds": 0.6,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 20979,
+          "keys_per_curve_min": 37,
+          "keys_per_curve_max": 37,
+          "keyed_frames_union": 37,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Rush",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 24,
+          "duration_seconds": 0.4,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 14175,
+          "keys_per_curve_min": 25,
+          "keys_per_curve_max": 25,
+          "keyed_frames_union": 25,
+          "max_key_offset_ticks": 1
+        },
+        {
+          "take_name": "StoneResonatorRig|Stop",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 9,
+          "duration_seconds": 0.15,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 5670,
+          "keys_per_curve_min": 10,
+          "keys_per_curve_max": 10,
+          "keyed_frames_union": 10,
+          "max_key_offset_ticks": 0
+        },
+        {
+          "take_name": "StoneResonatorRig|Walk",
+          "in_takes_section": true,
+          "frame_start": 0,
+          "frame_end": 60,
+          "duration_seconds": 1.0,
+          "keys_on_every_frame": true,
+          "curve_count": 567,
+          "total_keys": 34587,
+          "keys_per_curve_min": 61,
+          "keys_per_curve_max": 61,
+          "keyed_frames_union": 61,
+          "max_key_offset_ticks": 1
+        }
+      ],
+      "blender_import_action_names": [
+        "StoneResonatorRig|StoneResonatorRig|Charge",
+        "StoneResonatorRig|StoneResonatorRig|Dead",
+        "StoneResonatorRig|StoneResonatorRig|Death",
+        "StoneResonatorRig|StoneResonatorRig|Displaced",
+        "StoneResonatorRig|StoneResonatorRig|Idle",
+        "StoneResonatorRig|StoneResonatorRig|Locked",
+        "StoneResonatorRig|StoneResonatorRig|Reassess",
+        "StoneResonatorRig|StoneResonatorRig|Recover",
+        "StoneResonatorRig|StoneResonatorRig|Release",
+        "StoneResonatorRig|StoneResonatorRig|Run",
+        "StoneResonatorRig|StoneResonatorRig|Rush",
+        "StoneResonatorRig|StoneResonatorRig|Stop",
+        "StoneResonatorRig|StoneResonatorRig|Walk"
+      ],
+      "textures": [
+        {
+          "name": "StoneStriker-BaseColor",
+          "relative_filename": "stone-striker.fbm/StoneStriker-BaseColor.jpg",
+          "embedded_bytes": 978764,
+          "blender_image": {
+            "name": "StoneStriker-BaseColor",
+            "size": [
+              2048,
+              2048
+            ],
+            "packed": true
+          }
+        }
+      ],
+      "rest_bounds_m": {
+        "frame": "Y-up, right-handed, meters, after unit conversion",
+        "min": [
+          -1.2834,
+          -0.0006,
+          -0.3698
+        ],
+        "max": [
+          1.198,
+          2.0027,
+          0.3765
+        ]
+      }
+    },
+    {
       "file": "pebble-golem.fbx",
       "description": "Rigged creature: one fused stone mesh, 27 deform bones with fingers and thumbs on both hands, automatic weights, four clips baked with a key on every frame.",
+      "gallery": false,
       "size_bytes": 1630796,
       "export_settings": {
         "use_selection": false,
@@ -266,6 +656,7 @@
     {
       "file": "pebble-golem-sparse.fbx",
       "description": "The pebble golem exported with key simplification, so curves have sparse, irregularly spaced keys.",
+      "gallery": false,
       "size_bytes": 1363612,
       "export_settings": {
         "use_selection": false,

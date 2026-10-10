@@ -10,7 +10,8 @@ Options after `--`:
     --no-export             skip building; only re-measure existing files
     --no-manifest           skip measuring and writing samples/manifest.json
 
-Every model is built from primitives in code. No external assets are used.
+Every model except the Stone Striker is built from primitives in code. The Stone Striker comes from the Iza game and
+is exported from sources/stone-striker.blend.
 """
 
 import hashlib
@@ -995,6 +996,35 @@ def beetle_export_settings(object_types):
     )
 
 
+# ---------------------------------------------------------------- stone striker
+
+STRIKER_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources", "stone-striker.blend")
+
+
+def build_stone_striker():
+    """Load the Stone Striker from the Iza game into an unsaved session, so no path reaches the FBX header."""
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    placeholder = bpy.context.scene
+    with bpy.data.libraries.load(STRIKER_SOURCE, link=False) as (source, target):
+        target.scenes = list(source.scenes)
+        target.actions = list(source.actions)
+    bpy.context.window.scene = target.scenes[0]
+    bpy.data.scenes.remove(placeholder)
+
+    for obj in bpy.data.objects:
+        if obj.type == "MESH":
+            obj.data.name = obj.name
+    (material,) = bpy.data.materials
+    material.name = "Stone"
+    (image,) = bpy.data.images
+    image.name = "StoneStriker-BaseColor"
+    image.filepath_raw = "//StoneStriker-BaseColor.jpg"
+
+    rig = bpy.data.objects["StoneResonatorRig"]
+    rig.animation_data.action = bpy.data.actions["Idle"]
+    bpy.context.scene.frame_set(1)
+
+
 # ---------------------------------------------------------------- samples
 
 SAMPLES = [
@@ -1005,16 +1035,27 @@ SAMPLES = [
         export=dict(UNITY_EXPORT),
     ),
     dict(
+        name="stone-striker",
+        description="Game character: the Stone Striker from Iza. Three skinned LODs on a 62-bone rig, a 2048x2048 "
+                    "base-color texture embedded in the FBX, and 13 clips at 60 fps.",
+        export=dict(UNITY_EXPORT, use_armature_deform_only=False, path_mode="COPY", embed_textures=True,
+                    bake_anim=True, bake_anim_use_all_bones=True, bake_anim_use_nla_strips=False,
+                    bake_anim_use_all_actions=True, bake_anim_force_startend_keying=True, bake_anim_step=1.0,
+                    bake_anim_simplify_factor=0.0),
+    ),
+    dict(
         name="pebble-golem",
         description="Rigged creature: one fused stone mesh, 27 deform bones with fingers and thumbs on both "
                     "hands, automatic weights, four clips baked with a key on every frame.",
         export=golem_export_settings(0.0),
+        gallery=False,
     ),
     dict(
         name="pebble-golem-sparse",
         description="The pebble golem exported with key simplification, so curves have sparse, "
                     "irregularly spaced keys.",
         export=golem_export_settings(1.0),
+        gallery=False,
     ),
     dict(
         name="blob",
@@ -1064,6 +1105,8 @@ SAMPLES = [
 def build(name, texture_dir):
     if name == "crate":
         build_crate()
+    elif name == "stone-striker":
+        build_stone_striker()
     elif name in ("pebble-golem", "pebble-golem-sparse"):
         build_golem()
     elif name == "blob":
@@ -1287,9 +1330,10 @@ def describe(sample):
             raise RuntimeError("%s: imported bones differ from FBX LimbNodes" % sample["name"])
     export = export_settings(sample)
     export["object_types"] = sorted(export["object_types"])
-    entry = dict(
-        file=sample["name"] + ".fbx",
-        description=sample["description"],
+    entry = dict(file=sample["name"] + ".fbx", description=sample["description"])
+    if "gallery" in sample:
+        entry["gallery"] = sample["gallery"]
+    entry.update(
         size_bytes=os.path.getsize(path),
         export_settings=export,
         fbx_version=raw["fbx_version"],

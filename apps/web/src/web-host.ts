@@ -29,6 +29,10 @@ function isLoadFailure(event: Event): boolean {
   return !(event instanceof ErrorEvent);
 }
 
+function sampleAsset(sample: SampleInfo): SampleAsset {
+  return { name: sample.file, path: samplePath(sample.file), description: sample.description };
+}
+
 export interface OpenAt {
   clip?: string;
   frame?: number;
@@ -41,6 +45,7 @@ export interface OpenAt {
 export class WebHost {
   readonly client: CoreClient;
   readonly store: WorkspaceStore;
+  /** The samples the empty state lists. */
   readonly samples: readonly SampleAsset[];
   readonly #sampleInfo: readonly SampleInfo[];
   readonly #baseUrl: string;
@@ -53,11 +58,7 @@ export class WebHost {
 
   constructor(samples: readonly SampleInfo[], baseUrl: string) {
     this.#sampleInfo = samples;
-    this.samples = samples.map((sample) => ({
-      name: sample.file,
-      path: samplePath(sample.file),
-      description: sample.description,
-    }));
+    this.samples = samples.filter((sample) => sample.gallery).map(sampleAsset);
     this.#baseUrl = baseUrl;
 
     const worker = new Worker(new URL("./workers/core-worker.ts", import.meta.url), {
@@ -99,9 +100,10 @@ export class WebHost {
     this.#ready = this.#host.request("command", hostRequests.connectWindow, { port: channel.port2 }, [channel.port2]);
   }
 
+  /** Any sample, including test fixtures the empty state does not list. */
   sampleById(id: string): SampleAsset | null {
     const info = this.#sampleInfo.find((sample) => sample.id === id);
-    return info ? (this.samples.find((sample) => sample.path === samplePath(info.file)) ?? null) : null;
+    return info ? sampleAsset(info) : null;
   }
 
   /** Fetches the sample once, then opens it, at a clip and frame if given. Resolves to the asset id. */
