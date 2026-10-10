@@ -930,7 +930,7 @@ async function main(): Promise<void> {
       };
     });
     check(
-      "a pending pin is drawn in the feedback blue without a number",
+      "a pending pin is drawn in the feedback color without a number",
       pendingPin.pending && !pendingPin.sent && pendingPin.text === "",
       pendingPin,
     );

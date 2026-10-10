@@ -22,7 +22,7 @@ export interface CommentOverlay {
   anchor: SpatialAnchor;
   /** A selected region is the one that Shift strokes add to and Ctrl or Cmd strokes erase from. */
   selected: boolean;
-  /** The comment is still being written: drawn in the feedback blue whatever its state, without a number, pulsing. */
+  /** The comment is still being written: drawn in the feedback color whatever its state, without a number, pulsing. */
   pending?: boolean;
 }
 

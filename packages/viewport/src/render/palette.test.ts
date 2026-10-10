@@ -10,7 +10,9 @@ function stylesheetTokens(): Map<string, string> {
   for (const [, name, value] of tokensCss.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
     if (name && value) tokens.set(name, normalize(value));
   }
-  return tokens;
+  const resolve = (value: string): string =>
+    value.replace(/var\((--[a-z0-9-]+)\)/g, (_, name: string) => resolve(tokens.get(name) ?? ""));
+  return new Map([...tokens].map(([name, value]) => [name, resolve(value)]));
 }
 
 describe("the view's colors", () => {

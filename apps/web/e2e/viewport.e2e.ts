@@ -13,8 +13,8 @@ const WALK_12 = "/?sample=pebble-golem&clip=Armature%7CWalk&frame=12";
 interface PixelStats {
   /** Share of pixels that differ clearly from the top-left corner, which shows the backdrop. */
   covered: number;
-  /** Share of pixels where blue leads red and green clearly, as the feedback blue does. */
-  blue: number;
+  /** Share of pixels where red leads green and blue clearly, as the feedback orange does. */
+  feedback: number;
 }
 
 async function pixelStats(page: Page, png: Buffer): Promise<PixelStats> {
@@ -28,16 +28,16 @@ async function pixelStats(page: Page, png: Buffer): Promise<PixelStats> {
     const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
     const [r0 = 0, g0 = 0, b0 = 0] = data;
     let covered = 0;
-    let blue = 0;
+    let feedback = 0;
     for (let index = 0; index < data.length; index += 4) {
       const r = data[index] ?? 0;
       const g = data[index + 1] ?? 0;
       const b = data[index + 2] ?? 0;
       if (Math.abs(r - r0) + Math.abs(g - g0) + Math.abs(b - b0) > 60) covered++;
-      if (b - r > 40 && b - g > 15) blue++;
+      if (r - b > 50 && r - g > 30) feedback++;
     }
     const total = data.length / 4;
-    return { covered: covered / total, blue: blue / total };
+    return { covered: covered / total, feedback: feedback / total };
   }, png.toString("base64"));
 }
 
@@ -124,7 +124,7 @@ async function settle(page: Page): Promise<void> {
   );
 }
 
-function feedbackBlue(page: Page): Promise<string> {
+function feedbackColor(page: Page): Promise<string> {
   return page.evaluate(() => {
     const probe = document.createElement("span");
     probe.style.color = "var(--feedback)";
@@ -166,7 +166,7 @@ test("playing a clip advances the thin red playhead", async ({ page }) => {
   await expect(page.getByRole("img", { name: /^Frame \d+ of 30$/ })).not.toHaveAccessibleName("Frame 12 of 30");
 });
 
-test("a click pins, a drag paints in feedback blue, and a copied round names the clip, frame and mesh", async ({
+test("a click pins, a drag paints in the feedback color, and a copied round names the clip, frame and mesh", async ({
   page,
   context,
 }) => {
@@ -176,14 +176,14 @@ test("a click pins, a drag paints in feedback blue, and a copied round names the
 
   await placePin(page, canvas, "Round the shoulder plate.");
   await page.mouse.move(5, 5);
-  const blue = await feedbackBlue(page);
+  const feedback = await feedbackColor(page);
   const pin = page.locator(".arcue-vp-pin-dot", { hasText: /^1$/ });
-  await expect.poll(() => pin.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(blue);
+  await expect.poll(() => pin.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(feedback);
 
   const beforePaint = await pixelStats(page, await canvas.screenshot());
   await paintRegion(page, canvas, "Thicken the belly.", 2);
   const afterPaint = await pixelStats(page, await canvas.screenshot());
-  expect(afterPaint.blue - beforePaint.blue).toBeGreaterThan(0.002);
+  expect(afterPaint.feedback - beforePaint.feedback).toBeGreaterThan(0.002);
 
   const panel = page.getByRole("complementary", { name: "Comments" });
   await expect(panel.getByRole("button", { name: "Comment 1: Round the shoulder plate." })).toBeVisible();
@@ -227,7 +227,7 @@ test("the gallery lists the samples", async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}gallery.png` });
 });
 
-test("a lane drag selects a range in feedback blue, and a resolved comment turns a very dim blue", async ({
+test("a lane drag selects a range in the feedback color, and a resolved comment turns olive", async ({
   page,
   context,
 }) => {
@@ -241,13 +241,13 @@ test("a lane drag selects a range in feedback blue, and a resolved comment turns
   await page.mouse.up();
   await expect(page.locator(".range-chip")).toContainText("f8–20");
   const range = page.locator(".tl-range");
-  const blue = await feedbackBlue(page);
+  const feedback = await feedbackColor(page);
   const rangeStyle = await range.evaluate((element) => {
     const computed = getComputedStyle(element);
     return { fill: computed.backgroundColor, edges: computed.boxShadow };
   });
-  expect(rangeStyle.fill).toBe("rgba(91, 156, 246, 0.16)");
-  expect(rangeStyle.edges).toContain(blue);
+  expect(rangeStyle.fill).toBe("rgba(221, 101, 61, 0.16)");
+  expect(rangeStyle.edges).toContain(feedback);
   await page.screenshot({ path: `${SHOTS}timeline-range.png` });
 
   await page.getByRole("button", { name: "Comment", exact: true }).click();

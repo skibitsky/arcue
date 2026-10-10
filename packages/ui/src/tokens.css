@@ -2,12 +2,22 @@
 :root {
   color-scheme: dark;
 
+  /* The Arcue palette. The function tokens below take their colors from it. */
+  --palette-orange: #dd653d;
+  --palette-rust: #691e06;
+  --palette-olive: #515a47;
+  --palette-sand: #ebb773;
+  --palette-charcoal: #1b1a18;
+  --palette-charcoal-raised: #292725;
+  --palette-charcoal-strong: #363430;
+  --palette-stone: #b6b1a8;
+
   /* Neutrals: warm charcoal surfaces, lines and text. */
   --surface-desk: #121110;
-  --surface-base: #1b1a18;
+  --surface-base: var(--palette-charcoal);
   --surface-panel: #22211f;
-  --surface-raised: #2b2a27;
-  --surface-raised-strong: #363431;
+  --surface-raised: var(--palette-charcoal-raised);
+  --surface-raised-strong: var(--palette-charcoal-strong);
   --surface-tooltip: #0e0d0c;
   --surface-hover: rgba(236, 228, 214, 0.04);
   --surface-hover-strong: rgba(236, 228, 214, 0.06);
@@ -16,27 +26,28 @@
   --line: rgba(236, 228, 214, 0.08);
   --line-strong: rgba(236, 228, 214, 0.15);
   --text: #ede9e2;
-  --text-muted: #b6b1a8;
+  --text-muted: var(--palette-stone);
   --text-faint: #8f8a82;
   --focus-ring: rgba(237, 233, 226, 0.7);
 
-  /* Feedback: pins, painted regions, the brush, the range selection, comment markers, Copy prompt. */
-  --feedback: #5b9cf6;
-  --feedback-hover: #78aef8;
-  --feedback-ink: #0b1526;
-  --feedback-soft: rgba(91, 156, 246, 0.16);
-  --feedback-ring: rgba(91, 156, 246, 0.35);
-  --feedback-sent: #4a6890;
-  --feedback-resolved: #34445c;
-  --feedback-resolved-ink: #8ea5c6;
+  /* Feedback: pins, painted regions, the brush, the range selection, comment markers, Copy prompt. Sent comments
+     are a brick lifted from the rust so small marks stay visible; resolved comments fade to olive. */
+  --feedback: var(--palette-orange);
+  --feedback-hover: #e37c59;
+  --feedback-ink: var(--palette-charcoal);
+  --feedback-soft: rgba(221, 101, 61, 0.16);
+  --feedback-ring: rgba(221, 101, 61, 0.35);
+  --feedback-sent: #a3401c;
+  --feedback-resolved: var(--palette-olive);
+  --feedback-resolved-ink: var(--palette-stone);
 
-  /* The playhead: a thin red line. */
+  /* The playhead: a thin red line, like a film editor's. */
   --playhead: #ff4b45;
   --playhead-width: 1.5px;
 
   /* Warnings and errors. */
-  --alert: #f0a43a;
-  --alert-soft: rgba(240, 164, 58, 0.14);
+  --alert: var(--palette-sand);
+  --alert-soft: rgba(235, 183, 115, 0.14);
 
   /* The status bar's dot for a watched file whose latest export is on screen. */
   --live: #93bd8c;

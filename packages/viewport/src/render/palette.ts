@@ -21,18 +21,18 @@ export interface Palette {
 }
 
 export const DEFAULT_PALETTE: Palette = {
-  feedback: "#5b9cf6",
-  feedbackHover: "#78aef8",
-  feedbackInk: "#0b1526",
-  feedbackSent: "#4a6890",
-  feedbackResolved: "#34445c",
-  feedbackResolvedInk: "#8ea5c6",
-  feedbackRing: "rgba(91, 156, 246, 0.35)",
-  alert: "#f0a43a",
+  feedback: "#dd653d",
+  feedbackHover: "#e37c59",
+  feedbackInk: "#1b1a18",
+  feedbackSent: "#a3401c",
+  feedbackResolved: "#515a47",
+  feedbackResolvedInk: "#b6b1a8",
+  feedbackRing: "rgba(221, 101, 61, 0.35)",
+  alert: "#ebb773",
   viewportGlow: "#2d2b28",
   viewportEdge: "#1a1917",
   surfaceDesk: "#121110",
-  surfaceRaised: "#2b2a27",
+  surfaceRaised: "#292725",
   text: "#ede9e2",
   textMuted: "#b6b1a8",
   textFaint: "#8f8a82",
@@ -59,7 +59,7 @@ const TOKENS: Record<keyof Palette, string> = {
 /** Every UI token the view's stylesheet uses, with the value `tokens.css` gives it; the fallback when it is missing. */
 export const TOKEN_DEFAULTS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(TOKENS).map(([key, token]) => [token, DEFAULT_PALETTE[key as keyof Palette]])),
-  "--feedback-soft": "rgba(91, 156, 246, 0.16)",
+  "--feedback-soft": "rgba(221, 101, 61, 0.16)",
   "--size-pin": "22px",
   "--radius-full": "999px",
   "--weight-bold": "700",
