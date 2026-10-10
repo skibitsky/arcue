@@ -88,7 +88,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none \
-            --body "Web host preview: $URL ($HEAD_SHA). Samples open from the empty state, or link one with \`?sample=pebble-golem&clip=Armature%7CWalk&frame=12\`."
+            --body "Web host preview: $URL ($HEAD_SHA). Samples open from the empty state, or link one with \`?sample=stone-striker&clip=StoneResonatorRig%7CWalk&frame=12\`."
 
       - name: Deploy
         if: steps.secrets.outputs.present == 'true' && github.event_name == 'workflow_run'

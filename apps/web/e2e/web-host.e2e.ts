@@ -11,10 +11,25 @@ interface ArcueGlobal {
 }
 
 const SHOTS = fileURLToPath(new URL("../screenshots/", import.meta.url));
-const samples = readSampleEntries(fileURLToPath(new URL("../../../samples/", import.meta.url)));
+const samples = readSampleEntries(fileURLToPath(new URL("../../../samples/", import.meta.url))).filter(
+  (sample) => sample.gallery,
+);
 const clipsOf: Record<string, string[]> = {
-  "pebble-golem": ["Hit", "Idle", "Walk", "Wave"],
-  "pebble-golem-sparse": ["Hit", "Idle", "Walk", "Wave"],
+  "stone-striker": [
+    "Charge",
+    "Dead",
+    "Death",
+    "Displaced",
+    "Idle",
+    "Locked",
+    "Reassess",
+    "Recover",
+    "Release",
+    "Run",
+    "Rush",
+    "Stop",
+    "Walk",
+  ],
   blob: ["Bounce"],
   beetle: ["Turn", "Walk"],
   "beetle-turn": ["Turn"],
