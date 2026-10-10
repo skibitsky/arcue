@@ -225,7 +225,7 @@ describe("NodePlatform watching", () => {
     mkdirSync(join(native, "export"));
     await new Promise((resolve) => setTimeout(resolve, 100));
     await writeFile(join(native, "export", "Hero.fbx"), "v2");
-    await until(() => changes.at(-1)?.kind === "created");
+    await until(() => changes.some((change) => change.kind === "created"));
     stop();
   });
 

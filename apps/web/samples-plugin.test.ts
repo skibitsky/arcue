@@ -10,6 +10,7 @@ describe("readSampleEntries", () => {
     const entries = readSampleEntries(folder);
     expect(entries.map((entry) => entry.id)).toEqual([
       "crate",
+      "stone-striker",
       "pebble-golem",
       "pebble-golem-sparse",
       "blob",
@@ -23,6 +24,11 @@ describe("readSampleEntries", () => {
     expect(entries[0]?.description).toMatch(/^Static prop/);
     expect(entries[0]?.files).toEqual(["crate.fbx"]);
     expect(entries[0]?.composition).toBeUndefined();
+  });
+
+  it("keeps the golem test fixtures out of the gallery", () => {
+    const hidden = readSampleEntries(folder).filter((entry) => !entry.gallery);
+    expect(hidden.map((entry) => entry.id)).toEqual(["pebble-golem", "pebble-golem-sparse"]);
   });
 
   it("gives a model its composition from the manifest, with every file the composition names", () => {

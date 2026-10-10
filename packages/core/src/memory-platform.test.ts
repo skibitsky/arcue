@@ -72,6 +72,19 @@ describe("MemoryPlatform files", () => {
     ]);
   });
 
+  it("lists the root, and never a sibling whose name starts with the folder's", async () => {
+    const platform = new MemoryPlatform();
+    await platform.writeFile("/r/a.png", "");
+    await platform.writeFile("/r2/b.png", "");
+    await platform.writeFile("/r.png", "");
+    await expect(platform.list("/r")).resolves.toEqual([{ name: "a.png", kind: "file" }]);
+    await expect(platform.list("/")).resolves.toEqual([
+      { name: "r", kind: "directory" },
+      { name: "r.png", kind: "file" },
+      { name: "r2", kind: "directory" },
+    ]);
+  });
+
   it("removes a folder with everything in it, and ignores missing paths", async () => {
     const platform = new MemoryPlatform();
     await platform.writeFile("/r/rounds/round-1/c1.png", "");

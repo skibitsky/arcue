@@ -1,4 +1,4 @@
-import { copyFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,11 @@ export async function buildProcesses(): Promise<void> {
   await build(nodeBundle(require.resolve("@arcue/platform-node/import-worker"), "import-worker.js", "es"));
   const wasm = require.resolve("@arcue/import-fbx/arcue-ufbx.wasm");
   await copyFile(wasm, join(dist, "arcue-ufbx.wasm"));
+  const icons = join(dist, "icons");
+  await mkdir(icons, { recursive: true });
+  const branding = fileURLToPath(new URL("../../../assets/branding/", import.meta.url));
+  await copyFile(join(branding, "arcue.png"), join(icons, "arcue.png"));
+  await copyFile(join(branding, "arcue.ico"), join(icons, "arcue.ico"));
 }
 
 export async function buildRenderer(): Promise<void> {

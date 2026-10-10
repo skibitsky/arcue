@@ -14,6 +14,7 @@ export interface WindowManagerOptions {
   core: CoreHost;
   log: Log;
   preload: string;
+  icon: string;
   rendererUrl: string;
   devServer: string | null;
   /** Called whenever what a session restore needs changed: tabs, bounds, or the set of windows. */
@@ -100,6 +101,7 @@ export class WindowManager {
       minHeight: 480,
       show: false,
       title: "Arcue",
+      icon: this.#options.icon,
       ...(mac ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 14, y: 14 } } : {}),
       webPreferences: {
         preload: this.#options.preload,

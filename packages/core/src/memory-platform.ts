@@ -1,7 +1,7 @@
 import { ArcueError, createMemoryChannel, serveImportWorker } from "@arcue/protocol";
 import type { Importer } from "@arcue/scene";
 import { ManualClock } from "./manual-clock";
-import { basename, dirname, findGitRoot, joinPath, normalizePath, pathInside } from "./paths";
+import { dirname, findGitRoot, joinPath, normalizePath, pathInside } from "./paths";
 import type { Clock, DirectoryEntry, FileChange, FileStat, ImportWorker, Platform } from "./platform";
 
 type Entry =
@@ -96,8 +96,8 @@ export class MemoryPlatform implements Platform {
     if (this.#entries.get(folder)?.kind !== "directory") throw notFound(folder);
     const entries: DirectoryEntry[] = [];
     for (const [entryPath, entry] of this.#entries) {
-      if (entryPath !== folder && dirname(entryPath) === folder)
-        entries.push({ name: basename(entryPath), kind: entry.kind });
+      const name = childName(folder, entryPath);
+      if (name !== null) entries.push({ name, kind: entry.kind });
     }
     return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
@@ -115,7 +115,7 @@ export class MemoryPlatform implements Platform {
   async removeEmptyFolder(path: string): Promise<void> {
     const folder = this.#resolve(path, false);
     if (this.#entries.get(folder)?.kind !== "directory") throw notFound(folder);
-    if ([...this.#entries.keys()].some((entry) => entry !== folder && dirname(entry) === folder)) {
+    if ([...this.#entries.keys()].some((entry) => childName(folder, entry) !== null)) {
       throw new ArcueError("conflict", `${folder} is not empty.`);
     }
     this.#entries.delete(folder);
@@ -231,6 +231,12 @@ export class MemoryPlatform implements Platform {
       for (const listener of [...(this.#watchers.get(path) ?? [])]) listener({ kind, path });
     });
   }
+}
+
+function childName(folder: string, path: string): string | null {
+  const prefix = folder.endsWith("/") ? folder : `${folder}/`;
+  if (path.length <= prefix.length || !path.startsWith(prefix) || path.includes("/", prefix.length)) return null;
+  return path.slice(prefix.length);
 }
 
 function rootOf(path: string): string {

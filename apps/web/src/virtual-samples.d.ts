@@ -5,6 +5,7 @@ declare module "virtual:arcue-samples" {
     id: string;
     file: string;
     description: string;
+    gallery: boolean;
     files: readonly string[];
     composition?: CompositionFile;
   }[];

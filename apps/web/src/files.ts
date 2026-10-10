@@ -13,6 +13,8 @@ export interface SampleInfo {
   /** The model to open. */
   file: string;
   description: string;
+  /** Whether the empty state lists it. A test fixture opens only by id. */
+  gallery: boolean;
   /** Every file to fetch, the model first. */
   files: readonly string[];
   /** The model's composition, which the web host writes where the core reads it before opening the model. */

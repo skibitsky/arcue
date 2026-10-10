@@ -223,7 +223,8 @@ test("a deep link opens the view at its frame", async ({ page }) => {
 
 test("the gallery lists the samples", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: /^pebble-golem\.fbx/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^stone-striker\.fbx/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^pebble-golem/ })).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}gallery.png` });
 });
 

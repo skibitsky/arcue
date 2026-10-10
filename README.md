@@ -32,6 +32,12 @@ Software rendering has a longer test budget because shader compilation and scree
 
 On Linux without a display, run the desktop app and its tests under `xvfb-run -a`. Without a GPU, start the app with `--use-angle=swiftshader --enable-unsafe-swiftshader` so the 3D view renders.
 
+## Build the desktop app
+
+```sh
+pnpm --filter @arcue/desktop package
+```
+
 ## License
 
 [MIT](LICENSE)

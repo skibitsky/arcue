@@ -1,7 +1,7 @@
 import { IMAGE_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { FoundFile } from "@arcue/scene";
 import { parseStoredPath } from "@arcue/scene";
-import { insideWithoutLinks } from "./links";
+import { createLinkCheck } from "./links";
 import { dirname, joinPath, normalizePath, pathInside, relativePath, stemOf } from "./paths";
 import type { DirectoryEntry, EntryKind, Platform } from "./platform";
 
@@ -37,6 +37,7 @@ export function createFileSearch(
   const root = normalizePath(readRoot);
   const assetFolder = dirname(assetPath);
   const stem = stemOf(assetPath);
+  const insideWithoutLinks = createLinkCheck(platform, root);
   const listings = new Map<string, Promise<DirectoryEntry[]>>();
   const found = new Map<string, Promise<string | null>>();
 
@@ -46,14 +47,14 @@ export function createFileSearch(
       listing =
         listings.size >= MAX_SEARCHED_FOLDERS
           ? Promise.resolve([])
-          : listFolder(platform, root, folder, isReadableImage);
+          : listFolder(platform, insideWithoutLinks, folder, isReadableImage);
       listings.set(folder, listing);
     }
     return listing;
   };
 
   const entry = async (folder: string, name: string, kind: EntryKind): Promise<string | null> => {
-    if (onCandidate && kind === "file" && (await insideWithoutLinks(platform, root, joinPath(folder, name)))) {
+    if (onCandidate && kind === "file" && (await insideWithoutLinks(joinPath(folder, name)))) {
       onCandidate?.(joinPath(folder, name));
     }
     const lower = name.toLowerCase();
@@ -137,6 +138,7 @@ export async function findFilesByExtension(
   extensions: readonly string[],
 ): Promise<string[]> {
   const root = normalizePath(readRoot);
+  const insideWithoutLinks = createLinkCheck(platform, root);
   const matches = (name: string) => extensions.some((extension) => name.toLowerCase().endsWith(extension));
   const queue = folders.filter((folder) => pathInside(root, folder) !== null);
   const listed = new Set<string>();
@@ -145,7 +147,7 @@ export async function findFilesByExtension(
     const folder = queue.shift();
     if (folder === undefined || listed.has(folder)) continue;
     listed.add(folder);
-    for (const entry of await listFolder(platform, root, folder, matches)) {
+    for (const entry of await listFolder(platform, insideWithoutLinks, folder, matches)) {
       const path = joinPath(folder, entry.name);
       if (entry.kind === "directory") {
         if (!entry.name.startsWith(".")) queue.push(path);
@@ -155,15 +157,15 @@ export async function findFilesByExtension(
   return files;
 }
 
-/** A folder's subfolders and the plain files whose names `keep` accepts; nothing outside `root` or through a link. */
+/** A folder's subfolders and the plain files whose names `keep` accepts; nothing outside the root or through a link. */
 async function listFolder(
   platform: Platform,
-  root: string,
+  insideWithoutLinks: (path: string) => Promise<boolean>,
   folder: string,
   keep: (name: string) => boolean,
 ): Promise<DirectoryEntry[]> {
   try {
-    if (!(await insideWithoutLinks(platform, root, folder))) return [];
+    if (!(await insideWithoutLinks(folder))) return [];
     if ((await platform.stat(folder))?.kind !== "directory") return [];
     const entries = await platform.list(folder);
     return entries.filter((entry) => entry.kind === "directory" || (entry.kind === "file" && keep(entry.name)));
