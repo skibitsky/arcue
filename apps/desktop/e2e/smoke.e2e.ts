@@ -10,6 +10,7 @@ import type { BrowserWindow } from "electron";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { rendererSwitches } from "./rendering.ts";
 
 interface WindowProbe {
   arcueWindow?: {
@@ -36,6 +37,8 @@ const electronPath = createRequire(import.meta.url)("electron") as string;
 const run = promisify(execFile);
 const TORN_CAMERA: ViewState["camera"] = { position: [2.5, 1.4, 3], target: [0, 0.9, 0], up: [0, 1, 0], fov: 35 };
 const DRAFT = "Lift the left arm higher on the second step";
+/** Containers often run as root, where Electron starts only without its sandbox. */
+const sandbox: Record<string, string> = process.getuid?.() === 0 ? { ELECTRON_DISABLE_SANDBOX: "1" } : {};
 
 /** A temporary folder with copies of the samples, so reviews the tests write never land in the repository. */
 let workDir: string;
@@ -50,8 +53,8 @@ let app: ElectronApplication | null = null;
 function launch(): Promise<ElectronApplication> {
   return _electron.launch({
     executablePath: electronPath,
-    args: [appDir],
-    env: { ...process.env, ARCUE_USER_DATA: userData },
+    args: [...rendererSwitches, appDir],
+    env: { ...process.env, ...sandbox, ARCUE_USER_DATA: userData },
   });
 }
 
@@ -311,7 +314,7 @@ describe("the desktop app", () => {
     if (!app) throw new Error("The app is not running.");
     const page = await connectedWindow(app);
     await run(electronPath, [appDir, blob], {
-      env: { ...process.env, ARCUE_USER_DATA: userData },
+      env: { ...process.env, ...sandbox, ARCUE_USER_DATA: userData },
     });
     const list = await settled(page, 3);
     expect(list.find((asset) => asset.path === blob)?.status).toBe("ready");
@@ -405,7 +408,7 @@ describe("the desktop app", () => {
   it.skipIf(process.platform === "win32")("starts the stopped app with its built windows for arcue open", async () => {
     await app?.close();
     app = null;
-    const env = { ...process.env, ARCUE_USER_DATA: userData };
+    const env = { ...process.env, ...sandbox, ARCUE_USER_DATA: userData };
     const opened = await run(process.execPath, [cli, "open", crate], { env });
     expect(opened.stdout).toContain(`Opened ${crate}`);
     const corePid = bridgeInfo().pid;

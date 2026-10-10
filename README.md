@@ -18,15 +18,19 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm --filter @arcue/web test:e2e
+pnpm --filter @arcue/desktop test:e2e
 ```
 
-CI runs browser tests on Linux with SwiftShader software rendering. To use the same renderer on macOS:
+The browser and desktop tests render with SwiftShader software rendering everywhere but macOS, and CI runs the browser tests that way on Linux. To use the same renderer on macOS:
 
 ```sh
 ARCUE_E2E_SOFTWARE=1 pnpm --filter @arcue/web test:e2e --workers=1
+ARCUE_E2E_SOFTWARE=1 pnpm --filter @arcue/desktop test:e2e
 ```
 
 Software rendering has a longer test budget because shader compilation and screenshots can block for several seconds. The same assertions run with either renderer; failures retain traces and screenshots, which CI uploads as artifacts.
+
+On Linux without a display, run the desktop app and its tests under `xvfb-run -a`. Without a GPU, start the app with `--use-angle=swiftshader --enable-unsafe-swiftshader` so the 3D view renders.
 
 ## Build the desktop app
 
