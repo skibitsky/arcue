@@ -2,7 +2,17 @@ import type { ImportWarningCode, ImportWarningSubject, Mesh, NodeKind, Skeleton 
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { idName, isLinked } from "../blend/ids";
 import type { Mat4 } from "../math";
-import { identity, invert, mat4From, multiply, multiplyAll, transformPoint, translation } from "../math";
+import {
+  identity,
+  invert,
+  mat4From,
+  multiply,
+  multiplyAll,
+  SHEAR_TOLERANCE,
+  shearOf,
+  transformPoint,
+  translation,
+} from "../math";
 import type { Bone } from "./armature";
 import { readBones } from "./armature";
 import type { MaterialDraft } from "./materials";
@@ -69,6 +79,8 @@ export interface MeshRecord {
   morphKeys: string[];
   /** Default weight of each morph target. */
   morphDefaults: number[];
+  /** The range Blender clamps each morph target's weight to. */
+  morphRanges: [number, number][];
 }
 
 /** The UV maps of a mesh that uses a material, by name, with the one rendering uses by default. */
@@ -227,13 +239,12 @@ function objectNodes(contents: SceneContents, warn: Warn) {
     const parentInverse = mat4From(object.struct.numbers("parentinv"));
     const values = objectValues(object.struct);
     const record: ObjectRecord = { object, node: nodes.length, parentPart, parentInverse, values, armature: null };
-    nodes.push({
-      name: object.name,
-      parent: parentNode,
-      kind: "empty",
-      rest: multiplyAll(parentPart, parentInverse, objectBasis(values)),
-      mesh: null,
-    });
+    const rest = multiplyAll(parentPart, parentInverse, objectBasis(values));
+    nodes.push({ name: object.name, parent: parentNode, kind: "empty", rest, mesh: null });
+    if (shearOf(rest) > SHEAR_TOLERANCE) {
+      const detail = "Its parent's scale shears it, which the preview drops";
+      warn("deform-approximated", object.name, `Shear not shown: ${object.name}`, detail);
+    }
     if (object.type === ObjectType.armature && object.data) addArmature(record, object.data, nodes, warn);
     if (activeConstraints(object.struct).length > 0) {
       warn("constraint-not-evaluated", object.name, `Constraints not evaluated: ${object.name}`);
@@ -263,6 +274,8 @@ function objectNodes(contents: SceneContents, warn: Warn) {
 class MaterialTable {
   readonly drafts: MaterialDraft[] = [];
   readonly uvMaps: MaterialUvMaps[] = [];
+  /** Names of materials linked from other files, which show as the default material. */
+  readonly linked = new Set<string>();
   readonly #read = new Map<number, MaterialDraft>();
   readonly #index = new Map<string, number>();
   readonly #version: number;
@@ -272,6 +285,7 @@ class MaterialTable {
   }
 
   indexOf(material: BlendStruct | null, uvMaps: MaterialUvMaps): number {
+    if (material && isLinked(material)) this.linked.add(idName(material));
     const usable = material && !isLinked(material) ? material : null;
     let draft = usable ? this.#read.get(usable.offset) : undefined;
     if (usable && !draft) {
@@ -481,15 +495,20 @@ export function buildScene(file: BlendFile): BuiltScene {
       object,
       morphKeys: built.morphKeys,
       morphDefaults: built.morphTargets.map((target) => target.defaultWeight),
+      morphRanges: built.morphRanges,
     });
   }
 
-  if (contents.linkedObjects.length > 0) {
+  const linked = [
+    contents.linkedObjects.length > 0 ? `objects ${contents.linkedObjects.join(", ")}` : "",
+    materials.linked.size > 0 ? `materials ${[...materials.linked].join(", ")}` : "",
+  ].filter((entry) => entry !== "");
+  if (linked.length > 0) {
     warnings.push({
       code: "library-not-loaded",
       subject: { kind: "file", name: "" },
       message: "Linked data not shown",
-      detail: `From other .blend files: ${contents.linkedObjects.join(", ")}`,
+      detail: `From other .blend files: ${linked.join("; ")}`,
     });
   }
 

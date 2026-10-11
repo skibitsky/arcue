@@ -255,6 +255,23 @@ export function quatFromRotationMatrix(m: Mat4): Quat {
 }
 
 /** Splits an affine matrix into translation, rotation and scale. Shear is lost; a mirror flips the x scale. */
+/** The shear below which a matrix counts as a plain translation, rotation and scale. */
+export const SHEAR_TOLERANCE = 1e-4;
+
+/** How far a matrix's axes are from orthogonal, as the largest cosine between two of them. */
+export function shearOf(m: Mat4): number {
+  const axis = (index: number) => {
+    const x = m[index * 4] ?? 0;
+    const y = m[index * 4 + 1] ?? 0;
+    const z = m[index * 4 + 2] ?? 0;
+    const length = Math.hypot(x, y, z) || 1;
+    return [x / length, y / length, z / length];
+  };
+  const [x, y, z] = [axis(0), axis(1), axis(2)];
+  const cosine = (a: number[], b: number[]) => Math.abs(a.reduce((sum, value, k) => sum + value * (b[k] ?? 0), 0));
+  return Math.max(cosine(x, y), cosine(y, z), cosine(x, z));
+}
+
 export function decompose(m: Mat4): Trs {
   const at = (index: number) => m[index] ?? 0;
   let [sx, sy, sz] = axisLengths(m);

@@ -91,34 +91,14 @@ function activeViewLayer(file: BlendFile, scene: BlendStruct): BlendStruct | nul
   return layers.find((layer) => layer.offset === scene.resolve(current)?.offset) ?? layers[0] ?? null;
 }
 
-/** What the view layer leaves out or hides, by struct offset in the file. */
-interface ViewLayerState {
-  excludedCollections: Set<number>;
-  /** Collections hidden with the eye, themselves or through a parent. */
-  hiddenCollections: Set<number>;
-  hiddenObjects: Set<number>;
-}
-
-function viewLayerState(viewLayer: BlendStruct | null): ViewLayerState {
-  const state: ViewLayerState = {
-    excludedCollections: new Set(),
-    hiddenCollections: new Set(),
-    hiddenObjects: new Set(),
-  };
-  const visit = (layerCollection: BlendStruct, parentHidden: boolean) => {
-    const collection = layerCollection.deref("collection");
-    const flag = layerCollection.number("flag");
-    const hidden = parentHidden || (flag & LAYER_COLLECTION_HIDE) !== 0;
-    if (collection && (flag & LAYER_COLLECTION_EXCLUDE) !== 0) state.excludedCollections.add(collection.offset);
-    if (collection && hidden) state.hiddenCollections.add(collection.offset);
-    for (const child of layerCollection.list("layer_collections")) visit(child, hidden);
-  };
-  for (const layerCollection of viewLayer?.list("layer_collections") ?? []) visit(layerCollection, false);
+/** Objects the view layer hides with the eye, by struct offset in the file. */
+function eyeHiddenObjects(viewLayer: BlendStruct | null): Set<number> {
+  const hidden = new Set<number>();
   for (const base of viewLayer?.list("object_bases") ?? []) {
     const object = base.deref("object");
-    if (object && (base.number("flag") & BASE_HIDDEN) !== 0) state.hiddenObjects.add(object.offset);
+    if (object && (base.number("flag") & BASE_HIDDEN) !== 0) hidden.add(object.offset);
   }
-  return state;
+  return hidden;
 }
 
 /** The collection an object instances, such as one linked in from an asset library, or null. */
@@ -175,23 +155,29 @@ export function deformingArmatures(object: BlendStruct): { target: BlendStruct; 
 export function collectSceneObjects(file: BlendFile): SceneContents {
   const scene = activeScene(file);
   if (!scene) return { scene: null, objects: [], linkedObjects: [] };
-  const layer = viewLayerState(activeViewLayer(file, scene));
+  const viewLayer = activeViewLayer(file, scene);
+  const hiddenBases = eyeHiddenObjects(viewLayer);
   const ordered: BlendStruct[] = [];
   const shown = new Set<number>();
   const unhiddenByCollection = new Set<number>();
-  const seenCollections = new Set<number>();
   const linked = new Set<string>();
 
-  const visit = (collection: BlendStruct) => {
-    if (seenCollections.has(collection.offset)) return;
-    seenCollections.add(collection.offset);
+  /** Walks one place a collection has in the tree, with the view layer's layer collection for that place. */
+  const visit = (
+    collection: BlendStruct,
+    layerCollection: BlendStruct | null,
+    parentHidden: boolean,
+    ancestors: ReadonlySet<number>,
+  ) => {
+    const flag = layerCollection?.number("flag") ?? 0;
     if (
-      layer.excludedCollections.has(collection.offset) ||
+      ancestors.has(collection.offset) ||
+      (flag & LAYER_COLLECTION_EXCLUDE) !== 0 ||
       (collection.number("flag") & COLLECTION_HIDE_VIEWPORT) !== 0
     ) {
       return;
     }
-    const collectionHidden = layer.hiddenCollections.has(collection.offset);
+    const collectionHidden = parentHidden || (flag & LAYER_COLLECTION_HIDE) !== 0;
     for (const entry of collection.list("gobject")) {
       const object = entry.deref("ob");
       if (!object) continue;
@@ -206,13 +192,17 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
       ordered.push(object);
       if (usesLinkedData(object)) linked.add(idName(object));
     }
+    const childLayers = layerCollection?.list("layer_collections") ?? [];
+    const path = new Set(ancestors).add(collection.offset);
     for (const child of collection.list("children")) {
       const nested = child.deref("collection");
-      if (nested) visit(nested);
+      if (!nested) continue;
+      const nestedLayer = childLayers.find((candidate) => candidate.deref("collection")?.offset === nested.offset);
+      visit(nested, nestedLayer ?? null, collectionHidden, path);
     }
   };
   const master = scene.deref("master_collection");
-  if (master) visit(master);
+  if (master) visit(master, viewLayer?.list("layer_collections")[0] ?? null, false, new Set());
 
   const needed = new Map<number, BlendStruct>();
   const need = (object: BlendStruct | null) => {
@@ -226,8 +216,7 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     for (const { target } of deformingArmatures(object)) need(target);
   }
 
-  const hidden = (object: BlendStruct) =>
-    layer.hiddenObjects.has(object.offset) || !unhiddenByCollection.has(object.offset);
+  const hidden = (object: BlendStruct) => hiddenBases.has(object.offset) || !unhiddenByCollection.has(object.offset);
   const all = [
     ...ordered.map((object) => describe(object, true, hidden(object))),
     ...[...needed.values()].map((object) => describe(object, false, false)),

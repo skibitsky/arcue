@@ -28,6 +28,8 @@ export interface BuiltMesh {
   morphTargets: MorphTarget[];
   /** Morph target names in order, for weight tracks. */
   morphKeys: string[];
+  /** The range Blender clamps each morph target's weight to: its shape key's slider range. */
+  morphRanges: [number, number][];
   /** Skinning, or null for a rigid mesh. */
   skin: {
     /** Node index of each joint; the mesh's own node is last when some vertices have no weights. */
@@ -127,7 +129,7 @@ function buildSkin(mesh: MeshData, bones: SkinBone[], meshNode: number) {
 
 /** Each shape key's offsets at full weight from the shape it is relative to, in Blender's space. */
 function shapeKeyOffsets(mesh: MeshData) {
-  const targets: { name: string; defaultWeight: number; offsets: Float32Array }[] = [];
+  const targets: { name: string; defaultWeight: number; range: [number, number]; offsets: Float32Array }[] = [];
   const groupIndex = new Map(mesh.vertexGroupNames.map((name, index) => [name, index]));
   mesh.shapeKeys.forEach((key, index) => {
     if (index === mesh.referenceKey || key.muted) return;
@@ -142,7 +144,8 @@ function shapeKeyOffsets(mesh: MeshData) {
         offsets[v * 3 + k] = ((key.positions[v * 3 + k] ?? 0) - (base.positions[v * 3 + k] ?? 0)) * factor;
       }
     }
-    targets.push({ name: key.name, defaultWeight: Math.min(Math.max(key.value, 0), 1), offsets });
+    const range: [number, number] = key.max > key.min ? [key.min, key.max] : [0, 1];
+    targets.push({ name: key.name, defaultWeight: Math.min(Math.max(key.value, range[0]), range[1]), range, offsets });
   });
   return targets;
 }
@@ -322,6 +325,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     groups,
     morphTargets,
     morphKeys: morphs.map((target) => target.name),
+    morphRanges: morphs.map((target) => target.range),
     skin,
     droppedUvSets: Math.max(mesh.uvMaps.length - MAX_UV_SETS, 0),
   };

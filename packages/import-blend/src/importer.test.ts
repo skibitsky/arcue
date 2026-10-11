@@ -391,21 +391,34 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
 
   it("keeps objects hidden with the eye and starts their parts hidden, unless a level of the part shows", () => {
     expect(scene.parts.map((part) => [part.name, part.hiddenByDefault === true])).toEqual([
+      ["Painted", false],
       ["Visible", false],
       ["EyeHidden", true],
       ["Rock", false],
       ["Morph", false],
+      ["Skewed", false],
       ["TuckedAway", true],
+      ["SharedPiece", false],
     ]);
   });
 
-  it("warns about collection instances, absolute shape keys and data linked from other files", () => {
+  it("shows a collection's objects where the view layer keeps one of the places the collection is in", () => {
+    expect(scene.nodes.map((node) => node.name)).toContain("SharedPiece");
+  });
+
+  it("warns about collection instances, shear, absolute shape keys and data linked from other files", () => {
     expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
       ["object-not-shown", "KitInstance", "Arcue does not expand instances of Kit"],
+      ["deform-approximated", "Skewed", "Its parent's scale shears it, which the preview drops"],
       ["deform-approximated", "Morph", "Shown in its basis shape"],
-      ["library-not-loaded", `scenes-${version}.blend`, "From other .blend files: Borrowed, LibraryRock"],
+      [
+        "library-not-loaded",
+        `scenes-${version}.blend`,
+        "From other .blend files: objects Borrowed, LibraryRock; materials LibraryPaint",
+      ],
     ]);
     expect(scene.meshes[meshIndex(scene, "Morph")]?.morphTargets).toEqual([]);
+    expect(scene.materials[scene.meshes[meshIndex(scene, "Painted")]?.groups[0]?.material ?? -1]?.name).toBe("Default");
   });
 });
 
@@ -486,6 +499,16 @@ describe("reading", () => {
       locateFile: () => Promise.resolve(null),
     };
     await expect(blendImporter.import(request)).rejects.toMatchObject({ code: "invalid-input" });
+  });
+
+  it("refuses a file from before Blender 2.80, which has no collections to read", async () => {
+    const bytes = await decompressed("4.2");
+    bytes.set(new TextEncoder().encode("279"), 9);
+    await expect(importBytes("old.blend", bytes)).rejects.toMatchObject({
+      code: "invalid-input",
+      message:
+        "old.blend was saved by Blender 2.79. Arcue opens files from Blender 2.80 on; save it in a newer Blender.",
+    });
   });
 
   it("refuses a file that is cut short", async () => {

@@ -1,7 +1,7 @@
 import type { Interpolation, Quat, Track, Vec3 } from "@arcue/scene";
 import type { BlendStruct } from "../blend/file";
 import type { Mat4 } from "../math";
-import { decompose, invert, multiply, multiplyAll, toSceneAxes } from "../math";
+import { decompose, invert, multiply, multiplyAll, SHEAR_TOLERANCE, shearOf, toSceneAxes } from "../math";
 import { BoneFlag, inheritsFully, poseMatrices } from "../scene/armature";
 import type { BlendWarning, BuiltScene, MeshRecord, ObjectRecord } from "../scene/build";
 import { ObjectType } from "../scene/objects";
@@ -156,22 +156,6 @@ interface NodeSamples {
   rotation: number[];
   scale: number[];
   stepped: { translation: boolean; rotation: boolean; scale: boolean };
-}
-
-const SHEAR_TOLERANCE = 1e-4;
-
-/** How far a matrix's axes are from orthogonal, as the largest cosine between two of them. */
-function shearOf(m: Mat4): number {
-  const axis = (index: number) => {
-    const x = m[index * 4] ?? 0;
-    const y = m[index * 4 + 1] ?? 0;
-    const z = m[index * 4 + 2] ?? 0;
-    const length = Math.hypot(x, y, z) || 1;
-    return [x / length, y / length, z / length];
-  };
-  const [x, y, z] = [axis(0), axis(1), axis(2)];
-  const cosine = (a: number[], b: number[]) => Math.abs(a.reduce((sum, value, k) => sum + value * (b[k] ?? 0), 0));
-  return Math.max(cosine(x, y), cosine(y, z), cosine(x, z));
 }
 
 function sameTrs(
@@ -401,7 +385,8 @@ export function buildClips(scene: BuiltScene, actions: readonly Action[], warnin
         const weights = [...mesh.morphDefaults];
         for (const curve of curves) {
           const index = mesh.morphKeys.indexOf(parseShapeKeyPath(curve.path) ?? "");
-          if (index >= 0) weights[index] = Math.min(Math.max(evaluateFCurve(curve, frame), 0), 1);
+          const [min, max] = mesh.morphRanges[index] ?? [0, 1];
+          if (index >= 0) weights[index] = Math.min(Math.max(evaluateFCurve(curve, frame), min), max);
         }
         const list = weightSamples.get(mesh) ?? [];
         list.push(...weights);

@@ -224,8 +224,18 @@ function hideEyeHiddenParts(parts: ScenePart[], scene: BuiltScene): ScenePart[] 
   });
 }
 
+/** Blender 2.80 brought collections and view layers, which the scene is read from. */
+const OLDEST_VERSION = 280;
+
 async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const file = await parse(request);
+  if (file.version < OLDEST_VERSION) {
+    const saved = exporterOf(file)?.version ?? "an old version";
+    throw new ArcueError(
+      "invalid-input",
+      `${request.fileName} was saved by Blender ${saved}. Arcue opens files from Blender 2.80 on; save it in a newer Blender.`,
+    );
+  }
   let scene: BuiltScene;
   let clips: ParsedClip[];
   try {

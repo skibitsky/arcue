@@ -15,7 +15,7 @@ export interface MaterialGroup {
 
 export interface MorphTarget {
   name: string;
-  /** The target's weight in the rest pose and in clips that do not animate it, from 0 to 1. */
+  /** The target's weight in the rest pose and in clips that do not animate it, usually from 0 to 1. */
   defaultWeight: number;
   /** Position offsets, three values per rendered vertex. */
   positions: Float32Array;

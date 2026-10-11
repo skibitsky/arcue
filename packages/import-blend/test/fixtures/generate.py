@@ -621,6 +621,7 @@ def build_rig():
     modifier.object = rig
     body.shape_key_add(name="Basis")
     bulge = body.shape_key_add(name="Bulge", from_mix=False)
+    bulge.slider_max = 2.0
     for point in bulge.data:
         point.co.x *= 1.4
         point.co.y *= 1.4
@@ -720,7 +721,7 @@ def build_rig():
     bulge.value = 0.0
 
     pulse = new_action(key, "Pulse")
-    for frame, value in ((1, 0.0), (4, 1.0), (7, 0.0)):
+    for frame, value in ((1, 0.0), (4, 1.5), (7, 0.0)):
         bulge.value = value
         bulge.keyframe_insert("value", frame=frame)
     for curve in fcurves_of(pulse):
@@ -933,20 +934,25 @@ def build_materials():
 # ---------------------------------------------------------------- scenes
 
 def build_scenes():
-    """Objects hidden with the eye, a collection instance, absolute shape keys and data linked from another file."""
+    """Objects hidden with the eye, a collection in two places, a collection instance, absolute shape keys, a sheared
+    child and data linked from another file."""
     scene = reset_scene()
     library_path = os.path.join(HERE, "library-%s.blend" % VERSION)
     shared = bpy.data.meshes.new("SharedMesh")
     box_bmesh().to_mesh(shared)
     library_rock = bpy.data.objects.new("LibraryRock", shared)
-    bpy.data.libraries.write(library_path, {shared, library_rock}, path_remap="RELATIVE_ALL")
+    paint = material("LibraryPaint", (0.2, 0.5, 0.9))
+    bpy.data.libraries.write(library_path, {shared, library_rock, paint}, path_remap="RELATIVE_ALL")
     bpy.data.objects.remove(library_rock)
     bpy.data.meshes.remove(shared)
+    bpy.data.materials.remove(paint)
     with bpy.data.libraries.load(library_path, link=True, relative=True) as (source, target):
         target.meshes = ["SharedMesh"]
         target.objects = ["LibraryRock"]
+        target.materials = ["LibraryPaint"]
     link(bpy.data.objects.new("Borrowed", target.meshes[0]))
     link(target.objects[0])
+    mesh_object("Painted", box_bmesh(), (target.materials[0],))
 
     mesh_object("Visible", box_bmesh())
     eye = mesh_object("EyeHidden", box_bmesh())
@@ -967,8 +973,25 @@ def build_scenes():
         point.co *= 1.5
     morph.data.shape_keys.use_relative = False
 
+    for side in ("Left", "Right"):
+        holder = bpy.data.collections.new(side)
+        scene.collection.children.link(holder)
+    both = bpy.data.collections.new("Both")
+    bpy.data.collections["Left"].children.link(both)
+    bpy.data.collections["Right"].children.link(both)
+    mesh_object("SharedPiece", box_bmesh(), collection=both)
+
+    squashed = link(bpy.data.objects.new("Squashed", None))
+    squashed.rotation_euler = (0, 0, 0.5)
+    squashed.scale = (1, 2, 1)
+    skewed = mesh_object("Skewed", box_bmesh())
+    skewed.location = (1, 0, 0)
+
     layer = bpy.context.view_layer
     layer.update()
+    skewed.parent = squashed
+    skewed.matrix_parent_inverse = squashed.matrix_world.inverted()
+    layer.layer_collection.children["Left"].children["Both"].exclude = True
     eye.hide_set(True)
     lod1.hide_set(True)
     layer.layer_collection.children["Tucked"].hide_viewport = True

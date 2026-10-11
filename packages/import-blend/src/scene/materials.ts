@@ -333,10 +333,13 @@ function readSimpleShader(graph: Graph, node: BlendStruct, draft: MaterialDraft)
   draft.metallic = type === "ShaderNodeBsdfGlossy" || type === "ShaderNodeBsdfAnisotropic" ? 1 : 0;
 }
 
-/** A metallic-roughness approximation of a Blender material from its node tree, or its viewport display values. */
+/**
+ * A metallic-roughness approximation of a Blender material from its node tree. A material without nodes takes its
+ * color, metallic and roughness, opaque, as EEVEE renders it.
+ */
 export function readMaterial(material: BlendStruct, version: number): MaterialDraft {
   const draft = defaultMaterial(idName(material));
-  draft.baseColor = [material.number("r"), material.number("g"), material.number("b"), material.number("a") || 1];
+  draft.baseColor = [material.number("r"), material.number("g"), material.number("b"), 1];
   draft.metallic = clamp01(material.number("metallic"));
   draft.roughness = clamp01(material.number("roughness"));
   draft.doubleSided = (material.number("blend_flag") & BACKFACE_CULLING) === 0;
