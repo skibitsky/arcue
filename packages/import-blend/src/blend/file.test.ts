@@ -107,6 +107,50 @@ function sample(header: "old" | "new", pointerSize: 4 | 8, little: boolean): Uin
   });
 }
 
+/** The inverse of multiplying by an odd number, modulo 2 ** 32. */
+function inverseOf(odd: number): number {
+  let inverse = odd;
+  for (let step = 0; step < 5; step++) inverse = Math.imul(inverse, 2 - Math.imul(odd, inverse));
+  return inverse;
+}
+
+/** The value that `value ^ (value >>> shift)` was computed from. */
+function unshift(value: number, shift: number): number {
+  let result = value;
+  for (let step = 0; step * shift < 32; step++) result = value ^ (result >>> shift);
+  return result;
+}
+
+/**
+ * Addresses that the fixed hash this reader once used put in slot 0 of every table. That hash mixed in the low half,
+ * the high half and the owner, -1 outside a datablock, with one multiplication each, so working back from a hash of 0
+ * gives a low half for each high half.
+ */
+function addressesInOneSlot(count: number): bigint[] {
+  const ownerFactor = Math.imul(unshift(0, 15), inverseOf(0x27d4eb2f));
+  const highFactor = Math.imul(unshift(ownerFactor ^ -1, 16), inverseOf(0xc2b2ae35));
+  return Array.from({ length: count }, (_, index) => {
+    const high = index + 1;
+    const lowFactor = Math.imul(unshift(highFactor ^ high, 13), inverseOf(0x85ebca6b));
+    return (BigInt(high) << 32n) | BigInt((lowFactor ^ 0x9e3779b9) >>> 0);
+  });
+}
+
+function emptyDataBlocks(addresses: readonly bigint[]): Uint8Array {
+  const blocks = addresses.map((address) => ({ code: "DATA", struct: null, address, data: new Uint8Array() }));
+  return writeBlend({ header: "old", pointerSize: 8, little: true, structs: [LIST_BASE, THING, OWNER], blocks });
+}
+
+/** The fastest of three reads of the bytes, in milliseconds. */
+function fastestRead(bytes: Uint8Array): number {
+  const times = [0, 1, 2].map(() => {
+    const start = performance.now();
+    readBlendFile(bytes);
+    return performance.now() - start;
+  });
+  return Math.min(...times);
+}
+
 const FORMATS = [
   ["the old header with 4-byte pointers, big-endian", "old", 4, false],
   ["the old header with 8-byte pointers", "old", 8, true],
@@ -230,6 +274,17 @@ describe("readBlendFile", () => {
     expect(file.block(last, 0)?.index).toBe(count);
     expect(file.block(last)?.index).toBe(count);
     expect(file.block(last + 4n)).toBeNull();
+  });
+
+  it("indexes blocks whose addresses a file chose to collide as fast as blocks with sequential addresses", () => {
+    const count = 20_000;
+    const colliding = addressesInOneSlot(count);
+    const collidingBytes = emptyDataBlocks(colliding);
+    const sequentialBytes = emptyDataBlocks(Array.from({ length: count }, (_, index) => BigInt(0x1000 + index * 8)));
+    const file = readBlendFile(collidingBytes);
+    expect(colliding.map((address) => file.block(address)?.index)).toEqual(colliding.map((_, index) => index));
+    expect(file.block((colliding.at(-1) ?? 0n) + (1n << 32n))).toBeNull();
+    expect(fastestRead(collidingBytes)).toBeLessThan(fastestRead(sequentialBytes) * 5 + 50);
   });
 
   it("refuses bytes without a Blender header, files cut short and newer file formats", () => {

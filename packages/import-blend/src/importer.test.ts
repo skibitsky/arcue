@@ -34,6 +34,26 @@ import { buildScene } from "./scene/build";
 import { cloneValues, setTransformProperty } from "./scene/transforms";
 
 const TOLERANCE = 1e-4;
+/**
+ * Meshes of the features fixture whose Geometry Nodes use the nodes of Smooth by Angle to do something else, which its
+ * reference leaves out.
+ */
+const UNAPPLIED_SMOOTHING = [
+  "LookalikeSmooth",
+  "InvertedAutoSmooth",
+  "InactiveOutputSmooth",
+  "FloatOutputSmooth",
+  "SignedAngleSmooth",
+  "IntegerAngleSmooth",
+  "ConstantAngleSmooth",
+  "EdgesOnFacesSmooth",
+  "FacesOnEdgesSmooth",
+  "FlatFacesSmooth",
+  "SubdividedSmooth",
+  "AngleFirstSmooth",
+  "HalfIgnoreSmooth",
+  "AlwaysIgnoreSmooth",
+];
 
 function nodeIndex(scene: SceneDescription, name: string): number {
   const index = scene.nodes.findIndex((node) => node.name === name);
@@ -65,8 +85,10 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       expect(scene.source.originalSpace).toEqual({ axes: { right: "+X", up: "+Z", front: "-Y" }, unitMeters: 1 });
     });
 
-    it("applies Smooth by Angle and warns about nothing it leaves out", () => {
-      expect(scene.source.warnings).toEqual([]);
+    it("applies Smooth by Angle, and warns only about groups made of its nodes that do something else", () => {
+      expect(scene.source.warnings.map((entry) => [entry.code, entry.message])).toEqual(
+        UNAPPLIED_SMOOTHING.map((name) => ["modifier-not-applied", `Modifiers not applied: ${name}`]),
+      );
     });
 
     it("leaves out objects the view layer excludes or viewports disable", () => {
@@ -402,11 +424,15 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["material-approximated", "AlphaTint"],
         ["material-approximated", "Blended"],
         ["material-approximated", "Boxed"],
+        ["material-approximated", "Clear"],
         ["material-approximated", "Cutout"],
         ["material-approximated", "Decal"],
+        ["material-approximated", "Dialed"],
         ["material-approximated", "Displaced"],
+        ["material-approximated", "Frosted"],
         ["material-approximated", "Generated"],
         ["material-approximated", "Glassy"],
+        ["material-approximated", "Masked"],
         ["material-approximated", "ObjectNormal"],
         ["material-approximated", "Pixelated"],
         ["material-approximated", "Procedural"],
@@ -447,6 +473,10 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["Displaced", "Displacement comes from Displacement, which the preview leaves out"],
         ["Smoke", "Its volume comes from Principled Volume, which the preview leaves out"],
         ["Smart", "checker.png uses Smart interpolation, shown Linear"],
+        ["Clear", "Transmission is 1, which the preview leaves out"],
+        ["Frosted", "Transmission comes from Noise Texture, which the preview leaves out"],
+        ["Dialed", "Transmission is 0.25, which the preview leaves out"],
+        ["Masked", "Transmission comes from checker.png, which the preview leaves out"],
       ]);
       expect(approximated.every((warning) => warning.subject.kind === "material")).toBe(true);
       expect(material("Muted").baseColorTexture).not.toBeNull();

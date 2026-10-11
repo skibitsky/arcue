@@ -29,6 +29,14 @@ export interface Action {
   layers: number;
 }
 
+export const ADT_NLA_SOLO_TRACK = 1 << 0;
+export const ADT_NLA_EVAL_OFF = 1 << 1;
+export const ADT_NLA_EDIT_ON = 1 << 2;
+const ADT_NLA_EVAL_UPPER_TRACKS = 1 << 5;
+export const NLATRACK_MUTED = 1 << 2;
+const NLATRACK_SOLO = 1 << 3;
+const NLATRACK_DISABLED = 1 << 10;
+const NLASTRIP_MUTED = 1 << 12;
 const ACTION_FRAME_RANGE = 1 << 12;
 const KEYFRAME_STRIP = 0;
 
@@ -123,40 +131,71 @@ export function actionRange(action: Action): [number, number] {
 /** An ID an action can animate, with the action uses its animation data records. */
 export interface AnimatedId {
   id: BlendStruct;
-  /** Pairs of action struct offset and slot handle that the ID's animation data uses. */
-  uses: { action: number; slot: number }[];
+  /** The action struct offset, slot handle and whether Blender plays it, for each use that `usedActions` lists. */
+  uses: { action: number; slot: number; played: boolean }[];
   drivers: FCurve[];
 }
 
-/** The actions, slots and drivers an ID's animation data uses: its active action, tweak action and NLA strips. */
+/** The actions, slots and drivers an ID's animation data uses: its active action, stashed action and NLA strips. */
 export function animationUses(id: BlendStruct): AnimatedId {
   const adt = id.deref("adt");
   if (!adt) return { id, uses: [], drivers: [] };
-  const uses = usedActions(id).map(({ action, slot }) => ({ action: action.offset, slot }));
+  const uses = usedActions(id).map(({ action, slot, played }) => ({ action: action.offset, slot, played }));
   return { id, uses, drivers: adt.list("drivers").map(readFCurve) };
 }
 
 /**
- * The actions an ID's animation data plays, as its active, tweaked and NLA strip actions, with their slot handles, in
- * the order Blender lets them override one another: the active action over every NLA track, and an upper track over a
- * lower one.
+ * Blender's `is_nlatrack_evaluatable`: whether an NLA track plays. The soloed track plays while one is, any unmuted
+ * track otherwise, and in tweak mode no track that it disables but the tweaked one.
  */
-export function usedActions(id: BlendStruct): { action: BlendStruct; slot: number }[] {
+function trackPlays(flag: number, track: BlendStruct, tweaked: boolean): boolean {
+  const trackFlag = track.number("flag");
+  if ((trackFlag & NLATRACK_DISABLED) !== 0 && !tweaked) return false;
+  if ((flag & ADT_NLA_SOLO_TRACK) !== 0) return (trackFlag & NLATRACK_SOLO) !== 0;
+  return (trackFlag & NLATRACK_MUTED) === 0;
+}
+
+/**
+ * The actions an ID's animation data uses, as its active, stashed and NLA strip actions, with their slot handles, in
+ * the order Blender lets those it plays override one another: the action it plays over the NLA first, then an upper
+ * track before a lower one. `played` says whether Blender plays the use, as `animsys_evaluate_nla_for_flush` decides.
+ * With the NLA off, only the active action plays. Otherwise the active action, or in tweak mode the stashed one, plays
+ * over the tracks unless a track plays solo or tweak mode leaves out the tracks above the tweaked one. A strip plays
+ * unless it or its track is muted, a soloed track or tweak mode leaves its track out, or it shares the tweaked track
+ * with the tweaked strip.
+ */
+export function usedActions(id: BlendStruct): { action: BlendStruct; slot: number; played: boolean }[] {
   const adt = id.deref("adt");
-  const uses: { action: BlendStruct; slot: number }[] = [];
+  const uses: { action: BlendStruct; slot: number; played: boolean }[] = [];
   if (!adt) return uses;
-  const add = (action: BlendStruct | null, slot: number) => {
-    if (action) uses.push({ action, slot });
+  const flag = adt.number("flag");
+  const tracks = adt.list("nla_tracks");
+  const nla = tracks.length > 0 && (flag & ADT_NLA_EVAL_OFF) === 0;
+  const tweaking = (flag & ADT_NLA_EDIT_ON) !== 0;
+  const upper = !tweaking || (flag & ADT_NLA_EVAL_UPPER_TRACKS) !== 0;
+  const overNla = nla && (flag & ADT_NLA_SOLO_TRACK) === 0 && upper;
+  const handle = (owner: BlendStruct, field: string) => (owner.has(field) ? owner.number(field) : -1);
+  const add = (action: BlendStruct | null, slot: number, played: boolean) => {
+    if (action) uses.push({ action, slot, played });
   };
-  add(adt.deref("action"), adt.has("slot_handle") ? adt.number("slot_handle") : -1);
-  add(adt.deref("tmpact"), adt.has("tmp_slot_handle") ? adt.number("tmp_slot_handle") : -1);
-  const visitStrips = (strips: BlendStruct[]) => {
+  add(adt.deref("action"), handle(adt, "slot_handle"), !nla || (!tweaking && overNla));
+  add(adt.deref("tmpact"), handle(adt, "tmp_slot_handle"), tweaking && overNla);
+  const visitStrips = (strips: BlendStruct[], played: boolean) => {
     for (const strip of strips) {
-      add(strip.deref("act"), strip.has("action_slot_handle") ? strip.number("action_slot_handle") : -1);
-      visitStrips(strip.list("strips"));
+      const plays = played && (strip.number("flag") & NLASTRIP_MUTED) === 0;
+      add(strip.deref("act"), handle(strip, "action_slot_handle"), plays);
+      visitStrips(strip.list("strips"), plays);
     }
   };
-  for (const track of adt.list("nla_tracks").reverse()) visitStrips(track.list("strips"));
+  const tweakedTrack = tweaking ? adt.deref("act_track")?.offset : undefined;
+  const tweakedStrip = adt.deref("actstrip")?.offset;
+  for (const track of tracks.reverse()) {
+    const tweaked = track.offset === tweakedTrack;
+    const plays = nla && trackPlays(flag, track, tweaked);
+    for (const strip of track.list("strips")) {
+      visitStrips([strip], plays && (!tweaked || strip.offset === tweakedStrip));
+    }
+  }
   return uses;
 }
 

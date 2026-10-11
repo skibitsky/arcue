@@ -1,6 +1,19 @@
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { datablocks, idName, isLinked } from "../blend/ids";
 import { ModifierType, modifierType, viewportModifiers } from "./modifiers";
+import {
+  feedingOutputs,
+  graphOf,
+  groupOutput,
+  inputSocket,
+  isMuted,
+  linkedOutput,
+  nodeType,
+  type ShaderGraph,
+  SocketType,
+  socketType,
+  socketValue,
+} from "./shader-graph";
 import { isSmoothByAngle } from "./smooth-by-angle";
 
 export const ObjectType = {
@@ -130,32 +143,112 @@ const MAKES_MESH: ReadonlySet<number> = new Set([
 /** Modifiers that can give a mesh with vertices and no faces some faces. */
 const MAKES_FACES: ReadonlySet<number> = new Set([ModifierType.screw, ModifierType.skin]);
 
-/** Geometry Nodes that can output instances, which Blender places instead of an instancer's children. */
+/**
+ * Geometry Nodes whose output Blender draws instead of an instancer's children: the nodes of Blender 4.2 to 5.2 that
+ * make instances from geometry without any, and Curves to Grease Pencil. That is the one node that makes grease
+ * pencil, which Blender also draws instead of the children, and whose layers other nodes output as instances.
+ */
 const INSTANCING_NODES: ReadonlySet<string> = new Set([
-  "GeometryNodeInstanceOnPoints",
   "GeometryNodeCollectionInfo",
-  "GeometryNodeObjectInfo",
   "GeometryNodeGeometryToInstance",
+  "GeometryNodeImportOBJ",
+  "GeometryNodeInstanceOnPoints",
+  "GeometryNodeObjectInfo",
   "GeometryNodeSplitToInstances",
   "GeometryNodeStringToCurves",
-  "GeometryNodeBake",
+  "GeometryNodeCurvesToGreasePencil",
 ]);
 
-/** Whether a node group, or a group it nests, may output instances; a group from another file may. */
-function mayOutputInstances(group: BlendStruct | null, seen = new Set<number>()): boolean {
-  if (!group || seen.has(group.offset)) return false;
-  seen.add(group.offset);
-  if (isLinked(group)) return true;
-  return group.list("nodes").some((node) => {
-    const type = node.string("idname");
-    return INSTANCING_NODES.has(type) || (type === "GeometryNodeGroup" && mayOutputInstances(node.deref("id"), seen));
+/** Instancing nodes whose instances, once realized, hold the geometry the node reads, or the meshes of an OBJ file. */
+const REALIZED_TO_INPUTS: ReadonlySet<string> = new Set([
+  "GeometryNodeGeometryToInstance",
+  "GeometryNodeImportOBJ",
+  "GeometryNodeInstanceOnPoints",
+  "GeometryNodeSplitToInstances",
+]);
+
+/** Nodes that output what the modifier baked, which may hold instances that no node makes any longer. */
+const BAKING_NODES: ReadonlySet<string> = new Set(["GeometryNodeBake", "GeometryNodeSimulationOutput"]);
+
+/** Socket types whose links can carry geometry, which bundles and closures can hold. */
+const CARRIES_GEOMETRY: ReadonlySet<number> = new Set([SocketType.geometry, SocketType.bundle, SocketType.closure]);
+
+/** A node's type, or none for a muted node, which only passes its inputs on. */
+function activeType(node: BlendStruct): string {
+  return isMuted(node) ? "" : nodeType(node);
+}
+
+/** Whether a Realize Instances node realizes every instance at every level. */
+function realizesAll(graph: ShaderGraph, node: BlendStruct): boolean {
+  return ["Selection", "Realize All"].every((name) => {
+    const socket = inputSocket(node, name);
+    return socket === null || (!linkedOutput(graph, socket) && socketValue(socket)[0] === 1);
   });
+}
+
+/** Whether the modifier holds baked data packed into the file, which Blender outputs in place of what it baked. */
+function holdsPackedBake(modifier: BlendStruct): boolean {
+  return modifier.derefAll("bakes").some((bake) => bake.pointer("packed") !== 0n);
+}
+
+const outputsInstances = new WeakMap<BlendFile, Map<string, boolean>>();
+
+/**
+ * Whether a node group may output instances or grease pencil, through the nodes that feed its output. Below a Realize
+ * Instances node that realizes them all, an instancing node counts as the geometry its instances hold: what it reads,
+ * or an OBJ file's meshes. A group from another file may output them.
+ */
+function mayOutputInstances(
+  group: BlendStruct | null,
+  realized: boolean,
+  baked: boolean,
+  walking = new Set<string>(),
+): boolean {
+  if (!group) return false;
+  if (isLinked(group)) return true;
+  const key = `${group.offset} ${realized} ${baked}`;
+  let known = outputsInstances.get(group.file);
+  if (!known) {
+    known = new Map();
+    outputsInstances.set(group.file, known);
+  }
+  const found = known.get(key);
+  if (found !== undefined) return found;
+  if (walking.has(key)) return false;
+  walking.add(key);
+  const result = reachesInstances(group, realized, baked, walking);
+  known.set(key, result);
+  return result;
+}
+
+function reachesInstances(group: BlendStruct, realized: boolean, baked: boolean, walking: Set<string>): boolean {
+  const graph = graphOf(group);
+  const output = groupOutput(graph.nodes);
+  if (!output) return false;
+  const reached = new Set<string>();
+  const pending: [BlendStruct, boolean][] = [[output, realized]];
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    const [node, under] = next;
+    const type = activeType(node);
+    if (INSTANCING_NODES.has(type) && !(under && REALIZED_TO_INPUTS.has(type))) return true;
+    if (baked && BAKING_NODES.has(type)) return true;
+    if (type === "GeometryNodeGroup" && mayOutputInstances(node.deref("id"), under, baked, walking)) return true;
+    const realizing = under || (type === "GeometryNodeRealizeInstances" && realizesAll(graph, node));
+    for (const source of feedingOutputs(graph, node)) {
+      const key = `${source.node.offset} ${realizing}`;
+      if (!CARRIES_GEOMETRY.has(socketType(source.socket)) || reached.has(key)) continue;
+      reached.add(key);
+      pending.push([source.node, realizing]);
+    }
+  }
+  return false;
 }
 
 /**
  * Where a mesh object places a copy of each of its children, as Blender's instancing on vertices or faces does. A mesh
  * without such elements places none, unless a modifier may add them. Geometry Nodes may add them too, or output
- * instances that Blender places instead of the children, so an object whose nodes may do that is left out.
+ * instances or grease pencil that Blender draws instead of the children, so an object whose nodes may do that is left
+ * out.
  */
 export function childInstancing(object: BlendStruct): "vertex" | "face" | null {
   const mesh = object.number("type") === ObjectType.mesh ? object.deref("data") : null;
@@ -163,9 +256,9 @@ export function childInstancing(object: BlendStruct): "vertex" | "face" | null {
   const modifiers = viewportModifiers(object).filter((modifier) => !isSmoothByAngle(modifier));
   const groups = modifiers.flatMap((modifier) => {
     const group = modifierType(modifier) === ModifierType.nodes ? modifier.deref("node_group") : null;
-    return group ? [group] : [];
+    return group ? [{ group, baked: holdsPackedBake(modifier) }] : [];
   });
-  if (groups.some((group) => mayOutputInstances(group))) return null;
+  if (groups.some(({ group, baked }) => mayOutputInstances(group, false, baked))) return null;
   const types = modifiers.map(modifierType);
   const flag = object.number("transflag");
   const hasVertices = mesh.number("totvert") > 0;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CurveModifier, FCurve, Keys } from "./fcurve";
-import { canJump, canJumpAfter, evaluateFCurve, Interpolation, jumpFrames, keyFrames } from "./fcurve";
+import { canJump, canJumpAfter, curveEvaluator, evaluateFCurve, Interpolation, jumpFrames, keyFrames } from "./fcurve";
 
 function keys(points: [frame: number, value: number][], interpolation: number = Interpolation.linear): Keys {
   const count = points.length;
@@ -72,8 +72,8 @@ describe("evaluateFCurve", () => {
     );
     expect(evaluateFCurve(stepped, 3.9)).toBe(1);
     expect(evaluateFCurve(stepped, 4)).toBe(3);
-    expect(canJump(stepped)).toBe(true);
-    expect(jumpFrames(stepped, 0, 10)).toEqual([4]);
+    expect(canJump(stepped, 0, 10)).toBe(true);
+    expect(jumpFrames(stepped, 0, 10, 100)).toEqual([4]);
   });
 
   it("finds jumps at the keys that end a constant segment, not at a constant last key", () => {
@@ -83,11 +83,11 @@ describe("evaluateFCurve", () => {
       [8, 5],
     ]);
     smooth.keys.interpolation[2] = Interpolation.constant;
-    expect(canJump(smooth)).toBe(false);
-    expect(jumpFrames(smooth, 0, 10)).toEqual([]);
+    expect(canJump(smooth, 0, 10)).toBe(false);
+    expect(jumpFrames(smooth, 0, 10, 100)).toEqual([]);
     smooth.keys.interpolation[1] = Interpolation.constant;
-    expect(canJump(smooth)).toBe(true);
-    expect(jumpFrames(smooth, 0, 10)).toEqual([8]);
+    expect(canJump(smooth, 0, 10)).toBe(true);
+    expect(jumpFrames(smooth, 0, 10, 100)).toEqual([8]);
   });
 
   it("finds the steps of a Stepped modifier inside the range, and leaves steps under a frame to interpolation", () => {
@@ -109,8 +109,8 @@ describe("evaluateFCurve", () => {
       ],
       { modifiers: [stepped] },
     );
-    expect(canJump(ramp)).toBe(true);
-    expect(jumpFrames(ramp, 1, 9)).toEqual([3, 5.5, 8]);
+    expect(canJump(ramp, 1, 9)).toBe(true);
+    expect(jumpFrames(ramp, 1, 9, 100)).toEqual([3, 5.5, 8]);
     const fine = curve(
       [
         [0, 0],
@@ -118,7 +118,7 @@ describe("evaluateFCurve", () => {
       ],
       { modifiers: [{ ...stepped, step: 0.5 }] },
     );
-    expect(canJump(fine)).toBe(false);
+    expect(canJump(fine, 1, 9)).toBe(false);
   });
 
   it("finds that a Stepped modifier's steps before its offset jump just after their frame", () => {
@@ -166,10 +166,10 @@ describe("evaluateFCurve", () => {
       ],
       { interpolation: Interpolation.constant, modifiers: [cycles] },
     );
-    expect(canJump(constant)).toBe(true);
+    expect(canJump(constant, 1, 10)).toBe(true);
     expect([3.999, 4, 4.001].map((frame) => evaluateFCurve(constant, frame))).toEqual([1, 0, 0]);
     expect(canJumpAfter(constant, 1, 10)).toBe(false);
-    expect([...new Set(jumpFrames(constant, 1, 10))].sort((a, b) => a - b)).toEqual([2.5, 4, 5.5, 7, 8.5]);
+    expect([...new Set(jumpFrames(constant, 1, 10, 100))].sort((a, b) => a - b)).toEqual([2.5, 4, 5.5, 7, 8.5]);
     const ramp = curve(
       [
         [1, 0],
@@ -177,7 +177,7 @@ describe("evaluateFCurve", () => {
       ],
       { modifiers: [cycles] },
     );
-    expect(canJump(ramp)).toBe(false);
+    expect(canJump(ramp, 1, 10)).toBe(false);
     expect(canJumpAfter(ramp, 1, 10)).toBe(true);
     expect(canJumpAfter(ramp, 1, 3)).toBe(false);
     expect(canJumpAfter(ramp, 3, 5.5)).toBe(true);
@@ -185,6 +185,67 @@ describe("evaluateFCurve", () => {
     [1, 0.0005, 1, 0.125].forEach((value, index) => {
       expect(evaluateFCurve(ramp, [3, 3.001, 5, 5.25][index] ?? 0)).toBeCloseTo(value, 9);
     });
+  });
+
+  it("finds that a Cycles modifier repeating before the first key jumps at the start of each cycle", () => {
+    const cycles: CurveModifier = {
+      type: "cycles",
+      before: 1,
+      after: 0,
+      beforeCycles: 0,
+      afterCycles: 0,
+      range: null,
+      influence: 1,
+    };
+    const ramp = curve(
+      [
+        [20, 0],
+        [30, 10],
+      ],
+      { modifiers: [cycles] },
+    );
+    [9.5, 0, 0.5, 9.5, 0].forEach((value, index) => {
+      expect(evaluateFCurve(ramp, [9.5, 10, 10.5, 19.5, 20][index] ?? 0)).toBeCloseTo(value, 9);
+    });
+    expect(canJump(ramp, 0, 40)).toBe(true);
+    expect(canJump(ramp, 0, 10)).toBe(true);
+    expect(canJump(ramp, 10, 19.5)).toBe(false);
+    expect(canJump(ramp, 20, 40)).toBe(false);
+    expect(canJump({ ...ramp, modifiers: [{ ...cycles, before: 2 }] }, 0, 40)).toBe(false);
+    expect(canJump({ ...ramp, modifiers: [{ ...cycles, before: 0, after: 1 }] }, 0, 40)).toBe(false);
+    expect(canJumpAfter(ramp, 0, 40)).toBe(false);
+  });
+
+  it("gives up on finding jumps past a limit, counting only the frames inside the range", () => {
+    const halves = curve(
+      Array.from({ length: 41 }, (_, index): [number, number] => [index / 2, index]),
+      { interpolation: Interpolation.constant },
+    );
+    expect(jumpFrames(halves, 5, 10, 9)).toEqual([5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5]);
+    expect(jumpFrames(halves, 5, 10, 8)).toBeNull();
+    const cycles: CurveModifier = {
+      type: "cycles",
+      before: 1,
+      after: 1,
+      beforeCycles: 0,
+      afterCycles: 0,
+      range: null,
+      influence: 1,
+    };
+    const cycled = { ...halves, modifiers: [cycles] };
+    expect(jumpFrames(cycled, 0, 1e9, 100_000)).toBeNull();
+    const stepped: CurveModifier = {
+      type: "stepped",
+      step: 1,
+      offset: 0.5,
+      start: 0,
+      end: 0,
+      noBefore: false,
+      noAfter: false,
+      range: null,
+      influence: 1,
+    };
+    expect(jumpFrames({ ...halves, modifiers: [stepped] }, 0, 1e9, 100_000)).toBeNull();
   });
 
   it("finds jumps under a Stepped modifier of a frame or more per step, at any influence or frame range", () => {
@@ -203,12 +264,12 @@ describe("evaluateFCurve", () => {
       [0, 0],
       [10, 10],
     ];
-    expect(canJump(curve(points, { modifiers: [step] }))).toBe(true);
+    expect(canJump(curve(points, { modifiers: [step] }), 0, 10)).toBe(true);
     const half = curve(points, { modifiers: [{ ...step, influence: 0.5 }] });
-    expect(canJump(half)).toBe(true);
+    expect(canJump(half, 0, 10)).toBe(true);
     expect([3.5, 4].map((frame) => evaluateFCurve(half, frame))).toEqual([2.75, 4]);
-    expect(canJump(curve(points, { modifiers: [{ ...step, noAfter: true }] }))).toBe(true);
-    expect(canJump(curve(points, { modifiers: [{ ...step, step: 0.5 }] }))).toBe(false);
+    expect(canJump(curve(points, { modifiers: [{ ...step, noAfter: true }] }), 0, 10)).toBe(true);
+    expect(canJump(curve(points, { modifiers: [{ ...step, step: 0.5 }] }), 0, 10)).toBe(false);
   });
 
   it("follows a Bezier segment with flat handles through its midpoint", () => {
@@ -438,5 +499,44 @@ describe("evaluateFCurve", () => {
     const baked = curve([], { samples: Float32Array.of(0, 10, 20), sampleStart: -2 });
     expect(evaluateFCurve(baked, -1.5)).toBeCloseTo(5);
     expect(evaluateFCurve(baked, -0.5)).toBeCloseTo(15);
+  });
+});
+
+describe("curveEvaluator", () => {
+  it("gives what evaluateFCurve gives, at rising and falling frames, on keys, near them and between them", () => {
+    const cycles: CurveModifier = {
+      type: "cycles",
+      before: 1,
+      after: 1,
+      beforeCycles: 0,
+      afterCycles: 0,
+      range: null,
+      influence: 1,
+    };
+    const spread = Array.from({ length: 40 }, (_, k): [number, number] => [k * 1.5 + (k % 3) * 0.25, Math.sin(k)]);
+    const crowded: [number, number][] = [
+      [0, 0],
+      [1, 1],
+      [1.00005, 2],
+      [1.0002, 3],
+      [3, 4],
+    ];
+    const curves = [
+      curve(spread),
+      curve(spread, { interpolation: Interpolation.constant }),
+      curve(spread, { interpolation: Interpolation.bezier, modifiers: [cycles] }),
+      curve(crowded, { interpolation: Interpolation.constant }),
+    ];
+    const near = [...spread, ...crowded].flatMap(([frame]) =>
+      [-0.00011, -0.0001, -0.00009, 0, 0.00009, 0.0001, 0.00011].map((offset) => frame + offset),
+    );
+    const rising = Array.from({ length: 2400 }, (_, k) => -5 + k * 0.0371);
+    const frames = [...rising, ...near, ...[...rising].reverse()];
+    for (const tested of curves) {
+      const valueAt = curveEvaluator(tested);
+      const found = frames.map((frame) => valueAt(frame));
+      const expected = frames.map((frame) => evaluateFCurve(tested, frame));
+      expect(found.every((value, index) => Object.is(value, expected[index]))).toBe(true);
+    }
   });
 });

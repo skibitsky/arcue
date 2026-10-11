@@ -1,6 +1,7 @@
 import { ArcueError } from "@arcue/protocol";
 import type {
   Clip,
+  FoundFile,
   Importer,
   ImportRequest,
   ImportWarning,
@@ -39,10 +40,11 @@ import { BlendParseError } from "./blend/errors";
 import type { BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
 import { idName, idOf } from "./blend/ids";
+import { isGrayImage } from "./gray-images";
 import { decompose, invert, multiplyAll } from "./math";
 import type { BlendWarning, BuiltScene } from "./scene/build";
-import { buildScene, uvSetFor } from "./scene/build";
-import type { ImageUse } from "./scene/materials";
+import { buildScene, grayCandidates, uvSetFor } from "./scene/build";
+import type { GrayCheck, ImageUse } from "./scene/materials";
 import { IMAGE_SOURCE_FILE, packedFile } from "./scene/materials";
 import { joinWarningsById, normalizedPath, shareFoundTextures } from "./texture-files";
 
@@ -100,6 +102,45 @@ function packedBytes(file: BlendFile, image: BlendStruct): Uint8Array | null {
   if (!block) return null;
   const size = Math.min(Math.max(packed.number("size"), 0), block.size);
   return file.bytes.slice(block.offset, block.offset + size);
+}
+
+type FindFile = ImportRequest["findFile"];
+
+/** `findFile` that looks each stored path up once, as the gray check and the textures both read some images. */
+function findingOnce(findFile: FindFile): FindFile {
+  const found = new Map<string, Promise<FoundFile | null>>();
+  return (storedPath) => {
+    let file = found.get(storedPath);
+    if (!file) {
+      file = findFile(storedPath);
+      found.set(storedPath, file);
+    }
+    return file;
+  };
+}
+
+/** An image's bytes: packed in the file, or found by the paths it stores. Null for an image that is not one file. */
+async function imageBytes(file: BlendFile, image: BlendStruct, findFile: FindFile): Promise<Uint8Array | null> {
+  if (image.typeName !== "Image") return null;
+  const packed = packedBytes(file, image);
+  if (packed) return packed;
+  if (image.has("source") && image.number("source") !== IMAGE_SOURCE_FILE) return null;
+  const { relative, absolute } = imagePaths(image);
+  for (const path of new Set([relative, absolute])) {
+    const found = path === "" ? null : await findFile(path);
+    if (found) return found.bytes;
+  }
+  return null;
+}
+
+/** The offsets of the images whose every pixel is gray. */
+async function grayImages(file: BlendFile, images: Iterable<BlendStruct>, findFile: FindFile): Promise<Set<number>> {
+  const gray = new Set<number>();
+  for (const image of images) {
+    const bytes = await imageBytes(file, image, findFile);
+    if (bytes && (await isGrayImage(bytes))) gray.add(image.offset);
+  }
+  return gray;
 }
 
 /**
@@ -313,6 +354,25 @@ function hiddenLevelWarnings(parts: readonly ScenePart[], scene: BuiltScene): Bl
 /** Blender 2.80 brought collections and view layers, which the scene is read from. */
 const OLDEST_VERSION = 280;
 
+/** What `read` gives, with the errors of reading the file's scene as Arcue's errors. */
+function readingScene<T>(request: ImportRequest, read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof BlendParseError) throw unreadable(request, error);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, {
+      cause: error,
+    });
+  }
+}
+
+function readScene(file: BlendFile, isGray: GrayCheck): { scene: BuiltScene; clips: ParsedClip[] } {
+  const actions = readActions(file);
+  const scene = buildScene(file, animatedPaths(file, actions), isGray);
+  return { scene, clips: buildClips(scene, actions, scene.warnings) };
+}
+
 async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const file = await parse(request);
   if (file.version < OLDEST_VERSION) {
@@ -322,24 +382,15 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
       `${request.fileName} was saved by Blender ${saved}. Arcue opens files from Blender 2.80 on; save it in a newer Blender.`,
     );
   }
-  let scene: BuiltScene;
-  let clips: ParsedClip[];
-  try {
-    const actions = readActions(file);
-    scene = buildScene(file, animatedPaths(file, actions));
-    clips = buildClips(scene, actions, scene.warnings);
-  } catch (error) {
-    if (error instanceof BlendParseError) throw unreadable(request, error);
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, {
-      cause: error,
-    });
-  }
+  const findFile = findingOnce(request.findFile);
+  const candidates = readingScene(request, () => grayCandidates(file));
+  const gray = await grayImages(file, candidates, findFile);
+  const { scene, clips } = readingScene(request, () => readScene(file, (image) => gray.has(image.offset)));
   const meshes: Mesh[] = scene.meshes.map((mesh) => ({ ...mesh, topology: topologyFingerprint(mesh) }));
   const images = new ImageFiles(file);
   let resolver: TextureResolver | null = null;
   const textures = () => {
-    resolver ??= createTextureResolver(images.files, request.findFile, request.locateFile);
+    resolver ??= createTextureResolver(images.files, findFile, request.locateFile);
     return resolver;
   };
   const materials = await buildMaterials(scene, images, textures);

@@ -1,51 +1,45 @@
-import type { BlendStruct } from "../blend/file";
-import { idName } from "../blend/ids";
+import type { BlendFile, BlendStruct } from "../blend/file";
+import { idName, isLinked } from "../blend/ids";
 import type { MeshData } from "./mesh-data";
 import { ModifierType, modifierType, viewportModifiers } from "./modifiers";
 import { faceNormals } from "./normals";
+import {
+  graphOf,
+  groupOutput,
+  inputSocket,
+  linkedOutput,
+  nodeType,
+  type ShaderGraph,
+  SocketType,
+  socketType,
+  socketValue,
+} from "./shader-graph";
 
 const PROPERTY_INT = 1;
 const PROPERTY_FLOAT = 2;
 const PROPERTY_DOUBLE = 8;
 const PROPERTY_BOOLEAN = 10;
 const DEFAULT_ANGLE = Math.PI / 6;
+const DOMAIN_EDGE = 1;
+const DOMAIN_FACE = 2;
+const BOOLEAN_AND = 0;
+const BOOLEAN_OR = 1;
+const COMPARE_LESS_EQUAL = 1;
 
-/** Names of the node groups Blender adds for auto smooth: the Essentials asset, and the one versioning makes. */
-const SMOOTHING_GROUPS = [/^Smooth by Angle(\.\d+)?$/, /^Auto Smooth(\.\d+)?$/];
-
-/** The nodes of those groups, which read edge angles and smooth flags and set the flags, and nothing else. */
-const SHADING_NODES: ReadonlySet<string> = new Set([
-  "NodeGroupInput",
-  "NodeGroupOutput",
-  "NodeReroute",
-  "NodeFrame",
-  "GeometryNodeSetShadeSmooth",
-  "GeometryNodeInputMeshEdgeAngle",
-  "GeometryNodeInputEdgeSmooth",
-  "GeometryNodeInputShadeSmooth",
-  "FunctionNodeBooleanMath",
-  "FunctionNodeCompare",
-]);
+/** The identifiers of a smoothing group's angle input and Ignore Sharpness switch, which only the Essentials has. */
+interface SmoothingInputs {
+  angle: string;
+  ignoreSharpness: string | null;
+}
 
 /**
- * Whether a node group is Blender's auto smooth group: by its name, or by its nodes, since Blender names the group
- * that versioning makes, and its sockets, in the interface language when it translates new data.
+ * The node groups Blender adds for auto smooth, the Essentials asset and the one versioning makes, by name and with
+ * their inputs. Only a group linked from a file this one does not hold is known by its name.
  */
-function isSmoothingGroup(group: BlendStruct): boolean {
-  if (SMOOTHING_GROUPS.some((pattern) => pattern.test(idName(group)))) return true;
-  const types = group.list("nodes").map((node) => node.string("idname"));
-  return (
-    types.includes("GeometryNodeSetShadeSmooth") &&
-    types.includes("GeometryNodeInputMeshEdgeAngle") &&
-    types.every((type) => SHADING_NODES.has(type))
-  );
-}
-
-/** Whether the modifier is Blender's Smooth by Angle, which changes only how the mesh shades. */
-export function isSmoothByAngle(modifier: BlendStruct): boolean {
-  const group = modifierType(modifier) === ModifierType.nodes ? modifier.deref("node_group") : null;
-  return group !== null && isSmoothingGroup(group);
-}
+const LINKED_GROUPS: readonly { name: RegExp; inputs: SmoothingInputs }[] = [
+  { name: /^Smooth by Angle(\.\d+)?$/, inputs: { angle: "Input_1", ignoreSharpness: "Socket_1" } },
+  { name: /^Auto Smooth(\.\d+)?$/, inputs: { angle: "Socket_2", ignoreSharpness: null } },
+];
 
 export interface SmoothByAngle {
   /** The modifier, so the importer knows it is applied. */
@@ -80,51 +74,162 @@ function propertyValue(group: BlendStruct | null, name: string): number | null {
 
 const SOCKET_INPUT = 1 << 0;
 
-/** The input sockets of a node group's interface in order, panels included. */
+/** The input sockets of a node group's interface in Blender's order, each panel's in its place. */
 function groupInputs(group: BlendStruct): BlendStruct[] {
   const inputs: BlendStruct[] = [];
   const seen = new Set<number>();
-  const root = group.struct("tree_interface")?.struct("root_panel");
-  const panels = root ? [root] : [];
-  for (let panel = panels.shift(); panel; panel = panels.shift()) {
-    if (seen.has(panel.offset)) continue;
+  const visit = (panel: BlendStruct): void => {
+    if (seen.has(panel.offset)) return;
     seen.add(panel.offset);
     const items = panel.pointers("items_array", Math.max(panel.number("items_num"), 0));
     for (const item of items.map((address) => panel.file.first(panel.resolve(address)))) {
-      if (item?.typeName === "bNodeTreeInterfacePanel") panels.push(item);
+      if (item?.typeName === "bNodeTreeInterfacePanel") visit(item);
       else if (item?.typeName === "bNodeTreeInterfaceSocket" && (item.number("flag") & SOCKET_INPUT) !== 0) {
         inputs.push(item);
       }
     }
-  }
+  };
+  const root = group.struct("tree_interface")?.struct("root_panel");
+  if (root) visit(root);
   return inputs;
 }
 
-/** The first input of a socket type, such as "NodeSocketFloat", which also matches its subtypes. */
-function inputOfType(inputs: readonly BlendStruct[], type: string): BlendStruct | undefined {
-  return inputs.find((socket) => socket.text("socket_type").startsWith(type));
+/** The identifier of the group input of `type` that a socket reads, or null when it reads anything else. */
+function groupInput(graph: ShaderGraph, socket: BlendStruct | null, type: number): string | null {
+  const source = linkedOutput(graph, socket);
+  if (!source || nodeType(source.node) !== "NodeGroupInput" || socketType(source.socket) !== type) return null;
+  return source.name;
 }
 
-/** An input's value on the modifier, stored under the socket's identifier, or else the socket's default. */
-function inputValue(properties: BlendStruct | null, socket: BlendStruct | undefined): number | null {
-  if (!socket) return null;
-  return propertyValue(properties, socket.text("identifier")) ?? socket.deref("socket_data")?.number("value") ?? null;
+/** The two inputs of the Boolean Math node with `operation` that a socket reads, in both orders, or none. */
+function operands(graph: ShaderGraph, socket: BlendStruct | null, operation: number): [BlendStruct, BlendStruct][] {
+  const node = linkedOutput(graph, socket)?.node;
+  if (!node || nodeType(node) !== "FunctionNodeBooleanMath" || node.number("custom1") !== operation) return [];
+  const [a, b] = node.list("inputs");
+  return a && b
+    ? [
+        [a, b],
+        [b, a],
+      ]
+    : [];
 }
 
 /**
- * The object's Smooth by Angle modifier when it is on in viewports, with its settings. The group's one angle input
- * and one switch, Ignore Sharpness, are found by their types, as their names may be translated.
+ * Whether a socket reads a smooth flag from a node of `type`, alone or ORed with a group input, as the auto smooth
+ * groups' Ignore Sharpness switch does. Null when it reads anything else.
+ */
+function smoothFlag(
+  graph: ShaderGraph,
+  socket: BlendStruct | null,
+  type: string,
+): { ignoreSharpness: string | null } | null {
+  const source = linkedOutput(graph, socket);
+  if (source && nodeType(source.node) === type) return { ignoreSharpness: null };
+  for (const [flag, other] of operands(graph, socket, BOOLEAN_OR)) {
+    const read = linkedOutput(graph, flag);
+    const input = groupInput(graph, other, SocketType.boolean);
+    if (read && nodeType(read.node) === type && input) return { ignoreSharpness: input };
+  }
+  return null;
+}
+
+/** The group input that a socket compares each edge's angle with, as `angle <= input`, or null. */
+function angleLimit(graph: ShaderGraph, socket: BlendStruct | null): string | null {
+  const node = linkedOutput(graph, socket)?.node;
+  if (!node || nodeType(node) !== "FunctionNodeCompare") return null;
+  const settings = node.deref("storage");
+  if (settings?.number("data_type") !== SocketType.float || settings.number("operation") !== COMPARE_LESS_EQUAL) {
+    return null;
+  }
+  const angle = linkedOutput(graph, inputSocket(node, "A"));
+  const edges = angle?.name === "Unsigned Angle" && nodeType(angle.node) === "GeometryNodeInputMeshEdgeAngle";
+  return edges ? groupInput(graph, inputSocket(node, "B"), SocketType.float) : null;
+}
+
+function setsSmooth(node: BlendStruct | undefined, domain: number): node is BlendStruct {
+  return node !== undefined && nodeType(node) === "GeometryNodeSetShadeSmooth" && node.number("custom1") === domain;
+}
+
+function alwaysOn(graph: ShaderGraph, node: BlendStruct, ...names: string[]): boolean {
+  return names.every((name) => {
+    const socket = inputSocket(node, name);
+    return socket !== null && !linkedOutput(graph, socket) && socketValue(socket)[0] === 1;
+  });
+}
+
+/**
+ * The inputs of a node group wired as Blender's auto smooth groups are, or null for any other group. The Essentials'
+ * Smooth by Angle and the "Auto Smooth" group that versioning makes are wired alike, the second without the Ignore
+ * Sharpness switch, and do what `applySmoothByAngle` does. The modifier gives the object's mesh only to a group whose
+ * first input is a geometry.
+ */
+function wiredInputs(group: BlendStruct): SmoothingInputs | null {
+  const nodes = group.list("nodes");
+  if (nodes.length === 0) {
+    return isLinked(group) ? (LINKED_GROUPS.find(({ name }) => name.test(idName(group)))?.inputs ?? null) : null;
+  }
+  const graph = graphOf(group);
+  const result = groupOutput(nodes)?.list("inputs")[0] ?? null;
+  if (!result || socketType(result) !== SocketType.geometry) return null;
+  const faces = linkedOutput(graph, result)?.node;
+  if (!setsSmooth(faces, DOMAIN_FACE) || !alwaysOn(graph, faces, "Selection", "Shade Smooth")) return null;
+  const edges = linkedOutput(graph, inputSocket(faces, "Geometry"))?.node;
+  if (!setsSmooth(edges, DOMAIN_EDGE)) return null;
+  const [mesh] = groupInputs(group);
+  const read = groupInput(graph, inputSocket(edges, "Geometry"), SocketType.geometry);
+  const selection = smoothFlag(graph, inputSocket(edges, "Selection"), "GeometryNodeInputEdgeSmooth");
+  if (mesh?.text("socket_type") !== "NodeSocketGeometry" || read !== mesh.text("identifier") || !selection) return null;
+  for (const [within, smooth] of operands(graph, inputSocket(edges, "Shade Smooth"), BOOLEAN_AND)) {
+    const angle = angleLimit(graph, within);
+    const faceFlag = smoothFlag(graph, smooth, "GeometryNodeInputShadeSmooth");
+    if (angle && faceFlag?.ignoreSharpness === selection.ignoreSharpness) return { angle, ...selection };
+  }
+  return null;
+}
+
+const smoothingGroups = new WeakMap<BlendFile, Map<number, SmoothingInputs | null>>();
+
+/** `wiredInputs` of a group, read once for all the objects that share it. */
+function smoothingInputs(group: BlendStruct): SmoothingInputs | null {
+  let known = smoothingGroups.get(group.file);
+  if (!known) {
+    known = new Map();
+    smoothingGroups.set(group.file, known);
+  }
+  const found = known.get(group.offset);
+  if (found !== undefined) return found;
+  const inputs = wiredInputs(group);
+  known.set(group.offset, inputs);
+  return inputs;
+}
+
+/** Whether the modifier is Blender's Smooth by Angle, which changes only how the mesh shades. */
+export function isSmoothByAngle(modifier: BlendStruct): boolean {
+  const group = modifierType(modifier) === ModifierType.nodes ? modifier.deref("node_group") : null;
+  return group !== null && smoothingInputs(group) !== null;
+}
+
+/** An input's value on the modifier, stored under the socket's identifier, or else the socket's default. */
+function inputValue(properties: BlendStruct | null, group: BlendStruct, identifier: string | null): number | null {
+  if (identifier === null) return null;
+  const socket = groupInputs(group).find((input) => input.text("identifier") === identifier);
+  return propertyValue(properties, identifier) ?? socket?.deref("socket_data")?.number("value") ?? null;
+}
+
+/**
+ * The object's Smooth by Angle modifier when it is on in viewports, with its settings: the values of the group inputs
+ * that its nodes compare edge angles with and that ignore sharpness.
  */
 export function smoothByAngle(object: BlendStruct): SmoothByAngle | null {
   for (const modifier of viewportModifiers(object)) {
-    if (!isSmoothByAngle(modifier)) continue;
-    const group = modifier.deref("node_group");
+    const group = modifierType(modifier) === ModifierType.nodes ? modifier.deref("node_group") : null;
+    const inputs = group ? smoothingInputs(group) : null;
+    if (!group || !inputs) continue;
     const properties = modifier.struct("settings")?.deref("properties") ?? null;
-    const inputs = group ? groupInputs(group) : [];
     return {
       modifier,
-      angle: inputValue(properties, inputOfType(inputs, "NodeSocketFloat")) ?? DEFAULT_ANGLE,
-      ignoreSharpness: (inputValue(properties, inputOfType(inputs, "NodeSocketBool")) ?? 0) !== 0,
+      angle: inputValue(properties, group, inputs.angle) ?? DEFAULT_ANGLE,
+      ignoreSharpness: (inputValue(properties, group, inputs.ignoreSharpness) ?? 0) !== 0,
     };
   }
   return null;

@@ -91,6 +91,34 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
     expect([4.5, 7.5].map((frame) => near(repeated, frame))).toEqual([true, true]);
   });
 
+  it("samples whole frames, and warns, when the jumps between frames would take a clip past 100000 frames", async () => {
+    const bytes = await decompressBlend(readFixture("clips", version));
+    const file = readBlendFile(bytes);
+    const action = datablocks(file, "AC").find((candidate) => idName(candidate) === "CycConst");
+    const field = action?.field("frame_end");
+    if (!action || !field) throw new Error("No CycConst range");
+    new DataView(bytes.buffer, bytes.byteOffset).setFloat32(action.offset + field.offset, 90_001, file.little);
+    const long = await importBytes("long.blend", bytes);
+    expect(
+      long.source.warnings
+        .filter((warning) => warning.subject.name === "CycConst")
+        .map((warning) => [warning.code, warning.message, warning.detail]),
+    ).toEqual([
+      [
+        "deform-approximated",
+        "Jumps between frames not shown: CycConst",
+        "Sampling them would take more than 100000 frames, so the preview samples whole frames",
+      ],
+    ]);
+    const longClip = long.clips.find((candidate) => candidate.name === "CycConst");
+    const track = longClip?.tracks.find((candidate) => long.nodes[candidate.node]?.name === "CycConst");
+    const frames = keyFrames(track, 24);
+    expect(frames.at(-1)).toBeCloseTo(90_000, 3);
+    expect(frames.filter((frame) => frame > 1.01 && frame < 1.99)).toEqual([]);
+    const short = keyFrames(tracksOf("CycConst", "CycConst", "translation")[0], 24);
+    expect(short.some((frame) => Math.abs(frame - 1.5) < 1e-4)).toBe(true);
+  });
+
   it("poses only the armatures a clip animates, from the pose Blender shows when it opens the file", () => {
     expect(new Set(clip("MixedSteps").tracks.map((track) => scene.nodes[track.node]?.name))).toEqual(
       new Set(["Mixed"]),
@@ -104,9 +132,11 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
     expect(scene.nodes[scene.nodes.findIndex((node) => node.name === "Nudged")]?.translation[0]).toBeCloseTo(1, 6);
   });
 
-  it("plays an armature set to its rest position from its rest pose", () => {
+  it("plays an armature set to its rest position from its rest pose, and warns that Blender keeps it at rest", () => {
     expect(tracksOf("RestKeyed", "Keyed", "rotation")).toHaveLength(1);
     expect(tracksOf("RestKeyed", "Posed")).toEqual([]);
+    const resting = scene.source.warnings.filter((warning) => warning.subject.name === "RestRig");
+    expect(resting.map((warning) => warning.message)).toEqual(["Rest position not followed: RestRig"]);
   });
 
   it("follows Blender's Bezier handles that reach past the other key", async () => {
@@ -148,6 +178,21 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
   it("plays every slot of an action that an armature plays, as its active action and through an NLA strip", () => {
     const keys = (bone: string) => tracksOf("Dual", bone, "translation").map((track) => track.times.length);
     expect([keys("Top"), keys("Low")]).toEqual([[9], [9]]);
+  });
+
+  it("plays an upper NLA track's slot over a lower one's only where Blender plays it", () => {
+    for (const name of ["Stack", "TweakedFull", "StashedFull"]) {
+      expect(tracksOf(name, `${name}Tip`), name).toHaveLength(3);
+    }
+    const left = ["MutedTrack", "MutedStrip", "Soloed", "NlaOff", "Tweaked", "TweakedSolo", "TweakedStrip", "Stashed"];
+    for (const name of left) {
+      expect(tracksOf(name, `${name}Base`, "translation"), name).toHaveLength(1);
+      expect(tracksOf(name, `${name}Tip`), name).toEqual([]);
+    }
+  });
+
+  it("plays an action that Blender plays nowhere on the object that has it on a muted track", () => {
+    expect(new Set(clip("Reused").tracks.map((track) => scene.nodes[track.node]?.name))).toEqual(new Set(["Reuser"]));
   });
 
   it("warns that a layered action with more than one layer plays only its first", async () => {

@@ -18,7 +18,8 @@ import {
 import type { Action, ActionSlot } from "./actions";
 import { actionRange, animationUses, IdCode, parsePosePath, parseShapeKeyPath, slotFor } from "./actions";
 import type { FCurve } from "./fcurve";
-import { canJump, canJumpAfter, evaluateFCurve, jumpFrames, keyFrames } from "./fcurve";
+import { canJump, canJumpAfter, curveEvaluator, jumpFrames, keyFrames } from "./fcurve";
+import { inRestPosition } from "./rest-position";
 
 export interface ParsedClip {
   name: string;
@@ -32,6 +33,7 @@ export interface ParsedClip {
 type Target = { kind: "object"; record: ObjectRecord } | { kind: "shapeKeys"; meshes: MeshRecord[] };
 
 const SNAP_FRAMES = 1e-3;
+/** The most whole frames a clip spans, and the most it samples with the frames between them where a curve jumps. */
 const MAX_FRAMES = 100_000;
 /** How long before or after a jump, in frames, a track still holds the value on the other side of it. */
 const HOLD_FRAMES = 1e-3;
@@ -126,9 +128,10 @@ interface Assignment {
 
 /**
  * What each slot of each action animates: the objects and shape keys whose animation data plays it, each with every
- * slot it plays. For an action that plays nowhere, what `guessedTargets` finds, one slot to an object or mesh: a slot
- * named after it before one that only names its bones or keys. An object or mesh that uses the action without a slot
- * stays still.
+ * slot it plays. Where Blender plays the action through a slot, only the uses it plays count; an action it plays
+ * through none, such as one on muted tracks only, counts with every use. For an action that no animation data uses
+ * through a slot, what `guessedTargets` finds, one slot to an object or mesh: a slot named after it before one that
+ * only names its bones or keys. An object or mesh that uses the action without a slot stays still.
  */
 function assignTargets(actions: readonly Action[], scene: BuiltScene): Map<Action, Assignment[]> {
   const result = new Map<Action, Assignment[]>();
@@ -136,7 +139,7 @@ function assignTargets(actions: readonly Action[], scene: BuiltScene): Map<Actio
     const key = shapeKeyOwner(mesh);
     return key ? [{ mesh, key }] : [];
   });
-  const uses: { action: number; slot: number; target: Target }[] = [];
+  const uses: { action: number; slot: number; played: boolean; target: Target }[] = [];
   for (const record of scene.objects) {
     for (const use of animationUses(record.object.struct).uses)
       uses.push({ ...use, target: { kind: "object", record } });
@@ -158,11 +161,14 @@ function assignTargets(actions: readonly Action[], scene: BuiltScene): Map<Actio
       for (const mesh of meshes) claimed.add(mesh);
       return meshes.length > 0 ? { kind: "shapeKeys", meshes } : null;
     };
-    for (const use of uses) {
-      if (use.action !== action.struct.offset) continue;
-      const slot = slotFor(action, use.slot);
-      if (slot) assigned.push({ slot, target: use.target });
-      else claim(use.target);
+    const own = uses.flatMap((use) =>
+      use.action === action.struct.offset ? [{ ...use, slot: slotFor(action, use.slot) }] : [],
+    );
+    const plays = own.some((use) => use.played && use.slot);
+    for (const { slot, played, target } of own) {
+      if (plays && !played) continue;
+      if (slot) assigned.push({ slot, target });
+      else claim(target);
     }
     if (assigned.length === 0) {
       const guesses = action.slots.map((slot) => ({ slot, ...guessedTargets(slot, scene, shapeKeys) }));
@@ -187,16 +193,31 @@ function snapTime(seconds: number, fps: number): number {
   return Math.abs(frames - whole) < SNAP_FRAMES ? whole / fps : seconds;
 }
 
-function sameTrs(a: Trs, b: Trs): boolean {
-  const close = (x: readonly number[], y: readonly number[], tolerance: number) =>
-    x.every((value, index) => Math.abs(value - (y[index] ?? 0)) <= tolerance);
+/** Whether the `at`th translation, rotation and scale in arrays of them match `b`, as `sameTrs` decides. */
+function sameTrsAt(
+  translation: ArrayLike<number>,
+  rotation: ArrayLike<number>,
+  scale: ArrayLike<number>,
+  at: number,
+  b: Trs,
+): boolean {
+  for (let c = 0; c < 3; c++) {
+    if (!(Math.abs((translation[at * 3 + c] ?? 0) - (b.translation[c] ?? 0)) <= 1e-6)) return false;
+    if (!(Math.abs((scale[at * 3 + c] ?? 0) - (b.scale[c] ?? 0)) <= 1e-6)) return false;
+  }
+  const r = at * 4;
   const dot = Math.abs(
-    a.rotation[0] * b.rotation[0] +
-      a.rotation[1] * b.rotation[1] +
-      a.rotation[2] * b.rotation[2] +
-      a.rotation[3] * b.rotation[3],
+    (rotation[r] ?? 0) * b.rotation[0] +
+      (rotation[r + 1] ?? 0) * b.rotation[1] +
+      (rotation[r + 2] ?? 0) * b.rotation[2] +
+      (rotation[r + 3] ?? 0) * b.rotation[3],
   );
-  return close(a.translation, b.translation, 1e-6) && close(a.scale, b.scale, 1e-6) && dot > 1 - 1e-9;
+  return dot > 1 - 1e-9;
+}
+
+/** Whether two transforms match: translations and scales within 1e-6, and rotations within a dot of 1e-9. */
+function sameTrs(a: Trs, b: Trs): boolean {
+  return sameTrsAt(a.translation, a.rotation, a.scale, 0, b);
 }
 
 function track(
@@ -204,7 +225,7 @@ function track(
   property: Track["property"],
   interpolation: Interpolation,
   times: Float32Array,
-  values: number[],
+  values: ArrayLike<number>,
   components: number,
 ): Track | null {
   const count = times.length;
@@ -225,25 +246,37 @@ function track(
   return { node, property, interpolation, times, values: stored };
 }
 
-function near(a: readonly number[], b: readonly number[], tolerance: number): boolean {
-  return a.every((value, index) => Math.abs(value - (b[index] ?? 0)) <= tolerance);
+/** A value of `components` numbers at `at` in an array of such values. */
+interface At {
+  values: Float64Array;
+  at: number;
+}
+
+function near(a: At, b: At, components: number): boolean {
+  for (let c = 0; c < components; c++) {
+    if (!(Math.abs((a.values[a.at + c] ?? 0) - (b.values[b.at + c] ?? 0)) <= HOLD_TOLERANCE)) return false;
+  }
+  return true;
 }
 
 /**
  * Whether a value jumps between `probe` and `after`, a sample a moment away, given `before` on the other side of the
  * probe: by more than `JUMP_SHARE` of its change over the rest of the segment.
  */
-function jumps(before: readonly number[], probe: readonly number[], after: readonly number[]): boolean {
-  return after.some((value, index) => {
-    const last = Math.abs(value - (probe[index] ?? 0));
-    return last > JUMP_MINIMUM && last > JUMP_SHARE * Math.abs((probe[index] ?? 0) - (before[index] ?? 0));
-  });
+function jumps(before: At, probe: At, after: At, components: number): boolean {
+  for (let c = 0; c < components; c++) {
+    const at = probe.values[probe.at + c] ?? 0;
+    const last = Math.abs((after.values[after.at + c] ?? 0) - at);
+    if (last > JUMP_MINIMUM && last > JUMP_SHARE * Math.abs(at - (before.values[before.at + c] ?? 0))) return true;
+  }
+  return false;
 }
 
-/** The quaternion, or its negation when that is nearer `reference`. */
-function aligned(q: number[], reference: readonly number[]): number[] {
-  const dot = q.reduce((sum, value, index) => sum + value * (reference[index] ?? 0), 0);
-  return dot < 0 ? q.map((value) => -value) : q;
+/** Negates the quaternion at `q` when its negation is nearer the one at `reference`. */
+function align(q: At, reference: At): void {
+  let dot = 0;
+  for (let c = 0; c < 4; c++) dot += (q.values[q.at + c] ?? 0) * (reference.values[reference.at + c] ?? 0);
+  if (dot < 0) for (let c = 0; c < 4; c++) q.values[q.at + c] = -(q.values[q.at + c] ?? 0);
 }
 
 /**
@@ -255,10 +288,16 @@ interface EdgeTimes {
   hold: number | null;
 }
 
-/** What one node, mesh or property is at each segment's edge times: `after` at its lead, `before` at its hold. */
-interface EdgeSamples<Value> {
-  after: readonly (Value | null)[];
-  before: readonly (Value | null)[];
+/**
+ * What a node's property or a mesh's weights are at each sample time, one value of `components` numbers after another,
+ * and at the edge times of each segment between samples: `after` at its lead and `before` at its hold, where it has
+ * them.
+ */
+interface Series {
+  components: number;
+  frames: Float64Array;
+  after: Float64Array;
+  before: Float64Array;
 }
 
 /**
@@ -270,46 +309,51 @@ function sampledTrack(
   node: number,
   property: Track["property"],
   times: Float32Array,
-  series: number[][],
   edges: readonly EdgeTimes[],
-  probes: EdgeSamples<number[]>,
+  { components, frames, after, before }: Series,
 ): Track | null {
-  const components = series[0]?.length ?? 0;
   if (components === 0) return null;
-  let { after, before } = probes;
+  const count = times.length;
+  const frame = (k: number): At => ({ values: frames, at: k * components });
+  const leading = (k: number): At => ({ values: after, at: k * components });
+  const holding = (k: number): At => ({ values: before, at: k * components });
   if (property === "rotation") {
-    for (let k = 1; k < series.length; k++) series[k] = aligned(series[k] ?? [], series[k - 1] ?? []);
-    const align = (value: number[] | null, k: number) => value && aligned(value, series[k] ?? []);
-    after = after.map(align);
-    before = before.map(align);
+    for (let k = 1; k < count; k++) align(frame(k), frame(k - 1));
+    edges.forEach((edge, k) => {
+      if (edge.lead !== null) align(leading(k), frame(k));
+      if (edge.hold !== null) align(holding(k), frame(k));
+    });
   }
-  const holds = (value: number[] | null | undefined, k: number) =>
-    value !== null && value !== undefined && near(value, series[k] ?? [], HOLD_TOLERANCE);
   const steps =
-    edges.length > 0 && edges.every((edge, k) => holds(before[k], k) && (edge.lead === null || holds(after[k], k)));
-  if (steps) return track(node, property, "step", times, series.flat(), components);
-  const keyTimes: number[] = [];
-  const values: number[] = [];
-  series.forEach((value, k) => {
-    keyTimes.push(times[k] ?? 0);
-    values.push(...value);
+    edges.length > 0 &&
+    edges.every(
+      (edge, k) =>
+        edge.hold !== null &&
+        near(holding(k), frame(k), components) &&
+        (edge.lead === null || near(leading(k), frame(k), components)),
+    );
+  if (steps) return track(node, property, "step", times, frames, components);
+  const most = count + 2 * edges.length;
+  const keyTimes = new Float32Array(most);
+  const values = new Float64Array(most * components);
+  let keys = 0;
+  const key = (time: number, value: At) => {
+    keyTimes[keys] = time;
+    values.set(value.values.subarray(value.at, value.at + components), keys * components);
+    keys++;
+  };
+  for (let k = 0; k < count; k++) {
+    key(times[k] ?? 0, frame(k));
     const edge = edges[k];
-    const next = series[k + 1];
-    if (!edge || !next) return;
-    const leading = after[k];
-    const holding = before[k];
-    let from = value;
-    if (edge.lead !== null && leading && jumps(next, leading, value)) {
-      keyTimes.push(edge.lead);
-      values.push(...leading);
-      from = leading;
+    if (!edge || k + 1 >= count) continue;
+    let from = frame(k);
+    if (edge.lead !== null && jumps(frame(k + 1), leading(k), frame(k), components)) {
+      key(edge.lead, leading(k));
+      from = leading(k);
     }
-    if (edge.hold !== null && holding && jumps(from, holding, next)) {
-      keyTimes.push(edge.hold);
-      values.push(...holding);
-    }
-  });
-  return track(node, property, "linear", Float32Array.from(keyTimes), values, components);
+    if (edge.hold !== null && jumps(from, holding(k), frame(k + 1), components)) key(edge.hold, holding(k));
+  }
+  return track(node, property, "linear", keyTimes.slice(0, keys), values.subarray(0, keys * components), components);
 }
 
 function keepScale(values: number[]): void {
@@ -341,12 +385,6 @@ interface SavedPose {
   sheared: Map<number, string>;
 }
 
-const ARMATURE_REST_POSITION = 1 << 0;
-
-function inRestPosition(record: ObjectRecord): boolean {
-  return ((record.object.data?.number("flag") ?? 0) & ARMATURE_REST_POSITION) !== 0;
-}
-
 /**
  * The pose an armature's actions start from: the pose Blender shows when it opens the file, or, for an armature set to
  * its rest position, the rest pose in each channel's rotation mode.
@@ -375,31 +413,35 @@ function savedPose(armature: ArmatureRecord, atRest: boolean, restTrs: readonly 
 
 /**
  * Every whole frame of the range from its start, its end, and the frames between where a curve may jump. `late` when
- * a curve may jump too soon after one of those frames to sample on its own.
+ * a curve may jump too soon after one of those frames to sample on its own. Only the whole frames and the end, with
+ * `dropped`, when the frames between would take the clip past `MAX_FRAMES`.
  */
 function sampleFrames(
   start: number,
   end: number,
   whole: number,
   curves: readonly FCurve[],
-): { frames: number[]; late: boolean } {
+): { frames: number[]; late: boolean; dropped: boolean } {
   const frames: number[] = [];
   for (let k = 0; k <= whole; k++) frames.push(start + k);
   if (end - start - whole > 1e-6) frames.push(end);
   const between = new Set<number>();
   let late = false;
   for (const curve of curves) {
-    for (const frame of jumpFrames(curve, start, end)) {
+    const jumps = jumpFrames(curve, start, end, MAX_FRAMES);
+    if (jumps === null) return { frames, late: false, dropped: true };
+    for (const frame of jumps) {
       const offset = frame - start;
       const fraction = offset - Math.round(offset);
       if (Math.abs(fraction) >= SNAP_FRAMES && Math.abs(end - frame) >= SNAP_FRAMES) between.add(frame);
       else if (fraction > 0 && fraction < SNAP_FRAMES) late = true;
     }
+    if (whole + between.size > MAX_FRAMES) return { frames, late: false, dropped: true };
   }
-  if (between.size === 0) return { frames, late };
+  if (between.size === 0) return { frames, late, dropped: false };
   const all = [...frames, ...between].sort((a, b) => a - b);
   const kept = all.filter((frame, index) => index === 0 || frame - (all[index - 1] ?? 0) >= SNAP_FRAMES);
-  return { frames: kept, late: late || kept.length < all.length };
+  return { frames: kept, late: late || kept.length < all.length, dropped: false };
 }
 
 /**
@@ -422,18 +464,19 @@ function edgeTimes(times: Float32Array, fps: number, leads: boolean, holds: bool
   return edges;
 }
 
+/** A curve the clip plays and the place of its value among those the clip evaluates at each time. */
+interface PlayedCurve {
+  curve: FCurve;
+  slot: number;
+}
+
 interface Binding {
   record: ObjectRecord;
-  objectCurves: FCurve[];
-  boneCurves: Map<number, { curve: FCurve; property: string }[]>;
+  objectCurves: PlayedCurve[];
+  boneCurves: Map<number, (PlayedCurve & { property: string })[]>;
   /** Bones sampled at every frame: those the action keys and those whose transform depends on their parents'. */
   sampled: number[];
   needsPoses: boolean;
-}
-
-interface Sample {
-  nodes: Map<number, Trs>;
-  weights: Map<MeshRecord, number[]>;
 }
 
 interface ClipScene {
@@ -448,19 +491,20 @@ interface KeyTarget {
   curves: FCurve[];
 }
 
-function bind(record: ObjectRecord, curves: readonly FCurve[]): Binding {
+function bind(record: ObjectRecord, curves: readonly FCurve[], slots: ReadonlyMap<FCurve, number>): Binding {
   const boneIndex = new Map(record.armature?.bones.map((bone, index) => [bone.name, index]) ?? []);
-  const boneCurves = new Map<number, { curve: FCurve; property: string }[]>();
-  const objectCurves: FCurve[] = [];
+  const boneCurves = new Map<number, (PlayedCurve & { property: string })[]>();
+  const objectCurves: PlayedCurve[] = [];
   for (const curve of curves) {
+    const slot = slots.get(curve) ?? -1;
     const pose = parsePosePath(curve.path);
     if (!pose) {
-      objectCurves.push(curve);
+      objectCurves.push({ curve, slot });
       continue;
     }
     const index = boneIndex.get(pose.bone);
     if (index === undefined) continue;
-    boneCurves.set(index, [...(boneCurves.get(index) ?? []), { curve, property: pose.property }]);
+    boneCurves.set(index, [...(boneCurves.get(index) ?? []), { curve, slot, property: pose.property }]);
   }
   const bones = record.armature?.bones ?? [];
   const sampled = bones.flatMap((bone, index) => (boneCurves.has(index) || !inheritsFully(bone) ? [index] : []));
@@ -471,68 +515,175 @@ function bind(record: ObjectRecord, curves: readonly FCurve[]): Binding {
   return { record, objectCurves, boneCurves, sampled, needsPoses };
 }
 
-/** Samples the nodes and morph weights an action moves from its curves' values at a frame, noting bones that shear. */
+const TRS_SIZE = 10;
+
+/**
+ * Where a sample keeps what it holds, one number after another: the translation, rotation and scale of each node the
+ * clip moves, then the morph weights of each mesh.
+ */
+interface Layout {
+  nodes: { node: number; offset: number }[];
+  meshes: { mesh: MeshRecord; offset: number; components: number }[];
+  size: number;
+}
+
+/** Samples the nodes and morph weights an action moves from its curves' values at a time. */
+interface Sampler {
+  layout: Layout;
+  /** Writes the sample for the curves' `values` into `row`, and adds the bones that shear to `sheared`. */
+  sample(values: Float64Array, row: Float64Array, sheared: Set<string>): void;
+}
+
+/** A copy of transform values that each sample changes, after `reset` copies the values' arrays into it again. */
+function scratchValues<Values extends TransformValues>(values: Values): { copy: Values; reset(): void } {
+  const copy = cloneValues(values);
+  const arrays = Object.entries(values).flatMap(([key, from]) => {
+    const to = (copy as unknown as Record<string, unknown>)[key];
+    return Array.isArray(from) && Array.isArray(to) ? [{ from: from as number[], to: to as number[] }] : [];
+  });
+  const reset = () => {
+    for (const { from, to } of arrays) for (let i = 0; i < from.length; i++) to[i] = from[i] ?? 0;
+  };
+  return { copy, reset };
+}
+
+function writeTrs(row: Float64Array, offset: number, trs: Trs): void {
+  row.set(trs.translation, offset);
+  row.set(trs.rotation, offset + 3);
+  row.set(trs.scale, offset + 7);
+}
+
 function sampler(
   bindings: readonly Binding[],
   keyTargets: readonly KeyTarget[],
   clipScene: ClipScene,
-  sheared: Set<string>,
-): (played: (curve: FCurve) => number) => Sample {
+  slots: ReadonlyMap<FCurve, number>,
+): Sampler {
   const { scene, saved } = clipScene;
-  return (played) => {
-    const nodes = new Map<number, Trs>();
-    for (const { record, objectCurves, boneCurves, sampled, needsPoses } of bindings) {
-      if (objectCurves.length > 0) {
-        const values = cloneValues(record.values);
-        for (const curve of objectCurves) {
-          setTransformProperty(values, curve.path, curve.index, played(curve));
+  const layout: Layout = { nodes: [], meshes: [], size: 0 };
+  const place = (node: number) => {
+    layout.nodes.push({ node, offset: layout.size });
+    layout.size += TRS_SIZE;
+    return layout.size - TRS_SIZE;
+  };
+  const objects = bindings.map((binding) => {
+    const { record, objectCurves, boneCurves, sampled } = binding;
+    const own = objectCurves.length > 0 ? { offset: place(record.node), scratch: scratchValues(record.values) } : null;
+    const armature = record.armature;
+    const pose = saved.get(record);
+    if (!armature || !pose || boneCurves.size === 0) return { binding, own, posed: null };
+    const channels = [...pose.channels];
+    const keyed = [...boneCurves].map(([index, list]) => {
+      const scratch = scratchValues(pose.channels[index] ?? restChannel());
+      channels[index] = scratch.copy;
+      return { scratch, list };
+    });
+    const bones = sampled.flatMap((index) => {
+      const bone = armature.bones[index];
+      const node = armature.nodes[index];
+      return bone && node !== undefined ? [{ index, bone, offset: place(node) }] : [];
+    });
+    return { binding, own, posed: { armature, channels, keyed, bones } };
+  });
+  const meshes = keyTargets.map(({ mesh, curves }) => {
+    const offset = layout.size;
+    const components = mesh.morphDefaults.length;
+    layout.meshes.push({ mesh, offset, components });
+    layout.size += components;
+    const keyed = curves.map((curve) => {
+      const index = mesh.morphKeys.indexOf(parseShapeKeyPath(curve.path) ?? "");
+      return { index, range: mesh.morphRanges[index] ?? [0, 1], slot: slots.get(curve) ?? -1 };
+    });
+    return { mesh, offset, keyed };
+  });
+  const sample = (values: Float64Array, row: Float64Array, sheared: Set<string>) => {
+    for (const { binding, own, posed } of objects) {
+      const { record, objectCurves, needsPoses } = binding;
+      if (own) {
+        own.scratch.reset();
+        const transform = own.scratch.copy;
+        for (const { curve, slot } of objectCurves) {
+          setTransformProperty(transform, curve.path, curve.index, values[slot] ?? 0);
         }
-        keepScale(values.scale);
-        keepScale(values.deltaScale);
-        const local = multiplyAll(record.parentPart, record.parentInverse, objectBasis(values));
-        nodes.set(record.node, decompose(toSceneAxes(local, scene.unitScale)));
+        keepScale(transform.scale);
+        keepScale(transform.deltaScale);
+        const local = multiplyAll(record.parentPart, record.parentInverse, objectBasis(transform));
+        writeTrs(row, own.offset, decompose(toSceneAxes(local, scene.unitScale)));
       }
-      const armature = record.armature;
-      const pose = saved.get(record);
-      if (!armature || !pose || boneCurves.size === 0) continue;
-      const channels = [...pose.channels];
-      for (const [index, list] of boneCurves) {
-        const channel = cloneValues(pose.channels[index] ?? restChannel());
-        for (const { curve, property } of list) {
-          setTransformProperty(channel, property, curve.index, played(curve));
+      if (!posed) continue;
+      const { armature, channels, keyed, bones } = posed;
+      for (const { scratch, list } of keyed) {
+        scratch.reset();
+        for (const { curve, property, slot } of list) {
+          setTransformProperty(scratch.copy, property, curve.index, values[slot] ?? 0);
         }
-        keepScale(channel.scale);
-        channels[index] = channel;
+        keepScale(scratch.copy.scale);
       }
       const poses = needsPoses ? poseMatrices(armature.bones, channels) : null;
-      for (const index of sampled) {
-        const bone = armature.bones[index];
-        const node = armature.nodes[index];
-        if (!bone || node === undefined) continue;
+      for (const { index, bone, offset } of bones) {
         const local = boneLocal(armature.bones, index, channels[index], poses);
         if (poses && !inheritsFully(bone) && shearOf(local) > SHEAR_TOLERANCE) sheared.add(bone.name);
-        nodes.set(node, decompose(toSceneAxes(local, scene.unitScale)));
+        writeTrs(row, offset, decompose(toSceneAxes(local, scene.unitScale)));
       }
     }
-    const weights = new Map<MeshRecord, number[]>();
-    for (const { mesh, curves } of keyTargets) {
-      const values = [...mesh.morphDefaults];
-      for (const curve of curves) {
-        const index = mesh.morphKeys.indexOf(parseShapeKeyPath(curve.path) ?? "");
-        const [min, max] = mesh.morphRanges[index] ?? [0, 1];
-        if (index >= 0) values[index] = Math.min(Math.max(played(curve), min), max);
+    for (const { mesh, offset, keyed } of meshes) {
+      row.set(mesh.morphDefaults, offset);
+      for (const { index, range, slot } of keyed) {
+        if (index >= 0) row[offset + index] = Math.min(Math.max(values[slot] ?? 0, range[0]), range[1]);
       }
-      weights.set(mesh, values);
     }
-    return { nodes, weights };
   };
+  return { layout, sample };
 }
 
-function pickEdges<Value>(probes: EdgeSamples<Sample>, pick: (sample: Sample) => Value | null): EdgeSamples<Value> {
-  return {
-    after: probes.after.map((sample) => (sample ? pick(sample) : null)),
-    before: probes.before.map((sample) => (sample ? pick(sample) : null)),
+/** A sample just inside a segment: its own, the same as the sample at the segment's first frame, or none. */
+type EdgeSample = Float64Array | "first" | null;
+
+/** A clip's samples: a row at each of `count` frames, laid out by `layout`, and those at each segment's edge times. */
+interface Samples {
+  layout: Layout;
+  count: number;
+  frames: Float64Array;
+  after: EdgeSample[];
+  before: EdgeSample[];
+}
+
+/** The series of the `components` numbers at `offset` in each sample. */
+function seriesOf({ layout, count, frames, after, before }: Samples, offset: number, components: number): Series {
+  const values = new Float64Array(count * components);
+  for (let k = 0; k < count; k++) {
+    for (let c = 0; c < components; c++) values[k * components + c] = frames[k * layout.size + offset + c] ?? 0;
+  }
+  const edgeValues = (edgeSamples: readonly EdgeSample[]) => {
+    const result = new Float64Array(edgeSamples.length * components);
+    edgeSamples.forEach((edgeSample, k) => {
+      if (edgeSample === null) return;
+      const source = edgeSample === "first" ? frames : edgeSample;
+      const at = edgeSample === "first" ? k * layout.size + offset : offset;
+      for (let c = 0; c < components; c++) result[k * components + c] = source[at + c] ?? 0;
+    });
+    return result;
   };
+  return { components, frames: values, after: edgeValues(after), before: edgeValues(before) };
+}
+
+/** Whether every sample of a node, at each frame and edge time, is its rest transform. */
+function resting(
+  translation: Series,
+  rotation: Series,
+  scale: Series,
+  edges: readonly EdgeTimes[],
+  rest: Trs,
+): boolean {
+  const count = translation.frames.length / 3;
+  for (let k = 0; k < count; k++) {
+    if (!sameTrsAt(translation.frames, rotation.frames, scale.frames, k, rest)) return false;
+  }
+  return edges.every(
+    (edge, k) =>
+      (edge.lead === null || sameTrsAt(translation.after, rotation.after, scale.after, k, rest)) &&
+      (edge.hold === null || sameTrsAt(translation.before, rotation.before, scale.before, k, rest)),
+  );
 }
 
 /**
@@ -540,9 +691,8 @@ function pickEdges<Value>(probes: EdgeSamples<Sample>, pick: (sample: Sample) =>
  * bones that the saved pose of an armature the clip animates moves and that the clip does not sample.
  */
 function clipTracks(
-  samples: readonly Sample[],
+  samples: Samples,
   edges: readonly EdgeTimes[],
-  probes: EdgeSamples<Sample>,
   times: Float32Array,
   clipScene: ClipScene,
   armatures: readonly ObjectRecord[],
@@ -550,18 +700,20 @@ function clipTracks(
 ): Track[] {
   const { restTrs, saved } = clipScene;
   const tracks: Track[] = [];
-  const sampledNodes = new Set(samples[0]?.nodes.keys());
-  for (const node of sampledNodes) {
-    const series = samples.map((sample) => sample.nodes.get(node));
-    const nodeProbes = pickEdges(probes, (sample) => sample.nodes.get(node) ?? null);
+  const sampledNodes = new Set<number>();
+  for (const { node, offset } of samples.layout.nodes) {
+    sampledNodes.add(node);
+    const translation = seriesOf(samples, offset, 3);
+    const rotation = seriesOf(samples, offset + 3, 4);
+    const scale = seriesOf(samples, offset + 7, 3);
     const rest = restTrs[node];
-    const probed = [...nodeProbes.after, ...nodeProbes.before];
-    if (rest && [...series, ...probed].every((trs) => !trs || sameTrs(trs, rest))) continue;
-    for (const property of TRANSFORM_PROPERTIES) {
-      const values = series.map((trs) => (trs ? [...trs[property]] : []));
-      const pick = (trs: Trs | null) => (trs ? [...trs[property]] : null);
-      const propertyProbes = { after: nodeProbes.after.map(pick), before: nodeProbes.before.map(pick) };
-      const created = sampledTrack(node, property, times, values, edges, propertyProbes);
+    if (rest && resting(translation, rotation, scale, edges, rest)) continue;
+    for (const [property, series] of [
+      ["translation", translation],
+      ["rotation", rotation],
+      ["scale", scale],
+    ] as const) {
+      const created = sampledTrack(node, property, times, edges, series);
       if (created) tracks.push(created);
     }
   }
@@ -577,10 +729,8 @@ function clipTracks(
       }
     }
   }
-  for (const mesh of samples[0]?.weights.keys() ?? []) {
-    const series = samples.map((sample) => sample.weights.get(mesh) ?? []);
-    const weightProbes = pickEdges(probes, (sample) => sample.weights.get(mesh) ?? null);
-    const created = sampledTrack(mesh.node, "weights", times, series, edges, weightProbes);
+  for (const { mesh, offset, components } of samples.layout.meshes) {
+    const created = sampledTrack(mesh.node, "weights", times, edges, seriesOf(samples, offset, components));
     if (created) tracks.push(created);
   }
   return tracks.sort((a, b) => a.node - b.node);
@@ -588,8 +738,8 @@ function clipTracks(
 
 /**
  * The curves each object and mesh plays, from every slot that reaches it. Where two slots key one value, the one its
- * animation data lists first wins, so the active action's slot wins over an NLA strip's, and an upper track's strip
- * over a lower one's.
+ * animation data lists first wins, so the slot Blender plays over the NLA wins over an NLA strip's, and an upper
+ * track's strip over a lower one's.
  */
 function playedCurves<Owner>(entries: readonly { owner: Owner; curves: readonly FCurve[] }[]): Map<Owner, FCurve[]> {
   const byValue = new Map<Owner, Map<string, FCurve>>();
@@ -657,7 +807,11 @@ function buildClip(action: Action, assignments: readonly Assignment[], clipScene
     warn("clip-not-sampled", "Clip not sampled", `It spans ${whole} frames, more than ${MAX_FRAMES}`);
     return null;
   }
-  const { frames, late } = sampleFrames(start, end, whole, animated);
+  const { frames, late, dropped } = sampleFrames(start, end, whole, animated);
+  if (dropped) {
+    const detail = `Sampling them would take more than ${MAX_FRAMES} frames, so the preview samples whole frames`;
+    warn("deform-approximated", "Jumps between frames not shown", detail);
+  }
   const times = Float32Array.from(frames, (frame) => snapTime((frame - start) / fps, fps));
   const duration = snapTime(span / fps, fps);
 
@@ -670,36 +824,43 @@ function buildClip(action: Action, assignments: readonly Assignment[], clipScene
     if (keyed.length > 0) curveTimes.push(Float32Array.from(keyed));
   }
 
-  const sheared = new Set<string>();
-  const bindings = objectTargets.map(({ record, curves }) => bind(record, curves));
-  const sampleAt = sampler(bindings, keyTargets, clipScene, sheared);
   const distinct = [...new Set(animated)];
-  const order = new Map(distinct.map((curve, index) => [curve, index]));
-  const valuesAt = (frame: number) => {
-    const values = new Float64Array(distinct.length);
-    distinct.forEach((curve, index) => {
-      values[index] = evaluateFCurve(curve, frame);
+  const slots = new Map(distinct.map((curve, index) => [curve, index]));
+  const bindings = objectTargets.map(({ record, curves }) => bind(record, curves, slots));
+  const { layout, sample } = sampler(bindings, keyTargets, clipScene, slots);
+  const evaluators = distinct.map(curveEvaluator);
+  const evaluate = (frame: number, values: Float64Array) => {
+    evaluators.forEach((valueAt, index) => {
+      values[index] = valueAt(frame);
     });
-    return values;
   };
-  const sampleOf = (values: Float64Array) => sampleAt((curve) => values[order.get(curve) ?? -1] ?? 0);
-  const frameValues = frames.map(valuesAt);
-  const samples = frameValues.map(sampleOf);
   const leads = late || animated.some((curve) => canJumpAfter(curve, start, end));
-  const edges = edgeTimes(times, fps, leads, animated.some(canJump));
-  const probe = (time: number | null, k: number) => {
+  const holds = animated.some((curve) => canJump(curve, start, end));
+  const edges = edgeTimes(times, fps, leads, holds);
+  const count = frames.length;
+  const samples: Samples = { layout, count, frames: new Float64Array(count * layout.size), after: [], before: [] };
+  const frameValues = new Float64Array(distinct.length);
+  const edgeValues = new Float64Array(distinct.length);
+  const shearedAt = { frames: new Set<string>(), after: new Set<string>(), before: new Set<string>() };
+  const edgeSample = (time: number | null, sheared: Set<string>): EdgeSample => {
     if (time === null) return null;
-    const values = valuesAt(start + time * fps);
-    const before = frameValues[k];
-    const held = before !== undefined && values.every((value, index) => value === before[index]);
-    return held ? (samples[k] ?? null) : sampleOf(values);
+    evaluate(start + time * fps, edgeValues);
+    if (edgeValues.every((value, index) => value === frameValues[index])) return "first";
+    const row = new Float64Array(layout.size);
+    sample(edgeValues, row, sheared);
+    return row;
   };
-  const probes = {
-    after: edges.map(({ lead }, k) => probe(lead, k)),
-    before: edges.map(({ hold }, k) => probe(hold, k)),
-  };
+  frames.forEach((frame, k) => {
+    evaluate(frame, frameValues);
+    sample(frameValues, samples.frames.subarray(k * layout.size, (k + 1) * layout.size), shearedAt.frames);
+    const edge = edges[k];
+    if (!edge) return;
+    samples.after.push(edgeSample(edge.lead, shearedAt.after));
+    samples.before.push(edgeSample(edge.hold, shearedAt.before));
+  });
+  const sheared = new Set([...shearedAt.frames, ...shearedAt.after, ...shearedAt.before]);
   const armatures = bindings.flatMap(({ record }) => (record.armature ? [record] : []));
-  const tracks = clipTracks(samples, edges, probes, times, clipScene, armatures, sheared);
+  const tracks = clipTracks(samples, edges, times, clipScene, armatures, sheared);
   if (sheared.size > 0) {
     const detail = `These bones shear under their parents' scale, which the preview drops: ${[...sheared].join(", ")}`;
     warn("deform-approximated", "Shear not shown", detail);

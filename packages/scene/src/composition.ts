@@ -75,11 +75,12 @@ const LISTED_NAMES = 5;
 /**
  * One scene from a model and the other files of its composition. The model's nodes, meshes and clips keep their
  * indices and paths. Clips from animation files bind to the model's nodes by name, preferring bones, without the
- * tracks that only hold their file's pose, and bones a clip lacks keep the rest pose. Attached nodes keep their rest placement in scene space, as both files were exported
- * in the same rest frame: under a bone they follow it, otherwise they stay in place. A bone in an attached file that
- * matches a model bone by name is that model bone, so skinned meshes and children of those bones follow the model's
- * skeleton, as Unreal's leader pose does. Nodes and clips from other files take the file as a prefix on their paths
- * and names. The inputs are not changed; typed arrays are shared with them.
+ * tracks that only hold their file's pose, and bones a clip lacks keep the rest pose. Attached nodes keep their rest
+ * placement in scene space, as both files were exported in the same rest frame: under a bone they follow it,
+ * otherwise they stay in place. A bone in an attached file that matches a model bone by name is that model bone, so
+ * skinned meshes and children of those bones follow the model's skeleton, as Unreal's leader pose does. Nodes and
+ * clips from other files take the file as a prefix on their paths and names. The inputs are not changed; typed arrays
+ * are shared with them.
  */
 export function composeScene(model: SceneDescription, composition: Composition): SceneDescription {
   const builder = new SceneBuilder(model, composition.warnings ?? []);

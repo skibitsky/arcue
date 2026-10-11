@@ -180,12 +180,12 @@ function vertexGroupFactors(mesh: MeshData, group: number): Float32Array {
 }
 
 /** A Blender-space normal, rounded to 32 bits as a vertex stores it, in the scene's axes at unit length. */
-function sceneNormal(conversion: Mat4, normal: readonly number[]): [number, number, number] {
+function sceneNormal(conversion: Mat4, normal: ArrayLike<number>, at = 0): [number, number, number] {
   const [x, y, z] = transformDirection(
     conversion,
-    Math.fround(normal[0] ?? 0),
-    Math.fround(normal[1] ?? 0),
-    Math.fround(normal[2] ?? 0),
+    Math.fround(normal[at] ?? 0),
+    Math.fround(normal[at + 1] ?? 0),
+    Math.fround(normal[at + 2] ?? 0),
   );
   const length = Math.hypot(x, y, z) || 1;
   return [x / length, y / length, z / length];
@@ -319,18 +319,22 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     return index;
   };
   const splitWhereShadingDiffers = (shaded: Float32Array) => {
-    const made = new Map<string, number>();
+    const shadedAlike = (a: number, b: number) =>
+      sameNumber(shaded[a * 3] ?? 0, shaded[b * 3]) &&
+      sameNumber(shaded[a * 3 + 1] ?? 0, shaded[b * 3 + 1]) &&
+      sameNumber(shaded[a * 3 + 2] ?? 0, shaded[b * 3 + 2]);
+    const made = new Map<number, number[]>();
     for (let corner = 0; corner < mesh.cornerCount; corner++) {
       const from = renderedOfCorner[corner] ?? -1;
       const first = cornerOf[from] ?? corner;
-      if (from < 0 || first === corner) continue;
-      const [x = 0, y = 0, z = 0] = [shaded[corner * 3], shaded[corner * 3 + 1], shaded[corner * 3 + 2]];
-      const known = first * 3;
-      if (sameNumber(x, shaded[known]) && sameNumber(y, shaded[known + 1]) && sameNumber(z, shaded[known + 2]))
-        continue;
-      const key = `${from} ${x} ${y} ${z}`;
-      const index = made.get(key) ?? split(from, corner);
-      made.set(key, index);
+      if (from < 0 || first === corner || shadedAlike(corner, first)) continue;
+      const splits = made.get(from) ?? [];
+      let index = splits.find((candidate) => shadedAlike(corner, cornerOf[candidate] ?? corner));
+      if (index === undefined) {
+        index = split(from, corner);
+        splits.push(index);
+        made.set(from, splits);
+      }
       renderedOfCorner[corner] = index;
     }
   };
@@ -345,7 +349,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     const offsets = new Float32Array(sourceVertex.length * 3);
     for (let r = 0; r < sourceVertex.length; r++) {
       const corner = cornerOf[r] ?? 0;
-      const normal = sceneNormal(options.conversion, Array.from(shaded.subarray(corner * 3, corner * 3 + 3)));
+      const normal = sceneNormal(options.conversion, shaded, corner * 3);
       for (let k = 0; k < 3; k++) offsets[r * 3 + k] = (normal[k] ?? 0) - (outNormals[r * 3 + k] ?? 0);
     }
     return offsets;
@@ -360,14 +364,13 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     const normalOffsets = new Float32Array(source.length * 3);
     const shading = shapedNormalOffsets[index];
     if (shading) normalOffsets.set(shading);
+    const { offsets } = target;
     for (let r = 0; r < source.length; r++) {
-      const v = source[r] ?? 0;
-      const offset = target.offsets.subarray(v * 3, v * 3 + 3);
-      values.set(transformDirection(options.conversion, offset[0] ?? 0, offset[1] ?? 0, offset[2] ?? 0), r * 3);
-      const from = splitFrom.get(r);
-      if (shading && r * 3 >= shading.length && from !== undefined) {
-        normalOffsets.copyWithin(r * 3, from * 3, from * 3 + 3);
-      }
+      const v = (source[r] ?? 0) * 3;
+      const moved = transformDirection(options.conversion, offsets[v] ?? 0, offsets[v + 1] ?? 0, offsets[v + 2] ?? 0);
+      values.set(moved, r * 3);
+      const from = shading && r * 3 >= shading.length ? splitFrom.get(r) : undefined;
+      if (from !== undefined) normalOffsets.copyWithin(r * 3, from * 3, from * 3 + 3);
     }
     return { name: target.name, defaultWeight: target.defaultWeight, positions: values, normals: normalOffsets };
   });

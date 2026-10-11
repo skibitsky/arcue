@@ -609,9 +609,7 @@ export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: r
     : [...objectGroups];
   const shapeKeys = readShapeKeys(mesh, file, sizes);
   const autoSmooth = (mesh.number("flag") & LEGACY_AUTO_SMOOTH) !== 0 && mesh.has("smoothresh") && file.version < 401;
-  const materials = mesh.pointers("mat", Math.max(mesh.number("totcol"), 0)).map((address) => {
-    return file.first(mesh.resolve(address));
-  });
+  const materials = meshMaterials(file, mesh);
   return {
     name: idName(mesh),
     vertexCount: sizes.point,
@@ -632,6 +630,11 @@ export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: r
     absoluteKeys: shapeKeys.absolute,
     materials,
   };
+}
+
+/** The material in each of the mesh's own slots. */
+export function meshMaterials(file: BlendFile, mesh: BlendStruct): (BlendStruct | null)[] {
+  return mesh.pointers("mat", Math.max(mesh.number("totcol"), 0)).map((address) => file.first(mesh.resolve(address)));
 }
 
 function validateTopology(

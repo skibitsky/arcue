@@ -43,6 +43,23 @@ function valueAt(track: Track, time: number): number[] {
   return Array.from(track.values.subarray(key * width, key * width + width));
 }
 
+/**
+ * The times at which a track's value changes from the key before, and its first time. At any other of its clip's
+ * sample times the track holds a value it holds at one of these.
+ */
+function changeTimes(track: Track): number[] {
+  const width = track.values.length / Math.max(track.times.length, 1);
+  const times: number[] = [];
+  for (let k = 0; k < track.times.length; k++) {
+    let changed = k === 0;
+    for (let c = 0; c < width && !changed; c++) {
+      changed = track.values[k * width + c] !== track.values[(k - 1) * width + c];
+    }
+    if (changed) times.push(track.times[k] ?? 0);
+  }
+  return times;
+}
+
 /** Local matrices in scene space, at rest or at a time of a clip. */
 class Locals {
   readonly #rest: Mat4[];
@@ -73,8 +90,17 @@ class Locals {
   }
 }
 
-/** Whether the clip changes where the mesh's path puts it relative to the armature's path, below their common node. */
-function movesApart(locals: Locals, clip: ParsedClip, meshPath: number[], armaturePath: number[]): boolean {
+/**
+ * Whether the clip changes where the mesh's path puts it relative to the armature's path, below their common node.
+ * `changesOf` gives the times at which a track's value changes.
+ */
+function movesApart(
+  locals: Locals,
+  clip: ParsedClip,
+  meshPath: number[],
+  armaturePath: number[],
+  changesOf: (track: Track) => number[],
+): boolean {
   const tracks = clip.tracks.filter(
     (track) => track.property !== "weights" && (meshPath.includes(track.node) || armaturePath.includes(track.node)),
   );
@@ -90,7 +116,7 @@ function movesApart(locals: Locals, clip: ParsedClip, meshPath: number[], armatu
     return { matrix: multiply(invert(armature), mesh), reach };
   };
   const rest = relative(null);
-  const times = new Set(tracks.flatMap((track) => Array.from(track.times)));
+  const times = new Set(tracks.flatMap(changesOf));
   return [...times].some((time) => {
     const { matrix, reach } = relative(time);
     const translationTolerance = TOLERANCE + 8 * FLOAT32_ROUNDING * Math.max(reach, rest.reach);
@@ -108,6 +134,15 @@ function movesApart(locals: Locals, clip: ParsedClip, meshPath: number[], armatu
  */
 export function skinMotionWarnings(scene: BuiltScene, clips: readonly ParsedClip[]): BlendWarning[] {
   const locals = new Locals(scene);
+  const changes = new Map<Track, number[]>();
+  const changesOf = (track: Track) => {
+    let times = changes.get(track);
+    if (!times) {
+      times = changeTimes(track);
+      changes.set(track, times);
+    }
+    return times;
+  };
   const warnings: BlendWarning[] = [];
   scene.meshes.forEach((mesh, index) => {
     const skeleton = mesh.skeleton === null ? undefined : scene.skeletons[mesh.skeleton];
@@ -119,7 +154,7 @@ export function skinMotionWarnings(scene: BuiltScene, clips: readonly ParsedClip
     const common = meshChain.find((node) => armatureChain.includes(node)) ?? -1;
     const meshPath = pathBelow(meshChain, common);
     const armaturePath = pathBelow(armatureChain, common);
-    const moving = clips.filter((clip) => movesApart(locals, clip, meshPath, armaturePath));
+    const moving = clips.filter((clip) => movesApart(locals, clip, meshPath, armaturePath, changesOf));
     if (moving.length === 0) return;
     const armatureName = scene.nodes[armature]?.name ?? "";
     warnings.push({

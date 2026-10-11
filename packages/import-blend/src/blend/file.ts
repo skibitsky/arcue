@@ -22,7 +22,8 @@ export interface BlendBlock {
   owner: number;
 }
 
-const HEADER_MAGIC = "BLENDER";
+/** The bytes every uncompressed .blend file starts with. */
+export const HEADER_MAGIC = "BLENDER";
 const textDecoder = new TextDecoder("utf-8");
 
 function ascii(bytes: Uint8Array, start: number, end: number): string {
@@ -51,10 +52,15 @@ function digits(text: string): number | null {
   return /^\d+$/.test(text) ? Number(text) : null;
 }
 
-function readHeader(bytes: Uint8Array): Header {
-  if (bytes.byteLength < 12 || ascii(bytes, 0, 7) !== HEADER_MAGIC) {
+/** Refuses bytes that are shorter than `length` or do not start with `HEADER_MAGIC`. */
+export function checkHeaderMagic(bytes: Uint8Array, length = HEADER_MAGIC.length): void {
+  if (bytes.byteLength < length || ascii(bytes, 0, HEADER_MAGIC.length) !== HEADER_MAGIC) {
     throw new BlendParseError("it does not start with a Blender file header");
   }
+}
+
+function readHeader(bytes: Uint8Array): Header {
+  checkHeaderMagic(bytes, 12);
   const headerSize = digits(ascii(bytes, 7, 9));
   if (headerSize !== null) {
     const format = digits(ascii(bytes, 10, 12));
@@ -115,12 +121,23 @@ const ENDB = codeWord("ENDB");
 const DNA1 = codeWord("DNA1");
 const EMPTY_SLOT = 0;
 
-/** Mixes an address, and the datablock that owns it or -1, into a hash table slot's starting point. */
-function hashAddress(low: number, high: number, owner: number): number {
-  let hash = Math.imul(low ^ 0x9e3779b9, 0x85ebca6b);
-  hash = Math.imul(hash ^ (hash >>> 13) ^ high, 0xc2b2ae35);
-  hash = Math.imul(hash ^ (hash >>> 16) ^ owner, 0x27d4eb2f);
-  return (hash ^ (hash >>> 15)) >>> 0;
+/** MurmurHash3's finalizer: each bit of the value flips about half of the result's bits. */
+function mix(value: number): number {
+  let hash = Math.imul(value ^ (value >>> 16), 0x85ebca6b);
+  hash = Math.imul(hash ^ (hash >>> 13), 0xc2b2ae35);
+  return hash ^ (hash >>> 16);
+}
+
+/**
+ * A hash table slot's starting point for an address and the datablock that owns it or -1. The key is random for each
+ * file, so a file cannot choose addresses that all start at one slot.
+ */
+function hashAddress(key: number, low: number, high: number, owner: number): number {
+  return mix(mix(mix(low ^ key) ^ high) ^ owner);
+}
+
+function randomKey(): number {
+  return new DataView(crypto.getRandomValues(new Uint8Array(4)).buffer).getInt32(0);
 }
 
 /** Slots for an open-addressed table of `count` entries, a power of two at most two thirds full. */
@@ -155,6 +172,7 @@ export class BlendFile {
   readonly #global: Int32Array;
   /** Data blocks by their datablock and address, the first of each. */
   readonly #owned: Int32Array;
+  readonly #hashKey = randomKey();
   readonly #made = new Map<number, BlendBlock>();
 
   constructor(bytes: Uint8Array) {
@@ -234,7 +252,7 @@ export class BlendFile {
   /** The slot that holds the block with this address, and for `owner` 0 or more that datablock, or an empty one. */
   #slot(slots: Int32Array, low: number, high: number, owner: number): number {
     const mask = slots.length - 1;
-    for (let slot = hashAddress(low, high, owner) & mask; ; slot = (slot + 1) & mask) {
+    for (let slot = hashAddress(this.#hashKey, low, high, owner) & mask; ; slot = (slot + 1) & mask) {
       const entry = slots[slot] ?? EMPTY_SLOT;
       if (entry === EMPTY_SLOT) return slot;
       const block = entry - 1;

@@ -1,8 +1,19 @@
 import type { BlendStruct } from "../blend/file";
 
 /** Blender's `eNodeSocketDatatype`. */
-export const SocketType = { float: 0, vector: 1, color: 2, shader: 3, boolean: 4, int: 6 } as const;
+export const SocketType = {
+  float: 0,
+  vector: 1,
+  color: 2,
+  shader: 3,
+  boolean: 4,
+  int: 6,
+  geometry: 10,
+  bundle: 17,
+  closure: 18,
+} as const;
 
+export const NODE_DO_OUTPUT = 1 << 6;
 const NODE_MUTED = 1 << 9;
 const SOCK_UNAVAILABLE = 1 << 3;
 const SOCK_NO_INTERNAL_LINK = 1 << 9;
@@ -12,8 +23,8 @@ const LUMINANCE = [0.2126, 0.7152, 0.0722] as const;
 
 export interface ShaderGraph {
   nodes: BlendStruct[];
-  /** The link into each input socket, by the socket's offset in the file. */
-  linksTo: Map<number, BlendStruct>;
+  /** The links into each input socket, by the socket's offset in the file: one, or many into a multi-input socket. */
+  linksTo: Map<number, BlendStruct[]>;
 }
 
 /** Where an input's value comes from: a node's output, or the value set on a socket. */
@@ -22,17 +33,26 @@ type Source =
   | { kind: "value"; socket: BlendStruct };
 
 export function graphOf(tree: BlendStruct): ShaderGraph {
-  const linksTo = new Map<number, BlendStruct>();
+  const linksTo = new Map<number, BlendStruct[]>();
   for (const link of tree.list("links")) {
     if (link.pointer("tosock") === 0n) continue;
     const target = link.deref("tosock");
-    if (target && !linksTo.has(target.offset)) linksTo.set(target.offset, link);
+    if (!target) continue;
+    const links = linksTo.get(target.offset);
+    if (links) links.push(link);
+    else linksTo.set(target.offset, [link]);
   }
   return { nodes: tree.list("nodes"), linksTo };
 }
 
 export function nodeType(node: BlendStruct): string {
   return node.string("idname");
+}
+
+/** The Group Output node that gives a node group its outputs: the active one, or the first. */
+export function groupOutput(nodes: readonly BlendStruct[]): BlendStruct | null {
+  const outputs = nodes.filter((node) => nodeType(node) === "NodeGroupOutput");
+  return outputs.find((node) => (node.number("flag") & NODE_DO_OUTPUT) !== 0) ?? outputs[0] ?? null;
 }
 
 export function nodeLabel(node: BlendStruct): string {
@@ -51,7 +71,7 @@ function available(socket: BlendStruct): boolean {
   return (socket.number("flag") & SOCK_UNAVAILABLE) === 0;
 }
 
-function isMuted(node: BlendStruct): boolean {
+export function isMuted(node: BlendStruct): boolean {
   return (node.number("flag") & NODE_MUTED) !== 0;
 }
 
@@ -114,7 +134,7 @@ function passedInput(graph: ShaderGraph, node: BlendStruct, output: BlendStruct)
  */
 function sourceOf(graph: ShaderGraph, socket: BlendStruct, depth = 0): Source {
   const own: Source = { kind: "value", socket };
-  const link = graph.linksTo.get(socket.offset);
+  const link = graph.linksTo.get(socket.offset)?.[0];
   if (!link || depth > 32 || !available(socket) || (link.number("flag") & LINK_MUTED) !== 0) return own;
   const node = link.deref("fromnode");
   const output = link.deref("fromsock");
@@ -124,6 +144,21 @@ function sourceOf(graph: ShaderGraph, socket: BlendStruct, depth = 0): Source {
   const input = nodeType(node) === "NodeReroute" ? node.list("inputs")[0] : passedInput(graph, node, output);
   const passed = input ? sourceOf(graph, input, depth + 1) : own;
   return passed.kind === "output" ? passed : own;
+}
+
+/**
+ * The node outputs that a node's inputs read through every link Blender evaluates, without looking through reroutes
+ * or muted nodes.
+ */
+export function feedingOutputs(graph: ShaderGraph, node: BlendStruct): { node: BlendStruct; socket: BlendStruct }[] {
+  return node.list("inputs").flatMap((input) =>
+    (available(input) ? (graph.linksTo.get(input.offset) ?? []) : []).flatMap((link) => {
+      const from = link.deref("fromnode");
+      const socket = link.deref("fromsock");
+      const evaluated = from && socket && available(socket) && (link.number("flag") & LINK_MUTED) === 0;
+      return evaluated ? [{ node: from, socket }] : [];
+    }),
+  );
 }
 
 /** The node output an input reads, or null when the input keeps a value. */

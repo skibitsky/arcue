@@ -3,7 +3,16 @@ import { isLinked } from "../blend/ids";
 import type { ObjectValues, TransformValues } from "../scene/transforms";
 import { cloneValues, isTransformProperty, setTransformProperty } from "../scene/transforms";
 import type { Action } from "./actions";
-import { parsePosePath, parseShapeKeyPath, readAction, slotFor } from "./actions";
+import {
+  ADT_NLA_EDIT_ON,
+  ADT_NLA_EVAL_OFF,
+  ADT_NLA_SOLO_TRACK,
+  NLATRACK_MUTED,
+  parsePosePath,
+  parseShapeKeyPath,
+  readAction,
+  slotFor,
+} from "./actions";
 import type { FCurve } from "./fcurve";
 import { evaluateFCurve, keyFrames, readFCurve } from "./fcurve";
 
@@ -16,10 +25,6 @@ export interface OpeningPose {
   channel(bone: string, values: TransformValues): TransformValues;
 }
 
-const ADT_NLA_SOLO_TRACK = 1 << 0;
-const ADT_NLA_EVAL_OFF = 1 << 1;
-const ADT_NLA_EDIT_ON = 1 << 2;
-const NLATRACK_MUTED = 1 << 2;
 const NLA_BLEND_REPLACE = 0;
 const NLA_EXTEND_HOLD = 0;
 const NLA_EXTEND_HOLD_FORWARD = 1;

@@ -436,6 +436,219 @@ def auto_smooth_group(name="Auto Smooth", geometry="Geometry", angle_name="Angle
     return group
 
 
+def rewired_auto_smooth_group():
+    """The "Auto Smooth" group under another name, with a float input before the angle and a reroute between the angle
+    and its comparison, which leave what it does unchanged."""
+    group = auto_smooth_group("Rewired Smoothing")
+    strength = group.interface.new_socket(name="Strength", in_out="INPUT", socket_type="NodeSocketFloat")
+    group.interface.move(strength, 2)
+    group_input = next(node for node in group.nodes if node.bl_idname == "NodeGroupInput")
+    within = next(node for node in group.nodes if node.bl_idname == "FunctionNodeCompare")
+    reroute = group.nodes.new("NodeReroute")
+    group.links.new(group_input.outputs["Angle"], reroute.inputs[0])
+    group.links.new(reroute.outputs[0], within.inputs[1])
+    return group
+
+
+def linked_smoothing_groups(library_name):
+    """Writes Smooth by Angle from the Essentials and the "Auto Smooth" group to a library in the fixtures folder and
+    links them from it by its bare file name, so that the fixture holds only their names. Remove the library after the
+    fixture is saved."""
+    assets = os.path.join(bpy.utils.system_resource("DATAFILES"), "assets")
+    essentials = next(
+        os.path.relpath(path, assets)
+        for path in (os.path.join(assets, "geometry_nodes", "smooth_by_angle.blend"),
+                     os.path.join(assets, "nodes", "geometry_nodes_essentials.blend"))
+        if os.path.exists(path)
+    )
+    groups = {essentials_group("Smooth by Angle", essentials), auto_smooth_group()}
+    names = sorted(group.name for group in groups)
+    working_dir = os.getcwd()
+    os.chdir(HERE)
+    try:
+        bpy.data.libraries.write(library_name, groups, path_remap="NONE")
+        for group in groups:
+            bpy.data.node_groups.remove(group)
+        with bpy.data.libraries.load(library_name, link=True) as (_, target):
+            target.node_groups = names
+    finally:
+        os.chdir(working_dir)
+    forget_absolute_path(target.node_groups[0].library, "//" + library_name)
+    return target.node_groups
+
+
+def sharpening_group():
+    """A group made of the kinds of nodes the auto smooth groups use that does something else: it shades every face
+    smooth, and then each edge smooth only where its faces meet at more than 10 degrees."""
+    group = bpy.data.node_groups.new("Sharpen Smooth Edges", "GeometryNodeTree")
+    group.interface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    threshold = group.interface.new_socket(name="Threshold", in_out="INPUT", socket_type="NodeSocketFloat")
+    threshold.default_value = math.radians(10)
+    group.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    nodes, links = group.nodes, group.links
+    group_input = nodes.new("NodeGroupInput")
+    above = nodes.new("FunctionNodeCompare")
+    above.data_type, above.operation = "FLOAT", "GREATER_THAN"
+    links.new(nodes.new("GeometryNodeInputMeshEdgeAngle").outputs["Unsigned Angle"], above.inputs[0])
+    links.new(group_input.outputs["Threshold"], above.inputs[1])
+    faces = nodes.new("GeometryNodeSetShadeSmooth")
+    faces.domain = "FACE"
+    edges = nodes.new("GeometryNodeSetShadeSmooth")
+    edges.domain = "EDGE"
+    links.new(group_input.outputs["Geometry"], faces.inputs["Geometry"])
+    links.new(faces.outputs["Geometry"], edges.inputs["Geometry"])
+    links.new(above.outputs["Result"], edges.inputs["Shade Smooth"])
+    links.new(edges.outputs["Geometry"], nodes.new("NodeGroupOutput").inputs["Geometry"])
+    return group
+
+
+def node_of(group, idname, domain=None):
+    """The group's first node of a type, and of a domain when one is given."""
+    return next(node for node in group.nodes if node.bl_idname == idname and (domain is None or node.domain == domain))
+
+
+def ignoring_smooth_group(name):
+    """Smooth by Angle as the Essentials hold it: the "Auto Smooth" group with an Ignore Sharpness switch that each of
+    its smooth flags is ORed with."""
+    group = auto_smooth_group(name, "Mesh")
+    group.interface.new_socket(name="Ignore Sharpness", in_out="INPUT", socket_type="NodeSocketBool")
+    edges, both = node_of(group, "GeometryNodeSetShadeSmooth", "EDGE"), node_of(group, "FunctionNodeBooleanMath")
+    for flag, target in (("GeometryNodeInputEdgeSmooth", edges.inputs["Selection"]),
+                         ("GeometryNodeInputShadeSmooth", both.inputs[1])):
+        either = group.nodes.new("FunctionNodeBooleanMath")
+        either.operation = "OR"
+        group.links.new(node_of(group, flag).outputs[0], either.inputs[0])
+        group.links.new(node_of(group, "NodeGroupInput").outputs["Ignore Sharpness"], either.inputs[1])
+        group.links.new(either.outputs[0], target)
+    return group
+
+
+def pass_mesh_to_active_output(group):
+    """Adds a second Group Output that Blender reads, which passes the mesh on unchanged."""
+    extra = group.nodes.new("NodeGroupOutput")
+    group.links.new(node_of(group, "NodeGroupInput").outputs[0], extra.inputs[0])
+    extra.is_active_output = True
+
+
+def output_float_first(group):
+    """Puts a float output first and links the shaded mesh to it too, which Blender refuses."""
+    value = group.interface.new_socket(name="Value", in_out="OUTPUT", socket_type="NodeSocketFloat")
+    group.interface.move(value, 0)
+    shaded = node_of(group, "GeometryNodeSetShadeSmooth", "FACE").outputs[0]
+    group.links.new(shaded, node_of(group, "NodeGroupOutput").inputs[0])
+
+
+def compare_signed_angle(group):
+    group.links.new(node_of(group, "GeometryNodeInputMeshEdgeAngle").outputs["Signed Angle"],
+                    node_of(group, "FunctionNodeCompare").inputs[0])
+
+
+def compare_whole_radians(group):
+    """Compares the edge angle with the angle input as integers."""
+    compare = node_of(group, "FunctionNodeCompare")
+    compare.data_type = "INT"
+    a, b = (next(socket for socket in compare.inputs if socket.name == name and socket.enabled) for name in "AB")
+    group.links.new(node_of(group, "GeometryNodeInputMeshEdgeAngle").outputs["Unsigned Angle"], a)
+    group.links.new(node_of(group, "NodeGroupInput").outputs["Angle"], b)
+
+
+def compare_constant_angle(group):
+    value = group.nodes.new("ShaderNodeValue")
+    value.outputs[0].default_value = 0.62
+    group.links.new(value.outputs[0], node_of(group, "FunctionNodeCompare").inputs[1])
+
+
+def swap_operands(group):
+    """Swaps the inputs of every Boolean Math node, which leaves what the group does unchanged."""
+    for node in group.nodes:
+        if node.bl_idname == "FunctionNodeBooleanMath":
+            first, second = (node.inputs[index].links[0].from_socket for index in (0, 1))
+            group.links.new(second, node.inputs[0])
+            group.links.new(first, node.inputs[1])
+
+
+def set_edges_on_faces(group):
+    node_of(group, "GeometryNodeSetShadeSmooth", "EDGE").domain = "FACE"
+
+
+def set_faces_on_edges(group):
+    node_of(group, "GeometryNodeSetShadeSmooth", "FACE").domain = "EDGE"
+
+
+def shade_faces_flat(group):
+    node_of(group, "GeometryNodeSetShadeSmooth", "FACE").inputs["Shade Smooth"].default_value = False
+
+
+def subdivide_first(group):
+    subdivide = group.nodes.new("GeometryNodeSubdivideMesh")
+    group.links.new(node_of(group, "NodeGroupInput").outputs[0], subdivide.inputs["Mesh"])
+    group.links.new(subdivide.outputs[0], node_of(group, "GeometryNodeSetShadeSmooth", "EDGE").inputs["Geometry"])
+
+
+def ignore_on_edges_only(group):
+    both = next(node for node in group.nodes if node.bl_idname == "FunctionNodeBooleanMath" and node.operation == "AND")
+    group.links.new(node_of(group, "GeometryNodeInputShadeSmooth").outputs[0], both.inputs[1])
+
+
+def ignore_always(group):
+    """ORs the smooth flags with a Boolean node that is on, in place of the Ignore Sharpness input."""
+    switch = group.nodes.new("FunctionNodeInputBool")
+    switch.boolean = True
+    for node in group.nodes:
+        if node.bl_idname == "FunctionNodeBooleanMath" and node.operation == "OR":
+            group.links.new(switch.outputs[0], node.inputs[1])
+
+
+def nest_inputs_in_panels(group):
+    """Moves the mesh input into a panel inside a panel and the angle into a later panel, which leaves the mesh the
+    group's first input."""
+    interface = group.interface
+    outer = interface.new_panel(name="Outer")
+    inner = interface.new_panel(name="Inner")
+    interface.move_to_parent(inner, outer, 0)
+    later = interface.new_panel(name="Later")
+    inputs = [item for item in interface.items_tree if item.item_type == "SOCKET" and item.in_out == "INPUT"]
+    interface.move_to_parent(next(item for item in inputs if item.socket_type == "NodeSocketGeometry"), inner, 0)
+    interface.move_to_parent(next(item for item in inputs if item.name == "Angle"), later, 0)
+
+
+def put_angle_first(group):
+    """Moves the mesh input below the angle, which Blender refuses."""
+    mesh = next(item for item in group.interface.items_tree
+                if item.item_type == "SOCKET" and item.in_out == "INPUT" and item.socket_type == "NodeSocketGeometry")
+    group.interface.move(mesh, len(group.interface.items_tree))
+
+
+# Each object's group is the "Auto Smooth" group, or Smooth by Angle when the modifier sets Ignore Sharpness, with one
+# change, and the modifier's Angle is 1.2 unless it sets another. Each change but the last two makes Blender shade the
+# dimpled sphere otherwise than the auto smooth groups do with the same inputs.
+SMOOTHING_CHANGES = (
+    ("InactiveOutputSmooth", pass_mesh_to_active_output, {}),
+    ("FloatOutputSmooth", output_float_first, {}),
+    ("SignedAngleSmooth", compare_signed_angle, {"Angle": 0.3}),
+    ("IntegerAngleSmooth", compare_whole_radians, {}),
+    ("ConstantAngleSmooth", compare_constant_angle, {}),
+    ("EdgesOnFacesSmooth", set_edges_on_faces, {}),
+    ("FacesOnEdgesSmooth", set_faces_on_edges, {}),
+    ("FlatFacesSmooth", shade_faces_flat, {}),
+    ("SubdividedSmooth", subdivide_first, {}),
+    ("AngleFirstSmooth", put_angle_first, {}),
+    ("HalfIgnoreSmooth", ignore_on_edges_only, {"Ignore Sharpness": True}),
+    ("AlwaysIgnoreSmooth", ignore_always, {"Ignore Sharpness": False}),
+    ("SwappedSmooth", swap_operands, {"Ignore Sharpness": True}),
+    ("PaneledSmooth", nest_inputs_in_panels, {}),
+)
+UNCHANGED_SMOOTHING = {"SwappedSmooth", "PaneledSmooth"}
+
+
+def dimpled_sphere_bmesh():
+    """An 8 by 5 sphere whose top is pushed in, so that some of its edges are concave."""
+    bm = sphere_bmesh(segments=8, rings=5)
+    bm.verts.ensure_lookup_table()
+    bm.verts[0].co.z = 0.2
+    return bm
+
+
 def bmesh_from(positions, faces, edges=()):
     """A mesh with exactly these vertices, edges first in this order, and faces, all shaded smooth."""
     bm = bmesh.new()
@@ -692,13 +905,70 @@ def build_features():
     set_modifier_input(localized_modifier, "Winkel", 1.2)
     localized.location = (22, -3, 0)
 
+    rewired = mesh_object("RewiredAutoSmooth", sphere_bmesh(segments=8, rings=5))
+    for polygon in rewired.data.polygons[:3]:
+        polygon.use_smooth = False
+    rewired.data.edges[20].use_edge_sharp = True
+    rewired_modifier = rewired.modifiers.new("Rewired", "NODES")
+    rewired_modifier.node_group = rewired_auto_smooth_group()
+    set_modifier_input(rewired_modifier, "Strength", 0.1)
+    set_modifier_input(rewired_modifier, "Angle", 1.2)
+    rewired.location = (26, -3, 0)
+
+    lookalike = mesh_object("LookalikeSmooth", sphere_bmesh(segments=12, rings=7))
+    lookalike.modifiers.new("Sharpen", "NODES").node_group = sharpening_group()
+    lookalike.location = (30, -3, 0)
+    inverted = mesh_object("InvertedAutoSmooth", sphere_bmesh(segments=8, rings=5))
+    inverted_group = auto_smooth_group("Inverted Smoothing")
+    next(node for node in inverted_group.nodes if node.bl_idname == "FunctionNodeCompare").operation = "GREATER_THAN"
+    inverted_modifier = inverted.modifiers.new("Inverted", "NODES")
+    inverted_modifier.node_group = inverted_group
+    set_modifier_input(inverted_modifier, "Angle", 0.3)
+    inverted.location = (34, -3, 0)
+
+    lookalikes = {"LookalikeSmooth", "InvertedAutoSmooth"}
+    for index, (name, change, settings) in enumerate(SMOOTHING_CHANGES):
+        changed = mesh_object(name, dimpled_sphere_bmesh())
+        for polygon in changed.data.polygons[16:19]:
+            polygon.use_smooth = False
+        changed.data.edges[20].use_edge_sharp = True
+        ignoring = "Ignore Sharpness" in settings
+        changed_group = (ignoring_smooth_group if ignoring else auto_smooth_group)("Changed " + change.__name__)
+        change(changed_group)
+        changed_modifier = changed.modifiers.new(name, "NODES")
+        changed_modifier.node_group = changed_group
+        for input_name, value in {"Angle": 1.2, **settings}.items():
+            set_modifier_input(changed_modifier, input_name, value)
+        if name not in UNCHANGED_SMOOTHING:
+            lookalikes.add(name)
+        changed.location = (4 * index, -9, 0)
+
+    library_name = "features-library-%s.blend" % VERSION
+    for index, group in enumerate(linked_smoothing_groups(library_name)):
+        essentials = group.name.startswith("Smooth by Angle")
+        name = "LinkedSmoothByAngle" if essentials else "LinkedAutoSmooth"
+        linked = mesh_object(name, sphere_bmesh(segments=8, rings=5))
+        for polygon in linked.data.polygons[:3]:
+            polygon.use_smooth = False
+        linked.data.edges[20].use_edge_sharp = True
+        linked_modifier = linked.modifiers.new(name, "NODES")
+        linked_modifier.node_group = group
+        set_modifier_input(linked_modifier, "Angle", 1.2)
+        if essentials:
+            set_modifier_input(linked_modifier, "Ignore Sharpness", True)
+        linked.location = (38 + 4 * index, -3, 0)
+
     scene.frame_set(1)
     rest_pose(scene)
     reference = {
         "fps": 25.0,
         "unitScale": 1.0,
         "objects": world_matrices(scene),
-        "meshes": {obj.name: mesh_reference(obj, scene) for obj in scene.objects if obj.type == "MESH"},
+        "meshes": {
+            obj.name: mesh_reference(obj, scene)
+            for obj in scene.objects
+            if obj.type == "MESH" and obj.name not in lookalikes
+        },
     }
     reference["meshes"]["BasisDrift"].update(
         restPositions=evaluated_positions(drift, scene), corners=evaluated_corner_normals(drift)
@@ -731,6 +1001,7 @@ def build_features():
     stacked.value = 0.0
     pose_pose(scene)
     save_blend("features")
+    os.remove(os.path.join(HERE, library_name))
     save_reference("features", reference)
 
 
@@ -1420,7 +1691,42 @@ def build_materials():
     image.image = checker
     image.interpolation = "Smart"
     tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
-    materials += [tilted, pulsing, smart]
+
+    clear = bpy.data.materials.new("Clear")
+    bsdf = principled(clear)
+    bsdf.inputs["Transmission Weight"].default_value = 1.0
+    bsdf.inputs["Roughness"].default_value = 0.0
+
+    frosted = bpy.data.materials.new("Frosted")
+    bsdf = principled(frosted)
+    tree = frosted.node_tree
+    noise = tree.nodes.new("ShaderNodeTexNoise")
+    tree.links.new(noise.outputs["Fac"], bsdf.inputs["Transmission Weight"])
+
+    dialed = bpy.data.materials.new("Dialed")
+    bsdf = principled(dialed)
+    tree = dialed.node_tree
+    weight = tree.nodes.new("ShaderNodeValue")
+    weight.outputs["Value"].default_value = 0.5
+    tree.links.new(weight.outputs["Value"], bsdf.inputs["Transmission Weight"])
+    bsdf.inputs["Metallic"].default_value = 0.5
+
+    masked = bpy.data.materials.new("Masked")
+    bsdf = principled(masked)
+    tree = masked.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    separate = tree.nodes.new("ShaderNodeSeparateColor")
+    tree.links.new(image.outputs["Color"], separate.inputs["Color"])
+    tree.links.new(separate.outputs["Red"], bsdf.inputs["Transmission Weight"])
+
+    chrome = bpy.data.materials.new("Chrome")
+    bsdf = principled(chrome)
+    tree = chrome.node_tree
+    noise = tree.nodes.new("ShaderNodeTexNoise")
+    tree.links.new(noise.outputs["Fac"], bsdf.inputs["Transmission Weight"])
+    bsdf.inputs["Metallic"].default_value = 1.0
+    materials += [tilted, pulsing, smart, clear, frosted, dialed, masked, chrome]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
@@ -1623,13 +1929,14 @@ def build_shading():
     """Materials whose node graphs the preview reads beyond plain sockets: constant nodes, reroutes, muted nodes and
     links, links to sockets their node hides, output targets, volumes, holdouts, colors and values where a shader is
     expected, Mapping types, glTF's factors and alpha clips, a clip under a constant mix with a Transparent BSDF, image
-    channels, also through a Math node, the alpha Blender multiplies into an image's color, premultiplied images, color
-    spaces and interpolation. The reference holds what Cycles bakes for them: at the first texel
-    each material's diffuse color, with specular turned off so that it is the base color times one minus metallic, and
-    its emission; where each Mapping sends the UVs of each texel; and the alpha each clip leaves there. It also holds
-    what Cycles renders over a transparent film for surfaces a bake cannot show, one that adds light to a Transparent
-    BSDF, one with only a volume and a holdout, what EEVEE renders for an image's color where nodes read its alpha and
-    where none do, and the color of the shader EEVEE's output shows."""
+    channels, also through Math, Color Ramp and Mix nodes and of an image whose every pixel is gray, an image mixed by
+    another's alpha, the alpha Blender multiplies into an image's color, premultiplied images, color spaces and
+    interpolation. The reference holds what Cycles bakes for them: at the first texel each material's diffuse color,
+    with specular turned off so that it is the base color times one minus metallic, and its emission; where each
+    Mapping sends the UVs of each texel; and the alpha each clip leaves there. It also holds what Cycles renders over a
+    transparent film for surfaces a bake cannot show, one that adds light to a Transparent BSDF, one with only a volume
+    and a holdout, what EEVEE renders for an image's color where nodes read its alpha and where none do, and the color
+    of the shader EEVEE's output shows."""
     scene = reset_scene()
     checker = save_png("checker.png", 4, 4, checker_pixel)
     orm = save_png("orm.png", 2, 2, orm_pixel)
@@ -2165,6 +2472,73 @@ def build_shading():
     ramp = tree.nodes.new("ShaderNodeValToRGB")
     tree.links.new(alpha, ramp.inputs["Fac"])
     tree.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+
+    tree, bsdf, alpha = cutout_material("BaseRedThroughRamp")
+    separate = tree.nodes.new("ShaderNodeSeparateColor")
+    tree.links.new(bsdf.inputs["Base Color"].links[0].from_socket, separate.inputs["Color"])
+    ramp = tree.nodes.new("ShaderNodeValToRGB")
+    tree.links.new(separate.outputs["Red"], ramp.inputs["Fac"])
+    tree.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+
+    tree, bsdf, alpha = cutout_material("BaseRedThroughMix")
+    separate = tree.nodes.new("ShaderNodeSeparateColor")
+    tree.links.new(bsdf.inputs["Base Color"].links[0].from_socket, separate.inputs["Color"])
+    mix = tree.nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    socket_named(mix.inputs, "Factor_Float").default_value = 0.5
+    socket_named(mix.inputs, "B_Color").default_value = (0.0, 0.0, 1.0, 1.0)
+    tree.links.new(separate.outputs["Red"], socket_named(mix.inputs, "A_Color"))
+    tree.links.new(socket_named(mix.outputs, "Result_Color"), bsdf.inputs["Base Color"])
+
+    tree, bsdf, alpha = cutout_material("BaseBrightnessThroughRamp")
+    ramp = tree.nodes.new("ShaderNodeValToRGB")
+    tree.links.new(bsdf.inputs["Base Color"].links[0].from_socket, ramp.inputs["Fac"])
+    tree.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+
+    tree, bsdf, alpha = cutout_material("BaseMixedByOtherAlpha")
+    mix = tree.nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    socket_named(mix.inputs, "B_Color").default_value = (1.0, 1.0, 1.0, 1.0)
+    tree.links.new(alpha, socket_named(mix.inputs, "Factor_Float"))
+    tree.links.new(image_node(tree, checker).outputs["Color"], socket_named(mix.inputs, "A_Color"))
+    tree.links.new(socket_named(mix.outputs, "Result_Color"), bsdf.inputs["Base Color"])
+
+    def through_ramp(tree, image, mode):
+        value = image_node(tree, image).outputs["Color"]
+        if mode:
+            separate = tree.nodes.new("ShaderNodeSeparateColor")
+            separate.mode = mode
+            tree.links.new(value, separate.inputs["Color"])
+            value = separate.outputs["Red"]
+        ramp = tree.nodes.new("ShaderNodeValToRGB")
+        tree.links.new(value, ramp.inputs["Fac"])
+        return ramp.outputs["Color"]
+
+    for name, image, mode in (
+        ("GrayThroughRamp", checker, None),
+        ("GrayRedThroughRamp", checker, "RGB"),
+        ("GrayHueThroughRamp", checker, "HSV"),
+    ):
+        mat, tree, bsdf = shading_material(name)
+        tree.links.new(through_ramp(tree, image, mode), bsdf.inputs["Base Color"])
+        materials.append(mat)
+
+    for name, image, mode in (("GrayRampEmission", checker, None), ("EmissionRedThroughRamp", cutout, "RGB")):
+        mat, tree, bsdf = shading_material(name)
+        tree.links.new(through_ramp(tree, image, mode), bsdf.inputs["Emission Color"])
+        bsdf.inputs["Emission Strength"].default_value = 1.0
+        materials.append(mat)
+
+    mat, tree, bsdf = shading_material("EmissionShaderRedThroughRamp")
+    tree.nodes.remove(bsdf)
+    glow = tree.nodes.new("ShaderNodeEmission")
+    tree.links.new(through_ramp(tree, cutout, "RGB"), glow.inputs["Color"])
+    tree.links.new(glow.outputs["Emission"], tree.nodes["Material Output"].inputs["Surface"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("SurfaceRedThroughRamp")
+    tree.links.new(through_ramp(tree, cutout, "RGB"), tree.nodes["Material Output"].inputs["Surface"])
+    materials.append(mat)
 
     objects = []
     for index, mat in enumerate(materials):
@@ -2913,6 +3287,62 @@ def small_rig(name, bones, location=(0, 0, 0)):
     return rig
 
 
+def stacked_slots(name, x):
+    """An armature and an action with two slots that key its bones <name>Base and <name>Tip: Lower moves the base along
+    x, and Upper moves it the other way and the tip along y."""
+    base, tip = name + "Base", name + "Tip"
+    rig = small_rig(name + "Rig", ((base, (0, 0, 0), (0, 0, 1), None), (tip, (0, 0, 1), (0, 0, 2), base)), (x, 0, 0))
+    action = bpy.data.actions.new(name)
+    strip = action.layers.new("Layer").strips.new(type="KEYFRAME")
+    slots = {}
+    for slot_name, keys in (("Lower", ((base, 0, 1.0),)), ("Upper", ((base, 0, -1.0), (tip, 1, 0.4)))):
+        slot = action.slots.new(id_type="OBJECT", name=slot_name)
+        for bone_name, axis, value in keys:
+            path = 'pose.bones["%s"].location' % bone_name
+            curve = strip.channelbag(slot, ensure=True).fcurves.new(path, index=axis)
+            curve.keyframe_points.insert(1, 0.0)
+            curve.keyframe_points.insert(9, value)
+        slots[slot_name] = slot
+    set_interpolation(action, lambda curve: "LINEAR")
+    return rig, action, slots
+
+
+def slot_tracks(rig, action, slots):
+    """One NLA track for each slot, from the bottom up, whose strip plays the action through it."""
+    data = rig.animation_data or rig.animation_data_create()
+    tracks = []
+    for slot in slots:
+        track = data.nla_tracks.new()
+        strip = track.strips.new(action.name, 1, action)
+        strip.action_slot = slot
+        strip.action_frame_start, strip.action_frame_end = 1, 9
+        tracks.append(track)
+    return tracks
+
+
+def tweak(rig, track, upper_stack):
+    """Enters NLA tweak mode on the first strip of `track`. With `upper_stack`, the tracks above it still play, as when
+    Tab enters tweak mode in the NLA editor. Only that editor's operator sets this, so it runs in a borrowed area."""
+    data = rig.animation_data
+    data.nla_tracks.active = track
+    for other in data.nla_tracks:
+        for strip in other.strips:
+            strip.select = strip == track.strips[0]
+    if upper_stack:
+        activate(rig)
+        window = bpy.context.window_manager.windows[0]
+        area = window.screen.areas[0]
+        kind = area.type
+        area.type = "NLA_EDITOR"
+        area.spaces.active.dopesheet.show_only_selected = True
+        region = next(region for region in area.regions if region.type == "WINDOW")
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            assert bpy.ops.nla.tweakmode_enter(use_upper_stack_evaluation=True) == {"FINISHED"}
+            assert bpy.ops.nla.tweakmode_exit() == {"FINISHED"}
+        area.type = kind
+    data.use_tweak_mode = True
+
+
 def build_clips():
     """Clips that hold, step and jump between frames: a hinge bone with constant keys under a moving parent, constant
     and linear axes of one property, a Stepped modifier, scale keyed to zero, a curve without keys, a constant key
@@ -2922,10 +3352,32 @@ def build_clips():
     4.4 on, also unused actions with two slots for one armature, one slot named after it, an unused shape key action
     whose slot names one of two keys, one whose slot names a key without the shape key it animates, an object that has
     an action but no slot, an armature that plays one slot of an action and another through an NLA strip, an
-    action whose only user has no slot, and an armature whose two NLA tracks play two slots of one action that key one
-    value, where the upper track wins."""
+    action whose only user has no slot, an object whose active action has no slot and whose muted NLA track plays it
+    through one, and armatures whose two NLA tracks play two slots of one action that key one value, where the upper
+    track wins unless Blender leaves it out: muted, under a muted strip, beside a soloed track and under an active
+    action that the solo leaves out too, with the NLA off under the active action, above the tweaked track in tweak
+    mode, beside a soloed track when the tweaked one is not, or beside the tweaked strip on its track. In tweak mode
+    with the upper tracks playing, the upper track wins over the tweaked one, and an active action that tweak mode
+    stashes plays over both; without them, the stashed action plays nowhere. In every version, also an object that
+    plays an action that another object has on a muted track, and a curve that a Cycles modifier repeats before its
+    first key."""
     scene = reset_scene()
     plays = []
+    tweaking = []
+
+    crossing = link(bpy.data.objects.new("Crossing", None))
+    crossing.location = (0, -15, 0)
+    key_values(crossing, "location", 0, ((1, 0.0), (9, 2.0)))
+    cross = named_action(crossing, "Cross")
+    set_interpolation(cross, lambda curve: "LINEAR")
+    bystander = link(bpy.data.objects.new("Bystander", None))
+    bystander.location = (0, -16, 0)
+    muted = bystander.animation_data_create().nla_tracks.new()
+    muted_strip = muted.strips.new("Cross", 1, cross)
+    if LAYERED_ACTIONS:
+        muted_strip.action_slot = own_slot(crossing)
+    muted.mute = True
+    plays.append((cross, [(crossing, own_slot(crossing))], [1, 5, 9]))
 
     rig = small_rig("HingeRig", (("Upper", (0, 0, 0), (0, 0, 1), None), ("Hand", (0, 0, 1), (0, 0, 1.5), "Upper")))
     rig.data.bones["Hand"].use_inherit_rotation = False
@@ -3062,9 +3514,12 @@ def build_clips():
         curve.keyframe_points.insert(9, 1.0)
         plays.append((wink_only, [(winker.data.shape_keys, slot)], [1, 5, 9]))
 
-    for name, keys, interpolation, end, frames in (
-        ("CycJump", ((1, 0.0), (3, 1.0)), "LINEAR", 9, [1, 2, 3, 3.25, 3.5, 4, 5, 5.25, 5.5, 9]),
-        ("CycConst", ((1, 0.0), (2.5, 1.0), (4, 0.0)), "CONSTANT", 10, [1, 2.5, 4, 4.5, 5.25, 5.5, 5.75, 7, 8.25, 8.5, 10]),
+    for name, keys, interpolation, start, end, frames in (
+        ("CycJump", ((1, 0.0), (3, 1.0)), "LINEAR", 1, 9, [1, 2, 3, 3.25, 3.5, 4, 5, 5.25, 5.5, 9]),
+        ("CycConst", ((1, 0.0), (2.5, 1.0), (4, 0.0)), "CONSTANT", 1, 10,
+         [1, 2.5, 4, 4.5, 5.25, 5.5, 5.75, 7, 8.25, 8.5, 10]),
+        ("CycBefore", ((20, 0.0), (30, 10.0)), "LINEAR", 0, 40,
+         [0, 5, 9, 9.5, 9.9, 10, 10.5, 19, 19.5, 19.9, 20, 25, 30, 30.5, 35, 40]),
     ):
         cycled = link(bpy.data.objects.new(name, None))
         cycled.location = (0, -6, 0)
@@ -3073,7 +3528,7 @@ def build_clips():
         set_interpolation(action, lambda curve, chosen=interpolation: chosen)
         fcurves_of(action)[0].modifiers.new("CYCLES")
         action.use_frame_range = True
-        action.frame_start, action.frame_end = 1, end
+        action.frame_start, action.frame_end = start, end
         plays.append((action, [(cycled, own_slot(cycled))], frames))
 
     tweaked = small_rig("TweakRig", (("Bone", (0, 0, 0), (0, 0, 1), None), ("Tip", (0, 0, 1), (0, 0, 2), "Bone")), (-3, 0, 0))
@@ -3141,30 +3596,60 @@ def build_clips():
         named_action(holder, "Lone")
         holder.animation_data.action_slot = None
 
-        stack_bones = (("StackBase", (0, 0, 0), (0, 0, 1), None), ("StackTip", (0, 0, 1), (0, 0, 2), "StackBase"))
-        stack_rig = small_rig("StackRig", stack_bones, (9, 0, 0))
-        stack = bpy.data.actions.new("Stack")
-        strip = stack.layers.new("Layer").strips.new(type="KEYFRAME")
-        stack_slots = []
-        for slot_name, keys in (
-            ("Lower", (("StackBase", 0, 1.0),)),
-            ("Upper", (("StackBase", 0, -1.0), ("StackTip", 1, 0.4))),
-        ):
-            slot = stack.slots.new(id_type="OBJECT", name=slot_name)
-            for bone_name, axis, value in keys:
-                path = 'pose.bones["%s"].location' % bone_name
-                curve = strip.channelbag(slot, ensure=True).fcurves.new(path, index=axis)
-                curve.keyframe_points.insert(1, 0.0)
-                curve.keyframe_points.insert(9, value)
-            stack_slots.append(slot)
-        set_interpolation(stack, lambda curve: "LINEAR")
-        stack_data = stack_rig.animation_data_create()
-        for slot in stack_slots:
-            stack_strip = stack_data.nla_tracks.new().strips.new("Stack", 1, stack)
-            stack_strip.action_slot = slot
-            stack_strip.action_frame_start, stack_strip.action_frame_end = 1, 9
-        plays.append((stack, [(stack_rig, None)], [1, 5, 9]))
-        rigs.append(stack_rig)
+        decoy = link(bpy.data.objects.new("Decoy", None))
+        decoy.location = (0, 3, 0)
+        key_values(decoy, "location", 0, ((1, 0.0), (9, 2.0)))
+        reused = named_action(decoy, "Reused")
+        reused.use_fake_user = True
+        decoy.animation_data.action = None
+        reuser = link(bpy.data.objects.new("Reuser", None))
+        reuser.location = (0, 4, 0)
+        reused_track = reuser.animation_data_create().nla_tracks.new()
+        reused_track.strips.new("Reused", 1, reused).action_slot = reused.slots[0]
+        reused_track.mute = True
+        play(reuser, reused, None)
+
+        stacks = ("Stack", "MutedTrack", "MutedStrip", "Soloed", "NlaOff", "Tweaked", "TweakedFull", "TweakedSolo",
+                  "TweakedStrip", "Stashed", "StashedFull")
+        for k, name in enumerate(stacks):
+            stack_rig, stack, stack_slots = stacked_slots(name, 9 + 3 * k)
+            lower_slot, upper_slot = stack_slots["Lower"], stack_slots["Upper"]
+            owner = (stack_rig, None)
+            if name == "NlaOff":
+                slot_tracks(stack_rig, stack, [upper_slot])
+                play(stack_rig, stack, lower_slot)
+                stack_rig.animation_data.use_nla = False
+                owner = (stack_rig, lower_slot)
+            elif name == "TweakedStrip":
+                [track] = slot_tracks(stack_rig, stack, [lower_slot])
+                track.strips.new(name, 11, stack).action_slot = upper_slot
+                tweak(stack_rig, track, False)
+                tweaking.append(stack_rig)
+            elif name.startswith("Stashed"):
+                [lower] = slot_tracks(stack_rig, stack, [lower_slot])
+                play(stack_rig, stack, upper_slot)
+                tweak(stack_rig, lower, name == "StashedFull")
+                tweaking.append(stack_rig)
+                owner = (stack_rig, upper_slot)
+            else:
+                lower, upper = slot_tracks(stack_rig, stack, [lower_slot, upper_slot])
+                if name == "MutedTrack":
+                    upper.mute = True
+                elif name == "MutedStrip":
+                    upper.strips[0].mute = True
+                elif name == "Soloed":
+                    lower.is_solo = True
+                    play(stack_rig, stack, upper_slot)
+                    owner = (stack_rig, upper_slot)
+                elif name == "TweakedSolo":
+                    lower.is_solo = True
+                    tweak(stack_rig, upper, False)
+                    tweaking.append(stack_rig)
+                elif name.startswith("Tweaked"):
+                    tweak(stack_rig, lower, name == "TweakedFull")
+                    tweaking.append(stack_rig)
+            plays.append((stack, [owner], [1, 5, 9]))
+            rigs.append(stack_rig)
 
     scene.frame_set(1)
     resting.pose.bones["Posed"].rotation_euler = (0.4, 0.0, 0.0)
@@ -3176,12 +3661,17 @@ def build_clips():
     transforms = {obj.name: (obj.location.copy(), obj.rotation_euler.copy(), obj.scale.copy()) for obj in scene.objects}
     poses = {armature.name: pose_values(armature) for armature in rigs}
 
+    animatable = list(scene.objects) + [face.data.shape_keys for face in faces]
+    nla_off = [id_data for id_data in animatable if id_data.animation_data and not id_data.animation_data.use_nla]
     clips = {}
     for action, owners, frames in plays:
-        for id_data in list(scene.objects) + [face.data.shape_keys for face in faces]:
-            if id_data.animation_data:
-                id_data.animation_data.action = None
-                id_data.animation_data.use_nla = any(id_data == owner for owner, _ in owners)
+        for id_data in animatable:
+            data = id_data.animation_data
+            if data:
+                if data.use_tweak_mode:
+                    data.use_tweak_mode = False
+                data.action = None
+                data.use_nla = any(id_data == owner for owner, _ in owners) and id_data not in nla_off
         for obj in scene.objects:
             obj.location, obj.rotation_euler, obj.scale = transforms[obj.name]
         for armature in rigs:
@@ -3190,7 +3680,10 @@ def build_clips():
             for block in face.data.shape_keys.key_blocks:
                 block.value = 0.0
         for id_data, slot in owners:
-            play(id_data, action, slot)
+            if id_data not in tweaking or slot is not None:
+                play(id_data, action, slot)
+            if id_data in tweaking:
+                id_data.animation_data.use_tweak_mode = True
         samples = []
         for frame in frames:
             whole = math.floor(frame)
@@ -3403,6 +3896,185 @@ def raise_points():
     return tree
 
 
+def joined_to_input(name, output):
+    """A Geometry Nodes group that joins what `output(tree)` returns, a node's geometry output, to its input."""
+    tree = bpy.data.node_groups.new(name, "GeometryNodeTree")
+    tree.interface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    join = tree.nodes.new("GeometryNodeJoinGeometry")
+    tree.links.new(tree.nodes.new("NodeGroupInput").outputs["Geometry"], join.inputs[0])
+    tree.links.new(output(tree), join.inputs[0])
+    tree.links.new(join.outputs[0], tree.nodes.new("NodeGroupOutput").inputs["Geometry"])
+    return tree
+
+
+def node_group(name, output):
+    """A Geometry Nodes group that outputs what `output(tree, mesh)` returns for its input `mesh`, a geometry output."""
+    tree = bpy.data.node_groups.new(name, "GeometryNodeTree")
+    tree.interface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    mesh = tree.nodes.new("NodeGroupInput").outputs["Geometry"]
+    tree.links.new(output(tree, mesh), tree.nodes.new("NodeGroupOutput").inputs["Geometry"])
+    return tree
+
+
+def placed_cubes(tree, points):
+    """An Instance on Points node that places a small cube on each of the points."""
+    place = tree.nodes.new("GeometryNodeInstanceOnPoints")
+    cube = tree.nodes.new("GeometryNodeMeshCube")
+    cube.inputs["Size"].default_value = (0.1, 0.1, 0.1)
+    tree.links.new(points, place.inputs["Points"])
+    tree.links.new(cube.outputs["Mesh"], place.inputs["Instance"])
+    return place
+
+
+def simulated_rise(tree, mesh):
+    """A simulation that moves the mesh up on each step, which leaves it a plain mesh."""
+    start = tree.nodes.new("GeometryNodeSimulationInput")
+    end = tree.nodes.new("GeometryNodeSimulationOutput")
+    start.pair_with_output(end)
+    move = tree.nodes.new("GeometryNodeSetPosition")
+    move.inputs["Offset"].default_value = (0.0, 0.0, 0.1)
+    tree.links.new(mesh, start.inputs["Geometry"])
+    tree.links.new(start.outputs["Geometry"], move.inputs["Geometry"])
+    tree.links.new(move.outputs["Geometry"], end.inputs["Geometry"])
+    return end.outputs["Geometry"]
+
+
+def loose_cubes(tree, mesh):
+    """Cubes on the mesh's points that no node reads, beside the mesh, which the group outputs."""
+    placed_cubes(tree, mesh)
+    return mesh
+
+
+def object_offset(tree, mesh):
+    """The mesh moved by the location an Object Info node reads, which leaves it a plain mesh."""
+    move = tree.nodes.new("GeometryNodeSetPosition")
+    tree.links.new(mesh, move.inputs["Geometry"])
+    tree.links.new(tree.nodes.new("GeometryNodeObjectInfo").outputs["Location"], move.inputs["Offset"])
+    return move.outputs["Geometry"]
+
+
+def muted_join(tree, mesh):
+    """The mesh joined to cubes on its points through a muted link, which Blender leaves out."""
+    join = tree.nodes.new("GeometryNodeJoinGeometry")
+    tree.links.new(mesh, join.inputs[0])
+    tree.links.new(placed_cubes(tree, mesh).outputs[0], join.inputs[0]).is_muted = True
+    return join.outputs[0]
+
+
+def nested(group):
+    """A Group node that runs `group` on the mesh, as `node_group` takes it."""
+    def output(tree, mesh):
+        node = tree.nodes.new("GeometryNodeGroup")
+        node.node_tree = group
+        tree.links.new(mesh, node.inputs[0])
+        return node.outputs[0]
+    return output
+
+
+def muted_cubes(tree, mesh):
+    """A muted Instance on Points node, which passes the mesh on."""
+    place = placed_cubes(tree, mesh)
+    place.mute = True
+    return place.outputs["Instances"]
+
+
+def realized(tree, geometry, selection=True, realize_all=True):
+    """Realize Instances on the geometry, which makes every instance real unless `selection` or `realize_all` is off."""
+    node = tree.nodes.new("GeometryNodeRealizeInstances")
+    node.inputs["Selection"].default_value = selection
+    node.inputs["Realize All"].default_value = realize_all
+    tree.links.new(geometry, node.inputs["Geometry"])
+    return node.outputs["Geometry"]
+
+
+def realized_cubes(**settings):
+    """Cubes on the mesh's points that Realize Instances with `settings` makes real, as `node_group` takes them."""
+    return lambda tree, mesh: realized(tree, placed_cubes(tree, mesh).outputs[0], **settings)
+
+
+def bundled_cubes(tree, mesh):
+    """Cubes on the mesh's points, put into a bundle and taken out of it."""
+    combine = tree.nodes.new("NodeCombineBundle")
+    combine.bundle_items.new("GEOMETRY", "Geometry")
+    separate = tree.nodes.new("NodeSeparateBundle")
+    separate.bundle_items.new("GEOMETRY", "Geometry")
+    tree.links.new(placed_cubes(tree, mesh).outputs[0], combine.inputs[0])
+    tree.links.new(combine.outputs[0], separate.inputs[0])
+    return separate.outputs[0]
+
+
+def cubes_in_closure(tree, mesh):
+    """Cubes on the mesh's points, placed by a closure that the group evaluates on the mesh."""
+    start = tree.nodes.new("NodeClosureInput")
+    end = tree.nodes.new("NodeClosureOutput")
+    start.pair_with_output(end)
+    end.input_items.new("GEOMETRY", "Geometry")
+    end.output_items.new("GEOMETRY", "Geometry")
+    tree.links.new(placed_cubes(tree, start.outputs[0]).outputs["Instances"], end.inputs[0])
+    evaluate = tree.nodes.new("NodeEvaluateClosure")
+    evaluate.input_items.new("GEOMETRY", "Geometry")
+    evaluate.output_items.new("GEOMETRY", "Geometry")
+    tree.links.new(end.outputs["Closure"], evaluate.inputs["Closure"])
+    tree.links.new(mesh, evaluate.inputs["Geometry"])
+    return evaluate.outputs["Geometry"]
+
+
+def line_mesh(tree, pencil=False):
+    """A line made into a mesh, which is a plain mesh, or first into grease pencil, whose layer becomes an instance."""
+    line = tree.nodes.new("GeometryNodeCurvePrimitiveLine").outputs["Curve"]
+    if pencil:
+        layers = tree.nodes.new("GeometryNodeCurvesToGreasePencil")
+        layers.inputs["Instances as Layers"].default_value = False
+        tree.links.new(line, layers.inputs["Curves"])
+        line = layers.outputs["Grease Pencil"]
+    mesh = tree.nodes.new("GeometryNodeCurveToMesh")
+    tree.links.new(line, mesh.inputs["Curve"])
+    return mesh.outputs["Mesh"]
+
+
+def imported_obj(tree, path):
+    """The instances Import OBJ makes from the file at `path`, which Blender reads from the working folder."""
+    node = tree.nodes.new("GeometryNodeImportOBJ")
+    node.inputs["Path"].default_value = path
+    return node.outputs["Instances"]
+
+
+def bake_instances(obj):
+    """Gives the object a simulation that places a small cube on each of its points, packs the simulation's first frame
+    into the file, and then takes out the nodes that placed the cubes, so that only the baked frame holds instances."""
+    tree = bpy.data.node_groups.new("BakedInstances", "GeometryNodeTree")
+    tree.interface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    group_input = tree.nodes.new("NodeGroupInput")
+    start = tree.nodes.new("GeometryNodeSimulationInput")
+    end = tree.nodes.new("GeometryNodeSimulationOutput")
+    start.pair_with_output(end)
+    cube = tree.nodes.new("GeometryNodeMeshCube")
+    cube.inputs["Size"].default_value = (0.1, 0.1, 0.1)
+    place = tree.nodes.new("GeometryNodeInstanceOnPoints")
+    tree.links.new(group_input.outputs["Geometry"], place.inputs["Points"])
+    tree.links.new(cube.outputs["Mesh"], place.inputs["Instance"])
+    tree.links.new(place.outputs["Instances"], start.inputs["Geometry"])
+    tree.links.new(start.outputs["Geometry"], end.inputs["Geometry"])
+    tree.links.new(end.outputs["Geometry"], tree.nodes.new("NodeGroupOutput").inputs["Geometry"])
+    modifier = obj.modifiers.new("Simulation", "NODES")
+    modifier.node_group = tree
+    modifier.bake_target = "PACKED"
+    bake = modifier.bakes[0]
+    bake.use_custom_simulation_frame_range = True
+    bake.frame_start, bake.frame_end = 1, 1
+    bpy.context.scene.frame_set(1)
+    with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
+        bpy.ops.object.geometry_node_bake_single(
+            session_uid=obj.session_uid, modifier_name=modifier.name, bake_id=bake.bake_id
+        )
+    tree.links.new(group_input.outputs["Geometry"], start.inputs["Geometry"])
+    tree.nodes.remove(place)
+    tree.nodes.remove(cube)
+
+
 def forget_browser_directories():
     """Empties the file browser's folder, which Blender sets to the home folder of whoever runs this. Blender saves the
     folder's whole buffer, so it is overwritten in full first, or the end of the home folder would stay in the file."""
@@ -3467,7 +4139,10 @@ def build_relations():
     """Objects whose display depends on others: skinned meshes that a clip moves apart from their armatures or not, near
     the origin and far from it, envelopes that reach ungrouped vertices or not, with a mask group, inverted or not, and
     without, envelope multiply inside and outside the envelope, armatures in rest position, vertex and face instancing
-    with and without modifiers that change the vertices, Geometry Nodes that output instances or a plain mesh,
+    with and without modifiers that change the vertices, Geometry Nodes that output instances, also from a nested group
+    or a group from another file, or a plain mesh, also through a simulation or beside instancing nodes that are
+    unread, muted, behind a muted link or realized, and, where the Blender version has the nodes, that import an OBJ
+    file, make grease pencil, hold instances only in a baked simulation or pass them through a bundle or a closure,
     instancers that hide themselves, LOD levels hidden with the eye, and a collection and an object from another file
     linked inside a local collection.
 
@@ -3483,18 +4158,21 @@ def build_relations():
     attic = bpy.data.collections.new("LibraryAttic")
     attic.objects.link(bpy.data.objects.new("AtticPart", shared))
     crate = bpy.data.objects.new("LibraryCrate", shared)
+    library_cubes = node_group("LibraryCubes", lambda tree, mesh: placed_cubes(tree, mesh).outputs[0])
     working_dir = os.getcwd()
     os.chdir(HERE)
     try:
-        bpy.data.libraries.write(library_name, {shelf, attic, crate}, path_remap="NONE")
+        bpy.data.libraries.write(library_name, {shelf, attic, crate, library_cubes}, path_remap="NONE")
         for name in ("ShelfPart", "AtticPart", "LibraryCrate"):
             bpy.data.objects.remove(bpy.data.objects[name])
         bpy.data.collections.remove(shelf)
         bpy.data.collections.remove(attic)
         bpy.data.meshes.remove(shared)
+        bpy.data.node_groups.remove(library_cubes)
         with bpy.data.libraries.load(library_name, link=True) as (source, target):
             target.collections = ["LibraryShelf", "LibraryAttic"]
             target.objects = ["LibraryCrate"]
+            target.node_groups = ["LibraryCubes"]
     finally:
         os.chdir(working_dir)
     props = bpy.data.collections.new("Props")
@@ -3502,6 +4180,7 @@ def build_relations():
     for collection in target.collections:
         props.children.link(collection)
     props.objects.link(target.objects[0])
+    linked_cubes = target.node_groups[0]
 
     motion = chain_rig("MotionRig", (0, 0, 0))
     riding = skinned_tube("Riding", motion, (0, 0, 0), parent=motion)
@@ -3626,6 +4305,46 @@ def build_relations():
     cap.location = (6, 0, 0)
     bpy.data.objects["CappedScatter"].modifiers.new("Array", "ARRAY").start_cap = cap
     smoothed = [name for name in ("SmoothScatter",) if add_smooth_by_angle(bpy.data.objects[name], 0.5)]
+    obj_name = "relations-import-%s.obj" % VERSION
+    with open(os.path.join(HERE, obj_name), "w") as handle:
+        handle.write("o Triangle\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+    os.chdir(HERE)
+    cubes = node_group("Cubes", lambda tree, mesh: placed_cubes(tree, mesh).outputs[0])
+    node_scatters = [
+        ("PipeScatter", joined_to_input("LineMesh", line_mesh)),
+        ("SimulatedScatter", node_group("SimulatedRise", simulated_rise)),
+        ("LooseScatter", node_group("LooseCubes", loose_cubes)),
+        ("MutedScatter", node_group("MutedCubes", muted_cubes)),
+        ("RealizedScatter", node_group("RealizedCubes", realized_cubes())),
+        ("PartlyRealizedScatter", node_group("PartlyRealizedCubes", realized_cubes(selection=False))),
+        ("ShallowRealizedScatter", node_group("ShallowRealizedCubes", realized_cubes(realize_all=False))),
+        ("ObjectOffsetScatter", node_group("ObjectOffset", object_offset)),
+        ("MutedLinkScatter", node_group("MutedLinkCubes", muted_join)),
+        ("NestedScatter", node_group("NestedCubes", nested(cubes))),
+        ("RealizedNestedScatter", node_group(
+            "RealizedNestedCubes", lambda tree, mesh: realized(tree, nested(cubes)(tree, mesh)))),
+        ("LinkedNodeScatter", linked_cubes),
+    ]
+    if hasattr(bpy.types, "GeometryNodeImportOBJ"):
+        node_scatters.append(("ImportScatter", joined_to_input("ImportOBJ", lambda tree: imported_obj(tree, obj_name))))
+        node_scatters.append(("ImportRealizedScatter", joined_to_input(
+            "RealizedOBJ", lambda tree: realized(tree, imported_obj(tree, obj_name)))))
+    if hasattr(bpy.types, "GeometryNodeCurvesToGreasePencil"):
+        node_scatters.append(("PencilScatter", joined_to_input("Pencil", lambda tree: line_mesh(tree, pencil=True))))
+    if "bake_target" in bpy.types.NodesModifier.bl_rna.properties:
+        node_scatters.append(("BakedScatter", None))
+    if hasattr(bpy.types, "NodeCombineBundle"):
+        node_scatters.append(("BundledScatter", node_group("BundledCubes", bundled_cubes)))
+        node_scatters.append(("ClosureScatter", node_group("ClosureCubes", cubes_in_closure)))
+    for index, (name, group) in enumerate(node_scatters):
+        scatter = mesh_object(name, plane_bmesh(1))
+        scatter.location = (16, 4 * index, 0)
+        scatter.instance_type = "VERTS"
+        mesh_object(name + "Child", box_bmesh((0.2, 0.2, 0.2))).parent = scatter
+        if group:
+            scatter.modifiers.new(group.name, "NODES").node_group = group
+        else:
+            bake_instances(scatter)
 
     for name, x, levels in (("Rock", 8, 2), ("Pebble", 10, 2), ("Stone", 12, 3)):
         for level in range(levels):
@@ -3641,19 +4360,24 @@ def build_relations():
                *(body for _, _, body in shared), unmasked)
     depsgraph = bpy.context.evaluated_depsgraph_get()
     instances = {}
+    others = set()
     drawn = set()
     for instance in depsgraph.object_instances:
         source = instance.object.original
         if not instance.is_instance and instance.show_self:
             drawn.add(source.name)
-        elif instance.is_instance and instance.parent and source.type == "MESH":
-            if descends(source, instance.parent.original):
+        elif instance.is_instance and instance.parent:
+            if not descends(source, instance.parent.original):
+                others.add(instance.parent.name)
+            elif source.type == "MESH":
                 instances[instance.parent.name] = instances.get(instance.parent.name, 0) + 1
+    os.chdir(working_dir)
     reference = {
         "fps": 24.0,
         "unitScale": 1.0,
         "rest": {obj.name: evaluated_positions(obj, scene) for obj in skinned},
         "instances": instances,
+        "otherInstances": sorted(others),
         "instancersDrawn": sorted(name for name, *_ in instancers if name in drawn),
         "linkedShown": sorted(obj.name for obj in scene.objects if obj.library and obj.visible_get()),
         "levelsShown": sorted(obj.name for obj in scene.objects if "_LOD" in obj.name and obj.visible_get()),
@@ -3690,6 +4414,7 @@ def build_relations():
         clips[action.name] = samples
     reference["clips"] = clips
     os.remove(os.path.join(HERE, library_name))
+    os.remove(os.path.join(HERE, obj_name))
     save_reference("relations", reference)
 
 

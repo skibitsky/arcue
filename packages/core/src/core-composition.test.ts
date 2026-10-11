@@ -358,6 +358,11 @@ describe("warnings from the files of a composition", () => {
         { kind: "clip", name: "Armature|Turn" },
         "Curve modifiers not applied: Armature|Turn",
       ),
+      importWarning(
+        "action-layer-not-played",
+        { kind: "clip", name: "Armature|Turn" },
+        "Only the first layer played: Armature|Turn",
+      ),
     ];
     const test = await setup({
       [SHELLS]: fakeAsset({ ...shells, warnings: [shellWarning] }),
@@ -371,6 +376,10 @@ describe("warnings from the files of a composition", () => {
       ],
       [
         "curve-modifier-not-applied:clip:Anim/BugTurn.fbx//Armature|Turn",
+        { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
+      ],
+      [
+        "action-layer-not-played:clip:Anim/BugTurn.fbx//Armature|Turn",
         { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
       ],
       ["unweighted-vertices:node:BugShells.fbx//ShellA", null],

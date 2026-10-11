@@ -18,13 +18,13 @@ import {
 } from "../math";
 import type { Bone } from "./armature";
 import { BoneFlag, readBones } from "./armature";
-import { envelopeUse } from "./envelopes";
-import type { MaterialDraft } from "./materials";
+import { envelopeUse, readEnvelopes } from "./envelopes";
+import type { GrayCheck, MaterialDraft } from "./materials";
 import { defaultMaterial, imageUses, readMaterial } from "./materials";
 import type { BuiltMesh, SkinBone } from "./mesh-build";
 import { buildMesh, MAX_UV_SETS } from "./mesh-build";
 import type { MeshData } from "./mesh-data";
-import { MeshReadError, readMeshData } from "./mesh-data";
+import { MeshReadError, meshMaterials, readMeshData } from "./mesh-data";
 import { changesPreview, ModifierType, modifierName, modifierType, viewportModifiers } from "./modifiers";
 import type { SceneContents, SceneObject } from "./objects";
 import {
@@ -346,9 +346,11 @@ class MaterialTable {
   readonly #read = new Map<number, MaterialDraft>();
   readonly #index = new Map<string, number>();
   readonly #version: number;
+  readonly #isGray: GrayCheck;
 
-  constructor(version: number) {
+  constructor(version: number, isGray: GrayCheck) {
     this.#version = version;
+    this.#isGray = isGray;
   }
 
   indexOf(material: BlendStruct | null, uvMaps: MaterialUvMaps): number {
@@ -356,7 +358,7 @@ class MaterialTable {
     const usable = material && !isLinked(material) ? material : null;
     let draft = usable ? this.#read.get(usable.offset) : undefined;
     if (usable && !draft) {
-      draft = readMaterial(usable, this.#version);
+      draft = readMaterial(usable, this.#version, this.#isGray);
       this.#read.set(usable.offset, draft);
     }
     for (const use of draft ? imageUses(draft) : []) {
@@ -376,15 +378,45 @@ class MaterialTable {
 }
 
 /** The material in each slot: the object's own where the slot links to the object, else the mesh's. */
-function slotMaterials(file: BlendFile, object: BlendStruct, data: MeshData): (slot: number) => BlendStruct | null {
+function slotMaterials(
+  file: BlendFile,
+  object: BlendStruct,
+  meshSlots: readonly (BlendStruct | null)[],
+): (slot: number) => BlendStruct | null {
   const objectSlots = Math.max(object.number("totcol"), 0);
   const objectMaterials = object.pointers("mat", objectSlots);
   const links = object.target("matbits");
   const linkBytes = links ? file.bytesOf(links) : new Uint8Array(0);
   return (slot) => {
-    if ((linkBytes[slot] ?? 0) === 0) return data.materials[slot] ?? null;
+    if ((linkBytes[slot] ?? 0) === 0) return meshSlots[slot] ?? null;
     return file.first(object.resolve(objectMaterials[slot] ?? 0n));
   };
+}
+
+/**
+ * The images that the materials in the slots of the scene's shown meshes ask `buildScene`'s `isGray` about, so that
+ * the caller can find which are gray before building the scene. It reads only the materials, not the meshes.
+ */
+export function grayCandidates(file: BlendFile): BlendStruct[] {
+  const asked = new Map<number, BlendStruct>();
+  const ask: GrayCheck = (image) => {
+    asked.set(image.offset, image);
+    return false;
+  };
+  const read = new Set<number>();
+  for (const object of collectSceneObjects(file).objects) {
+    if (object.type !== ObjectType.mesh || !object.data || !object.shown) continue;
+    const meshSlots = meshMaterials(file, object.data);
+    const slotMaterial = slotMaterials(file, object.struct, meshSlots);
+    const slots = Math.max(object.struct.number("totcol"), meshSlots.length);
+    for (let slot = 0; slot < slots; slot++) {
+      const material = slotMaterial(slot);
+      if (!material || isLinked(material) || read.has(material.offset)) continue;
+      read.add(material.offset);
+      readMaterial(material, file.version, ask);
+    }
+  }
+  return [...asked.values()];
 }
 
 /** The deform bones that skin the object, from its first Armature modifier, with warnings about what is left out. */
@@ -422,7 +454,8 @@ function envelopeWarnings(
   const target = first ? byOffset.get(first.target.offset) : undefined;
   if (!first || !target?.armature) return;
   const toArmature = multiply(invert(restWorld[target.node] ?? identity()), restWorld[node] ?? identity());
-  const use = envelopeUse(data, first, target.armature.bones, first.target.deref("data"), toArmature);
+  const armature = first.target.deref("data");
+  const use = envelopeUse(data, first, target.armature.bones, armature && readEnvelopes(armature), toArmature);
   if (use.enveloped) {
     warn("deform-approximated", object.name, `Envelopes not used: ${object.name}`, "Only vertex groups deform it");
   }
@@ -483,8 +516,15 @@ function sameValues(a: Float32Array, b: Float32Array): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-/** Reads the active scene of a .blend file into nodes, meshes, skeletons and material drafts. */
-export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new Set()): BuiltScene {
+/**
+ * Reads the active scene of a .blend file into nodes, meshes, skeletons and material drafts. `isGray` says which images
+ * are gray, where materials show one value of an image as a color.
+ */
+export function buildScene(
+  file: BlendFile,
+  animated: ReadonlySet<string> = new Set(),
+  isGray: GrayCheck = () => false,
+): BuiltScene {
   const warnings: BlendWarning[] = [];
   const warn: Warn = (code, name, message, detail) => {
     const subject: ImportWarningSubject = { kind: "node", name };
@@ -502,7 +542,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
   }
   const sceneWorld = (node: number) => multiplyAll(conversion, restWorld[node] ?? identity(), toScene);
 
-  const materials = new MaterialTable(file.version);
+  const materials = new MaterialTable(file.version, isGray);
   const meshes: Omit<Mesh, "topology">[] = [];
   const skeletons: Skeleton[] = [];
   const meshRecords: MeshRecord[] = [];
@@ -576,7 +616,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
       const [x = 0, y = 0, z = 0] = data.positions.subarray(v * 3, v * 3 + 3);
       restPositions.set(transformPoint(placement, x, y, z), v * 3);
     }
-    const slotMaterial = slotMaterials(file, object.struct, data);
+    const slotMaterial = slotMaterials(file, object.struct, data.materials);
     const uvMaps: MaterialUvMaps = {
       mesh: object.name,
       names: built.uvs.map((uv) => uv.name),

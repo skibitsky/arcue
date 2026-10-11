@@ -10,6 +10,8 @@ interface RelationsReference {
   rest: Record<string, number[]>;
   /** How many copies of its children Blender draws for each instancer. */
   instances: Record<string, number>;
+  /** The objects that Blender draws instances other than their children for. */
+  otherInstances: string[];
   /** The instancers that Blender draws themselves. */
   instancersDrawn: string[];
   /** Objects from other files that Blender shows. */
@@ -114,7 +116,25 @@ describe.each(VERSIONS)("the relations fixture from Blender %s", async (version)
       SmoothScatter: 4,
       CappedScatter: 4,
       PlainNodeScatter: 4,
+      PipeScatter: 6,
+      SimulatedScatter: 4,
+      LooseScatter: 4,
+      MutedScatter: 4,
+      RealizedScatter: 32,
+      ObjectOffsetScatter: 4,
+      MutedLinkScatter: 4,
+      RealizedNestedScatter: 32,
+      ...(version === "4.2" ? {} : { ImportRealizedScatter: 7 }),
     });
+    const others = [
+      "LinkedNodeScatter",
+      "NestedScatter",
+      "NodeScatter",
+      "PartlyRealizedScatter",
+      "ShallowRealizedScatter",
+    ];
+    const newerOthers = ["BakedScatter", "BundledScatter", "ClosureScatter", "ImportScatter", "PencilScatter"];
+    expect(expected.otherInstances).toEqual(version === "4.2" ? others : [...others, ...newerOthers].sort());
     expect(expected.smoothedByAngle).toEqual(["SmoothScatter"]);
     const instancers = scene.source.warnings.filter((entry) => entry.message.includes(" instances not shown: "));
     expect(instancers.map((entry) => [entry.code, entry.subject.name, entry.message])).toEqual([
@@ -124,6 +144,17 @@ describe.each(VERSIONS)("the relations fixture from Blender %s", async (version)
       ["object-not-shown", "SmoothScatter", "Vertex instances not shown: SmoothScatter"],
       ["object-not-shown", "CappedScatter", "Vertex instances not shown: CappedScatter"],
       ["object-not-shown", "PlainNodeScatter", "Vertex instances not shown: PlainNodeScatter"],
+      ["object-not-shown", "PipeScatter", "Vertex instances not shown: PipeScatter"],
+      ["object-not-shown", "SimulatedScatter", "Vertex instances not shown: SimulatedScatter"],
+      ["object-not-shown", "LooseScatter", "Vertex instances not shown: LooseScatter"],
+      ["object-not-shown", "MutedScatter", "Vertex instances not shown: MutedScatter"],
+      ["object-not-shown", "RealizedScatter", "Vertex instances not shown: RealizedScatter"],
+      ["object-not-shown", "ObjectOffsetScatter", "Vertex instances not shown: ObjectOffsetScatter"],
+      ["object-not-shown", "MutedLinkScatter", "Vertex instances not shown: MutedLinkScatter"],
+      ["object-not-shown", "RealizedNestedScatter", "Vertex instances not shown: RealizedNestedScatter"],
+      ...(version === "4.2"
+        ? []
+        : [["object-not-shown", "ImportRealizedScatter", "Vertex instances not shown: ImportRealizedScatter"]]),
     ]);
   });
 

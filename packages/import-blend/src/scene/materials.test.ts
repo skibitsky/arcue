@@ -297,6 +297,38 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
         "BaseAlphaThroughRamp",
         "Base color comes from the alpha of cutout.png through Color Ramp, which the preview leaves out",
       ],
+      [
+        "BaseRedThroughRamp",
+        "Base color comes from the Red channel of cutout.png through Color Ramp, which the preview leaves out",
+      ],
+      [
+        "BaseRedThroughMix",
+        "Base color comes from the Red channel of cutout.png through Mix, which the preview leaves out",
+      ],
+      [
+        "BaseBrightnessThroughRamp",
+        "Base color comes from the brightness of cutout.png through Color Ramp, which the preview leaves out",
+      ],
+      ["BaseMixedByOtherAlpha", "Base color passes checker.png through Mix, which the preview leaves out"],
+      ["GrayThroughRamp", "Base color passes checker.png through Color Ramp, which the preview leaves out"],
+      ["GrayRedThroughRamp", "Base color passes checker.png through Color Ramp, which the preview leaves out"],
+      [
+        "GrayHueThroughRamp",
+        "Base color comes from the Hue channel of checker.png through Color Ramp, which the preview leaves out",
+      ],
+      ["GrayRampEmission", "Emission passes checker.png through Color Ramp, which the preview leaves out"],
+      [
+        "EmissionRedThroughRamp",
+        "Emission comes from the Red channel of cutout.png through Color Ramp, which the preview leaves out",
+      ],
+      [
+        "EmissionShaderRedThroughRamp",
+        "Emission comes from the Red channel of cutout.png through Color Ramp, which the preview leaves out",
+      ],
+      [
+        "SurfaceRedThroughRamp",
+        "Emission comes from the Red channel of cutout.png through Color Ramp, which the preview leaves out",
+      ],
     ]);
     const roughness = (name: string) => material(name).roughnessTexture;
     for (const name of ["RoughFromAlpha", "RerouteSeparate", "HsvSeparate", "RoughMathSeparate", "FloatMixLeftover"]) {
@@ -315,5 +347,45 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
     }
     expectNear(material("BaseFromRed").baseColor, [0.8, 0.8, 0.8, 1], 4);
     expect(scene.textures[material("BaseMixedByAlpha").baseColorTexture?.texture ?? -1]?.name).toBe("cutout");
+  });
+
+  it("leaves out an image that reaches a color input only as one value, and shows one whose color does", () => {
+    for (const name of ["BaseRedThroughRamp", "BaseRedThroughMix", "BaseBrightnessThroughRamp"]) {
+      expect(material(name).baseColorTexture, name).toBeNull();
+    }
+    const [red = 0] = baked("BaseFromRed").base;
+    expectNear(baked("BaseRedThroughRamp").base, [red, red, red], 4);
+    expectNear(baked("BaseRedThroughMix").base, [red / 2, red / 2, (red + 1) / 2], 4);
+    expectNear(baked("BaseBrightnessThroughRamp").base, baked("BaseFromBrightness").base, 4);
+    expect(scene.textures[material("BaseMixedByOtherAlpha").baseColorTexture?.texture ?? -1]?.name).toBe("checker");
+    const [alpha = 0] = baked("BaseAlphaThroughRamp").base;
+    const mixed = baked("CheckerBase").base.map((channel) => channel * (1 - alpha) + alpha);
+    expectNear(baked("BaseMixedByOtherAlpha").base, mixed, 4);
+  });
+
+  it("shows an image whose every pixel is gray where its red channel or brightness reaches a color input", () => {
+    const gray = baked("CheckerBase").base;
+    for (const name of ["GrayThroughRamp", "GrayRedThroughRamp"]) {
+      expect(scene.textures[material(name).baseColorTexture?.texture ?? -1]?.name, name).toBe("checker");
+      expectNear(baked(name).base, gray, 4, name);
+    }
+    const glow = material("GrayRampEmission");
+    expect(scene.textures[glow.emissiveTexture?.texture ?? -1]?.name).toBe("checker");
+    expect(glow.emissive).toEqual([1, 1, 1]);
+    expectNear(baked("GrayRampEmission").emission, gray, 4);
+    expect(material("GrayHueThroughRamp").baseColorTexture).toBeNull();
+    expectNear(baked("GrayHueThroughRamp").base, [0, 0, 0], 4);
+  });
+
+  it("gives no light where it leaves out the image an emission comes from", () => {
+    const red = baked("BaseRedThroughRamp").base;
+    for (const name of ["EmissionRedThroughRamp", "EmissionShaderRedThroughRamp", "SurfaceRedThroughRamp"]) {
+      expect(material(name), name).toMatchObject({ emissiveTexture: null, emissive: [0, 0, 0] });
+      expectNear(baked(name).emission, red, 4, name);
+    }
+    for (const name of ["EmissionShaderRedThroughRamp", "SurfaceRedThroughRamp"]) {
+      expect(material(name).baseColor, name).toEqual([0, 0, 0, 1]);
+      expectNear(baked(name).base, [0, 0, 0], 4, name);
+    }
   });
 });

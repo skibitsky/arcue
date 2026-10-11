@@ -118,6 +118,19 @@ describe.each(VERSIONS)("image files from Blender %s", async (version) => {
   });
 });
 
+describe.each(VERSIONS)("the gray images of the shading fixture from Blender %s", (version) => {
+  it("are read once, for both the gray check and their textures", async () => {
+    const asked: string[] = [];
+    const scene = await importFixture("shading", version, (storedPath) => {
+      asked.push(storedPath);
+      return findInFixtures(storedPath);
+    });
+    expect(asked).toContain("textures/checker.png");
+    expect(asked.length).toBe(new Set(asked).size);
+    expect(scene.textures.filter((texture) => texture.name === "checker")).toHaveLength(1);
+  });
+});
+
 describe.each(VERSIONS)("a UDIM image with one tile packed in a file from Blender %s", (version) => {
   it("is shown as Blender shows it, without a note", async () => {
     const expected = reference("images", version) as ImagesReference;
