@@ -12,6 +12,12 @@ export interface UvTransform {
   rotation: number;
 }
 
+/**
+ * What a material does with a texture's alpha: multiply its opacity, multiply the texture's color as Blender does
+ * where nothing reads an image's alpha, or nothing.
+ */
+export type TextureAlpha = "opacity" | "premultiply" | "none";
+
 export interface TextureRef {
   /** Index into `SceneDescription.textures`. */
   texture: number;
@@ -21,6 +27,8 @@ export interface TextureRef {
   wrapV: WrapMode;
   /** Null when the UVs are used as they are. */
   transform: UvTransform | null;
+  /** Unset is "opacity" for a base color texture and "none" for the others. */
+  alpha?: TextureAlpha;
 }
 
 /** The material slots a composition file can give a texture. */

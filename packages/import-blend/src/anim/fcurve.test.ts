@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CurveModifier, FCurve, Keys } from "./fcurve";
-import { evaluateFCurve, Interpolation, isStepped, keyFrames } from "./fcurve";
+import { canJump, canJumpAfter, evaluateFCurve, Interpolation, jumpFrames, keyFrames } from "./fcurve";
 
 function keys(points: [frame: number, value: number][], interpolation: number = Interpolation.linear): Keys {
   const count = points.length;
@@ -34,6 +34,7 @@ function curve(points: [number, number][], options: Partial<FCurve> & { interpol
     muted: false,
     modifiers: [],
     unsupportedModifiers: [],
+    empty: false,
     ...rest,
   };
 }
@@ -71,25 +72,122 @@ describe("evaluateFCurve", () => {
     );
     expect(evaluateFCurve(stepped, 3.9)).toBe(1);
     expect(evaluateFCurve(stepped, 4)).toBe(3);
-    expect(isStepped(stepped)).toBe(true);
+    expect(canJump(stepped)).toBe(true);
+    expect(jumpFrames(stepped, 0, 10)).toEqual([4]);
   });
 
-  it("counts a curve as stepped by the keys that start a segment, not by the last key", () => {
-    const stepped = curve(
+  it("finds jumps at the keys that end a constant segment, not at a constant last key", () => {
+    const smooth = curve([
+      [0, 1],
+      [4, 3],
+      [8, 5],
+    ]);
+    smooth.keys.interpolation[2] = Interpolation.constant;
+    expect(canJump(smooth)).toBe(false);
+    expect(jumpFrames(smooth, 0, 10)).toEqual([]);
+    smooth.keys.interpolation[1] = Interpolation.constant;
+    expect(canJump(smooth)).toBe(true);
+    expect(jumpFrames(smooth, 0, 10)).toEqual([8]);
+  });
+
+  it("finds the steps of a Stepped modifier inside the range, and leaves steps under a frame to interpolation", () => {
+    const stepped: CurveModifier = {
+      type: "stepped",
+      step: 2.5,
+      offset: 0.5,
+      start: 0,
+      end: 0,
+      noBefore: false,
+      noAfter: false,
+      range: null,
+      influence: 1,
+    };
+    const ramp = curve(
       [
-        [0, 1],
-        [4, 3],
-        [8, 5],
+        [0, 0],
+        [10, 10],
       ],
-      { interpolation: Interpolation.constant },
+      { modifiers: [stepped] },
     );
-    stepped.keys.interpolation[2] = Interpolation.bezier;
-    expect(isStepped(stepped)).toBe(true);
-    stepped.keys.interpolation[1] = Interpolation.linear;
-    expect(isStepped(stepped)).toBe(false);
+    expect(canJump(ramp)).toBe(true);
+    expect(jumpFrames(ramp, 1, 9)).toEqual([3, 5.5, 8]);
+    const fine = curve(
+      [
+        [0, 0],
+        [10, 10],
+      ],
+      { modifiers: [{ ...stepped, step: 0.5 }] },
+    );
+    expect(canJump(fine)).toBe(false);
   });
 
-  it("counts a curve as stepped when a Stepped modifier steps all of it by a frame or more", () => {
+  it("finds that a Stepped modifier's steps before its offset jump just after their frame", () => {
+    const stepped: CurveModifier = {
+      type: "stepped",
+      step: 2,
+      offset: 6,
+      start: 0,
+      end: 0,
+      noBefore: false,
+      noAfter: false,
+      range: null,
+      influence: 1,
+    };
+    const ramp = curve(
+      [
+        [1, 0],
+        [13, 12],
+      ],
+      { modifiers: [stepped] },
+    );
+    expect([2, 2.5, 4, 4.5, 5.9, 6, 7.9, 8].map((frame) => evaluateFCurve(ramp, frame))).toEqual([
+      1, 3, 3, 5, 5, 5, 5, 7,
+    ]);
+    expect(canJumpAfter(ramp, 1, 13)).toBe(true);
+    expect(canJumpAfter(ramp, 5, 13)).toBe(false);
+    expect(canJumpAfter({ ...ramp, modifiers: [{ ...stepped, offset: 0 }] }, 1, 13)).toBe(false);
+  });
+
+  it("finds the jumps a Cycles modifier repeats, and the ends of its cycles, which jump just after the frame", () => {
+    const cycles: CurveModifier = {
+      type: "cycles",
+      before: 0,
+      after: 1,
+      beforeCycles: 0,
+      afterCycles: 0,
+      range: null,
+      influence: 1,
+    };
+    const constant = curve(
+      [
+        [1, 0],
+        [2.5, 1],
+        [4, 0],
+      ],
+      { interpolation: Interpolation.constant, modifiers: [cycles] },
+    );
+    expect(canJump(constant)).toBe(true);
+    expect([3.999, 4, 4.001].map((frame) => evaluateFCurve(constant, frame))).toEqual([1, 0, 0]);
+    expect(canJumpAfter(constant, 1, 10)).toBe(false);
+    expect([...new Set(jumpFrames(constant, 1, 10))].sort((a, b) => a - b)).toEqual([2.5, 4, 5.5, 7, 8.5]);
+    const ramp = curve(
+      [
+        [1, 0],
+        [3, 1],
+      ],
+      { modifiers: [cycles] },
+    );
+    expect(canJump(ramp)).toBe(false);
+    expect(canJumpAfter(ramp, 1, 10)).toBe(true);
+    expect(canJumpAfter(ramp, 1, 3)).toBe(false);
+    expect(canJumpAfter(ramp, 3, 5.5)).toBe(true);
+    expect(canJumpAfter({ ...ramp, modifiers: [{ ...cycles, after: 2 }] }, 1, 10)).toBe(false);
+    [1, 0.0005, 1, 0.125].forEach((value, index) => {
+      expect(evaluateFCurve(ramp, [3, 3.001, 5, 5.25][index] ?? 0)).toBeCloseTo(value, 9);
+    });
+  });
+
+  it("finds jumps under a Stepped modifier of a frame or more per step, at any influence or frame range", () => {
     const step: CurveModifier = {
       type: "stepped",
       step: 2,
@@ -105,10 +203,12 @@ describe("evaluateFCurve", () => {
       [0, 0],
       [10, 10],
     ];
-    expect(isStepped(curve(points, { modifiers: [step] }))).toBe(true);
-    expect(isStepped(curve(points, { modifiers: [{ ...step, influence: 0.5 }] }))).toBe(false);
-    expect(isStepped(curve(points, { modifiers: [{ ...step, noAfter: true }] }))).toBe(false);
-    expect(isStepped(curve(points, { modifiers: [{ ...step, step: 0.5 }] }))).toBe(false);
+    expect(canJump(curve(points, { modifiers: [step] }))).toBe(true);
+    const half = curve(points, { modifiers: [{ ...step, influence: 0.5 }] });
+    expect(canJump(half)).toBe(true);
+    expect([3.5, 4].map((frame) => evaluateFCurve(half, frame))).toEqual([2.75, 4]);
+    expect(canJump(curve(points, { modifiers: [{ ...step, noAfter: true }] }))).toBe(true);
+    expect(canJump(curve(points, { modifiers: [{ ...step, step: 0.5 }] }))).toBe(false);
   });
 
   it("follows a Bezier segment with flat handles through its midpoint", () => {
@@ -121,6 +221,114 @@ describe("evaluateFCurve", () => {
     );
     expect(evaluateFCurve(smooth, 5)).toBeCloseTo(0.5, 5);
     expect(evaluateFCurve(smooth, 2)).toBeLessThan(0.2);
+  });
+
+  describe("shortens only the Bezier handles that alone reach further than the other key, as Blender does", () => {
+    const cases: {
+      name: string;
+      keys: [number, number][];
+      handles: [right: [number, number], left: [number, number]];
+      expected: [frame: number, value: number][];
+    }[] = [
+      {
+        name: "two handles together longer than the gap",
+        keys: [
+          [1, 0],
+          [11, 1],
+        ],
+        handles: [
+          [7, 0],
+          [5, 1],
+        ],
+        expected: [
+          [3, 0.047968],
+          [5, 0.272978],
+          [8, 0.87277],
+        ],
+      },
+      {
+        name: "one handle longer than the gap",
+        keys: [
+          [0, 0],
+          [10, 1],
+        ],
+        handles: [
+          [15, 0.5],
+          [8, 1],
+        ],
+        expected: [
+          [2, 0.077742],
+          [5, 0.255562],
+          [7.5, 0.532811],
+          [9, 0.890625],
+        ],
+      },
+      {
+        name: "handles that cross each other and both reach past the other key",
+        keys: [
+          [0, 0],
+          [10, 1],
+        ],
+        handles: [
+          [12, 0],
+          [-2, 1],
+        ],
+        expected: [
+          [2, 0.017425],
+          [4, 0.111397],
+          [5, 0.5],
+          [6, 0.888603],
+          [8, 0.982574],
+        ],
+      },
+      {
+        name: "handles that cross where single-precision rounding moves the root, as Blender computes it",
+        keys: [
+          [1, 0],
+          [11, 1],
+        ],
+        handles: [
+          [13.375432968139648, -0.25715550780296326],
+          [-5.168770790100098, 1.6142659187316895],
+        ],
+        expected: [
+          [5, 0.06906],
+          [6, 0.568995],
+          [7, 1.015879],
+        ],
+      },
+      {
+        name: "handles that overlap in time",
+        keys: [
+          [0, 0],
+          [10, 1],
+        ],
+        handles: [
+          [9, 0.3],
+          [1, 0.6],
+        ],
+        expected: [
+          [1, 0.035984],
+          [3, 0.134223],
+          [5, 0.4625],
+          [7, 0.827785],
+          [9, 0.952503],
+        ],
+      },
+    ];
+    for (const { name, keys: points, handles, expected } of cases) {
+      it(name, () => {
+        const smooth = curve(points, { interpolation: Interpolation.bezier });
+        const [[rightFrame, rightValue], [leftFrame, leftValue]] = handles;
+        smooth.keys.rightFrame[0] = rightFrame;
+        smooth.keys.rightValue[0] = rightValue;
+        smooth.keys.leftFrame[1] = leftFrame;
+        smooth.keys.leftValue[1] = leftValue;
+        for (const [frame, value] of expected) {
+          expect(evaluateFCurve(smooth, frame), `at ${frame}`).toBeCloseTo(value, 5);
+        }
+      });
+    }
   });
 
   it("repeats the keyed range with a Cycles modifier, offset per cycle when it says so", () => {

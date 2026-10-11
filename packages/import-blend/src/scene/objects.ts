@@ -1,6 +1,7 @@
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { datablocks, idName, isLinked } from "../blend/ids";
 import { ModifierType, modifierType, viewportModifiers } from "./modifiers";
+import { isSmoothByAngle } from "./smooth-by-angle";
 
 export const ObjectType = {
   empty: 0,
@@ -46,7 +47,13 @@ export const ParentType = {
 const PARENT_TYPE_MASK = 15;
 export const ARMATURE_DEFORM_VERTEX_GROUPS = 1 << 0;
 const OBJECT_HIDE_VIEWPORT = 1 << 0;
+const OBJECT_INSTANCES_VERTICES = 1 << 4;
 const OBJECT_INSTANCES_COLLECTION = 1 << 8;
+const OBJECT_INSTANCES_FACES = 1 << 9;
+const OBJECT_INSTANCES_PARTICLES = 1 << 11;
+const OBJECT_INSTANCES =
+  OBJECT_INSTANCES_VERTICES | OBJECT_INSTANCES_COLLECTION | OBJECT_INSTANCES_FACES | OBJECT_INSTANCES_PARTICLES;
+const INSTANCER_SHOWN_IN_VIEWPORT = 1 << 0;
 const COLLECTION_HIDE_VIEWPORT = 1 << 0;
 const LAYER_COLLECTION_EXCLUDE = 1 << 4;
 const LAYER_COLLECTION_HIDE = 1 << 7;
@@ -67,6 +74,8 @@ export interface SceneObject {
   shown: boolean;
   /** Whether the active view layer hides the shown object or all its collections with the eye. */
   hidden: boolean;
+  /** Whether Blender draws only the instances or particles the shown object makes, and not the object itself. */
+  instancerHidden: boolean;
 }
 
 export interface SceneContents {
@@ -108,6 +117,72 @@ export function instancedCollection(object: BlendStruct): BlendStruct | null {
   return (object.number("transflag") & OBJECT_INSTANCES_COLLECTION) !== 0 ? object.deref("dup_group") : null;
 }
 
+/** Modifiers that can give a mesh with no vertices some, such as an Array's caps or a Boolean's union. */
+const MAKES_MESH: ReadonlySet<number> = new Set([
+  ModifierType.array,
+  ModifierType.boolean,
+  ModifierType.ocean,
+  ModifierType.meshSequenceCache,
+  ModifierType.fluid,
+  ModifierType.volumeToMesh,
+]);
+
+/** Modifiers that can give a mesh with vertices and no faces some faces. */
+const MAKES_FACES: ReadonlySet<number> = new Set([ModifierType.screw, ModifierType.skin]);
+
+/** Geometry Nodes that can output instances, which Blender places instead of an instancer's children. */
+const INSTANCING_NODES: ReadonlySet<string> = new Set([
+  "GeometryNodeInstanceOnPoints",
+  "GeometryNodeCollectionInfo",
+  "GeometryNodeObjectInfo",
+  "GeometryNodeGeometryToInstance",
+  "GeometryNodeSplitToInstances",
+  "GeometryNodeStringToCurves",
+  "GeometryNodeBake",
+]);
+
+/** Whether a node group, or a group it nests, may output instances; a group from another file may. */
+function mayOutputInstances(group: BlendStruct | null, seen = new Set<number>()): boolean {
+  if (!group || seen.has(group.offset)) return false;
+  seen.add(group.offset);
+  if (isLinked(group)) return true;
+  return group.list("nodes").some((node) => {
+    const type = node.string("idname");
+    return INSTANCING_NODES.has(type) || (type === "GeometryNodeGroup" && mayOutputInstances(node.deref("id"), seen));
+  });
+}
+
+/**
+ * Where a mesh object places a copy of each of its children, as Blender's instancing on vertices or faces does. A mesh
+ * without such elements places none, unless a modifier may add them. Geometry Nodes may add them too, or output
+ * instances that Blender places instead of the children, so an object whose nodes may do that is left out.
+ */
+export function childInstancing(object: BlendStruct): "vertex" | "face" | null {
+  const mesh = object.number("type") === ObjectType.mesh ? object.deref("data") : null;
+  if (!mesh) return null;
+  const modifiers = viewportModifiers(object).filter((modifier) => !isSmoothByAngle(modifier));
+  const groups = modifiers.flatMap((modifier) => {
+    const group = modifierType(modifier) === ModifierType.nodes ? modifier.deref("node_group") : null;
+    return group ? [group] : [];
+  });
+  if (groups.some((group) => mayOutputInstances(group))) return null;
+  const types = modifiers.map(modifierType);
+  const flag = object.number("transflag");
+  const hasVertices = mesh.number("totvert") > 0;
+  const makesMesh = groups.length > 0 || types.some((type) => MAKES_MESH.has(type));
+  const makesFaces = hasVertices && (groups.length > 0 || types.some((type) => MAKES_FACES.has(type)));
+  if ((flag & OBJECT_INSTANCES_VERTICES) !== 0 && (hasVertices || makesMesh)) return "vertex";
+  if ((flag & OBJECT_INSTANCES_FACES) !== 0 && (mesh.number("totpoly") > 0 || makesMesh || makesFaces)) return "face";
+  return null;
+}
+
+/** Whether Blender hides the object in viewports to draw only the instances or particles it makes. */
+function hidesInstancer(object: BlendStruct): boolean {
+  const instances = (object.number("transflag") & OBJECT_INSTANCES) !== 0 || object.list("particlesystem").length > 0;
+  const shown = object.number("duplicator_visibility_flag") & INSTANCER_SHOWN_IN_VIEWPORT;
+  return instances && object.has("duplicator_visibility_flag") && shown === 0;
+}
+
 function usesLinkedData(object: BlendStruct): boolean {
   const type = object.number("type");
   if (type !== ObjectType.mesh && type !== ObjectType.armature) return false;
@@ -127,6 +202,7 @@ function describe(struct: BlendStruct, shown: boolean, hidden: boolean): SceneOb
     parentBone: struct.string("parsubstr"),
     shown,
     hidden,
+    instancerHidden: shown && hidesInstancer(struct),
   };
 }
 
@@ -214,11 +290,12 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     for (const child of collection.list("children")) {
       const nested = child.deref("collection");
       if (!nested) continue;
+      const nestedLayer = childLayers.find((candidate) => candidate.deref("collection")?.offset === nested.offset);
       if (isLinked(nested)) {
-        linkedCollections.add(idName(nested));
+        const excluded = ((nestedLayer?.number("flag") ?? 0) & LAYER_COLLECTION_EXCLUDE) !== 0;
+        if (!excluded) linkedCollections.add(idName(nested));
         continue;
       }
-      const nestedLayer = childLayers.find((candidate) => candidate.deref("collection")?.offset === nested.offset);
       visit(nested, nestedLayer ?? null, collectionHidden, path);
     }
   };

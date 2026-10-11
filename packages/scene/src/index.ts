@@ -14,6 +14,7 @@ export type {
   AlphaMode,
   Material,
   Texture,
+  TextureAlpha,
   TextureOverride,
   TextureRef,
   TextureSlot,

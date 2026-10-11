@@ -1,5 +1,5 @@
-import type { Material as SceneMaterial, TextureRef, WrapMode } from "@arcue/scene";
-import type { DataTexture, Side, Texture, Wrapping } from "three";
+import type { Material as SceneMaterial, TextureAlpha, TextureRef, WrapMode } from "@arcue/scene";
+import type { DataTexture, Material, Side, Texture, WebGLProgramParametersWithUniforms, Wrapping } from "three";
 import {
   ClampToEdgeWrapping,
   Color,
@@ -10,6 +10,7 @@ import {
   MirroredRepeatWrapping,
   NoColorSpace,
   RepeatWrapping,
+  ShaderChunk,
   SRGBColorSpace,
 } from "three";
 import type { Palette } from "./palette";
@@ -20,6 +21,10 @@ export interface RegionTintUniforms {
   regionTint: { value: DataTexture };
   regionTintWidth: { value: number };
 }
+
+/** The lines of three.js's shader chunks that multiply the base color and emissive maps into the material. */
+const MAP_LINE = "diffuseColor *= sampledDiffuseColor;";
+const EMISSIVE_MAP_LINE = "totalEmissiveRadiance *= emissiveColor.rgb;";
 
 const TINT_VERTEX_PARS = /* glsl */ `
 attribute float triangle;
@@ -41,11 +46,25 @@ const TINT_FRAGMENT = /* glsl */ `
 }`;
 
 /**
+ * Adds a change to the material's shaders after the changes it already has. The cache key names every change, so
+ * three.js compiles each combination once.
+ */
+function patchShaders(material: Material, key: string, patch: (shader: WebGLProgramParametersWithUniforms) => void) {
+  const before = material.onBeforeCompile.bind(material);
+  const keyBefore = material.customProgramCacheKey();
+  material.onBeforeCompile = (shader, renderer) => {
+    before(shader, renderer);
+    patch(shader);
+  };
+  material.customProgramCacheKey = () => `${keyBefore}|${key}`;
+}
+
+/**
  * Tints painted triangles in the mesh shader itself, so a region deforms with the mesh. The tint is mixed in after
  * tone mapping and the output color space, so the feedback color on screen is the token's color.
  */
 export function withRegionTint(material: MeshStandardMaterial, uniforms: RegionTintUniforms): MeshStandardMaterial {
-  material.onBeforeCompile = (shader) => {
+  patchShaders(material, "arcue-region-tint", (shader) => {
     shader.uniforms.regionTint = uniforms.regionTint;
     shader.uniforms.regionTintWidth = uniforms.regionTintWidth;
     shader.vertexShader = shader.vertexShader
@@ -54,9 +73,32 @@ export function withRegionTint(material: MeshStandardMaterial, uniforms: RegionT
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", `#include <common>${TINT_FRAGMENT_PARS}`)
       .replace("#include <colorspace_fragment>", `#include <colorspace_fragment>${TINT_FRAGMENT}`);
-  };
-  material.customProgramCacheKey = () => "arcue-region-tint";
+  });
   return material;
+}
+
+/** Replaces a line of one of three.js's fragment shader chunks. */
+function replaceLine(
+  material: MeshStandardMaterial,
+  chunk: "map_fragment" | "emissivemap_fragment",
+  line: string,
+  replacement: string,
+): void {
+  patchShaders(material, replacement, (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      `#include <${chunk}>`,
+      ShaderChunk[chunk].replace(line, replacement),
+    );
+  });
+}
+
+/**
+ * The base color map's line where its alpha is not the opacity. A cutout still cuts by the map's alpha, as the ID pass
+ * does.
+ */
+function mapLine(alpha: Exclude<TextureAlpha, "opacity">, cutout: boolean): string {
+  const color = alpha === "premultiply" ? "sampledDiffuseColor.rgb * sampledDiffuseColor.a" : "sampledDiffuseColor.rgb";
+  return `diffuseColor.rgb *= ${color};${cutout ? " diffuseColor.a *= sampledDiffuseColor.a;" : ""}`;
 }
 
 export function sideOf(doubleSided: boolean): Side {
@@ -126,6 +168,18 @@ export function litMaterial({ material, images, uvSetCount, anisotropy, fallback
   result.metalnessMap = metalness ?? metallicRoughness;
   if (roughness) result.roughness = 1;
   if (metalness) result.metalness = 1;
+  const mapAlpha = material.baseColorTexture?.alpha ?? "opacity";
+  if (result.map && mapAlpha !== "opacity") {
+    replaceLine(result, "map_fragment", MAP_LINE, mapLine(mapAlpha, material.alphaMode === "mask"));
+  }
+  if (result.emissiveMap && material.emissiveTexture?.alpha === "premultiply") {
+    replaceLine(
+      result,
+      "emissivemap_fragment",
+      EMISSIVE_MAP_LINE,
+      "totalEmissiveRadiance *= emissiveColor.rgb * emissiveColor.a;",
+    );
+  }
   if (material.alphaMode === "blend") {
     result.transparent = true;
     result.opacity = alpha;

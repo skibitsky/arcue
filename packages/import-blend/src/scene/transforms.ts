@@ -31,10 +31,10 @@ function quaternionOf(values: number[]): number[] {
 }
 
 /** The rest values of a pose channel: no offset from the bone's rest pose. */
-export function restChannel(mode: RotationMode = "quaternion"): TransformValues {
+export function restChannel(): TransformValues {
   return {
     location: [0, 0, 0],
-    rotationMode: mode,
+    rotationMode: "quaternion",
     euler: [0, 0, 0],
     quaternion: [1, 0, 0, 0],
     axisAngle: [0, 0, 1, 0],

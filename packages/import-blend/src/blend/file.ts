@@ -38,6 +38,15 @@ interface Header {
   blockHeaderSize: 20 | 24 | 32;
 }
 
+/**
+ * A block's code without trailing zero bytes. Blender writes the code as an int, so a big-endian file holds a
+ * two-letter ID code such as "OB" after two zero bytes, and Blender's reader shifts it into place.
+ */
+function blockCode(bytes: Uint8Array, offset: number, little: boolean): string {
+  const shifted = !little && bytes[offset] === 0 && bytes[offset + 1] === 0;
+  return ascii(bytes, shifted ? offset + 2 : offset, offset + 4).replace(/\0+$/, "");
+}
+
 function digits(text: string): number | null {
   return /^\d+$/.test(text) ? Number(text) : null;
 }
@@ -94,9 +103,38 @@ const INT16: TypedArrays<Int16Array> = {
   over: (buffer, offset, length) => new Int16Array(buffer, offset, length),
 };
 
+/** A block code as the four bytes Blender writes, such as "OB\0\0", read as one big-endian number. */
+function codeWord(code: string): number {
+  let word = 0;
+  for (let index = 0; index < 4; index++) word = word * 256 + (code.charCodeAt(index) || 0);
+  return word;
+}
+
+const DATA = codeWord("DATA");
+const ENDB = codeWord("ENDB");
+const DNA1 = codeWord("DNA1");
+const EMPTY_SLOT = 0;
+
+/** Mixes an address, and the datablock that owns it or -1, into a hash table slot's starting point. */
+function hashAddress(low: number, high: number, owner: number): number {
+  let hash = Math.imul(low ^ 0x9e3779b9, 0x85ebca6b);
+  hash = Math.imul(hash ^ (hash >>> 13) ^ high, 0xc2b2ae35);
+  hash = Math.imul(hash ^ (hash >>> 16) ^ owner, 0x27d4eb2f);
+  return (hash ^ (hash >>> 15)) >>> 0;
+}
+
+/** Slots for an open-addressed table of `count` entries, a power of two at most two thirds full. */
+function tableSlots(count: number): Int32Array {
+  let size = 8;
+  while (size < count * 1.5) size *= 2;
+  return new Int32Array(size);
+}
+
 /**
  * A .blend file's blocks and SDNA over its uncompressed bytes. Pointers in the file are addresses from the session
- * that saved it; `block` finds the block that starts at one.
+ * that saved it; `block` finds the block that starts at one. The block index keeps a few numbers per block in typed
+ * arrays and makes a block's object when it is first asked for, so a file of many small blocks takes memory in
+ * proportion to its size.
  */
 export class BlendFile {
   readonly bytes: Uint8Array;
@@ -106,9 +144,18 @@ export class BlendFile {
   /** Major × 100 + minor, such as 502 for Blender 5.2. */
   readonly version: number;
   readonly sdna: Sdna;
-  readonly blocks: BlendBlock[];
-  readonly #global = new Map<bigint, BlendBlock>();
-  readonly #owned = new Map<number, Map<bigint, BlendBlock>>();
+  readonly blockCount: number;
+  readonly #blockHeaderSize: 20 | 24 | 32;
+  /** Where each block's header starts in the bytes. */
+  readonly #starts: Float64Array;
+  readonly #codes: Uint32Array;
+  /** The index of the datablock each block belongs to, or -1 for data before the first datablock. */
+  readonly #owners: Int32Array;
+  /** Every block with an address, by address: the last ID block with it, or else the first data block. */
+  readonly #global: Int32Array;
+  /** Data blocks by their datablock and address, the first of each. */
+  readonly #owned: Int32Array;
+  readonly #made = new Map<number, BlendBlock>();
 
   constructor(bytes: Uint8Array) {
     this.bytes = bytes;
@@ -117,59 +164,97 @@ export class BlendFile {
     this.little = header.little;
     this.pointerSize = header.pointerSize;
     this.version = header.version;
+    this.#blockHeaderSize = header.blockHeaderSize;
 
-    const raw: { code: string; sdnaIndex: number; address: bigint; offset: number; size: number; count: number }[] = [];
-    let offset = header.headerSize;
-    let sdnaBlock: { offset: number; size: number } | null = null;
-    let ended = false;
-    while (offset + header.blockHeaderSize <= bytes.byteLength) {
-      const code = ascii(bytes, offset, offset + 4).replace(/\0+$/, "");
-      if (code === "ENDB") {
-        ended = true;
-        break;
-      }
-      const fields = this.#blockHeader(offset, header.blockHeaderSize);
-      const dataOffset = offset + header.blockHeaderSize;
+    let count = 0;
+    const found: { sdna: Uint8Array | null } = { sdna: null };
+    this.#walk(header.headerSize, (start, code, size) => {
+      const data = start + header.blockHeaderSize;
+      if (code === DNA1) found.sdna = bytes.subarray(data, data + size);
+      count++;
+    });
+    if (!found.sdna) throw new BlendParseError("it has no SDNA block");
+    this.sdna = parseSdna(found.sdna, this.little, this.pointerSize);
+
+    this.blockCount = count;
+    this.#starts = new Float64Array(count);
+    this.#codes = new Uint32Array(count);
+    this.#owners = new Int32Array(count);
+    let index = 0;
+    let owner = -1;
+    let dataCount = 0;
+    this.#walk(header.headerSize, (start, code) => {
+      if (code === DATA) dataCount++;
+      else owner = index;
+      this.#starts[index] = start;
+      this.#codes[index] = code;
+      this.#owners[index] = owner;
+      index++;
+    });
+    this.#global = tableSlots(count);
+    this.#owned = tableSlots(dataCount);
+    for (let block = 0; block < count; block++) this.#addToTables(block);
+  }
+
+  /** Calls `visit` with each block's header offset, code and data size, up to the "ENDB" block, checking each. */
+  #walk(from: number, visit: (start: number, code: number, size: number) => void): void {
+    const bytes = this.bytes;
+    const headerSize = this.#blockHeaderSize;
+    let offset = from;
+    while (offset + headerSize <= bytes.byteLength) {
+      const code = this.#codeAt(offset);
+      if (code === ENDB) return;
+      if (code === 0) throw new BlendParseError(`its block at byte ${offset} has no code`);
+      const fields = this.#blockHeader(offset, headerSize);
+      const dataOffset = offset + headerSize;
       if (fields.size < 0 || dataOffset + fields.size > bytes.byteLength || fields.count < 0) {
-        throw new BlendParseError(`its "${code}" block at byte ${offset} runs past the end of the file`);
+        const name = blockCode(bytes, offset, this.little);
+        throw new BlendParseError(`its "${name}" block at byte ${offset} runs past the end of the file`);
       }
-      if (code === "DNA1") sdnaBlock = { offset: dataOffset, size: fields.size };
-      raw.push({ code, ...fields, offset: dataOffset });
+      visit(offset, code, fields.size);
       offset = dataOffset + fields.size;
     }
-    if (!ended) throw new BlendParseError("it is cut short: its last block is missing");
-    if (!sdnaBlock) throw new BlendParseError("it has no SDNA block");
-    this.sdna = parseSdna(
-      bytes.subarray(sdnaBlock.offset, sdnaBlock.offset + sdnaBlock.size),
-      this.little,
-      this.pointerSize,
-    );
-    let owner = -1;
-    this.blocks = raw.map((block, index) => {
-      if (block.code !== "DATA") owner = index;
-      return {
-        index,
-        code: block.code,
-        struct: block.sdnaIndex > 0 ? this.sdna.structs[block.sdnaIndex] : undefined,
-        address: block.address,
-        offset: block.offset,
-        size: block.size,
-        count: block.count,
-        owner,
-      };
-    });
-    for (const block of this.blocks) {
-      if (block.address === 0n) continue;
-      if (block.code === "DATA") {
-        let owned = this.#owned.get(block.owner);
-        if (!owned) {
-          owned = new Map();
-          this.#owned.set(block.owner, owned);
-        }
-        if (!owned.has(block.address)) owned.set(block.address, block);
-      }
-      if (!this.#global.has(block.address) || block.code !== "DATA") this.#global.set(block.address, block);
+    throw new BlendParseError("it is cut short: its last block is missing");
+  }
+
+  /** The block's code as `codeWord` gives it, with a big-endian file's two-letter ID codes shifted into place. */
+  #codeAt(start: number): number {
+    const word = this.view.getUint32(start, false);
+    return !this.little && word < 0x10000 ? word * 0x10000 : word;
+  }
+
+  #addressHalves(block: number): [low: number, high: number] {
+    const at = (this.#starts[block] ?? 0) + 8;
+    if (this.pointerSize === 4) return [this.view.getUint32(at, this.little), 0];
+    const first = this.view.getUint32(at, this.little);
+    const second = this.view.getUint32(at + 4, this.little);
+    return this.little ? [first, second] : [second, first];
+  }
+
+  /** The slot that holds the block with this address, and for `owner` 0 or more that datablock, or an empty one. */
+  #slot(slots: Int32Array, low: number, high: number, owner: number): number {
+    const mask = slots.length - 1;
+    for (let slot = hashAddress(low, high, owner) & mask; ; slot = (slot + 1) & mask) {
+      const entry = slots[slot] ?? EMPTY_SLOT;
+      if (entry === EMPTY_SLOT) return slot;
+      const block = entry - 1;
+      if (owner >= 0 && this.#owners[block] !== owner) continue;
+      const [blockLow, blockHigh] = this.#addressHalves(block);
+      if (blockLow === low && blockHigh === high) return slot;
     }
+  }
+
+  #addToTables(block: number): void {
+    const [low, high] = this.#addressHalves(block);
+    if (low === 0 && high === 0) return;
+    const data = this.#codes[block] === DATA;
+    const owner = this.#owners[block] ?? -1;
+    if (data && owner >= 0) {
+      const slot = this.#slot(this.#owned, low, high, owner);
+      if (this.#owned[slot] === EMPTY_SLOT) this.#owned[slot] = block + 1;
+    }
+    const slot = this.#slot(this.#global, low, high, -1);
+    if (this.#global[slot] === EMPTY_SLOT || !data) this.#global[slot] = block + 1;
   }
 
   #blockHeader(offset: number, size: number): { sdnaIndex: number; address: bigint; size: number; count: number } {
@@ -192,18 +277,49 @@ export class BlendFile {
     };
   }
 
+  /** The block at `index` in file order, or null past the last. */
+  blockAt(index: number): BlendBlock | null {
+    const made = this.#made.get(index);
+    if (made) return made;
+    const start = this.#starts[index];
+    if (start === undefined) return null;
+    const fields = this.#blockHeader(start, this.#blockHeaderSize);
+    const block: BlendBlock = {
+      index,
+      code: blockCode(this.bytes, start, this.little),
+      struct: fields.sdnaIndex > 0 ? this.sdna.structs[fields.sdnaIndex] : undefined,
+      address: fields.address,
+      offset: start + this.#blockHeaderSize,
+      size: fields.size,
+      count: fields.count,
+      owner: this.#owners[index] ?? -1,
+    };
+    this.#made.set(index, block);
+    return block;
+  }
+
   /**
    * The block that starts at `address`, or null for a null or dangling pointer. A pointer read from the data of the
    * datablock at block index `owner` resolves among that datablock's blocks first.
    */
   block(address: bigint, owner = -1): BlendBlock | null {
     if (address === 0n) return null;
-    return this.#owned.get(owner)?.get(address) ?? this.#global.get(address) ?? null;
+    const low = Number(address & 0xffffffffn);
+    const high = Number((address >> 32n) & 0xffffffffn);
+    const owned = owner >= 0 ? (this.#owned[this.#slot(this.#owned, low, high, owner)] ?? EMPTY_SLOT) : EMPTY_SLOT;
+    const entry = owned !== EMPTY_SLOT ? owned : (this.#global[this.#slot(this.#global, low, high, -1)] ?? EMPTY_SLOT);
+    return entry === EMPTY_SLOT ? null : this.blockAt(entry - 1);
   }
 
   /** Every block with `code`, such as all "OB" blocks, in file order. */
   blocksWithCode(code: string): BlendBlock[] {
-    return this.blocks.filter((block) => block.code === code);
+    const word = codeWord(code);
+    const found: BlendBlock[] = [];
+    this.#codes.forEach((candidate, index) => {
+      const block = candidate === word ? this.blockAt(index) : null;
+      if (block) found.push(block);
+    });
+    return found;
   }
 
   /** The element structs of a block whose struct is known. */
@@ -398,7 +514,10 @@ export class BlendStruct {
     return Array.from({ length }, (_, index) => this.file.pointerAt(block.offset + index * this.file.pointerSize));
   }
 
-  /** The structs of a ListBase member, following each one's `next` pointer, at most once each. */
+  /**
+   * The structs of a ListBase member, at most once each. Every element starts with its `next` pointer, also when its
+   * block's struct embeds the link in a header, as each modifier struct embeds `ModifierData`.
+   */
   list(name: string): BlendStruct[] {
     const base = this.struct(name);
     if (!base) return [];
@@ -409,10 +528,10 @@ export class BlendStruct {
     while (address !== 0n && !seen.has(address)) {
       seen.add(address);
       const item = this.file.first(from.resolve(address));
-      if (!item) break;
+      if (!item || item.type.size < this.file.pointerSize) break;
       items.push(item);
       from = item;
-      address = item.pointer("next");
+      address = this.file.pointerAt(item.offset);
     }
     return items;
   }

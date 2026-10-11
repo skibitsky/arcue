@@ -58,6 +58,7 @@ export type ImportWarningCode =
   | "constraint-not-evaluated"
   | "driver-not-evaluated"
   | "curve-modifier-not-applied"
+  | "action-layer-not-played"
   | "deform-approximated"
   | "object-not-shown"
   | "library-not-loaded"
@@ -139,6 +140,7 @@ export const importWarningSeverity: Readonly<Record<ImportWarningCode, ImportWar
   "constraint-not-evaluated": "warning",
   "driver-not-evaluated": "warning",
   "curve-modifier-not-applied": "warning",
+  "action-layer-not-played": "warning",
   "deform-approximated": "warning",
   "object-not-shown": "warning",
   "library-not-loaded": "error",

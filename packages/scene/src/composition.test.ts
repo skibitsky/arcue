@@ -330,6 +330,22 @@ describe("composeScene", () => {
     expect(legs.clips).toHaveLength(1);
   });
 
+  it("leaves out the tracks that only hold an animation file's pose, and does not miss their bones", () => {
+    const wave = scene({
+      nodes: [
+        { name: "Armature" },
+        { name: "Body", parent: 0, kind: "bone" },
+        { name: "Leg", parent: 1, kind: "bone" },
+        { name: "Control", parent: 0, kind: "bone" },
+      ],
+      clips: [{ name: "Armature|Wave", animate: [1, 2, 3] }],
+    });
+    for (const track of wave.clips[0]?.tracks ?? []) track.held = track.node !== 1;
+    const composed = composeScene(legs, { ...noComposition(), animations: [{ file: "Legs@Wave.blend", scene: wave }] });
+    expect(composed.clips.at(-1)?.tracks.map((track) => composed.nodes[track.node]?.path)).toEqual(["Armature/Body"]);
+    expect(composed.source.warnings).toEqual([]);
+  });
+
   it("names another file's clips within that file, so adding or removing other files never renames them", () => {
     const take = (name: string) => scene({ nodes: [{ name: "Body", kind: "bone" }], clips: [{ name, animate: [0] }] });
     const names = (files: string[]) =>

@@ -13,6 +13,11 @@ export interface Track {
    * morph target, from 0 to 1.
    */
   values: Float32Array;
+  /**
+   * True for a track that only holds the pose the file saves on a node the clip does not key. A composition leaves it
+   * out, so the model's node keeps its own pose.
+   */
+  held?: boolean;
 }
 
 export interface Clip {

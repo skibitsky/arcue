@@ -3,9 +3,17 @@ import type { BlendStruct } from "../blend/file";
 /** Blender's `eModifierType` values this importer acts on. */
 export const ModifierType = {
   armature: 8,
+  boolean: 11,
+  array: 12,
   collision: 23,
   surface: 30,
+  screw: 34,
+  ocean: 39,
+  skin: 42,
+  meshSequenceCache: 52,
+  fluid: 56,
   nodes: 57,
+  volumeToMesh: 60,
 } as const;
 
 /** Modifiers that change nothing a preview shows, such as physics collision settings. */

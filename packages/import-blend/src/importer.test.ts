@@ -204,6 +204,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
     it("makes a clip of every action, assigned or not, over its frame range", () => {
       expect(scene.clips.map((entry) => [entry.name, entry.frameCount, entry.fps])).toEqual([
         ["Ease", 61, 30],
+        ["Partial", 9, 30],
         ["Pulse", 7, 30],
         ["Spin", 10, 30],
         ["Stretch", 9, 30],
@@ -226,9 +227,11 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       const armature = built.objects.find((record) => record.object.name === "Rig")?.armature;
       if (!armature) throw new Error("no Rig");
       for (const action of readActions(file)) {
+        const curves = action.slots.flatMap((slot) => slot.curves);
+        if (!curves.some((curve) => parsePosePath(curve.path))) continue;
         for (const sample of expected.clips?.[action.name] ?? []) {
-          const channels = armature.rest.map((rest) => cloneValues(rest));
-          for (const curve of action.slots.flatMap((slot) => slot.curves)) {
+          const channels = armature.pose.map((saved) => cloneValues(saved));
+          for (const curve of curves) {
             const pose = parsePosePath(curve.path);
             const channel = channels[armature.bones.findIndex((bone) => bone.name === pose?.bone)];
             if (pose && channel)
@@ -320,7 +323,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       expect(modified(readActions(file)).map((curve) => curve.path)).toEqual(
         Array(3).fill('pose.bones["Spine"].rotation_euler'),
       );
-      for (const block of file.blocks.filter((candidate) => candidate.struct?.type === "FCurve")) {
+      for (const block of file.blocksWithCode("DATA").filter((candidate) => candidate.struct?.type === "FCurve")) {
         for (const curve of file.elements(block)) {
           const flag = curve.field("flag");
           if (flag) file.view.setInt16(curve.offset + flag.offset, curve.number("flag") | (1 << 6), file.little);
@@ -408,14 +411,12 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["material-approximated", "Pixelated"],
         ["material-approximated", "Procedural"],
         ["material-approximated", "Projected"],
-        ["material-approximated", "Pulsing"],
         ["material-approximated", "RedRough"],
+        ["material-approximated", "Smart"],
         ["material-approximated", "Smoke"],
         ["material-approximated", "SrgbRough"],
         ["material-approximated", "Textured"],
-        ["material-approximated", "Tilted"],
         ["material-approximated", "Tinted"],
-        ["material-approximated", "Vectored"],
         ["texture-not-found", "absolute.png"],
         ["texture-not-found", "missing.png"],
         ["texture-path-absolute", "absolute.png"],
@@ -440,18 +441,22 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
           "Base color comes from Noise Texture, shown at the value set on the input; Normal comes from Bump, which the preview leaves out",
         ],
         ["Boxed", "checker.png uses Box projection, shown flat"],
-        ["SrgbRough", "checker.png is sRGB but holds data, read as Non-Color"],
-        ["Vectored", "checker.png uses a Vector Mapping, shown as Point"],
+        ["SrgbRough", "checker.png is sRGB, shown as Non-Color"],
         ["Pixelated", "checker.png uses Closest interpolation, shown Linear"],
         ["AlphaTint", "Base color comes from the alpha of checker.png, which the preview leaves out"],
         ["Displaced", "Displacement comes from Displacement, which the preview leaves out"],
-        ["Smoke", "Only its volume renders, which the preview leaves out"],
-        ["Tilted", "checker.png is mapped with a turn around X or Y, which the preview leaves out"],
-        ["Pulsing", "Emission strength comes from Value, shown at the value set on the input"],
+        ["Smoke", "Its volume comes from Principled Volume, which the preview leaves out"],
+        ["Smart", "checker.png uses Smart interpolation, shown Linear"],
       ]);
       expect(approximated.every((warning) => warning.subject.kind === "material")).toBe(true);
       expect(material("Muted").baseColorTexture).not.toBeNull();
       expect(material("AlphaTint").baseColorTexture).toBeNull();
+      expect(material("Vectored").baseColorTexture?.transform).toBeNull();
+      const tilted = material("Tilted").baseColorTexture?.transform;
+      expect(tilted?.scale[0]).toBeCloseTo(1);
+      expect(tilted?.scale[1]).toBeCloseTo(Math.cos(0.3));
+      expect(material("Pulsing").emissive).toEqual([2, 1, 0]);
+      expect(material("Smoke")).toMatchObject({ baseColor: [0, 0, 0, 0], alphaMode: "blend" });
       expect(material("RedRough").roughnessTexture).toBeNull();
       expect(material("ObjectNormal").normalTexture).toBeNull();
     });
@@ -628,7 +633,7 @@ describe("reading", () => {
     expect(scene.source.warnings).toContainEqual(
       expect.objectContaining({
         code: "invalid-data",
-        detail: "Mesh PropMesh counts more elements than the file holds",
+        detail: "Mesh PropMesh counts 1073741824 vertices but holds 8",
       }),
     );
   });

@@ -50,6 +50,8 @@ export interface FCurve {
   modifiers: CurveModifier[];
   /** Names of modifiers this evaluator does not apply. */
   unsupportedModifiers: string[];
+  /** No keys, no samples and no modifier that makes values: Blender leaves the property alone. */
+  empty: boolean;
 }
 
 export const Interpolation = {
@@ -82,9 +84,18 @@ const FMODIFIER_DISABLED = 1 << 0;
 const FMODIFIER_MUTED = 1 << 3;
 const FMODIFIER_RANGE_RESTRICTED = 1 << 4;
 const FMODIFIER_USE_INFLUENCE = 1 << 5;
+const FMODIFIER_GENERATOR = 1;
+const FMODIFIER_BUILT_IN_FUNCTION = 2;
 const FMODIFIER_CYCLES = 4;
 const FMODIFIER_LIMITS = 8;
 const FMODIFIER_STEPPED = 9;
+/** The modifiers that give a curve without keys a value, muted or not, as Blender's `BKE_fcurve_is_empty` counts them. */
+const VALUE_MODIFIERS: ReadonlySet<number> = new Set([
+  FMODIFIER_GENERATOR,
+  FMODIFIER_BUILT_IN_FUNCTION,
+  FMODIFIER_LIMITS,
+  FMODIFIER_STEPPED,
+]);
 const MODIFIER_NAMES: Readonly<Record<number, string>> = {
   1: "Generator",
   2: "Built-In Function",
@@ -226,6 +237,7 @@ export function readFCurve(curve: BlendStruct): FCurve {
   const flag = curve.number("flag");
   const { modifiers, unsupported } =
     (flag & FCURVE_MODIFIERS_OFF) !== 0 ? { modifiers: [], unsupported: [] } : readModifiers(curve);
+  const makesValues = curve.list("modifiers").some((modifier) => VALUE_MODIFIERS.has(modifier.number("type")));
   return {
     path: curve.text("rna_path"),
     index: curve.number("array_index"),
@@ -237,6 +249,7 @@ export function readFCurve(curve: BlendStruct): FCurve {
     muted: (flag & FCURVE_MUTED) !== 0 || ((curve.deref("grp")?.number("flag") ?? 0) & ACTION_GROUP_MUTED) !== 0,
     modifiers,
     unsupportedModifiers: unsupported,
+    empty: keys.count === 0 && sampled === null && !makesValues,
   };
 }
 
@@ -297,9 +310,12 @@ function solveCubic(c0: number, c1: number, c2: number, c3: number): number | nu
 
 /**
  * The Bezier segment from key `a` to key `b` at `frame`, with Blender's `BKE_fcurve_correct_bezpart`, which shortens
- * handles that reach past the other key so the curve cannot loop.
+ * each handle that alone reaches further than the other key so the curve cannot loop. The corrected handles and the
+ * cubic's coefficients are rounded to single precision as Blender computes them: where handles cross, the root moves
+ * with that rounding.
  */
 function bezierValue(keys: Keys, a: number, b: number, frame: number): number {
+  const f = Math.fround;
   const x1 = keys.frame[a] ?? 0;
   const y1 = keys.value[a] ?? 0;
   let x2 = keys.rightFrame[a] ?? 0;
@@ -310,21 +326,29 @@ function bezierValue(keys: Keys, a: number, b: number, frame: number): number {
   const y4 = keys.value[b] ?? 0;
   const epsilon = 1.1920929e-7;
   if (Math.abs(y1 - y4) < epsilon && Math.abs(y2 - y3) < epsilon && Math.abs(y3 - y4) < epsilon) return y1;
-  const h1x = x1 - x2;
-  const h1y = y1 - y2;
-  const h2x = x4 - x3;
-  const h2y = y4 - y3;
-  const length = x4 - x1;
+  const h1x = f(x1 - x2);
+  const h1y = f(y1 - y2);
+  const h2x = f(x4 - x3);
+  const h2y = f(y4 - y3);
+  const length = f(x4 - x1);
   const length1 = Math.abs(h1x);
   const length2 = Math.abs(h2x);
-  if (length1 + length2 !== 0 && length1 + length2 > length) {
-    const factor = length / (length1 + length2);
-    x2 = x1 - factor * h1x;
-    y2 = y1 - factor * h1y;
-    x3 = x4 - factor * h2x;
-    y3 = y4 - factor * h2y;
+  if (length1 > length && length1 > 0) {
+    const factor = f(length / length1);
+    x2 = f(x1 - f(factor * h1x));
+    y2 = f(y1 - f(factor * h1y));
   }
-  const t = solveCubic(x1 - frame, 3 * (x2 - x1), 3 * (x1 - 2 * x2 + x3), x4 - x1 + 3 * (x2 - x3));
+  if (length2 > length && length2 > 0) {
+    const factor = f(length / length2);
+    x3 = f(x4 - f(factor * h2x));
+    y3 = f(y4 - f(factor * h2y));
+  }
+  const t = solveCubic(
+    f(x1 - f(frame)),
+    f(3 * f(x2 - x1)),
+    f(3 * f(f(x1 - 2 * x2) + x3)),
+    f(f(x4 - x1) + f(3 * f(x2 - x3))),
+  );
   if (t === null) return 0;
   const c1 = 3 * (y2 - y1);
   const c2 = 3 * (y1 - 2 * y2 + y3);
@@ -721,22 +745,114 @@ export function evaluateFCurve(curve: FCurve, frame: number): number {
   return value;
 }
 
+/** The Cycles modifier that repeats the curve's keys: Blender applies one only as the first modifier. */
+function cyclesOf(curve: FCurve): Extract<CurveModifier, { type: "cycles" }> | null {
+  const [first] = curve.modifiers;
+  return first?.type === "cycles" ? first : null;
+}
+
 /**
- * Whether the curve holds each value for a frame or more: every key holds until the next one, or a Stepped modifier
- * steps the whole curve.
+ * Whether the value can jump at a frame, leaving the value from before just before it: at a key after a constant or
+ * discrete segment, at a step of a Stepped modifier a frame or more long, or where a modifier's frame range starts.
+ * Steps shorter than a frame are left to interpolation between frames.
  */
-export function isStepped(curve: FCurve): boolean {
+export function canJump(curve: FCurve): boolean {
   if (curve.discrete) return true;
-  const steps = (modifier: CurveModifier) =>
-    modifier.type === "stepped" &&
-    modifier.step >= 1 &&
-    modifier.range === null &&
-    modifier.influence >= 1 &&
-    !modifier.noBefore &&
-    !modifier.noAfter;
-  if (curve.modifiers.some(steps)) return true;
+  const stepsOrRanges = curve.modifiers.some(
+    (modifier) => modifier.range !== null || (modifier.type === "stepped" && modifier.step >= 1),
+  );
+  if (stepsOrRanges) return true;
   const { count, interpolation } = curve.keys;
-  if (count === 0) return false;
-  for (let i = 0; i < count - 1; i++) if (interpolation[i] !== Interpolation.constant) return false;
-  return true;
+  for (let i = 0; i < count - 1; i++) if (interpolation[i] === Interpolation.constant) return true;
+  return false;
+}
+
+/**
+ * Whether a Stepped modifier has a step a frame or more long that starts between `start` and `end` and before its
+ * offset. Blender rounds toward the offset, so such a step starts just after its first frame.
+ */
+function stepsBeforeOffset(modifier: Extract<CurveModifier, { type: "stepped" }>, start: number, end: number): boolean {
+  if (!(modifier.step >= 1)) return false;
+  const from = modifier.noBefore ? Math.max(start, modifier.start) : start;
+  const to = Math.min(end, modifier.offset - modifier.step, modifier.noAfter ? modifier.end : end);
+  const latest = modifier.offset - Math.ceil((modifier.offset - to) / modifier.step) * modifier.step;
+  return to >= from && latest >= from;
+}
+
+const CYCLES_REPEAT = 1;
+
+/**
+ * Whether a Cycles modifier repeats the keys after the last one from `start` up to `end`, with a cycle that ends at or
+ * after `start` and before `end` and starts again at another value. Repeating with an offset or mirrored keeps the
+ * value, and so does a cycle that ends where it starts.
+ */
+function cycleEndsBetween(curve: FCurve, start: number, end: number): boolean {
+  const cycles = cyclesOf(curve);
+  const range = curveRange(curve);
+  if (cycles?.after !== CYCLES_REPEAT || !range) return false;
+  const [first, last] = range;
+  const period = last - first;
+  if (!(period > 0) || rawValue(curve, first) === rawValue(curve, last)) return false;
+  const firstEnd = Math.max(1, Math.ceil((start - first) / period));
+  return first + firstEnd * period < end;
+}
+
+/**
+ * Whether the value can jump just after a frame between `start` and `end`, keeping the value from before at that frame
+ * itself: at the end of a cycle of a Cycles modifier, at the end of a modifier's frame range, where a Stepped modifier
+ * stops, or at a step of a Stepped modifier before its offset.
+ */
+export function canJumpAfter(curve: FCurve, start: number, end: number): boolean {
+  if (cycleEndsBetween(curve, start, end)) return true;
+  return curve.modifiers.some(
+    (modifier) =>
+      modifier.range !== null ||
+      (modifier.type === "stepped" && (modifier.noAfter || stepsBeforeOffset(modifier, start, end))),
+  );
+}
+
+/** Where the frames of `within`, relative to the first key, repeat over `start` to `end` under a Cycles modifier. */
+function cycledFrames(curve: FCurve, within: readonly number[], start: number, end: number): number[] {
+  const cycles = cyclesOf(curve);
+  const range = curveRange(curve);
+  if (!cycles || !range) return [];
+  const [first, last] = range;
+  const period = last - first;
+  if (!(period >= 1)) return [];
+  const mirrored = cycles.before === 3 || cycles.after === 3;
+  const offsets = [0, ...within.map((frame) => frame - first)];
+  if (mirrored) offsets.push(...offsets.map((offset) => period - offset));
+  const frames: number[] = [];
+  const lastCycle = Math.ceil((end - first) / period);
+  for (let n = Math.floor((start - first) / period); n <= lastCycle; n++) {
+    for (const offset of offsets) frames.push(first + n * period + offset);
+  }
+  return frames;
+}
+
+/**
+ * Frames strictly between `start` and `end` where the curve may jump: its keys after constant or discrete segments
+ * and where a Cycles modifier repeats them, the ends of its cycles, the steps of its Stepped modifiers that are at
+ * least a frame apart, and the ends of its modifiers' frame ranges.
+ */
+export function jumpFrames(curve: FCurve, start: number, end: number): number[] {
+  const keyed: number[] = [];
+  const { count, frame, interpolation } = curve.keys;
+  for (let i = 1; i < count; i++) {
+    if (curve.discrete || interpolation[i - 1] === Interpolation.constant) keyed.push(frame[i] ?? 0);
+  }
+  const frames = [...keyed, ...cycledFrames(curve, keyed, start, end)];
+  for (const modifier of curve.modifiers) {
+    if (modifier.range) frames.push(modifier.range.start, modifier.range.end);
+    if (modifier.type !== "stepped" || !(modifier.step >= 1)) continue;
+    const from = modifier.noBefore ? Math.max(start, modifier.start) : start;
+    const to = modifier.noAfter ? Math.min(end, modifier.end) : end;
+    if (modifier.noBefore) frames.push(modifier.start);
+    if (modifier.noAfter) frames.push(modifier.end);
+    const last = Math.floor((to - modifier.offset) / modifier.step);
+    for (let n = Math.ceil((from - modifier.offset) / modifier.step); n <= last; n++) {
+      frames.push(modifier.offset + n * modifier.step);
+    }
+  }
+  return frames.filter((value) => value > start && value < end);
 }

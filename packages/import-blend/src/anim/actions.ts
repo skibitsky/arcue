@@ -25,6 +25,8 @@ export interface Action {
   slots: ActionSlot[];
   /** The manual frame range, when the action sets one. */
   manualRange: [number, number] | null;
+  /** The layers of a layered action. Arcue plays the first; Blender 5.2 makes no more than one. */
+  layers: number;
 }
 
 const ACTION_FRAME_RANGE = 1 << 12;
@@ -71,7 +73,18 @@ export function readAction(action: BlendStruct): Action {
     name: idName(action),
     slots,
     manualRange: manual ? [action.number("frame_start"), action.number("frame_end")] : null,
+    layers: layered ? action.number("layer_array_num") : 0,
   };
+}
+
+/**
+ * The slot that an animation data's slot handle plays. A legacy action has no slots, so its curves play for any handle;
+ * a layered action plays nothing for a handle that none of its slots has.
+ */
+export function slotFor(action: Action, handle: number): ActionSlot | undefined {
+  const [only] = action.slots;
+  if (action.slots.length === 1 && only?.handle === -1) return only;
+  return action.slots.find((slot) => slot.handle === handle);
 }
 
 /** Every action the file holds, in file order, without linked ones. */
@@ -123,7 +136,11 @@ export function animationUses(id: BlendStruct): AnimatedId {
   return { id, uses, drivers: adt.list("drivers").map(readFCurve) };
 }
 
-/** The actions an ID's animation data plays, as its active, tweaked and NLA strip actions, with their slot handles. */
+/**
+ * The actions an ID's animation data plays, as its active, tweaked and NLA strip actions, with their slot handles, in
+ * the order Blender lets them override one another: the active action over every NLA track, and an upper track over a
+ * lower one.
+ */
 export function usedActions(id: BlendStruct): { action: BlendStruct; slot: number }[] {
   const adt = id.deref("adt");
   const uses: { action: BlendStruct; slot: number }[] = [];
@@ -139,7 +156,7 @@ export function usedActions(id: BlendStruct): { action: BlendStruct; slot: numbe
       visitStrips(strip.list("strips"));
     }
   };
-  for (const track of adt.list("nla_tracks")) visitStrips(track.list("strips"));
+  for (const track of adt.list("nla_tracks").reverse()) visitStrips(track.list("strips"));
   return uses;
 }
 
@@ -147,7 +164,9 @@ export function usedActions(id: BlendStruct): { action: BlendStruct; slot: numbe
 export function animatedPaths(file: BlendFile, actions: readonly Action[]): Set<string> {
   const paths = new Set<string>();
   for (const action of actions) {
-    for (const slot of action.slots) for (const curve of slot.curves) if (!curve.muted) paths.add(curve.path);
+    for (const slot of action.slots) {
+      for (const curve of slot.curves) if (!curve.muted && !curve.empty) paths.add(curve.path);
+    }
   }
   for (const object of datablocks(file, "OB")) {
     for (const driver of animationUses(object).drivers) if (!driver.muted) paths.add(driver.path);

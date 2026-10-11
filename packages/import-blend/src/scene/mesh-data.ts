@@ -517,12 +517,13 @@ interface ShapeKeys {
   keys: ShapeKey[];
   reference: number;
   absolute: boolean;
+  /** The reference key's positions, which Blender shapes the mesh from instead of its vertices, when it has them all. */
+  basis: Float32Array | null;
 }
 
 function readShapeKeys(mesh: BlendStruct, file: BlendFile, sizes: Sizes): ShapeKeys {
   const key = mesh.deref("key");
-  if (!key) return { keys: [], reference: -1, absolute: false };
-  if (key.number("type") !== KEY_RELATIVE) return { keys: [], reference: -1, absolute: true };
+  if (!key) return { keys: [], reference: -1, absolute: false, basis: null };
   const blocks = key.list("block");
   const reference = blocks.findIndex((block) => block.offset === file.first(key.target("refkey"))?.offset);
   const keys = blocks.map((block) => {
@@ -541,7 +542,52 @@ function readShapeKeys(mesh: BlendStruct, file: BlendFile, sizes: Sizes): ShapeK
       vertexGroup: block.string("vgroup"),
     };
   });
-  return { keys, reference: reference === -1 && keys.length > 0 ? 0 : reference, absolute: false };
+  const basisIndex = reference === -1 && keys.length > 0 ? 0 : reference;
+  const basisBlock = blocks[basisIndex];
+  const basis = basisBlock?.number("totelem") === sizes.point ? (keys[basisIndex]?.positions ?? null) : null;
+  if (key.number("type") !== KEY_RELATIVE) return { keys: [], reference: -1, absolute: true, basis };
+  return { keys, reference: basisIndex, absolute: false, basis };
+}
+
+/**
+ * How many elements a topology attribute's values hold. One value for the whole domain counts as one element: Blender
+ * writes positions, edges and face corners as arrays, and repeating one value would let a count take any memory.
+ */
+function heldElements(attribute: MeshAttribute): number {
+  if (!attribute.block) return 0;
+  return attribute.single ? 1 : Math.floor(attribute.block.size / BYTES[attribute.type]);
+}
+
+function legacyElements(mesh: BlendStruct, field: string, type: number): number {
+  const block = customDataLayers(mesh, field, type)[0]?.target("data");
+  const size = block?.struct?.size ?? 0;
+  return block && size > 0 ? Math.min(block.count, Math.floor(block.size / size)) : 0;
+}
+
+const DOMAIN_NAMES: Readonly<Record<keyof Sizes, string>> = {
+  point: "vertices",
+  edge: "edges",
+  face: "faces",
+  corner: "face corners",
+};
+
+/** Refuses a mesh that counts more elements than the data that defines them holds, as a damaged file can. */
+function checkCounts(mesh: BlendStruct, reader: AttributeReader, sizes: Sizes): void {
+  const position = reader.find("position", ["float3"], "point");
+  const edgeVerts = reader.find(".edge_verts", ["int32_2d"], "edge");
+  const cornerVert = reader.find(".corner_vert", ["int32"], "corner");
+  const offsets = mesh.target("poly_offset_indices");
+  const held: Sizes = {
+    point: position ? heldElements(position) : legacyElements(mesh, "vdata", CustomDataType.vertex),
+    edge: edgeVerts ? heldElements(edgeVerts) : legacyElements(mesh, "edata", CustomDataType.edge),
+    face: offsets ? Math.max(Math.floor(offsets.size / 4) - 1, 0) : legacyElements(mesh, "pdata", CustomDataType.face),
+    corner: cornerVert ? heldElements(cornerVert) : legacyElements(mesh, "ldata", CustomDataType.loop),
+  };
+  for (const domain of ["point", "edge", "face", "corner"] as const) {
+    if (sizes[domain] <= held[domain]) continue;
+    const what = DOMAIN_NAMES[domain];
+    throw new MeshReadError(`Mesh ${idName(mesh)} counts ${sizes[domain]} ${what} but holds ${held[domain]}`);
+  }
 }
 
 /** Reads a mesh datablock. `objectGroups` are the vertex group names an object stores in files before Blender 3.0. */
@@ -552,12 +598,9 @@ export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: r
     face: Math.max(mesh.number("totpoly"), 0),
     corner: Math.max(mesh.number("totloop"), 0),
   };
-  const mostElements = file.bytes.length / 4;
-  if (Object.values(sizes).some((size) => size > mostElements)) {
-    throw new MeshReadError(`Mesh ${idName(mesh)} counts more elements than the file holds`);
-  }
   const attributes = [...storageAttributes(mesh), ...customDataAttributes(mesh)];
   const reader = new AttributeReader(file, attributes, sizes);
+  checkCounts(mesh, reader, sizes);
   const topology = readTopology(file, mesh, reader, sizes);
   validateTopology(topology, sizes, idName(mesh));
   const uvs = readUvMaps(mesh, reader, sizes);
@@ -576,6 +619,7 @@ export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: r
     faceCount: sizes.face,
     cornerCount: sizes.corner,
     ...topology,
+    positions: shapeKeys.basis ?? topology.positions,
     autoSmoothAngle: autoSmooth ? mesh.number("smoothresh") : null,
     uvMaps: uvs.maps,
     defaultUv: uvs.default,

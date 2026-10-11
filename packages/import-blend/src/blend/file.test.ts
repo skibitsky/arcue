@@ -34,6 +34,39 @@ const OWNER = {
   ],
 } satisfies FileDefinition["structs"][number];
 
+const MODIFIER_DATA = {
+  type: "ModifierData",
+  fields: [
+    ["ModifierData", "*next"],
+    ["ModifierData", "*prev"],
+    ["char", "name[8]"],
+  ],
+} satisfies FileDefinition["structs"][number];
+
+const MIRROR_MODIFIER = {
+  type: "MirrorModifierData",
+  fields: [
+    ["ModifierData", "modifier"],
+    ["short", "axis"],
+  ],
+} satisfies FileDefinition["structs"][number];
+
+const ARMATURE_MODIFIER = {
+  type: "ArmatureModifierData",
+  fields: [
+    ["ModifierData", "modifier"],
+    ["int", "deformflag"],
+  ],
+} satisfies FileDefinition["structs"][number];
+
+const OBJECT = {
+  type: "Object",
+  fields: [
+    ["char", "name[8]"],
+    ["ListBase", "modifiers"],
+  ],
+} satisfies FileDefinition["structs"][number];
+
 function floats(values: number[], little: boolean): Uint8Array {
   const view = new DataView(new ArrayBuffer(values.length * 4));
   values.forEach((value, index) => {
@@ -74,12 +107,14 @@ function sample(header: "old" | "new", pointerSize: 4 | 8, little: boolean): Uin
   });
 }
 
+const FORMATS = [
+  ["the old header with 4-byte pointers, big-endian", "old", 4, false],
+  ["the old header with 8-byte pointers", "old", 8, true],
+  ["Blender 5's header with large block headers", "new", 8, true],
+] as const;
+
 describe("readBlendFile", () => {
-  it.each([
-    ["the old header with 4-byte pointers, big-endian", "old", 4, false],
-    ["the old header with 8-byte pointers", "old", 8, true],
-    ["Blender 5's header with large block headers", "new", 8, true],
-  ] as const)("reads structs, arrays and pointers from %s", (_label, header, pointerSize, little) => {
+  it.each(FORMATS)("reads structs, arrays and pointers from %s", (_label, header, pointerSize, little) => {
     const file = readBlendFile(sample(header, pointerSize, little));
     expect(file.pointerSize).toBe(pointerSize);
     expect(file.little).toBe(little);
@@ -105,6 +140,57 @@ describe("readBlendFile", () => {
     expect(second?.list("things")[0]?.string("name")).toBe("Other");
   });
 
+  it.each(FORMATS)(
+    "follows a list whose elements embed their link in a header struct, from %s",
+    (_label, header, pointerSize, little) => {
+      const stacked = writeBlend({
+        header,
+        pointerSize,
+        little,
+        structs: [LIST_BASE, MODIFIER_DATA, MIRROR_MODIFIER, ARMATURE_MODIFIER, OBJECT],
+        blocks: [
+          { code: "OB", struct: "Object", address: 0x100n, data: [{ modifiers: { first: 0x200n, last: 0x220n } }] },
+          {
+            code: "DATA",
+            struct: "MirrorModifierData",
+            address: 0x200n,
+            data: [{ modifier: { next: 0x210n, name: "Mirror" } }],
+          },
+          {
+            code: "DATA",
+            struct: "ArmatureModifierData",
+            address: 0x210n,
+            data: [{ modifier: { next: 0x220n, prev: 0x200n, name: "Arm" }, deformflag: 1 }],
+          },
+          {
+            code: "DATA",
+            struct: "MirrorModifierData",
+            address: 0x220n,
+            data: [{ modifier: { prev: 0x210n, name: "Last" } }],
+          },
+        ],
+      });
+      const file = readBlendFile(stacked);
+      const object = file.first(file.blocksWithCode("OB")[0] ?? null);
+      const modifiers = object?.list("modifiers") ?? [];
+      expect(modifiers.map((modifier) => [modifier.typeName, modifier.struct("modifier")?.string("name")])).toEqual([
+        ["MirrorModifierData", "Mirror"],
+        ["ArmatureModifierData", "Arm"],
+        ["MirrorModifierData", "Last"],
+      ]);
+      expect(modifiers[1]?.number("deformflag")).toBe(1);
+    },
+  );
+
+  it("reads the two-letter codes a big-endian file writes after two zero bytes", () => {
+    const bytes = sample("old", 4, false);
+    expect(new TextDecoder().decode(bytes.subarray(12, 16))).toBe("\0\0OW");
+    const file = readBlendFile(bytes);
+    const codes = Array.from({ length: file.blockCount }, (_, index) => file.blockAt(index)?.code);
+    expect(codes).toEqual(["OW", "DATA", "DATA", "DATA", "OW", "DATA", "DNA1"]);
+    expect(file.blocksWithCode("OW").map((block) => block.index)).toEqual([0, 4]);
+  });
+
   it("stops a list that loops back on itself", () => {
     const looped = writeBlend({
       header: "old",
@@ -120,6 +206,30 @@ describe("readBlendFile", () => {
     const file = readBlendFile(looped);
     const owner = file.first(file.blocksWithCode("OW")[0] ?? null);
     expect(owner?.list("things").map((thing) => thing.string("name"))).toEqual(["A", "B"]);
+  });
+
+  it("refuses a block without a code, as a header followed by zeros has", () => {
+    const zeros = new Uint8Array(12 + 24 * 1000);
+    zeros.set(new TextEncoder().encode("BLENDER-v405"));
+    expect(() => readBlendFile(zeros)).toThrow(new BlendParseError("its block at byte 12 has no code"));
+  });
+
+  it("finds blocks by address among many small data blocks", () => {
+    const count = 100_000;
+    const blocks: FileDefinition["blocks"] = [
+      { code: "OW", struct: "Owner", address: 0x10n, data: [{ name: "Many", things: { first: 0x20n, last: 0x20n } }] },
+    ];
+    const tiny = new Uint8Array(1);
+    for (let index = 0; index < count; index++) {
+      blocks.push({ code: "DATA", struct: null, address: BigInt(0x20 + index * 8), data: tiny });
+    }
+    const structs = [LIST_BASE, THING, OWNER];
+    const file = readBlendFile(writeBlend({ header: "old", pointerSize: 8, little: true, structs, blocks }));
+    expect(file.blockCount).toBe(count + 2);
+    const last = BigInt(0x20 + (count - 1) * 8);
+    expect(file.block(last, 0)?.index).toBe(count);
+    expect(file.block(last)?.index).toBe(count);
+    expect(file.block(last + 4n)).toBeNull();
   });
 
   it("refuses bytes without a Blender header, files cut short and newer file formats", () => {

@@ -92,7 +92,8 @@ function parseField([type, raw]: [string, string]): ParsedField {
 
 /**
  * Writes the definition as an uncompressed .blend file. Like Blender, it puts a "Link" struct first, since a block
- * whose struct index is 0 holds raw data.
+ * whose struct index is 0 holds raw data, and it writes block codes as ints, so a big-endian file holds a two-letter
+ * code such as "OB" as "\0\0OB".
  */
 export function writeBlend(given: FileDefinition): Uint8Array {
   const link: StructDefinition = {
@@ -121,7 +122,7 @@ export function writeBlend(given: FileDefinition): Uint8Array {
   else out.text(`BLENDER${pointerSize === 4 ? "_" : "-"}${little ? "v" : "V"}${version}`);
 
   const blockHeader = (code: string, sdna: number, address: bigint, size: number, count: number) => {
-    out.text(code.padEnd(4, "\0"));
+    out.text(little || code.length > 2 ? code.padEnd(4, "\0") : code.padStart(4, "\0"));
     if (definition.header === "new") {
       out.number(sdna, 4);
       out.pointer(address, 8);

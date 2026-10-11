@@ -1,22 +1,35 @@
-import type { AlphaMode, UvTransform, Vec3, Vec4, WrapMode } from "@arcue/scene";
+import type { AlphaMode, TextureAlpha, UvTransform, Vec3, Vec4, WrapMode } from "@arcue/scene";
 import type { BlendStruct } from "../blend/file";
 import { idName } from "../blend/ids";
+import type { Affine } from "./mapping";
+import { composeAffine, IDENTITY, mappingAffine, uvTransformOf } from "./mapping";
+import type { ShaderGraph } from "./shader-graph";
+import {
+  constantOf,
+  graphOf,
+  inputSocket,
+  linkedOutput,
+  nodeLabel,
+  nodeType,
+  outputSocket,
+  readOutputs,
+  SocketType,
+  socketType,
+  socketValue,
+  upstreamNode,
+} from "./shader-graph";
 
 export const IMAGE_SOURCE_FILE = 1;
+const IMAGE_SOURCE_TILED = 6;
 const IMAGE_SOURCES: Readonly<Record<number, string>> = {
-  2: "image sequence",
-  3: "movie",
-  4: "generated",
-  5: "viewer",
-  6: "UDIM tiled",
+  2: "an image sequence",
+  3: "a movie",
+  4: "a generated image",
+  5: "a viewer image",
+  6: "a UDIM tiled image",
 };
 const TANGENT_SPACE = 0;
 const NORMAL_SPACES: Readonly<Record<number, string>> = { 1: "object", 2: "world", 3: "object", 4: "world" };
-
-/** The color space Blender reads an image's values in, such as "sRGB" or "Non-Color". */
-function colorSpace(image: BlendStruct): string {
-  return image.struct("colorspace_settings")?.string("name") ?? "";
-}
 
 /** The image's packed file, from the list newer files keep or the single pointer older ones do. */
 export function packedFile(image: BlendStruct): BlendStruct | null {
@@ -25,6 +38,7 @@ export function packedFile(image: BlendStruct): BlendStruct | null {
 
 /** An Image Texture node a material samples. */
 export interface ImageUse {
+  node: BlendStruct;
   image: BlendStruct;
   /** The UV map a UV Map node names, or null for the mesh's default UV map. */
   uvMap: string | null;
@@ -36,12 +50,10 @@ export interface ImageUse {
   clipped: boolean;
   /** Box, Sphere or Tube projection, which the preview shows as flat, or null for flat. */
   projection: string | null;
-  /** A Mapping node's Texture, Vector or Normal type, which the preview maps as Point, or null for Point. */
-  mapping: string | null;
-  /** Whether a Mapping node rotates around X or Y, which the preview leaves out. */
-  tilted: boolean;
   /** Closest, Cubic or Smart sampling, which the preview samples as Linear, or null for Linear. */
   interpolation: string | null;
+  /** What the material does with the image's alpha. */
+  alpha: TextureAlpha;
 }
 
 export interface MaterialDraft {
@@ -56,11 +68,9 @@ export interface MaterialDraft {
   metalnessImage: ImageUse | null;
   normalImage: ImageUse | null;
   normalScale: number;
-  /** The emission color times its strength, for a material without an emission image. */
+  /** The emission color times its strength, which multiplies an emission image. */
   emissive: Vec3;
   emissiveImage: ImageUse | null;
-  /** Multiplies an emission image. */
-  emissionStrength: number;
   alphaMode: AlphaMode;
   alphaCutoff: number;
   doubleSided: boolean;
@@ -69,31 +79,56 @@ export interface MaterialDraft {
 }
 
 const NODE_DO_OUTPUT = 1 << 6;
-const NODE_MUTED = 1 << 9;
+const OUTPUT_FOR_ALL = 0;
+const OUTPUT_FOR_EEVEE = 1;
+const OUTPUT_FOR_CYCLES = 2;
 const BACKFACE_CULLING = 1 << 2;
 const BLEND_METHOD_CLIP = 3;
+const MIX_MULTIPLY = 2;
+const MATH_SUBTRACT = 1;
+const MATH_MULTIPLY = 2;
+const MATH_ROUND = 14;
+const MATH_LESS_THAN = 15;
+const MATH_GREATER_THAN = 16;
+/** What a strict comparison adds to its cutoff, as the preview keeps alpha that equals the cutoff. */
+const STRICT = 1e-6;
+const SEPARATE_RGB = 0;
+const SEPARATED_CHANNELS: Readonly<Record<number, readonly string[]>> = {
+  1: ["Hue", "Saturation", "Value"],
+  2: ["Hue", "Saturation", "Lightness"],
+};
+/** The color channel each output of a Separate node reads, from a color or from the vector a color converts to. */
+const CHANNEL_INDEX: Readonly<Record<string, number>> = {
+  Red: 0,
+  R: 0,
+  X: 0,
+  Green: 1,
+  G: 1,
+  Y: 1,
+  Blue: 2,
+  B: 2,
+  Z: 2,
+};
+const GREEN = 1;
+const BLUE = 2;
+const ALPHA_STRAIGHT = 0;
+const ALPHA_PREMULTIPLIED = 1;
+/** The color spaces Blender reads as data, which it never multiplies by their alpha. */
+const DATA_SPACES = new Set(["Non-Color", "Raw", "Generic Data"]);
 
 const WRAPS: readonly WrapMode[] = ["repeat", "clamp", "clamp", "mirror"];
 const EXTENSION_CLIP = 2;
 const PROJECTIONS: Readonly<Record<number, string>> = { 1: "Box", 2: "Sphere", 3: "Tube" };
 const INTERPOLATIONS: Readonly<Record<number, string>> = { 1: "Closest", 2: "Cubic", 3: "Smart" };
-const MAPPING_TYPES: Readonly<Record<number, string>> = { 1: "Texture", 2: "Vector", 3: "Normal" };
-const IMAGE_SOURCE_TILED = 6;
-/** Color spaces that hold data rather than color, which Blender reads without converting. */
-const DATA_SPACES = new Set(["Non-Color", "Raw", "Generic Data"]);
 const SIMPLE_SHADERS = new Set([
   "ShaderNodeEmission",
   "ShaderNodeBsdfDiffuse",
   "ShaderNodeBsdfGlossy",
   "ShaderNodeBsdfAnisotropic",
 ]);
+/** The color spaces whose values Blender reads as they are, as the preview reads data images. */
+const RAW_SPACES = new Set(["", "Non-Color", "Raw", "Generic Data", "Linear", "scene_linear"]);
 
-interface Graph {
-  nodes: BlendStruct[];
-  links: BlendStruct[];
-}
-
-/** The material Blender shows for an empty slot. */
 /** The images a material samples. */
 export function imageUses(draft: MaterialDraft): ImageUse[] {
   return [
@@ -106,6 +141,7 @@ export function imageUses(draft: MaterialDraft): ImageUse[] {
   ].filter((use): use is ImageUse => use !== null);
 }
 
+/** The material Blender shows for an empty slot. */
 export function defaultMaterial(name = "Default"): MaterialDraft {
   return {
     name,
@@ -120,7 +156,6 @@ export function defaultMaterial(name = "Default"): MaterialDraft {
     normalScale: 1,
     emissive: [0, 0, 0],
     emissiveImage: null,
-    emissionStrength: 1,
     alphaMode: "opaque",
     alphaCutoff: 0.5,
     doubleSided: true,
@@ -128,69 +163,18 @@ export function defaultMaterial(name = "Default"): MaterialDraft {
   };
 }
 
-function nodeType(node: BlendStruct): string {
-  return node.string("idname");
-}
-
-function socketName(socket: BlendStruct): string {
-  return socket.string("identifier") || socket.string("name");
-}
-
-function inputSocket(node: BlendStruct, ...names: string[]): BlendStruct | null {
-  const inputs = node.list("inputs");
-  for (const name of names) {
-    const found = inputs.find((socket) => socketName(socket) === name || socket.string("name") === name);
-    if (found) return found;
-  }
-  return null;
-}
-
-/** The node and output a socket's link comes from, through muted nodes as Blender passes data through them. */
-function linkInto(graph: Graph, socket: BlendStruct, depth = 0): { node: BlendStruct; socket: string } | null {
-  for (const link of graph.links) {
-    if (link.pointer("tosock") === 0n) continue;
-    const target = link.deref("tosock");
-    if (target?.offset !== socket.offset) continue;
-    const from = link.deref("fromnode");
-    const fromSocket = link.deref("fromsock");
-    if (!from) return null;
-    if ((from.number("flag") & NODE_MUTED) !== 0) return mutedPassThrough(graph, from, fromSocket, depth);
-    return { node: from, socket: fromSocket ? socketName(fromSocket) : "" };
-  }
-  return null;
-}
-
-/** What a muted node passes on: the link into its first input of the output's type, or else its first linked input. */
-function mutedPassThrough(
-  graph: Graph,
-  node: BlendStruct,
-  output: BlendStruct | null,
-  depth: number,
-): { node: BlendStruct; socket: string } | null {
-  if (depth > 16) return null;
-  const inputs = node.list("inputs");
-  const type = output?.number("type");
-  const ordered = [...inputs.filter((input) => input.number("type") === type), ...inputs];
-  for (const input of ordered) {
-    const passed = linkInto(graph, input, depth + 1);
-    if (passed) return passed;
-  }
-  return null;
-}
-
-function defaultFloat(socket: BlendStruct | null, fallback: number): number {
-  const value = socket?.deref("default_value");
-  return value?.has("value") ? value.number("value") : fallback;
-}
-
-function defaultVector(socket: BlendStruct | null, fallback: readonly number[]): number[] {
-  const value = socket?.deref("default_value");
-  const values = value?.numbers("value") ?? [];
-  return values.length >= fallback.length ? values.slice(0, fallback.length) : [...fallback];
-}
-
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
+}
+
+/** The input's value where it is constant, else the value set on it, which Blender ignores while nodes drive it. */
+function inputValue(graph: ShaderGraph, socket: BlendStruct | null, fallback: readonly number[]): number[] {
+  const values = socket ? (constantOf(graph, socket) ?? socketValue(socket)) : [];
+  return fallback.map((value, index) => values[index] ?? value);
+}
+
+function scalarOf(graph: ShaderGraph, socket: BlendStruct | null, fallback: number): number {
+  return inputValue(graph, socket, [fallback])[0] ?? fallback;
 }
 
 const PASS_THROUGH = new Set([
@@ -208,7 +192,6 @@ const PASS_THROUGH = new Set([
   "ShaderNodeMapRange",
   "ShaderNodeValToRGB",
   "ShaderNodeRGBToBW",
-  "NodeReroute",
 ]);
 
 /** Pass-through nodes that only pick or convert channels, which leave an image's values as the preview reads them. */
@@ -217,263 +200,614 @@ const KEEPS_VALUES = new Set([
   "ShaderNodeSeparateRGB",
   "ShaderNodeSeparateXYZ",
   "ShaderNodeRGBToBW",
-  "NodeReroute",
 ]);
+const SEPARATES = new Set(["ShaderNodeSeparateColor", "ShaderNodeSeparateRGB", "ShaderNodeSeparateXYZ"]);
+
+/** A node between an image and the input it feeds, and the output it feeds from. */
+interface Step {
+  node: BlendStruct;
+  output: string;
+  socket: BlendStruct;
+}
 
 /** An Image Texture node that feeds an input, the output it feeds from and the nodes between. */
 interface FedImage {
   node: BlendStruct;
   /** The image node's output, such as "Color" or "Alpha". */
   output: string;
-  /** Each node between, as its type and the output it feeds from, such as "ShaderNodeSeparateColor:Green". */
-  via: string[];
+  /** Each node between, nearest the input first. */
+  via: Step[];
   /** Names of the nodes between that change the image's values, such as "Hue/Saturation/Value". */
   changes: string[];
 }
 
-/** Follows a socket upstream through color adjustments to the Image Texture node that feeds it. */
-function imageFeeding(graph: Graph, socket: BlendStruct | null, depth = 0): FedImage | null {
+/**
+ * Follows a socket upstream through color adjustments to the Image Texture node that feeds it. `seen` holds the nodes
+ * already searched, so that a node many inputs share is searched once.
+ */
+function imageFeeding(
+  graph: ShaderGraph,
+  socket: BlendStruct | null,
+  seen = new Set<number>(),
+  depth = 0,
+): FedImage | null {
   if (!socket || depth > 16) return null;
-  const link = linkInto(graph, socket);
-  if (!link) return null;
-  const type = nodeType(link.node);
+  const source = linkedOutput(graph, socket);
+  if (!source || seen.has(source.node.offset)) return null;
+  seen.add(source.node.offset);
+  const type = nodeType(source.node);
   if (type === "ShaderNodeTexImage") {
-    return link.node.pointer("id") !== 0n ? { node: link.node, output: link.socket, via: [], changes: [] } : null;
+    return source.node.pointer("id") !== 0n ? { node: source.node, output: source.name, via: [], changes: [] } : null;
   }
   if (!PASS_THROUGH.has(type)) return null;
-  for (const input of link.node.list("inputs")) {
-    const found = imageFeeding(graph, input, depth + 1);
+  for (const input of source.node.list("inputs")) {
+    const found = imageFeeding(graph, input, seen, depth + 1);
     if (!found) continue;
-    const change = KEEPS_VALUES.has(type) ? [] : [link.node.string("name") || type];
-    return { ...found, via: [`${type}:${link.socket}`, ...found.via], changes: [...change, ...found.changes] };
+    const change = KEEPS_VALUES.has(type) ? [] : [nodeLabel(source.node)];
+    return {
+      ...found,
+      via: [{ node: source.node, output: source.name, socket: source.socket }, ...found.via],
+      changes: [...change, ...found.changes],
+    };
   }
   return null;
 }
 
-/** Notes an input that nodes other than an image drive, which the preview shows at its own value. */
+function imageName(found: FedImage): string {
+  const image = found.node.deref("id");
+  return image ? idName(image) : "an image";
+}
+
+/** Notes an input that nodes other than an image or a constant drive, which the preview shows at its own value. */
 function noteNodeInput(
-  graph: Graph,
+  graph: ShaderGraph,
   draft: MaterialDraft,
   input: string,
   socket: BlendStruct | null,
   found: FedImage | null,
 ): void {
-  if (found || !socket) return;
-  const link = linkInto(graph, socket);
-  if (!link) return;
-  const name = link.node.string("name") || nodeType(link.node);
-  draft.approximations.push(`${input} comes from ${name}, shown at the value set on the input`);
+  if (found || !socket || constantOf(graph, socket)) return;
+  const source = linkedOutput(graph, socket);
+  if (!source) return;
+  draft.approximations.push(`${input} comes from ${nodeLabel(source.node)}, shown at the value set on the input`);
 }
 
 /** The image an input samples, noting on the draft any nodes between that change its values. */
-function imageInput(graph: Graph, draft: MaterialDraft, input: string, found: FedImage | null): ImageUse | null {
+function imageInput(graph: ShaderGraph, draft: MaterialDraft, input: string, found: FedImage | null): ImageUse | null {
   if (!found) return null;
-  const image = found.node.deref("id");
-  if (found.output === "Alpha") {
-    draft.approximations.push(
-      `${input} comes from the alpha of ${image ? idName(image) : "an image"}, which the preview leaves out`,
-    );
-    return null;
-  }
-  if (found.changes.length > 0) {
-    const nodes = [...new Set(found.changes)].join(", ");
-    draft.approximations.push(
-      `${input} passes ${image ? idName(image) : "an image"} through ${nodes}, which the preview leaves out`,
-    );
-  }
-  return imageUse(graph, found.node);
+  noteChanges(draft, input, found);
+  return imageUse(graph, draft, found.node);
 }
 
-function uvTransformOf(mapping: BlendStruct): UvTransform | null {
-  const location = defaultVector(inputSocket(mapping, "Location"), [0, 0, 0]);
-  const rotation = defaultVector(inputSocket(mapping, "Rotation"), [0, 0, 0]);
-  const scale = defaultVector(inputSocket(mapping, "Scale"), [1, 1, 1]);
-  const transform: UvTransform = {
-    offset: [location[0] ?? 0, location[1] ?? 0],
-    scale: [scale[0] ?? 1, scale[1] ?? 1],
-    rotation: rotation[2] ?? 0,
-  };
-  const identity =
-    transform.offset[0] === 0 &&
-    transform.offset[1] === 0 &&
-    transform.scale[0] === 1 &&
-    transform.scale[1] === 1 &&
-    transform.rotation === 0;
-  return identity ? null : transform;
+/** One Mapping node's map, or null with a note on the draft when the preview cannot follow it. */
+function mappingStep(graph: ShaderGraph, draft: MaterialDraft, image: string, mapping: BlendStruct): Affine | null {
+  const values = { location: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  const sockets = { location: "Location", rotation: "Rotation", scale: "Scale" } as const;
+  for (const key of ["location", "rotation", "scale"] as const) {
+    const socket = inputSocket(mapping, sockets[key]);
+    if (!socket) continue;
+    const constant = constantOf(graph, socket);
+    if (!constant) {
+      const from = nodeLabel(linkedOutput(graph, socket)?.node ?? mapping);
+      draft.approximations.push(`${image}'s Mapping takes its ${key} from ${from}, shown without the Mapping`);
+      return null;
+    }
+    values[key] = values[key].map((value, index) => constant[index] ?? value);
+  }
+  const [x = 0, y = 0, z = 0] = values.location;
+  const [turnX = 0, turnY = 0, turnZ = 0] = values.rotation;
+  const [scaleX = 1, scaleY = 1, scaleZ = 1] = values.scale;
+  const type = mapping.number("custom1");
+  const affine = mappingAffine(type, [x, y, z], [turnX, turnY, turnZ], [scaleX, scaleY, scaleZ]);
+  if (!affine) draft.approximations.push(`${image}'s Mapping is of the Normal type, shown without the Mapping`);
+  return affine;
 }
 
-function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
+function imageUse(graph: ShaderGraph, draft: MaterialDraft, node: BlendStruct): ImageUse | null {
   const image = node.deref("id");
   if (!image) return null;
+  const name = idName(image);
   const storage = node.deref("storage");
   const extension = storage?.number("extension") ?? 0;
   const wrap = WRAPS[extension] ?? "repeat";
   let uvMap: string | null = null;
-  let transform: UvTransform | null = null;
   let coordinates: string | null = null;
-  let mapping: string | null = null;
-  let tilted = false;
-  let vector = linkInto(graph, inputSocket(node, "Vector") ?? node);
-  for (let depth = 0; vector && depth < 8; depth++) {
-    const type = nodeType(vector.node);
+  let affine: Affine = IDENTITY;
+  let mappings = 0;
+  let followed = true;
+  let source = linkedOutput(graph, inputSocket(node, "Vector"));
+  for (let depth = 0; source && depth < 16; depth++) {
+    const type = nodeType(source.node);
     if (type === "ShaderNodeUVMap") {
-      uvMap = vector.node.deref("storage")?.string("uv_map") || null;
+      uvMap = source.node.deref("storage")?.string("uv_map") || null;
       break;
     }
     if (type === "ShaderNodeMapping") {
-      mapping ??= MAPPING_TYPES[vector.node.number("custom1")] ?? null;
-      const [x = 0, y = 0] = defaultVector(inputSocket(vector.node, "Rotation"), [0, 0, 0]);
-      tilted ||= x !== 0 || y !== 0;
-      transform ??= uvTransformOf(vector.node);
-      vector = linkInto(graph, inputSocket(vector.node, "Vector") ?? vector.node);
+      const step = mappingStep(graph, draft, name, source.node);
+      mappings++;
+      if (step) affine = composeAffine(affine, step);
+      else followed = false;
+      source = linkedOutput(graph, inputSocket(source.node, "Vector"));
+      if (!source) {
+        draft.approximations.push(`${name}'s Mapping has no vector input, shown with the UV map`);
+        followed = false;
+      }
       continue;
     }
-    if (type === "NodeReroute") {
-      vector = linkInto(graph, vector.node.list("inputs")[0] ?? vector.node);
-      continue;
-    }
-    if (type !== "ShaderNodeTexCoord") coordinates = vector.node.string("name") || type;
-    else if (vector.socket !== "UV") coordinates = vector.socket;
+    if (type !== "ShaderNodeTexCoord") coordinates = nodeLabel(source.node);
+    else if (source.name !== "UV") coordinates = source.name;
     break;
+  }
+  let transform: UvTransform | null = null;
+  if (mappings > 0 && followed) {
+    const mapped = uvTransformOf(affine);
+    transform = mapped.transform;
+    if (mapped.skewed) draft.approximations.push(`${name}'s Mapping shears it, which the preview leaves out`);
   }
   const projection = PROJECTIONS[storage?.number("projection") ?? 0] ?? null;
   const interpolation = INTERPOLATIONS[storage?.number("interpolation") ?? 0] ?? null;
   const clipped = extension === EXTENSION_CLIP;
-  return { image, uvMap, wrap, transform, coordinates, clipped, projection, mapping, tilted, interpolation };
+  return { node, image, uvMap, wrap, transform, coordinates, clipped, projection, interpolation, alpha: "none" };
 }
 
-function graphOf(tree: BlendStruct): Graph {
-  return { nodes: tree.list("nodes"), links: tree.list("links") };
+function isOutput(node: BlendStruct): boolean {
+  return nodeType(node) === "ShaderNodeOutputMaterial";
 }
 
-function outputNode(graph: Graph): BlendStruct | null {
-  const outputs = graph.nodes.filter((node) => nodeType(node) === "ShaderNodeOutputMaterial");
-  return outputs.find((node) => (node.number("flag") & NODE_DO_OUTPUT) !== 0) ?? outputs[0] ?? null;
+/** Blender's `ntreeShaderOutputNode` for EEVEE: an output for EEVEE over one for all engines, the active one first. */
+function outputNode(graph: ShaderGraph): BlendStruct | null {
+  let chosen: BlendStruct | null = null;
+  const active = (node: BlendStruct) => (node.number("flag") & NODE_DO_OUTPUT) !== 0;
+  for (const node of graph.nodes) {
+    if (!isOutput(node)) continue;
+    const target = node.number("custom1");
+    if (target !== OUTPUT_FOR_ALL && target !== OUTPUT_FOR_EEVEE) continue;
+    const replaces =
+      chosen === null ||
+      (target === OUTPUT_FOR_EEVEE && chosen.number("custom1") === OUTPUT_FOR_ALL) ||
+      (target === chosen.number("custom1") && active(node) && !active(chosen));
+    if (replaces) chosen = node;
+  }
+  return chosen;
 }
 
 interface SurfaceShader {
   node: BlendStruct | null;
+  /** The shader input that reads a color or a value, which Blender shows as light, or null where a shader feeds it. */
+  emitted: BlendStruct | null;
   /** How much of the surface is not a Transparent BSDF, from the mix and add shaders that lead to it. */
   alpha: number;
+  /** Image alphas that mix the surface with a Transparent BSDF. */
+  alphaImages: ImageAlpha[];
   /** What the preview shows differently from Blender's shader mix. */
   notes: string[];
+}
+
+function isTransparent(graph: ShaderGraph, socket: BlendStruct | null): boolean {
+  const source = linkedOutput(graph, socket);
+  return source !== null && nodeType(source.node) === "ShaderNodeBsdfTransparent";
 }
 
 /**
  * The shader the output's surface shows most of, looking through mix and add shaders, which weigh their inputs. A
  * Transparent BSDF in the mix makes the surface see-through rather than becoming the shader.
  */
-function surfaceShader(graph: Graph, output: BlendStruct): SurfaceShader {
-  const leaves: { node: BlendStruct; weight: number }[] = [];
+function surfaceShader(graph: ShaderGraph, output: BlendStruct): SurfaceShader {
+  const leaves: { node: BlendStruct; weight: number; emitted: BlendStruct | null }[] = [];
   const notes: string[] = [];
+  const alphaImages: ImageAlpha[] = [];
   let transparent = 0;
-  const visit = (node: BlendStruct | null, weight: number, depth: number) => {
-    if (!node || weight <= 0 || depth > 16) return;
+  const visit = (socket: BlendStruct | null, weight: number, depth: number) => {
+    const source = linkedOutput(graph, socket);
+    if (!socket || !source || weight <= 0 || depth > 16) return;
+    const node = source.node;
     const type = nodeType(node);
     const inputs = node.list("inputs");
-    if (type === "ShaderNodeMixShader") {
-      const fac = inputs[0] ?? null;
-      const linked = fac !== null && linkInto(graph, fac) !== null;
-      if (linked) notes.push(`${node.string("name") || "A Mix Shader"} mixes by nodes, shown half and half`);
-      const factor = fac && !linked ? clamp01(defaultFloat(fac, 0.5)) : 0.5;
-      visit(linkInto(graph, inputs[1] ?? node)?.node ?? null, weight * (1 - factor), depth + 1);
-      visit(linkInto(graph, inputs[2] ?? node)?.node ?? null, weight * factor, depth + 1);
+    const [first = null, second = null, third = null] = inputs;
+    const emitted = socketType(source.socket) !== SocketType.shader;
+    if (emitted || type === "ShaderNodeEmission") {
+      const toon = toonSource(graph, emitted ? socket : inputSocket(node, "Color"));
+      if (toon) {
+        const shader = emitted ? "Its surface" : nodeLabel(node);
+        notes.push(`${shader} takes its color from ${nodeLabel(toon)}, shown as the shader it reads`);
+        visit(inputSocket(toon, "Shader"), weight, depth + 1);
+      } else leaves.push({ node, weight, emitted: emitted ? socket : null });
+    } else if (type === "ShaderNodeMixShader") {
+      const mix: AlphaSource = first ? alphaSource(graph, first) : { kind: "constant", value: 0.5 };
+      if (mix.kind === "image" && isTransparent(graph, second)) {
+        alphaImages.push(mix);
+        visit(third, weight, depth + 1);
+        return;
+      }
+      if (mix.kind !== "constant") notes.push(`${nodeLabel(node)} mixes by nodes, shown half and half`);
+      const factor = mix.kind === "constant" ? mix.value : 0.5;
+      visit(second, weight * (1 - factor), depth + 1);
+      visit(third, weight * factor, depth + 1);
     } else if (type === "ShaderNodeAddShader") {
-      for (const input of inputs) visit(linkInto(graph, input)?.node ?? null, weight, depth + 1);
+      const shaders = [first, second];
+      const clear = shaders.filter((shader) => isTransparent(graph, shader));
+      const lit = shaders.filter((shader) => linkedOutput(graph, shader) && !isTransparent(graph, shader));
+      if (clear.length > 0 && lit.length > 0) {
+        notes.push(`${nodeLabel(node)} adds a Transparent BSDF, which the preview leaves out`);
+      }
+      for (const shader of lit.length > 0 ? lit : shaders) visit(shader, weight, depth + 1);
     } else if (type === "ShaderNodeBsdfTransparent") {
       transparent += weight;
+    } else if (type === "ShaderNodeHoldout") {
+      transparent += weight;
+      notes.push(`${nodeLabel(node)} hides what is behind it too, shown see-through`);
     } else {
-      leaves.push({ node, weight });
+      leaves.push({ node, weight, emitted: null });
     }
   };
-  visit(linkInto(graph, inputSocket(output, "Surface") ?? output)?.node ?? null, 1, 0);
-  const strongest = leaves.reduce<{ node: BlendStruct; weight: number } | null>(
+  visit(inputSocket(output, "Surface"), 1, 0);
+  const strongest = leaves.reduce<(typeof leaves)[number] | null>(
     (best, leaf) => (best === null || leaf.weight > best.weight ? leaf : best),
     null,
   );
   if (leaves.length > 1 && strongest) {
     notes.push(`${leaves.length} shaders mix, shown as ${strongest.node.string("name") || "the strongest"}`);
   }
-  return { node: strongest?.node ?? null, alpha: clamp01(1 - transparent), notes };
+  return {
+    node: strongest?.node ?? null,
+    emitted: strongest?.emitted ?? null,
+    alpha: clamp01(1 - transparent),
+    alphaImages,
+    notes,
+  };
 }
 
-function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): void {
+/** The Shader to RGB node a color comes from without an image, as toon shading does. */
+function toonSource(graph: ShaderGraph, color: BlendStruct | null): BlendStruct | null {
+  if (!color || imageFeeding(graph, color)) return null;
+  return upstreamNode(graph, color, "ShaderNodeShaderToRGB");
+}
+
+/** A Math node that clips alpha: the input it compares, and the cutoff it keeps the input above or, unless strict, at. */
+interface AlphaClip {
+  input: BlendStruct;
+  cutoff: number;
+  strict: boolean;
+}
+
+function alphaClip(graph: ShaderGraph, socket: BlendStruct): AlphaClip | null {
+  const source = linkedOutput(graph, socket);
+  if (!source || nodeType(source.node) !== "ShaderNodeMath") return null;
+  const operation = source.node.number("custom1");
+  const [a, b] = source.node.list("inputs");
+  if (!a || !b) return null;
+  const constantA = constantOf(graph, a)?.[0];
+  const constantB = constantOf(graph, b)?.[0];
+  if (operation === MATH_GREATER_THAN && constantA === undefined && constantB !== undefined) {
+    return { input: a, cutoff: constantB, strict: true };
+  }
+  if (operation === MATH_LESS_THAN && constantA !== undefined && constantB === undefined) {
+    return { input: b, cutoff: constantA, strict: true };
+  }
+  if (operation === MATH_ROUND && constantA === undefined) return { input: a, cutoff: 0.5, strict: false };
+  if (operation !== MATH_SUBTRACT || constantA !== 1 || constantB !== undefined) return null;
+  const inner = linkedOutput(graph, b);
+  if (!inner || nodeType(inner.node) !== "ShaderNodeMath") return null;
+  const [x, y] = inner.node.list("inputs");
+  if (!x || !y) return null;
+  const constantX = constantOf(graph, x)?.[0];
+  const constantY = constantOf(graph, y)?.[0];
+  const innerOperation = inner.node.number("custom1");
+  if (innerOperation === MATH_LESS_THAN && constantX === undefined && constantY !== undefined) {
+    return { input: x, cutoff: constantY, strict: false };
+  }
+  if (innerOperation === MATH_GREATER_THAN && constantX !== undefined && constantY === undefined) {
+    return { input: y, cutoff: constantX, strict: false };
+  }
+  return null;
+}
+
+/** A Math node that multiplies an input by a constant, as glTF's alpha factor does. */
+function scaledBy(graph: ShaderGraph, socket: BlendStruct): { input: BlendStruct; factor: number } | null {
+  const source = linkedOutput(graph, socket);
+  if (!source || nodeType(source.node) !== "ShaderNodeMath" || source.node.number("custom1") !== MATH_MULTIPLY) {
+    return null;
+  }
+  const [a, b] = source.node.list("inputs");
+  if (!a || !b) return null;
+  const constantA = constantOf(graph, a)?.[0];
+  const constantB = constantOf(graph, b)?.[0];
+  if (constantA !== undefined && constantB === undefined) return { input: b, factor: constantA };
+  if (constantB !== undefined && constantA === undefined) return { input: a, factor: constantB };
+  return null;
+}
+
+/** A Math node that multiplies an input by a constant from 0 to 1, as glTF's importer builds its factors. */
+function unitScaledBy(graph: ShaderGraph, socket: BlendStruct): { input: BlendStruct; factor: number } | null {
+  const scaled = scaledBy(graph, socket);
+  return scaled && scaled.factor >= 0 && scaled.factor <= 1 ? scaled : null;
+}
+
+/** A Mix node that multiplies a color by a constant color at full factor, as glTF's importer builds a color factor. */
+function colorScaledBy(graph: ShaderGraph, socket: BlendStruct): { input: BlendStruct; factor: number[] } | null {
+  const source = linkedOutput(graph, socket);
+  if (!source) return null;
+  const node = source.node;
+  const type = nodeType(node);
+  const mix = type === "ShaderNodeMix" ? node.deref("storage") : null;
+  if (mix && mix.number("data_type") !== SocketType.color) return null;
+  const sockets =
+    type === "ShaderNodeMix"
+      ? [inputSocket(node, "Factor_Float"), inputSocket(node, "A_Color"), inputSocket(node, "B_Color")]
+      : type === "ShaderNodeMixRGB"
+        ? [inputSocket(node, "Fac"), inputSocket(node, "Color1"), inputSocket(node, "Color2")]
+        : [];
+  const [factor = null, a = null, b = null] = sockets;
+  const blend = mix ? mix.number("blend_type") : node.number("custom1");
+  if (!a || !b || blend !== MIX_MULTIPLY || constantOf(graph, factor)?.[0] !== 1) return null;
+  const constantA = constantOf(graph, a);
+  const constantB = constantOf(graph, b);
+  if (constantA && !constantB) return { input: b, factor: constantA };
+  if (constantB && !constantA) return { input: a, factor: constantB };
+  return null;
+}
+
+function sameImageNode(a: FedImage | null, b: FedImage | null): boolean {
+  return a !== null && b !== null && a.node.offset === b.node.offset;
+}
+
+/** An image's alpha that drives a material's alpha, times a factor and, for a cutout, compared with a cutoff. */
+interface ImageAlpha {
+  found: FedImage;
+  factor: number;
+  cutoff: number | null;
+}
+
+/** Where an alpha comes from: a constant, an image's alpha, or other nodes, named for a note. */
+type AlphaSource =
+  | { kind: "constant"; value: number }
+  | ({ kind: "image" } & ImageAlpha)
+  | { kind: "nodes"; from: string };
+
+/**
+ * Where an alpha input or a Mix Shader's factor comes from: a constant, or an image's alpha, scaled by a constant and
+ * clipped at a cutoff as glTF's importer builds them, or else other nodes. A clip of the alpha times a factor keeps the
+ * texels whose alpha reaches the cutoff divided by the factor, and a clip that keeps every texel is a constant.
+ */
+function alphaSource(graph: ShaderGraph, socket: BlendStruct): AlphaSource {
+  const constant = constantOf(graph, socket);
+  if (constant) return { kind: "constant", value: clamp01(constant[0] ?? 1) };
+  const clip = alphaClip(graph, socket);
+  const compared = clip?.input ?? socket;
+  const scaled = clip ? scaledBy(graph, compared) : unitScaledBy(graph, compared);
+  const factor = scaled && (!clip || scaled.factor > 0) ? scaled : null;
+  const found = imageFeeding(graph, factor?.input ?? compared);
+  const source = linkedOutput(graph, socket);
+  const other: AlphaSource = {
+    kind: "nodes",
+    from: found ? imageName(found) : source ? nodeLabel(source.node) : "nodes",
+  };
+  if (found?.output !== "Alpha") return other;
+  const scale = factor?.factor ?? 1;
+  if (!clip) return { kind: "image", found, factor: scale, cutoff: null };
+  if (found.changes.length > 0) return other;
+  const cutoff = clip.cutoff / scale + (clip.strict ? STRICT : 0);
+  if (cutoff <= 0) return { kind: "constant", value: 1 };
+  return { kind: "image", found, factor: 1, cutoff };
+}
+
+function samplingOf(use: ImageUse): string {
+  return JSON.stringify([
+    use.uvMap,
+    use.wrap,
+    use.transform,
+    use.coordinates,
+    use.clipped,
+    use.projection,
+    use.interpolation,
+  ]);
+}
+
+/** Whether an Image Texture node samples the base color's image where the base color does, as the preview's alpha. */
+function samplesBase(graph: ShaderGraph, draft: MaterialDraft, found: FedImage): boolean {
+  const base = draft.baseColorImage;
+  const use = base ? imageUse(graph, defaultMaterial(), found.node) : null;
+  return (
+    base !== null && use !== null && use.image.offset === base.image.offset && samplingOf(use) === samplingOf(base)
+  );
+}
+
+/**
+ * Takes the material's alpha from its base color image's alpha, scaled or clipped as `alpha` says. A cutout shows the
+ * texels it keeps opaque.
+ */
+function useImageAlpha(draft: MaterialDraft, alpha: ImageAlpha): void {
+  if (alpha.found.changes.length > 0) {
+    const nodes = [...new Set(alpha.found.changes)].join(", ");
+    const image = imageName(alpha.found);
+    draft.approximations.push(`Alpha passes ${image}'s alpha through ${nodes}, which the preview leaves out`);
+  }
+  if (draft.baseColorImage) draft.baseColorImage.alpha = "opacity";
+  if (alpha.cutoff === null) {
+    draft.baseColor[3] *= alpha.factor;
+    draft.alphaMode = "blend";
+    return;
+  }
+  const kept = draft.baseColor[3];
+  if (kept < 1) draft.approximations.push(`Alpha is ${Math.round(kept * 100) / 100} inside the cutout, shown opaque`);
+  draft.baseColor[3] = 1;
+  draft.alphaMode = "mask";
+  draft.alphaCutoff = alpha.cutoff;
+}
+
+/** The Principled BSDF's alpha, or a note where the preview cannot show it. */
+function readAlpha(graph: ShaderGraph, draft: MaterialDraft, socket: BlendStruct | null): void {
+  const source: AlphaSource = socket ? alphaSource(graph, socket) : { kind: "constant", value: 1 };
+  if (source.kind === "constant") {
+    draft.baseColor[3] = source.value;
+    if (source.value < 1) draft.alphaMode = "blend";
+  } else if (source.kind === "image" && samplesBase(graph, draft, source.found)) {
+    useImageAlpha(draft, source);
+  } else {
+    const from = source.kind === "image" ? imageName(source.found) : source.from;
+    draft.approximations.push(`Alpha comes from ${from}, which the preview leaves out`);
+  }
+}
+
+/** An image the input reads times a constant color, as glTF's importer builds a base color or emissive factor. */
+function factoredImage(graph: ShaderGraph, socket: BlendStruct | null): { found: FedImage; factor: number[] } | null {
+  const scaled = socket ? colorScaledBy(graph, socket) : null;
+  const found = imageFeeding(graph, scaled?.input ?? socket);
+  return found ? { found, factor: scaled?.factor ?? [1, 1, 1] } : null;
+}
+
+const SCALAR_SOCKETS: ReadonlySet<number> = new Set([SocketType.float, SocketType.int, SocketType.boolean]);
+
+/** Whether an Image Texture node's color, not only its alpha, reaches a socket through pass-through nodes. */
+function readsColorOf(
+  graph: ShaderGraph,
+  socket: BlendStruct,
+  image: BlendStruct,
+  seen = new Set<number>(),
+  depth = 0,
+): boolean {
+  const source = linkedOutput(graph, socket);
+  if (!source || depth > 16) return false;
+  if (source.node.offset === image.offset) return source.name !== "Alpha";
+  if (seen.has(source.node.offset) || !PASS_THROUGH.has(nodeType(source.node))) return false;
+  seen.add(source.node.offset);
+  return source.node.list("inputs").some((input) => readsColorOf(graph, input, image, seen, depth + 1));
+}
+
+/**
+ * Whether an image reaches an input as one value: from a node that outputs one, or from the image's alpha without
+ * its color.
+ */
+function arrivesAsValue(graph: ShaderGraph, found: FedImage): boolean {
+  const [nearest] = found.via;
+  if (!nearest) return found.output === "Alpha";
+  if (SCALAR_SOCKETS.has(socketType(nearest.socket))) return true;
+  const inputs = nearest.node.list("inputs");
+  return found.output === "Alpha" && !inputs.some((input) => readsColorOf(graph, input, found.node));
+}
+
+/**
+ * The image a color input samples, unless the input gets one value from it, such as one channel, the brightness or
+ * the alpha, which it notes on the draft instead.
+ */
+function colorImage(graph: ShaderGraph, draft: MaterialDraft, input: string, found: FedImage | null): ImageUse | null {
+  if (!found) return null;
+  const channel = channelOf(found);
+  const brightness = found.via.some((step) => nodeType(step.node) === "ShaderNodeRGBToBW");
+  const value = arrivesAsValue(graph, found);
+  if (!value && (found.changes.length > 0 || (!channel && !brightness))) return imageInput(graph, draft, input, found);
+  const what = channel ? channelName(channel) : "the brightness";
+  const through = found.changes.length > 0 ? ` through ${[...new Set(found.changes)].join(", ")}` : "";
+  draft.approximations.push(
+    `${input} comes from ${what} of ${imageName(found)}${through}, which the preview leaves out`,
+  );
+  return null;
+}
+
+function noteChanges(draft: MaterialDraft, input: string, found: FedImage): void {
+  if (found.changes.length === 0) return;
+  const nodes = [...new Set(found.changes)].join(", ");
+  draft.approximations.push(`${input} passes ${imageName(found)} through ${nodes}, which the preview leaves out`);
+}
+
+/**
+ * Roughness in green and metalness in blue of one image, each times a constant as glTF's importer builds its factors,
+ * which the preview reads as a packed image.
+ */
+function readPacked(
+  graph: ShaderGraph,
+  draft: MaterialDraft,
+  metallicSocket: BlendStruct | null,
+  roughnessSocket: BlendStruct | null,
+): boolean {
+  const metallicScaled = metallicSocket ? unitScaledBy(graph, metallicSocket) : null;
+  const roughnessScaled = roughnessSocket ? unitScaledBy(graph, roughnessSocket) : null;
+  const metallic = imageFeeding(graph, metallicScaled?.input ?? metallicSocket);
+  const roughness = imageFeeding(graph, roughnessScaled?.input ?? roughnessSocket);
+  const packed =
+    metallic !== null &&
+    roughness !== null &&
+    sameImageNode(metallic, roughness) &&
+    channelOf(metallic)?.index === BLUE &&
+    channelOf(roughness)?.index === GREEN;
+  if (!packed) return false;
+  noteChanges(draft, "Roughness", roughness);
+  noteChanges(draft, "Metallic", metallic);
+  draft.metallicRoughnessImage = imageUse(graph, draft, metallic.node);
+  draft.metallic = metallicScaled?.factor ?? 1;
+  draft.roughness = roughnessScaled?.factor ?? 1;
+  return true;
+}
+
+function readPrincipled(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft): void {
   const baseSocket = inputSocket(node, "Base Color");
-  const color = defaultVector(baseSocket, [0.8, 0.8, 0.8, 1]);
+  const base = factoredImage(graph, baseSocket);
+  draft.baseColorImage = colorImage(graph, draft, "Base color", base?.found ?? null);
+  const color = draft.baseColorImage ? (base?.factor ?? [1, 1, 1]) : inputValue(graph, baseSocket, [0.8, 0.8, 0.8, 1]);
   draft.baseColor = [color[0] ?? 0.8, color[1] ?? 0.8, color[2] ?? 0.8, 1];
-  const baseImage = imageFeeding(graph, baseSocket);
-  draft.baseColorImage = imageInput(graph, draft, "Base color", baseImage);
-  noteNodeInput(graph, draft, "Base color", baseSocket, baseImage);
+  noteNodeInput(graph, draft, "Base color", baseSocket, base?.found ?? null);
 
   const metallicSocket = inputSocket(node, "Metallic");
   const roughnessSocket = inputSocket(node, "Roughness");
-  draft.metallic = clamp01(defaultFloat(metallicSocket, 0));
-  draft.roughness = clamp01(defaultFloat(roughnessSocket, 0.5));
+  draft.metallic = clamp01(scalarOf(graph, metallicSocket, 0));
+  draft.roughness = clamp01(scalarOf(graph, roughnessSocket, 0.5));
   const metallicImage = imageFeeding(graph, metallicSocket);
   const roughnessImage = imageFeeding(graph, roughnessSocket);
-  const separated = (found: typeof metallicImage, channel: string) =>
-    found?.via[0]?.startsWith("ShaderNodeSeparate") === true && found.via[0].endsWith(`:${channel}`);
-  if (
-    metallicImage &&
-    roughnessImage &&
-    metallicImage.node.offset === roughnessImage.node.offset &&
-    (separated(metallicImage, "Blue") || separated(metallicImage, "B")) &&
-    (separated(roughnessImage, "Green") || separated(roughnessImage, "G"))
-  ) {
-    draft.metallicRoughnessImage = imageInput(graph, draft, "Metallic and roughness", metallicImage);
-  } else {
-    draft.roughnessImage = channelImage(graph, draft, "Roughness", roughnessImage, ["Green", "G"]);
-    draft.metalnessImage = channelImage(graph, draft, "Metallic", metallicImage, ["Blue", "B"]);
+  if (!readPacked(graph, draft, metallicSocket, roughnessSocket)) {
+    draft.roughnessImage = channelImage(graph, draft, "Roughness", roughnessImage, GREEN);
+    draft.metalnessImage = channelImage(graph, draft, "Metallic", metallicImage, BLUE);
+    noteNodeInput(graph, draft, "Roughness", roughnessSocket, roughnessImage);
+    noteNodeInput(graph, draft, "Metallic", metallicSocket, metallicImage);
   }
-  noteNodeInput(graph, draft, "Roughness", roughnessSocket, roughnessImage);
-  noteNodeInput(graph, draft, "Metallic", metallicSocket, metallicImage);
 
-  const normalLink = linkInto(graph, inputSocket(node, "Normal") ?? node);
-  const normalSpace = normalLink?.node.deref("storage")?.number("space") ?? TANGENT_SPACE;
-  if (normalLink && nodeType(normalLink.node) === "ShaderNodeNormalMap" && normalSpace !== TANGENT_SPACE) {
+  const normal = linkedOutput(graph, inputSocket(node, "Normal"));
+  const normalSpace = normal?.node.deref("storage")?.number("space") ?? TANGENT_SPACE;
+  if (normal && nodeType(normal.node) === "ShaderNodeNormalMap" && normalSpace !== TANGENT_SPACE) {
     const space = NORMAL_SPACES[normalSpace] ?? "non-tangent";
     draft.approximations.push(`Its normal map is in ${space} space, which the preview leaves out`);
-  } else if (normalLink && nodeType(normalLink.node) === "ShaderNodeNormalMap") {
-    const strength = inputSocket(normalLink.node, "Strength");
-    const colorSocket = inputSocket(normalLink.node, "Color");
+  } else if (normal && nodeType(normal.node) === "ShaderNodeNormalMap") {
+    const colorSocket = inputSocket(normal.node, "Color");
     const image = imageFeeding(graph, colorSocket);
-    if (image) {
-      draft.normalImage = imageInput(graph, draft, "Normal", image);
-      draft.normalScale = defaultFloat(strength, 1);
-    }
+    draft.normalImage = colorImage(graph, draft, "Normal", image);
+    if (draft.normalImage) draft.normalScale = scalarOf(graph, inputSocket(normal.node, "Strength"), 1);
     noteNodeInput(graph, draft, "Normal map color", colorSocket, image);
-  } else if (normalLink) {
-    const name = normalLink.node.string("name") || nodeType(normalLink.node);
-    draft.approximations.push(`Normal comes from ${name}, which the preview leaves out`);
+  } else if (normal) {
+    draft.approximations.push(`Normal comes from ${nodeLabel(normal.node)}, which the preview leaves out`);
   }
 
   const emissionSocket = inputSocket(node, "Emission Color", "Emission");
-  const emission = defaultVector(emissionSocket, [0, 0, 0, 1]);
   const strengthSocket = inputSocket(node, "Emission Strength");
-  const strength = strengthSocket ? defaultFloat(strengthSocket, 1) : 1;
-  const emissionImage = imageFeeding(graph, emissionSocket);
-  draft.emissive = [(emission[0] ?? 0) * strength, (emission[1] ?? 0) * strength, (emission[2] ?? 0) * strength];
-  draft.emissionStrength = strength;
-  if (emissionImage && strength > 0) draft.emissiveImage = imageInput(graph, draft, "Emission", emissionImage);
-  noteNodeInput(graph, draft, "Emission", emissionSocket, emissionImage);
+  const strength = strengthSocket ? scalarOf(graph, strengthSocket, 1) : 1;
+  const emission = factoredImage(graph, emissionSocket);
+  draft.emissiveImage = strength > 0 ? colorImage(graph, draft, "Emission", emission?.found ?? null) : null;
+  const emissionColor = draft.emissiveImage
+    ? (emission?.factor ?? [1, 1, 1])
+    : inputValue(graph, emissionSocket, [0, 0, 0, 1]);
+  draft.emissive = [0, 1, 2].map((index) => (emissionColor[index] ?? 0) * strength) as Vec3;
+  if (strength !== 0) noteNodeInput(graph, draft, "Emission", emissionSocket, emission?.found ?? null);
   noteNodeInput(graph, draft, "Emission strength", strengthSocket, null);
 
-  const alphaSocket = inputSocket(node, "Alpha");
-  const alpha = clamp01(defaultFloat(alphaSocket, 1));
-  draft.baseColor[3] = alpha;
-  const alphaLinked = linkInto(graph, alphaSocket ?? node) !== null;
-  if (alpha < 1 || alphaLinked) draft.alphaMode = "blend";
-  const alphaImage = imageFeeding(graph, alphaSocket);
-  const fromBaseImage =
-    alphaImage !== null &&
-    alphaImage.node.offset === baseImage?.node.offset &&
-    alphaImage.output === "Alpha" &&
-    alphaImage.via.length === 0;
-  if (alphaLinked && !fromBaseImage) {
-    const image = alphaImage?.node.deref("id");
-    const source = image ? idName(image) : "nodes";
-    draft.approximations.push(`Alpha comes from ${source}, which the preview leaves out`);
+  readAlpha(graph, draft, inputSocket(node, "Alpha"));
+}
+
+/**
+ * The channel of an image a scalar input reads: a Separate node's output, with the index of the color channel it is,
+ * or the image's alpha, with no index; null for its color.
+ */
+function channelOf(found: FedImage | null): { name: string; index: number | null } | null {
+  if (!found) return null;
+  const separate = found.via.find((step) => SEPARATES.has(nodeType(step.node)));
+  if (separate) {
+    const mode =
+      nodeType(separate.node) === "ShaderNodeSeparateColor"
+        ? separate.node.deref("storage")?.number("mode")
+        : SEPARATE_RGB;
+    const named = SEPARATED_CHANNELS[mode ?? SEPARATE_RGB];
+    const index = CHANNEL_INDEX[separate.output] ?? null;
+    if (named) return { name: named[index ?? -1] ?? separate.output, index: null };
+    return { name: separate.output, index };
   }
+  return found.output === "Alpha" ? { name: "Alpha", index: null } : null;
 }
 
 /**
@@ -481,55 +815,100 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
  * roughness and blue for metallic, which it notes on the draft instead.
  */
 function channelImage(
-  graph: Graph,
+  graph: ShaderGraph,
   draft: MaterialDraft,
   input: string,
   found: FedImage | null,
-  readable: readonly string[],
+  readable: number,
 ): ImageUse | null {
   if (!found) return null;
-  const [separate] = found.via;
-  const channel = separate?.startsWith("ShaderNodeSeparate") ? separate.slice(separate.indexOf(":") + 1) : null;
-  if (channel === null || readable.includes(channel)) return imageInput(graph, draft, input, found);
-  const image = found.node.deref("id");
-  const name = image ? idName(image) : "an image";
-  draft.approximations.push(`${input} comes from the ${channel} channel of ${name}, which the preview leaves out`);
+  const channel = channelOf(found);
+  if (channel === null || channel.index === readable) return imageInput(graph, draft, input, found);
+  const what = channelName(channel);
+  draft.approximations.push(`${input} comes from ${what} of ${imageName(found)}, which the preview leaves out`);
   return null;
 }
 
-function readSimpleShader(graph: Graph, node: BlendStruct, draft: MaterialDraft): void {
+function channelName(channel: { name: string }): string {
+  return channel.name === "Alpha" ? "the alpha" : `the ${channel.name} channel`;
+}
+
+function readSimpleShader(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft): void {
   const type = nodeType(node);
+  const emits = type === "ShaderNodeEmission";
   const colorSocket = inputSocket(node, "Color");
-  const color = defaultVector(colorSocket, [0.8, 0.8, 0.8, 1]);
-  const image = imageFeeding(graph, colorSocket);
-  noteNodeInput(graph, draft, "Color", colorSocket, image);
-  if (type === "ShaderNodeEmission") {
-    const strength = defaultFloat(inputSocket(node, "Strength"), 1);
+  const fed = factoredImage(graph, colorSocket);
+  const image = colorImage(graph, draft, emits ? "Emission" : "Base color", fed?.found ?? null);
+  const color = image ? (fed?.factor ?? [1, 1, 1]) : inputValue(graph, colorSocket, [0.8, 0.8, 0.8, 1]);
+  noteNodeInput(graph, draft, "Color", colorSocket, fed?.found ?? null);
+  if (emits) {
+    const strengthSocket = inputSocket(node, "Strength");
+    const strength = scalarOf(graph, strengthSocket, 1);
+    noteNodeInput(graph, draft, "Strength", strengthSocket, null);
     draft.baseColor = [0, 0, 0, 1];
-    draft.emissiveImage = imageInput(graph, draft, "Emission", image);
-    draft.emissionStrength = strength;
-    draft.emissive = [(color[0] ?? 0) * strength, (color[1] ?? 0) * strength, (color[2] ?? 0) * strength];
+    draft.emissiveImage = image;
+    draft.emissive = [0, 1, 2].map((index) => (color[index] ?? 0) * strength) as Vec3;
     return;
   }
   draft.baseColor = [color[0] ?? 0.8, color[1] ?? 0.8, color[2] ?? 0.8, 1];
-  draft.baseColorImage = imageInput(graph, draft, "Base color", image);
+  draft.baseColorImage = image;
   const roughness = inputSocket(node, "Roughness");
   if (type === "ShaderNodeBsdfDiffuse") draft.roughness = 1;
-  else if (roughness) draft.roughness = clamp01(defaultFloat(roughness, 0.5));
+  else if (roughness) draft.roughness = clamp01(scalarOf(graph, roughness, 0.5));
   draft.metallic = type === "ShaderNodeBsdfGlossy" || type === "ShaderNodeBsdfAnisotropic" ? 1 : 0;
 }
 
 /**
- * A surface no shader draws, which Blender leaves out when a volume fills the object and otherwise renders black.
+ * A color or a value that `node` puts where a shader is expected, which Blender shows as the light of an Emission
+ * shader of strength 1. Other nodes that drive it leave the material's own color, with a note on the draft.
  */
-function emptySurface(graph: Graph, output: BlendStruct, draft: MaterialDraft): void {
-  if (linkInto(graph, inputSocket(output, "Volume") ?? output)) {
-    draft.approximations.push("Only its volume renders, which the preview leaves out");
-    return;
+function readEmitted(graph: ShaderGraph, socket: BlendStruct, node: BlendStruct, draft: MaterialDraft): void {
+  const found = imageFeeding(graph, socket);
+  const image = colorImage(graph, draft, "Emission", found);
+  const constant = constantOf(graph, socket, SocketType.color);
+  if (image || constant) {
+    draft.baseColor = [0, 0, 0, 1];
+    draft.metallic = 0;
+    draft.emissiveImage = image;
+    draft.emissive = image ? [1, 1, 1] : [constant?.[0] ?? 0, constant?.[1] ?? 0, constant?.[2] ?? 0];
+  } else if (!found) {
+    draft.approximations.push(`Its surface emits the output of ${nodeLabel(node)}, which the preview leaves out`);
   }
-  draft.baseColor = [0, 0, 0, draft.baseColor[3] ?? 1];
+}
+
+/** What EEVEE shows of a material whose output has no surface: black, or nothing where a volume fills it. */
+function readNoSurface(draft: MaterialDraft, volume: boolean): void {
+  draft.baseColor = [0, 0, 0, volume ? 0 : 1];
   draft.metallic = 0;
   draft.roughness = 1;
+  if (volume) draft.alphaMode = "blend";
+}
+
+function noteImages(draft: MaterialDraft): void {
+  const colorImages = new Set([draft.baseColorImage, draft.emissiveImage]);
+  for (const use of imageUses(draft)) {
+    const name = idName(use.image);
+    const source = use.image.has("source") ? use.image.number("source") : IMAGE_SOURCE_FILE;
+    if (source !== IMAGE_SOURCE_FILE && !packedFile(use.image)) {
+      const kind = IMAGE_SOURCES[source] ?? "not an image file";
+      draft.approximations.push(`${name} is ${kind}, which the preview leaves out`);
+    }
+    if (source === IMAGE_SOURCE_TILED && use.image.list("packedfiles").length > 1) {
+      draft.approximations.push(`${name} is a UDIM tiled image, shown with its first tile`);
+    }
+    if (use.coordinates) {
+      draft.approximations.push(`${name} uses ${use.coordinates} coordinates, shown with the UV map`);
+    }
+    if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
+    if (use.projection) draft.approximations.push(`${name} uses ${use.projection} projection, shown flat`);
+    if (use.interpolation) draft.approximations.push(`${name} uses ${use.interpolation} interpolation, shown Linear`);
+    const space = use.image.struct("colorspace_settings")?.string("name") ?? "";
+    if (colorImages.has(use) && space !== "sRGB" && space !== "") {
+      draft.approximations.push(`${name} is ${space}, shown as sRGB`);
+    } else if (!colorImages.has(use) && !RAW_SPACES.has(space) && !space.startsWith("Linear ")) {
+      draft.approximations.push(`${name} is ${space}, shown as Non-Color`);
+    }
+  }
 }
 
 /**
@@ -546,62 +925,90 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
   const tree = material.deref("nodetree");
   const usesNodes = version >= 500 || !material.has("use_nodes") || material.number("use_nodes") !== 0;
   const graph = tree && usesNodes ? graphOf(tree) : null;
-  const output = graph ? outputNode(graph) : null;
-  if (graph && output) {
-    const surface = surfaceShader(graph, output);
-    if (surface.node && nodeType(surface.node) === "ShaderNodeBsdfPrincipled")
-      readPrincipled(graph, surface.node, draft);
-    else if (surface.node) {
+  if (graph) {
+    const output = outputNode(graph);
+    if (!output && graph.nodes.some((node) => node.number("custom1") === OUTPUT_FOR_CYCLES && isOutput(node))) {
+      draft.approximations.push("Its output is for Cycles only, shown black as EEVEE renders it");
+    }
+    const surface = output ? surfaceShader(graph, output) : null;
+    const volume = output ? linkedOutput(graph, inputSocket(output, "Volume")) : null;
+    if (!surface?.node) readNoSurface(draft, volume !== null);
+    else if (surface.emitted) readEmitted(graph, surface.emitted, surface.node, draft);
+    else if (nodeType(surface.node) === "ShaderNodeBsdfPrincipled") readPrincipled(graph, surface.node, draft);
+    else {
       readSimpleShader(graph, surface.node, draft);
       if (!SIMPLE_SHADERS.has(nodeType(surface.node))) {
-        const label = surface.node.string("name") || nodeType(surface.node);
-        draft.approximations.push(`Its surface is ${label}, shown as a plain shader of its color`);
+        draft.approximations.push(`Its surface is ${nodeLabel(surface.node)}, shown as a plain shader of its color`);
       }
-    } else if (surface.alpha === 1) emptySurface(graph, output, draft);
-    draft.approximations.push(...surface.notes);
-    const displacement = linkInto(graph, inputSocket(output, "Displacement") ?? output);
+    }
+    if (volume) {
+      draft.approximations.push(`Its volume comes from ${nodeLabel(volume.node)}, which the preview leaves out`);
+    }
+    const displacement = output ? linkedOutput(graph, inputSocket(output, "Displacement")) : null;
     if (displacement) {
-      const name = displacement.node.string("name") || nodeType(displacement.node);
-      draft.approximations.push(`Displacement comes from ${name}, which the preview leaves out`);
+      draft.approximations.push(
+        `Displacement comes from ${nodeLabel(displacement.node)}, which the preview leaves out`,
+      );
     }
-    if (surface.alpha < 1) {
-      draft.baseColor[3] *= surface.alpha;
-      draft.alphaMode = "blend";
-    }
-  }
-
-  for (const use of imageUses(draft)) {
-    const name = idName(use.image);
-    const source = use.image.has("source") ? use.image.number("source") : IMAGE_SOURCE_FILE;
-    if (source !== IMAGE_SOURCE_FILE && (source === IMAGE_SOURCE_TILED || !packedFile(use.image))) {
-      const kind = IMAGE_SOURCES[source] ?? "non-file";
-      draft.approximations.push(`${name} is a ${kind} image, which the preview leaves out`);
-    }
-    if (use.coordinates) {
-      draft.approximations.push(`${name} uses ${use.coordinates} coordinates, shown with the UV map`);
-    }
-    if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
-    if (use.projection) draft.approximations.push(`${name} uses ${use.projection} projection, shown flat`);
-    if (use.mapping) draft.approximations.push(`${name} uses a ${use.mapping} Mapping, shown as Point`);
-    if (use.tilted)
-      draft.approximations.push(`${name} is mapped with a turn around X or Y, which the preview leaves out`);
-    if (use.interpolation) draft.approximations.push(`${name} uses ${use.interpolation} interpolation, shown Linear`);
-  }
-  for (const use of [draft.baseColorImage, draft.emissiveImage]) {
-    const space = use ? colorSpace(use.image) : "";
-    if (use && DATA_SPACES.has(space)) {
-      draft.approximations.push(`${idName(use.image)} is ${space} but colors the surface, shown as sRGB`);
+    if (surface) applySurfaceAlpha(graph, draft, surface);
+    const read = output ? readOutputs(graph, output) : new Set<number>();
+    for (const use of [draft.baseColorImage, draft.emissiveImage]) {
+      if (!use) continue;
+      if (use.alpha !== "opacity") use.alpha = colorAlpha(use, read);
+      notePremultiplied(draft, use, read);
     }
   }
-  const dataImages = [draft.metallicRoughnessImage, draft.roughnessImage, draft.metalnessImage, draft.normalImage];
-  for (const use of dataImages) {
-    if (use && colorSpace(use.image) === "sRGB") {
-      draft.approximations.push(`${idName(use.image)} is sRGB but holds data, read as Non-Color`);
-    }
-  }
+  noteImages(draft);
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";
     draft.alphaCutoff = material.number("alpha_threshold") || 0.5;
   }
+  draft.approximations = [...new Set(draft.approximations)];
   return draft;
+}
+
+/**
+ * What a material does with the alpha of an image whose color it shows, where the alpha is not the material's: Blender
+ * multiplies the color by it where no node reads it, unless the image already stores its color that way, its alpha is
+ * packed data or ignored, or it holds data.
+ */
+function colorAlpha(use: ImageUse, read: ReadonlySet<number>): TextureAlpha {
+  const space = use.image.struct("colorspace_settings")?.string("name") ?? "";
+  const alpha = outputSocket(use.node, "Alpha");
+  const straight = alphaMode(use.image) === ALPHA_STRAIGHT && !DATA_SPACES.has(space);
+  return straight && !(alpha && read.has(alpha.offset)) ? "premultiply" : "none";
+}
+
+function alphaMode(image: BlendStruct): number {
+  return image.has("alpha_mode") ? image.number("alpha_mode") : ALPHA_STRAIGHT;
+}
+
+/**
+ * Notes a premultiplied image whose color the material shows while a node reads its alpha: Blender then divides the
+ * color by the alpha, which the preview leaves out.
+ */
+function notePremultiplied(draft: MaterialDraft, use: ImageUse, read: ReadonlySet<number>): void {
+  const space = use.image.struct("colorspace_settings")?.string("name") ?? "";
+  const alpha = outputSocket(use.node, "Alpha");
+  if (alphaMode(use.image) !== ALPHA_PREMULTIPLIED || DATA_SPACES.has(space) || !(alpha && read.has(alpha.offset))) {
+    return;
+  }
+  draft.approximations.push(`${idName(use.image)} has premultiplied alpha, shown as straight`);
+}
+
+/** Applies the transparency the surface's shader mix adds, from mix factors and the images whose alpha mixes it. */
+function applySurfaceAlpha(graph: ShaderGraph, draft: MaterialDraft, surface: SurfaceShader): void {
+  draft.approximations.push(...surface.notes);
+  for (const alpha of surface.alphaImages) {
+    if (samplesBase(graph, draft, alpha.found)) useImageAlpha(draft, alpha);
+    else draft.approximations.push(`Alpha comes from ${imageName(alpha.found)}, which the preview leaves out`);
+  }
+  if (surface.alpha >= 1) return;
+  if (draft.alphaMode === "mask") {
+    const kept = Math.round(surface.alpha * 100) / 100;
+    draft.approximations.push(`Alpha is ${kept} inside the cutout, shown opaque`);
+    return;
+  }
+  draft.baseColor[3] *= surface.alpha;
+  draft.alphaMode = "blend";
 }

@@ -2,11 +2,14 @@ import type { MaterialGroup, MorphTarget, SkinWeights, UvSet } from "@arcue/scen
 import type { Mat4 } from "../math";
 import { transformDirection } from "../math";
 import type { MeshData } from "./mesh-data";
-import { cornerNormals, faceNormals, freeCornerNormals } from "./normals";
+import { cornerNormals, freeCornerNormals } from "./normals";
+import { applySmoothByAngle, type SmoothByAngle } from "./smooth-by-angle";
 import { triangulate } from "./triangulate";
 
 export const MAX_UV_SETS = 8;
 const MAX_JOINTS = 65534;
+/** Blender's armature deform leaves a vertex in place unless its weights add up to more than this. */
+const MIN_DEFORM_WEIGHT = 0.0001;
 
 /** A deform bone a mesh's vertex groups may name. */
 export interface SkinBone {
@@ -38,6 +41,8 @@ export interface BuiltMesh {
     source: SkinWeights;
     unweighted: boolean;
     droppedBones: boolean;
+    /** Vertices with more bones than rendering takes, and the largest share of a vertex's weight they lose. */
+    limited: { vertices: number; largestDroppedShare: number };
   } | null;
   /** UV sets the mesh had beyond `MAX_UV_SETS`. */
   droppedUvSets: number;
@@ -51,6 +56,10 @@ export interface BuildOptions {
   skinBones: SkinBone[] | null;
   /** The node of the mesh's object, the joint that unweighted vertices follow. */
   meshNode: number;
+  /** The object's Smooth by Angle modifier, applied to the basis shape and to each shape key on its own. */
+  smoothing: SmoothByAngle | null;
+  /** The version of Blender that saved the file, whose tessellation the triangles follow. */
+  blenderVersion: number;
 }
 
 interface Influence {
@@ -80,9 +89,10 @@ function buildSkin(mesh: MeshData, bones: SkinBone[], meshNode: number) {
   const strongestJoints = new Uint16Array(mesh.vertexCount * 4);
   const strongestWeights = new Float32Array(mesh.vertexCount * 4);
   let unweighted = false;
+  const limited = { vertices: 0, largestDroppedShare: 0 };
   for (let v = 0; v < mesh.vertexCount; v++) {
     offsets[v] = joints.length;
-    const influences: Influence[] = [];
+    let influences: Influence[] = [];
     if (weights) {
       for (let i = weights.offsets[v] ?? 0; i < (weights.offsets[v + 1] ?? 0); i++) {
         const bone = groupBone[weights.groups[i] ?? -1];
@@ -95,11 +105,17 @@ function buildSkin(mesh: MeshData, bones: SkinBone[], meshNode: number) {
       }
     }
     influences.sort((a, b) => b.weight - a.weight || a.joint - b.joint);
+    const total = influences.reduce((sum, influence) => sum + influence.weight, 0);
+    if (!(total > MIN_DEFORM_WEIGHT)) influences = [];
     let sum = 0;
     for (const [index, influence] of influences.entries()) {
       joints.push(influence.joint);
       values.push(influence.weight);
       if (index < 4) sum += influence.weight;
+    }
+    if (influences.length > 4) {
+      limited.vertices++;
+      limited.largestDroppedShare = Math.max(limited.largestDroppedShare, (total - sum) / total);
     }
     if (sum > 0) {
       for (let k = 0; k < Math.min(4, influences.length); k++) {
@@ -124,6 +140,7 @@ function buildSkin(mesh: MeshData, bones: SkinBone[], meshNode: number) {
     source: { offsets, joints: Uint16Array.from(joints), weights: Float32Array.from(values) },
     unweighted,
     droppedBones,
+    limited,
   };
 }
 
@@ -174,7 +191,12 @@ function sceneNormal(conversion: Mat4, normal: readonly number[]): [number, numb
   return [x / length, y / length, z / length];
 }
 
-function cornerNormalsOf(mesh: MeshData): Float32Array {
+function sameNumber(a: number, b: number | undefined): boolean {
+  return a === b || (Number.isNaN(a) && Number.isNaN(b));
+}
+
+function cornerNormalsOf(source: MeshData, smoothing: SmoothByAngle | null): Float32Array {
+  const mesh = smoothing ? applySmoothByAngle(source, smoothing) : source;
   const custom = mesh.customNormals;
   if (custom?.kind === "free") {
     const free = freeCornerNormals(mesh, custom.domain, custom.values);
@@ -190,12 +212,12 @@ function cornerNormalsOf(mesh: MeshData): Float32Array {
 
 /**
  * Turns mesh data into Arcue's triangle mesh: corners become rendered vertices, shared where the vertex, normal, UVs
- * and color all match, and triangles sort by material slot. Positions and normals go through `conversion`.
+ * and color all match, and where every shape key shades them alike, and triangles sort by material slot. Positions and
+ * normals go through `conversion`.
  */
 export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
-  const faces = faceNormals(mesh);
-  const normals = cornerNormalsOf(mesh);
-  const { corners } = triangulate(mesh, faces);
+  const normals = cornerNormalsOf(mesh, options.smoothing);
+  const { corners } = triangulate(mesh, options.blenderVersion);
   const triangleCount = corners.length / 3;
   const slotCount = Math.max(options.slotCount, 1);
   const faceOfTriangle = new Uint32Array(triangleCount);
@@ -235,15 +257,20 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
   };
   const vertexKeys: number[][] = [];
   const cornerOf: number[] = [];
+  const renderedOfCorner = new Int32Array(mesh.cornerCount).fill(-1);
   const renderedVertex = (corner: number): number => {
     const vertex = mesh.cornerVerts[corner] ?? 0;
     const attributes = attributesOf(corner);
     const candidates = rendered.get(vertex) ?? [];
     for (const candidate of candidates) {
       const known = vertexKeys[candidate];
-      if (known?.every((value, k) => value === attributes[k])) return candidate;
+      if (known?.every((value, k) => value === attributes[k])) {
+        renderedOfCorner[corner] = candidate;
+        return candidate;
+      }
     }
     const index = sourceVertex.length;
+    renderedOfCorner[corner] = index;
     candidates.push(index);
     rendered.set(vertex, candidates);
     vertexKeys.push(attributes);
@@ -266,31 +293,81 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
   };
 
   const groups: MaterialGroup[] = [];
+  const indexCorners = new Uint32Array(triangleCount * 3);
   order.forEach((triangle, position) => {
-    for (let k = 0; k < 3; k++) indices[position * 3 + k] = renderedVertex(corners[triangle * 3 + k] ?? 0);
+    for (let k = 0; k < 3; k++) {
+      const corner = corners[triangle * 3 + k] ?? 0;
+      indexCorners[position * 3 + k] = corner;
+      indices[position * 3 + k] = renderedVertex(corner);
+    }
     const slot = slotOf(triangle);
     const last = groups.at(-1);
     if (last && last.material === slot) last.triangleCount++;
     else groups.push({ start: position, triangleCount: 1, material: slot });
   });
 
-  const source = Uint32Array.from(sourceVertex);
+  const splitFrom = new Map<number, number>();
+  const split = (from: number, corner: number): number => {
+    const index = sourceVertex.length;
+    splitFrom.set(index, from);
+    cornerOf.push(corner);
+    sourceVertex.push(sourceVertex[from] ?? 0);
+    positions.push(...positions.slice(from * 3, from * 3 + 3));
+    outNormals.push(...outNormals.slice(from * 3, from * 3 + 3));
+    for (const values of uvValues) values.push(...values.slice(from * 2, from * 2 + 2));
+    if (colorValues) colors.push(...colors.slice(from * 4, from * 4 + 4));
+    return index;
+  };
+  const splitWhereShadingDiffers = (shaded: Float32Array) => {
+    const made = new Map<string, number>();
+    for (let corner = 0; corner < mesh.cornerCount; corner++) {
+      const from = renderedOfCorner[corner] ?? -1;
+      const first = cornerOf[from] ?? corner;
+      if (from < 0 || first === corner) continue;
+      const [x = 0, y = 0, z = 0] = [shaded[corner * 3], shaded[corner * 3 + 1], shaded[corner * 3 + 2]];
+      const known = first * 3;
+      if (sameNumber(x, shaded[known]) && sameNumber(y, shaded[known + 1]) && sameNumber(z, shaded[known + 2]))
+        continue;
+      const key = `${from} ${x} ${y} ${z}`;
+      const index = made.get(key) ?? split(from, corner);
+      made.set(key, index);
+      renderedOfCorner[corner] = index;
+    }
+  };
+
   const morphs = shapeKeyOffsets(mesh);
-  const morphTargets = morphs.map((target) => {
+  const shapedNormalOffsets = morphs.map((target) => {
+    if (!target.offsets.some((value) => value !== 0)) return null;
+    const shaped = new Float32Array(mesh.positions.length);
+    for (let i = 0; i < shaped.length; i++) shaped[i] = (mesh.positions[i] ?? 0) + (target.offsets[i] ?? 0);
+    const shaded = cornerNormalsOf({ ...mesh, positions: shaped }, options.smoothing);
+    splitWhereShadingDiffers(shaded);
+    const offsets = new Float32Array(sourceVertex.length * 3);
+    for (let r = 0; r < sourceVertex.length; r++) {
+      const corner = cornerOf[r] ?? 0;
+      const normal = sceneNormal(options.conversion, Array.from(shaded.subarray(corner * 3, corner * 3 + 3)));
+      for (let k = 0; k < 3; k++) offsets[r * 3 + k] = (normal[k] ?? 0) - (outNormals[r * 3 + k] ?? 0);
+    }
+    return offsets;
+  });
+  indexCorners.forEach((corner, slot) => {
+    indices[slot] = renderedOfCorner[corner] ?? 0;
+  });
+
+  const source = Uint32Array.from(sourceVertex);
+  const morphTargets = morphs.map((target, index) => {
     const values = new Float32Array(source.length * 3);
     const normalOffsets = new Float32Array(source.length * 3);
-    const shaped = Float32Array.from(mesh.positions, (value, index) => value + (target.offsets[index] ?? 0));
-    const shapedNormals = target.offsets.some((value) => value !== 0)
-      ? cornerNormalsOf({ ...mesh, positions: shaped })
-      : null;
+    const shading = shapedNormalOffsets[index];
+    if (shading) normalOffsets.set(shading);
     for (let r = 0; r < source.length; r++) {
       const v = source[r] ?? 0;
       const offset = target.offsets.subarray(v * 3, v * 3 + 3);
       values.set(transformDirection(options.conversion, offset[0] ?? 0, offset[1] ?? 0, offset[2] ?? 0), r * 3);
-      if (!shapedNormals) continue;
-      const corner = cornerOf[r] ?? 0;
-      const normal = sceneNormal(options.conversion, Array.from(shapedNormals.subarray(corner * 3, corner * 3 + 3)));
-      for (let k = 0; k < 3; k++) normalOffsets[r * 3 + k] = (normal[k] ?? 0) - (outNormals[r * 3 + k] ?? 0);
+      const from = splitFrom.get(r);
+      if (shading && r * 3 >= shading.length && from !== undefined) {
+        normalOffsets.copyWithin(r * 3, from * 3, from * 3 + 3);
+      }
     }
     return { name: target.name, defaultWeight: target.defaultWeight, positions: values, normals: normalOffsets };
   });
@@ -311,6 +388,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
       source: built.source,
       unweighted: built.unweighted,
       droppedBones: built.droppedBones,
+      limited: built.limited,
     };
   }
 

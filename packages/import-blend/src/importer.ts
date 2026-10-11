@@ -9,6 +9,7 @@ import type {
   SceneDescription,
   SceneNode,
   ScenePart,
+  TextureAlpha,
   TextureFile,
   TextureRef,
   TextureResolver,
@@ -25,26 +26,32 @@ import {
   importWarning,
   isKeyedEveryFrame,
   mergeKeyTimes,
+  parseStoredPath,
   topologyFingerprint,
 } from "@arcue/scene";
 import { animatedPaths, readActions } from "./anim/actions";
 import type { ParsedClip } from "./anim/clips";
 import { buildClips, driverWarnings } from "./anim/clips";
+import { restPositionWarnings } from "./anim/rest-position";
+import { skinMotionWarnings } from "./anim/skin-motion";
 import { decompressBlend } from "./blend/decompress";
 import { BlendParseError } from "./blend/errors";
 import type { BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
-import { idName } from "./blend/ids";
+import { idName, idOf } from "./blend/ids";
 import { decompose, invert, multiplyAll } from "./math";
 import type { BlendWarning, BuiltScene } from "./scene/build";
 import { buildScene, uvSetFor } from "./scene/build";
 import type { ImageUse } from "./scene/materials";
 import { IMAGE_SOURCE_FILE, packedFile } from "./scene/materials";
+import { joinWarningsById, normalizedPath, shareFoundTextures } from "./texture-files";
 
 /** Blender's own rotation for Z-up content in a Y-up scene: −90° about X. */
 const MINUS_90_ABOUT_X: [number, number, number, number] = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
 /** The gray Blender's default material shows, for a base color whose image is missing. */
 const UNTEXTURED = 0.8;
+/** The roughness Blender's default material shows, for a packed metallic-roughness image that is missing. */
+const UNTEXTURED_ROUGHNESS = 0.5;
 
 function buildNodes(scene: BuiltScene): SceneNode[] {
   const paths = buildNodePaths(scene.nodes);
@@ -64,12 +71,26 @@ function buildNodes(scene: BuiltScene): SceneNode[] {
   });
 }
 
+/** The folder a "//" path of the datablock starts at: this file's, or for data packed from a library, the library's. */
+function relativePathFolder(datablock: BlendStruct): string {
+  const library = idOf(datablock)?.deref("lib");
+  const path = library ? library.string("name") || library.string("filepath") : "";
+  return path.slice(0, path.replaceAll("\\", "/").lastIndexOf("/") + 1) || "//";
+}
+
 /** The image's stored path with Blender's "//" relative prefix removed, or the image's name when it has no path. */
 function imagePaths(image: BlendStruct): { relative: string; absolute: string } {
-  const stored = image.string("name") || image.string("filepath");
+  const own = image.string("name") || image.string("filepath");
+  const stored = own.startsWith("//") ? `${relativePathFolder(image)}${own.slice(2)}` : own;
   if (stored.startsWith("//")) return { relative: stored.slice(2), absolute: "" };
   if (stored === "") return { relative: idName(image), absolute: "" };
   return { relative: stored, absolute: stored };
+}
+
+/** The path the texture resolver names for an image: its relative path when it has one. */
+function storedPathOf(image: BlendStruct): string {
+  const paths = imagePaths(image);
+  return parseStoredPath(paths.relative).relative ?? paths.absolute;
 }
 
 function packedBytes(file: BlendFile, image: BlendStruct): Uint8Array | null {
@@ -81,9 +102,14 @@ function packedBytes(file: BlendFile, image: BlendStruct): Uint8Array | null {
   return file.bytes.slice(block.offset, block.offset + size);
 }
 
+/**
+ * The texture files the materials use: one for each stored path, however many Image datablocks store it and however
+ * it is spelled, and one for each packed image. An image linked from another .blend file has none, since this file
+ * holds only its name, unless the image was packed with its library.
+ */
 class ImageFiles {
   readonly files: TextureFile[] = [];
-  readonly #index = new Map<number, number>();
+  readonly #index = new Map<string, number>();
   readonly #file: BlendFile;
 
   constructor(file: BlendFile) {
@@ -91,13 +117,16 @@ class ImageFiles {
   }
 
   indexOf(image: BlendStruct): number | null {
-    const known = this.#index.get(image.offset);
-    if (known !== undefined) return known;
-    if (image.has("source") && image.number("source") !== IMAGE_SOURCE_FILE && !packedFile(image)) return null;
+    if (image.typeName !== "Image") return null;
+    const packed = packedFile(image);
+    if (image.has("source") && image.number("source") !== IMAGE_SOURCE_FILE && !packed) return null;
     const paths = imagePaths(image);
+    const key = packed ? `packed ${image.offset}` : `path ${normalizedPath(paths.relative)}`;
+    const known = this.#index.get(key);
+    if (known !== undefined) return known;
     const index = this.files.length;
     this.files.push({ ...paths, linked: true, content: packedBytes(this.#file, image) });
-    this.#index.set(image.offset, index);
+    this.#index.set(key, index);
     return index;
   }
 }
@@ -118,7 +147,7 @@ async function buildMaterials(
       const textures = resolver();
       const texture = await textures.resolve(file, draft.name, slot);
       if (texture === null) {
-        if (slot) missingTextures[slot] = textures.storedPath(file);
+        if (slot) missingTextures[slot] = storedPathOf(use.image);
         return null;
       }
       return {
@@ -129,28 +158,28 @@ async function buildMaterials(
         transform: use.transform,
       };
     };
-    const baseColorTexture = await ref(draft.baseColorImage, "baseColor");
+    const baseColorTexture = withAlpha(await ref(draft.baseColorImage, "baseColor"), draft.baseColorImage, "opacity");
     const metallicRoughnessTexture = await ref(draft.metallicRoughnessImage);
-    const emissiveTexture = await ref(draft.emissiveImage, "emissive");
-    const alpha = draft.baseColor[3];
-    const strength = draft.emissionStrength;
+    const emissiveTexture = withAlpha(await ref(draft.emissiveImage, "emissive"), draft.emissiveImage, "none");
+    const missingPacked = draft.metallicRoughnessImage !== null && !metallicRoughnessTexture;
+    const [red, green, blue, alpha] = draft.baseColor;
     const material: Material = {
       name: draft.name,
       baseColor: baseColorTexture
-        ? [1, 1, 1, alpha]
+        ? [red, green, blue, alpha]
         : draft.baseColorImage
           ? [UNTEXTURED, UNTEXTURED, UNTEXTURED, alpha]
           : draft.baseColor,
       baseColorTexture,
-      metallic: metallicRoughnessTexture ? 1 : draft.metallic,
-      roughness: metallicRoughnessTexture ? 1 : draft.roughness,
+      metallic: missingPacked ? 0 : draft.metallic,
+      roughness: missingPacked ? UNTEXTURED_ROUGHNESS : draft.roughness,
       metallicRoughnessTexture,
       roughnessTexture: await ref(draft.roughnessImage, "roughness"),
       metalnessTexture: await ref(draft.metalnessImage, "metalness"),
       normalTexture: await ref(draft.normalImage, "normal"),
       normalScale: draft.normalScale,
       occlusionTexture: null,
-      emissive: emissiveTexture ? [strength, strength, strength] : draft.emissiveImage ? [0, 0, 0] : draft.emissive,
+      emissive: !emissiveTexture && draft.emissiveImage ? [0, 0, 0] : draft.emissive,
       emissiveTexture,
       alphaMode: draft.alphaMode,
       alphaCutoff: draft.alphaCutoff,
@@ -160,6 +189,11 @@ async function buildMaterials(
     result.push(material);
   }
   return result;
+}
+
+/** The texture with the alpha its image's use gives it, where that is not the slot's own. */
+function withAlpha(ref: TextureRef | null, use: ImageUse | null, unset: TextureAlpha): TextureRef | null {
+  return ref && use && use.alpha !== unset ? { ...ref, alpha: use.alpha } : ref;
 }
 
 function buildClipList(clips: readonly ParsedClip[], fps: number): Clip[] {
@@ -223,25 +257,56 @@ function exporterOf(file: BlendFile): SceneDescription["source"]["exporter"] {
   return { name: "Blender", version: `${Math.floor(file.version / 100)}.${file.version % 100}` };
 }
 
+function unreadable(request: ImportRequest, error: BlendParseError): ArcueError {
+  return new ArcueError("invalid-input", `${request.fileName} is not a readable Blender file: ${error.message}`, {
+    cause: error,
+  });
+}
+
 async function parse(request: ImportRequest): Promise<BlendFile> {
   try {
     return readBlendFile(await decompressBlend(request.bytes));
   } catch (error) {
-    if (error instanceof BlendParseError) {
-      throw new ArcueError("invalid-input", `${request.fileName} is not a readable Blender file: ${error.message}`, {
-        cause: error,
-      });
-    }
+    if (error instanceof BlendParseError) throw unreadable(request, error);
     throw error;
   }
 }
 
-/** Parts whose every mesh Blender's view layer hides with the eye start hidden, so the view matches Blender's. */
-function hideEyeHiddenParts(parts: ScenePart[], scene: BuiltScene): ScenePart[] {
-  const hidden = new Set(scene.meshRecords.flatMap((record, index) => (record.object.hidden ? [index] : [])));
+/** Whether Blender hides the mesh: with the eye in the view layer, or as an instancer that shows only its instances. */
+function hiddenInBlender(scene: BuiltScene, mesh: number): boolean {
+  const object = scene.meshRecords[mesh]?.object;
+  return object !== undefined && (object.hidden || object.instancerHidden);
+}
+
+/** Parts whose every mesh Blender hides start hidden, so the view matches Blender's. */
+function hideBlenderHiddenParts(parts: ScenePart[], scene: BuiltScene): ScenePart[] {
   return parts.map((part) => {
     const meshes = part.levels.flatMap((level) => level.meshes);
-    return meshes.length > 0 && meshes.every((mesh) => hidden.has(mesh)) ? { ...part, hiddenByDefault: true } : part;
+    const hidden = meshes.length > 0 && meshes.every((mesh) => hiddenInBlender(scene, mesh));
+    return hidden ? { ...part, hiddenByDefault: true } : part;
+  });
+}
+
+/**
+ * Warnings for parts whose most detailed level Blender hides while it shows another level. The view starts at the most
+ * detailed level, so it shows the hidden one.
+ */
+function hiddenLevelWarnings(parts: readonly ScenePart[], scene: BuiltScene): BlendWarning[] {
+  const hidden = (mesh: number) => hiddenInBlender(scene, mesh);
+  const name = (mesh: number) => scene.meshRecords[mesh]?.object.name ?? "";
+  return parts.flatMap(({ levels }): BlendWarning[] => {
+    const shownLevel = levels.findIndex((level) => level.meshes.some((mesh) => !hidden(mesh)));
+    const shown = levels[shownLevel]?.meshes.find((mesh) => !hidden(mesh));
+    const hiddenMeshes = levels.slice(0, Math.max(shownLevel, 0)).flatMap((level) => level.meshes);
+    if (shown === undefined || hiddenMeshes.length === 0) return [];
+    return [
+      {
+        code: "object-not-shown",
+        subject: { kind: "node", name: name(shown) },
+        message: `Level not shown by default: ${name(shown)}`,
+        detail: `Blender hides ${hiddenMeshes.map(name).join(", ")} and shows this level instead`,
+      },
+    ];
   });
 }
 
@@ -264,6 +329,7 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
     scene = buildScene(file, animatedPaths(file, actions));
     clips = buildClips(scene, actions, scene.warnings);
   } catch (error) {
+    if (error instanceof BlendParseError) throw unreadable(request, error);
     const reason = error instanceof Error ? error.message : String(error);
     throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, {
       cause: error,
@@ -278,10 +344,16 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   };
   const materials = await buildMaterials(scene, images, textures);
   const nodes = buildNodes(scene);
-  const parts = hideEyeHiddenParts(describeParts(nodes), scene);
+  const parts = hideBlenderHiddenParts(describeParts(nodes), scene);
+  scene.warnings.push(
+    ...skinMotionWarnings(scene, clips),
+    ...restPositionWarnings(scene, clips),
+    ...hiddenLevelWarnings(parts, scene),
+  );
   const warnings = mergeWarnings([...scene.warnings, ...driverWarnings(scene)]).map((warning) =>
     toImportWarning(warning, request.fileName),
   );
+  const shared = shareFoundTextures(resolver ? (resolver as TextureResolver).textures : [], materials);
   return {
     source: {
       format: "blend",
@@ -289,13 +361,13 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
       fps: scene.fps,
       originalSpace: { axes: { right: "+X", up: "+Z", front: "-Y" }, unitMeters: scene.unitScale },
       conversion: { scale: scene.unitScale, rotation: MINUS_90_ABOUT_X },
-      warnings: [...warnings, ...(resolver ? await (resolver as TextureResolver).warnings() : [])],
+      warnings: [...warnings, ...(resolver ? joinWarningsById(await (resolver as TextureResolver).warnings()) : [])],
     },
     nodes,
     meshes,
     skeletons: scene.skeletons,
-    materials,
-    textures: resolver ? (resolver as TextureResolver).textures : [],
+    materials: shared.materials,
+    textures: shared.textures,
     clips: buildClipList(clips, scene.fps),
     parts,
     bounds: defaultViewBounds(meshes, parts),

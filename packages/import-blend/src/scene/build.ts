@@ -1,5 +1,7 @@
 import type { ImportWarningCode, ImportWarningSubject, Mesh, NodeKind, Skeleton } from "@arcue/scene";
 import { usedActions } from "../anim/actions";
+import type { OpeningPose } from "../anim/opening";
+import { openingPose, openingWeights } from "../anim/opening";
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { idName, isLinked } from "../blend/ids";
 import type { Mat4 } from "../math";
@@ -16,6 +18,7 @@ import {
 } from "../math";
 import type { Bone } from "./armature";
 import { BoneFlag, readBones } from "./armature";
+import { envelopeUse } from "./envelopes";
 import type { MaterialDraft } from "./materials";
 import { defaultMaterial, imageUses, readMaterial } from "./materials";
 import type { BuiltMesh, SkinBone } from "./mesh-build";
@@ -26,6 +29,7 @@ import { changesPreview, ModifierType, modifierName, modifierType, viewportModif
 import type { SceneContents, SceneObject } from "./objects";
 import {
   ARMATURE_DEFORM_VERTEX_GROUPS,
+  childInstancing,
   collectSceneObjects,
   deformingArmatures,
   instancedCollection,
@@ -34,7 +38,7 @@ import {
   UNSHOWN_GEOMETRY,
 } from "./objects";
 import type { SmoothByAngle } from "./smooth-by-angle";
-import { applySmoothByAngle, smoothByAngle } from "./smooth-by-angle";
+import { smoothByAngle } from "./smooth-by-angle";
 import type { ObjectValues, TransformValues } from "./transforms";
 import { channelValues, objectBasis, objectValues, restChannel } from "./transforms";
 
@@ -69,8 +73,8 @@ export interface ArmatureRecord {
   bones: Bone[];
   /** Node index of each bone. */
   nodes: number[];
-  /** Each bone's pose channel at rest, in the rotation mode the channel uses. */
-  rest: TransformValues[];
+  /** Each bone's pose channel as Blender shows it when it opens the file; an action changes only the values it keys. */
+  pose: TransformValues[];
 }
 
 export interface MeshRecord {
@@ -112,7 +116,6 @@ type Warn = (code: ImportWarningCode, name: string, message: string, detail?: st
 
 const CONSTRAINT_DISABLE = 1 << 2;
 const CONSTRAINT_OFF = 1 << 9;
-const ARMATURE_DEFORM_ENVELOPE = 1 << 1;
 const ARMATURE_DEFORM_QUATERNION = 1 << 2;
 
 export function sceneSettings(scene: BlendStruct | null): { fps: number; unitScale: number } {
@@ -209,6 +212,7 @@ function addArmature(
   nodes: NodeDraft[],
   animated: ReadonlySet<string>,
   warn: Warn,
+  opening: OpeningPose,
 ): void {
   const { object, node } = record;
   const bones = readBones(data);
@@ -216,7 +220,7 @@ function addArmature(
   for (const channel of object.struct.deref("pose")?.list("chanbase") ?? [])
     channels.set(channel.string("name"), channel);
   const boneNodes: number[] = [];
-  const rest = bones.map((bone) => {
+  const pose = bones.map((bone) => {
     const channel = channels.get(bone.name);
     boneNodes.push(nodes.length);
     nodes.push({
@@ -226,9 +230,9 @@ function addArmature(
       rest: bone.offset,
       mesh: null,
     });
-    return restChannel(channel ? channelValues(channel).rotationMode : "quaternion");
+    return opening.channel(bone.name, channel ? channelValues(channel) : restChannel());
   });
-  record.armature = { bones, nodes: boneNodes, rest };
+  record.armature = { bones, nodes: boneNodes, pose };
   if (bones.some((bone) => bone.deform && bone.segments > 1)) {
     warn("deform-approximated", object.name, `B-Bones bend as straight bones: ${object.name}`);
   }
@@ -248,12 +252,31 @@ function addArmature(
   }
 }
 
+/** Whether Blender draws geometry for the object, which instancing on vertices or faces would copy. */
+function drawsGeometry(object: SceneObject): boolean {
+  if (object.type === ObjectType.mesh || UNSHOWN_GEOMETRY.has(object.type)) return true;
+  return instancedCollection(object.struct) !== null;
+}
+
+/** Offsets of the objects that a shown object with geometry descends from. */
+function geometryAncestors(objects: readonly SceneObject[]): Set<number> {
+  const ancestors = new Set<number>();
+  for (const object of objects) {
+    if (!object.shown || !drawsGeometry(object)) continue;
+    for (let parent = object.parent; parent && !ancestors.has(parent.offset); parent = parent.deref("parent")) {
+      ancestors.add(parent.offset);
+    }
+  }
+  return ancestors;
+}
+
 /** A node for every object, each armature's bones under it, and an object parented to a bone under that bone. */
 function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, warn: Warn) {
   const worlds = new WorldMatrices();
   const nodes: NodeDraft[] = [];
   const objects: ObjectRecord[] = [];
   const byOffset = new Map<number, ObjectRecord>();
+  const ancestors = geometryAncestors(contents.objects);
   for (const object of contents.objects) {
     const parentRecord = object.parent ? byOffset.get(object.parent.offset) : undefined;
     let parentNode = parentRecord?.node ?? -1;
@@ -271,7 +294,8 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
       }
     }
     const parentInverse = mat4From(object.struct.numbers("parentinv"));
-    const values = objectValues(object.struct);
+    const opening = openingPose(object.struct, contents.scene);
+    const values = opening.object(objectValues(object.struct));
     const record: ObjectRecord = { object, node: nodes.length, parentPart, parentInverse, values, armature: null };
     const rest = multiplyAll(parentPart, parentInverse, objectBasis(values));
     nodes.push({ name: object.name, parent: parentNode, kind: "empty", rest, mesh: null });
@@ -279,7 +303,9 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
       const detail = "Its parent's scale shears it, which the preview drops";
       warn("deform-approximated", object.name, `Shear not shown: ${object.name}`, detail);
     }
-    if (object.type === ObjectType.armature && object.data) addArmature(record, object.data, nodes, animated, warn);
+    if (object.type === ObjectType.armature && object.data) {
+      addArmature(record, object.data, nodes, animated, warn, opening);
+    }
     if (activeConstraints(object.struct, "", animated).length > 0) {
       warn("constraint-not-evaluated", object.name, `Constraints not evaluated: ${object.name}`);
     }
@@ -291,6 +317,13 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
     if (instanced) {
       const detail = `Arcue does not expand instances of ${idName(instanced)}`;
       warn("object-not-shown", object.name, `Collection instance not shown: ${object.name}`, detail);
+    }
+    const drawsInstances = object.shown && !object.hidden && ancestors.has(object.struct.offset);
+    const instancing = drawsInstances ? childInstancing(object.struct) : null;
+    if (instancing) {
+      const kind = instancing === "vertex" ? "Vertex" : "Face";
+      const detail = `Arcue shows its children once instead of at each ${instancing}`;
+      warn("object-not-shown", object.name, `${kind} instances not shown: ${object.name}`, detail);
     }
     if (object.parentType === ParentType.vertex || object.parentType === ParentType.vertices) {
       warn("invalid-data", object.name, `Vertex parent not followed: ${object.name}`);
@@ -363,9 +396,6 @@ function skinBones(object: SceneObject, byOffset: Map<number, ObjectRecord>, war
   if (deforms.length > 1) {
     warn("extra-skins", object.name, `Several skins: ${object.name}`, "Only the first Armature modifier deforms it");
   }
-  if ((first.flags & ARMATURE_DEFORM_ENVELOPE) !== 0) {
-    warn("deform-approximated", object.name, `Envelopes not used: ${object.name}`, "Only vertex groups deform it");
-  }
   if ((first.flags & ARMATURE_DEFORM_QUATERNION) !== 0) {
     warn("deform-approximated", object.name, `Preserve volume shown as linear skinning: ${object.name}`);
   }
@@ -377,6 +407,29 @@ function skinBones(object: SceneObject, byOffset: Map<number, ObjectRecord>, war
   return armature.bones.flatMap((bone, index) =>
     bone.deform ? [{ name: bone.name, node: armature.nodes[index] ?? -1 }] : [],
   );
+}
+
+/** Warnings about the envelopes of the armature that skins the mesh object at `node`, which the preview leaves out. */
+function envelopeWarnings(
+  object: SceneObject,
+  node: number,
+  data: MeshData,
+  byOffset: Map<number, ObjectRecord>,
+  restWorld: readonly Mat4[],
+  warn: Warn,
+): void {
+  const [first] = deformingArmatures(object.struct);
+  const target = first ? byOffset.get(first.target.offset) : undefined;
+  if (!first || !target?.armature) return;
+  const toArmature = multiply(invert(restWorld[target.node] ?? identity()), restWorld[node] ?? identity());
+  const use = envelopeUse(data, first, target.armature.bones, first.target.deref("data"), toArmature);
+  if (use.enveloped) {
+    warn("deform-approximated", object.name, `Envelopes not used: ${object.name}`, "Only vertex groups deform it");
+  }
+  if (use.multiplying.length > 0) {
+    const detail = `Bones that multiply vertex group weights by their envelopes: ${use.multiplying.join(", ")}`;
+    warn("deform-approximated", object.name, `Envelope multiply not applied: ${object.name}`, detail);
+  }
 }
 
 function modifierWarnings(object: SceneObject, smoothing: SmoothByAngle | null, warn: Warn): void {
@@ -410,6 +463,19 @@ function meshWarnings(object: SceneObject, built: BuiltMesh, warn: Warn): void {
   }
   if (built.skin?.droppedBones) {
     warn("too-many-bones", object.name, `Too many bones: ${object.name}`, "Bones past the first 65534 are dropped");
+  }
+  const limited = built.skin?.limited;
+  if (limited && limited.vertices > 0) {
+    const percent = Math.round(limited.largestDroppedShare * 100);
+    const loss = percent < 1 ? "less than 1%" : `up to ${percent}%`;
+    warn(
+      "deform-approximated",
+      object.name,
+      `Skin weights limited to four bones: ${object.name}`,
+      limited.vertices === 1
+        ? `1 vertex keeps its four strongest bones and loses ${loss} of its weight`
+        : `${limited.vertices} vertices keep their four strongest bones and lose ${loss} of their weight`,
+    );
   }
 }
 
@@ -470,7 +536,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
     const smoothing = smoothByAngle(object.struct);
     modifierWarnings(object, smoothing, warn);
     if (data.faceCount === 0) {
-      if (data.vertexCount > 0)
+      if (data.edgeCount > 0)
         warn("object-not-shown", object.name, `Not shown: ${object.name}`, "Its mesh has no faces");
       continue;
     }
@@ -482,10 +548,16 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
         "Shown in its basis shape",
       );
     }
-    if (smoothing) data = applySmoothByAngle(data, smoothing);
     const slotCount = Math.max(object.struct.number("totcol"), data.materials.length);
     const bones = skinBones(object, byOffset, warn);
-    const built = buildMesh(data, { conversion, slotCount, skinBones: bones, meshNode: record.node });
+    const built = buildMesh(data, {
+      conversion,
+      slotCount,
+      skinBones: bones,
+      meshNode: record.node,
+      smoothing,
+      blenderVersion: file.version,
+    });
     meshWarnings(object, built, warn);
 
     const bind = sceneWorld(record.node);
@@ -497,6 +569,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
       });
       skeleton = skeletonIndex(built.skin.joints, inverseBind);
     }
+    envelopeWarnings(object, record.node, data, byOffset, restWorld, warn);
     const restPositions = new Float32Array(data.vertexCount * 3);
     const placement = multiply(bind, conversion);
     for (let v = 0; v < data.vertexCount; v++) {
@@ -513,6 +586,14 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
       ...group,
       material: materials.indexOf(slotMaterial(group.material), uvMaps),
     }));
+
+    const key = object.data.deref("key");
+    const opened = key ? openingWeights(key, contents.scene) : new Map<string, number>();
+    const morphTargets = built.morphTargets.map((target, index) => {
+      const weight = opened.get(target.name);
+      const [min, max] = built.morphRanges[index] ?? [0, 1];
+      return weight === undefined ? target : { ...target, defaultWeight: Math.min(Math.max(weight, min), max) };
+    });
 
     const node = nodes[record.node];
     if (node) {
@@ -532,7 +613,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
       weights: built.skin?.rendered.weights ?? null,
       indices: built.indices,
       groups,
-      morphTargets: built.morphTargets,
+      morphTargets,
       sourceVertex: built.sourceVertex,
       sourceVertexCount: built.sourceVertexCount,
       restPositions,
@@ -542,7 +623,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
       node: record.node,
       object,
       morphKeys: built.morphKeys,
-      morphDefaults: built.morphTargets.map((target) => target.defaultWeight),
+      morphDefaults: morphTargets.map((target) => target.defaultWeight),
       morphRanges: built.morphRanges,
     });
   }
@@ -570,11 +651,19 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
       ),
     ),
   ];
+  const linkedImages = [
+    ...new Set(
+      materials.drafts.flatMap((draft) =>
+        imageUses(draft).flatMap((use) => (use.image.typeName === "Image" ? [] : [idName(use.image)])),
+      ),
+    ),
+  ];
   const linked = [
     contents.linkedCollections.length > 0 ? `collections ${contents.linkedCollections.join(", ")}` : "",
     contents.linkedObjects.length > 0 ? `objects ${contents.linkedObjects.join(", ")}` : "",
     materials.linked.size > 0 ? `materials ${[...materials.linked].join(", ")}` : "",
     linkedActions.length > 0 ? `actions ${linkedActions.join(", ")}` : "",
+    linkedImages.length > 0 ? `images ${linkedImages.join(", ")}` : "",
   ].filter((entry) => entry !== "");
   if (linked.length > 0) {
     warnings.push({

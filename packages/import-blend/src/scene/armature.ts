@@ -1,4 +1,6 @@
+import { BlendParseError } from "../blend/errors";
 import type { BlendStruct } from "../blend/file";
+import { idName } from "../blend/ids";
 import type { Mat4 } from "../math";
 import { axisLengths, identity, invert, mat4From, multiply, transformPoint } from "../math";
 import type { TransformValues } from "./transforms";
@@ -41,7 +43,12 @@ export interface Bone {
 /** The armature's bones, each parent before its children, in the order Blender lists them. */
 export function readBones(armature: BlendStruct): Bone[] {
   const bones: Bone[] = [];
+  const visited = new Set<number>();
   const visit = (bone: BlendStruct, parent: number) => {
+    if (visited.has(bone.offset)) {
+      throw new BlendParseError(`its armature ${idName(armature)} lists bone ${bone.string("name")} twice`);
+    }
+    visited.add(bone.offset);
     const flag = bone.number("flag");
     const index = bones.length;
     const rest = mat4From(bone.numbers("arm_mat"));

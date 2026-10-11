@@ -33,7 +33,7 @@ function scaled(a: Vec, factor: number): Vec {
 }
 
 function lengthOf(a: Vec): number {
-  return Math.hypot(a[0], a[1], a[2]);
+  return Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
 }
 
 function normalize(a: Vec): Vec {
@@ -89,13 +89,17 @@ export function faceNormals(
   return normals;
 }
 
-/** Vertex normals: face normals weighted by the angle of each face's corner at the vertex. */
+/**
+ * Vertex normals: face normals weighted by the angle of each face's corner at the vertex. As in Blender, a vertex
+ * without faces points away from the origin, and one whose corner angles are all zero has no normal.
+ */
 export function vertexNormals(
   mesh: Pick<MeshData, "positions" | "faceOffsets" | "cornerVerts" | "faceCount" | "vertexCount">,
   faces: Float32Array,
 ): Float32Array {
   const { positions, faceOffsets, cornerVerts } = mesh;
   const sums = new Float64Array(mesh.vertexCount * 3);
+  const inFace = new Uint8Array(mesh.vertexCount);
   for (let f = 0; f < mesh.faceCount; f++) {
     const start = at(faceOffsets, f);
     const end = at(faceOffsets, f + 1);
@@ -104,6 +108,7 @@ export function vertexNormals(
     const normal = read(faces, f);
     for (let c = start; c < end; c++) {
       const current = at(cornerVerts, c);
+      inFace[current] = 1;
       const previous = at(cornerVerts, c === start ? end - 1 : c - 1);
       const next = at(cornerVerts, c + 1 === end ? start : c + 1);
       const here = vertex(positions, current);
@@ -118,7 +123,7 @@ export function vertexNormals(
   const normals = new Float32Array(mesh.vertexCount * 3);
   for (let v = 0; v < mesh.vertexCount; v++) {
     let normal = normalize([at(sums, v * 3), at(sums, v * 3 + 1), at(sums, v * 3 + 2)]);
-    if (lengthOf(normal) === 0) normal = normalize(vertex(positions, v));
+    if (!inFace[v]) normal = normalize(vertex(positions, v));
     store(normals, v, normal);
   }
   return normals;
@@ -283,6 +288,7 @@ function startsCyclicFan(
   const pivot = at(mesh.cornerVerts, corner);
   const state = { curr: previous, vert: corner };
   let edge = at(mesh.cornerEdges, previous);
+  if (isSharp(map, edge)) return false;
   skip[corner] = 1;
   for (;;) {
     fanNext(mesh, faceOf, map, edge, pivot, state);
