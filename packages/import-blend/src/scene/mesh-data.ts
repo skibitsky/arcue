@@ -165,6 +165,8 @@ export interface MeshData {
   shapeKeys: ShapeKey[];
   /** The key the others are relative to, by default, or -1. */
   referenceKey: number;
+  /** Whether the shape keys are absolute: Blender blends them by an evaluation time instead of each key's value. */
+  absoluteKeys: boolean;
   /** Material slots of the mesh data, as datablock structs or null for empty slots. */
   materials: (BlendStruct | null)[];
 }
@@ -507,12 +509,20 @@ function readDeformWeights(mesh: BlendStruct, sizes: Sizes): DeformWeights | nul
 }
 
 const KEY_BLOCK_MUTE = 1 << 0;
+const KEY_RELATIVE = 1;
 /** Blender 4.5 made a float vector "custom_normal" attribute on faces, points or corners the mesh's normals. */
 const FREE_NORMALS_VERSION = 405;
 
-function readShapeKeys(mesh: BlendStruct, file: BlendFile, sizes: Sizes): { keys: ShapeKey[]; reference: number } {
+interface ShapeKeys {
+  keys: ShapeKey[];
+  reference: number;
+  absolute: boolean;
+}
+
+function readShapeKeys(mesh: BlendStruct, file: BlendFile, sizes: Sizes): ShapeKeys {
   const key = mesh.deref("key");
-  if (!key) return { keys: [], reference: -1 };
+  if (!key) return { keys: [], reference: -1, absolute: false };
+  if (key.number("type") !== KEY_RELATIVE) return { keys: [], reference: -1, absolute: true };
   const blocks = key.list("block");
   const reference = blocks.findIndex((block) => block.offset === file.first(key.target("refkey"))?.offset);
   const keys = blocks.map((block) => {
@@ -531,7 +541,7 @@ function readShapeKeys(mesh: BlendStruct, file: BlendFile, sizes: Sizes): { keys
       vertexGroup: block.string("vgroup"),
     };
   });
-  return { keys, reference: reference === -1 && keys.length > 0 ? 0 : reference };
+  return { keys, reference: reference === -1 && keys.length > 0 ? 0 : reference, absolute: false };
 }
 
 /** Reads a mesh datablock. `objectGroups` are the vertex group names an object stores in files before Blender 3.0. */
@@ -571,6 +581,7 @@ export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: r
     vertexGroupNames: groupNames,
     shapeKeys: shapeKeys.keys,
     referenceKey: shapeKeys.reference,
+    absoluteKeys: shapeKeys.absolute,
     materials,
   };
 }

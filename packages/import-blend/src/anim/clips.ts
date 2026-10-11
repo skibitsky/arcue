@@ -449,8 +449,10 @@ export function buildClips(scene: BuiltScene, actions: readonly Action[], warnin
         if (created) tracks.push(created);
       }
     }
+    const steppedWeights = new Set(keyTargets.flatMap(({ mesh, curves }) => (curves.every(isStepped) ? [mesh] : [])));
     for (const [mesh, values] of weightSamples) {
-      const created = track(mesh.node, "weights", "linear", times, values, mesh.morphKeys.length);
+      const interpolation = steppedWeights.has(mesh) ? "step" : "linear";
+      const created = track(mesh.node, "weights", interpolation, times, values, mesh.morphKeys.length);
       if (created) tracks.push(created);
     }
     tracks.sort((a, b) => a.node - b.node);

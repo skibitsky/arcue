@@ -155,6 +155,17 @@ def evaluated_positions(obj, scene):
     return rounded(positions)
 
 
+def evaluated_corner_normals(obj):
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    mesh = evaluated.to_mesh()
+    corners = [
+        [loop.vertex_index] + rounded(scene_direction(normal.vector))
+        for loop, normal in zip(mesh.loops, mesh.corner_normals)
+    ]
+    evaluated.to_mesh_clear()
+    return corners
+
+
 def mesh_reference(obj, scene):
     unit = scene.unit_settings.scale_length
     mesh = obj.data
@@ -452,6 +463,12 @@ def build_features():
     for key in blob.data.shape_keys.key_blocks:
         key.value = weights.get(key.name, 0.0)
     reference["shapeKeys"] = {"Blob": {"weights": weights, "positions": evaluated_positions(blob, scene)}}
+    normals = {}
+    for name in ("Up", "Side", "Stacked"):
+        for key in blob.data.shape_keys.key_blocks:
+            key.value = 1.0 if key.name == name else 0.0
+        normals[name] = evaluated_corner_normals(blob)
+    reference["shapeKeys"]["Blob"]["normals"] = normals
     up.value = 0.25
     side.value = 0.5
     stacked.value = 0.0
@@ -702,7 +719,16 @@ def build_rig():
     bulge.keyframe_insert("value", frame=8)
     bulge.value = 0.0
 
-    for action in (wave, ease, stretch, spin, swell):
+    pulse = new_action(key, "Pulse")
+    for frame, value in ((1, 0.0), (4, 1.0), (7, 0.0)):
+        bulge.value = value
+        bulge.keyframe_insert("value", frame=frame)
+    for curve in fcurves_of(pulse):
+        for point in curve.keyframe_points:
+            point.interpolation = "CONSTANT"
+    bulge.value = 0.0
+
+    for action in (wave, ease, stretch, spin, swell, pulse):
         action.use_fake_user = True
     assign(rig, wave)
     assign(prop, spin)
@@ -719,7 +745,7 @@ def build_rig():
     }
     pose_pose(scene)
     saved = {obj.name: (obj.location.copy(), obj.rotation_euler.copy()) for obj in scene.objects}
-    save_blend("rig", compress=False, datablocks=[scene, wave, ease, stretch, spin, swell])
+    save_blend("rig", compress=False, datablocks=[scene, wave, ease, stretch, spin, swell, pulse])
 
     clips = {}
     for action, owner, frames in [
@@ -728,6 +754,7 @@ def build_rig():
         (stretch, rig, [1, 3, 5, 9]),
         (spin, prop, [1, 4, 7, 10]),
         (swell, key, [1, 3, 8]),
+        (pulse, key, [1, 3, 4, 6, 7]),
     ]:
         for id_data in (rig, prop, key):
             assign(id_data, None)
@@ -884,6 +911,17 @@ def build_materials():
         obj = mesh_object(mat.name + "Plane", bm, (mat,))
         obj.location = (index * 1.5, 0, 0)
 
+    bm = bmesh.new()
+    bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
+    bm.loops.layers.uv.new("Detail")
+    uv = bm.loops.layers.uv.new("UVMap")
+    for face in bm.faces:
+        for loop in face.loops:
+            loop[uv].uv = (loop.vert.co.x + 0.5, loop.vert.co.y + 0.5)
+    swapped = mesh_object("SwappedPlane", bm, (textured,))
+    swapped.data.uv_layers["UVMap"].active_render = True
+    swapped.location = (0, 1.5, 0)
+
     save_blend("materials")
     for image in (checker, orm, missing):
         image.filepath = "//textures/" + image.name
@@ -892,10 +930,58 @@ def build_materials():
     save_reference("materials", {"fps": 24.0, "unitScale": 1.0})
 
 
+# ---------------------------------------------------------------- scenes
+
+def build_scenes():
+    """Objects hidden with the eye, a collection instance, absolute shape keys and data linked from another file."""
+    scene = reset_scene()
+    library_path = os.path.join(HERE, "library-%s.blend" % VERSION)
+    shared = bpy.data.meshes.new("SharedMesh")
+    box_bmesh().to_mesh(shared)
+    library_rock = bpy.data.objects.new("LibraryRock", shared)
+    bpy.data.libraries.write(library_path, {shared, library_rock}, path_remap="RELATIVE_ALL")
+    bpy.data.objects.remove(library_rock)
+    bpy.data.meshes.remove(shared)
+    with bpy.data.libraries.load(library_path, link=True, relative=True) as (source, target):
+        target.meshes = ["SharedMesh"]
+        target.objects = ["LibraryRock"]
+    link(bpy.data.objects.new("Borrowed", target.meshes[0]))
+    link(target.objects[0])
+
+    mesh_object("Visible", box_bmesh())
+    eye = mesh_object("EyeHidden", box_bmesh())
+    mesh_object("Rock_LOD0", box_bmesh())
+    lod1 = mesh_object("Rock_LOD1", box_bmesh((0.5, 0.5, 0.5)))
+    tucked = bpy.data.collections.new("Tucked")
+    scene.collection.children.link(tucked)
+    mesh_object("TuckedAway", box_bmesh(), collection=tucked)
+    kit = bpy.data.collections.new("Kit")
+    mesh_object("KitPiece", box_bmesh(), collection=kit)
+    instance = link(bpy.data.objects.new("KitInstance", None))
+    instance.instance_type = "COLLECTION"
+    instance.instance_collection = kit
+    morph = mesh_object("Morph", box_bmesh())
+    morph.shape_key_add(name="Basis")
+    grown = morph.shape_key_add(name="Grown", from_mix=False)
+    for point in grown.data:
+        point.co *= 1.5
+    morph.data.shape_keys.use_relative = False
+
+    layer = bpy.context.view_layer
+    layer.update()
+    eye.hide_set(True)
+    lod1.hide_set(True)
+    layer.layer_collection.children["Tucked"].hide_viewport = True
+    save_blend("scenes", compress=False)
+    os.remove(library_path)
+    save_reference("scenes", {"fps": 24.0, "unitScale": 1.0})
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     only = set(argv[argv.index("--only") + 1].split(",")) if "--only" in argv else None
-    for name, build in (("features", build_features), ("rig", build_rig), ("materials", build_materials)):
+    builders = (("features", build_features), ("rig", build_rig), ("materials", build_materials), ("scenes", build_scenes))
+    for name, build in builders:
         if only is None or name in only:
             build()
 

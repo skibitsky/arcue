@@ -37,7 +37,15 @@ export interface Reference {
   unitScale: number;
   objects: Record<string, { type: string; world: number[] }>;
   meshes: Record<string, MeshReference>;
-  shapeKeys?: Record<string, { weights: Record<string, number>; positions: number[] }>;
+  shapeKeys?: Record<
+    string,
+    {
+      weights: Record<string, number>;
+      positions: number[];
+      /** Per shape key at full weight, alone: each face corner's vertex and normal in scene axes. */
+      normals?: Record<string, [number, number, number, number][]>;
+    }
+  >;
   clips?: Record<string, ClipSample[]>;
   curves?: Record<string, { path: string; index: number; samples: [number, number][] }[]>;
 }

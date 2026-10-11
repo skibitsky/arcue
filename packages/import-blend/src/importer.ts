@@ -8,6 +8,7 @@ import type {
   Mesh,
   SceneDescription,
   SceneNode,
+  ScenePart,
   TextureFile,
   TextureRef,
   TextureResolver,
@@ -108,7 +109,7 @@ async function buildMaterials(
 ): Promise<Material[]> {
   const result: Material[] = [];
   for (const [index, draft] of scene.materials.entries()) {
-    const uvMaps = scene.materialUvs[index] ?? [];
+    const uvMaps = scene.materialUvs[index];
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
     const ref = async (use: ImageUse | null, slot?: TextureSlot): Promise<TextureRef | null> => {
       if (!use) return null;
@@ -214,6 +215,15 @@ async function parse(request: ImportRequest): Promise<BlendFile> {
   }
 }
 
+/** Parts whose every mesh Blender's view layer hides with the eye start hidden, so the view matches Blender's. */
+function hideEyeHiddenParts(parts: ScenePart[], scene: BuiltScene): ScenePart[] {
+  const hidden = new Set(scene.meshRecords.flatMap((record, index) => (record.object.hidden ? [index] : [])));
+  return parts.map((part) => {
+    const meshes = part.levels.flatMap((level) => level.meshes);
+    return meshes.length > 0 && meshes.every((mesh) => hidden.has(mesh)) ? { ...part, hiddenByDefault: true } : part;
+  });
+}
+
 async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const file = await parse(request);
   let scene: BuiltScene;
@@ -236,7 +246,7 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   };
   const materials = await buildMaterials(scene, images, textures);
   const nodes = buildNodes(scene);
-  const parts = describeParts(nodes);
+  const parts = hideEyeHiddenParts(describeParts(nodes), scene);
   const warnings = [...scene.warnings, ...driverWarnings(scene)].map((warning) =>
     toImportWarning(warning, request.fileName),
   );

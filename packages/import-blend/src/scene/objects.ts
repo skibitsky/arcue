@@ -46,8 +46,11 @@ export const ParentType = {
 const PARENT_TYPE_MASK = 15;
 export const ARMATURE_DEFORM_VERTEX_GROUPS = 1 << 0;
 const OBJECT_HIDE_VIEWPORT = 1 << 0;
+const OBJECT_INSTANCES_COLLECTION = 1 << 8;
 const COLLECTION_HIDE_VIEWPORT = 1 << 0;
 const LAYER_COLLECTION_EXCLUDE = 1 << 4;
+const LAYER_COLLECTION_HIDE = 1 << 7;
+const BASE_HIDDEN = 1 << 8;
 
 export interface SceneObject {
   struct: BlendStruct;
@@ -62,13 +65,15 @@ export interface SceneObject {
   parentBone: string;
   /** Whether the scene's collections show the object, rather than another shown object needing it. */
   shown: boolean;
+  /** Whether the active view layer hides the shown object or all its collections with the eye. */
+  hidden: boolean;
 }
 
 export interface SceneContents {
   scene: BlendStruct | null;
   /** Shown objects, and the objects they need: their parents and the armatures that deform them. */
   objects: SceneObject[];
-  /** Linked datablocks, from other files, that the scene uses but this file does not hold. */
+  /** Objects that are, or whose mesh or armature data is, linked from other files, which this file does not hold. */
   linkedObjects: string[];
 }
 
@@ -83,23 +88,52 @@ function activeViewLayer(file: BlendFile, scene: BlendStruct): BlendStruct | nul
   const layers = scene.list("view_layers");
   const global = datablocks(file, "GLOB")[0];
   const current = global?.pointer("cur_view_layer") ?? 0n;
-  return layers.find((layer) => layer.offset === file.block(current)?.offset) ?? layers[0] ?? null;
+  return layers.find((layer) => layer.offset === scene.resolve(current)?.offset) ?? layers[0] ?? null;
 }
 
-/** Collections the view layer excludes, by their struct offset in the file. */
-function excludedCollections(viewLayer: BlendStruct | null): Set<number> {
-  const excluded = new Set<number>();
-  const visit = (layerCollection: BlendStruct) => {
-    const collection = layerCollection.deref("collection");
-    if (collection && (layerCollection.number("flag") & LAYER_COLLECTION_EXCLUDE) !== 0)
-      excluded.add(collection.offset);
-    for (const child of layerCollection.list("layer_collections")) visit(child);
+/** What the view layer leaves out or hides, by struct offset in the file. */
+interface ViewLayerState {
+  excludedCollections: Set<number>;
+  /** Collections hidden with the eye, themselves or through a parent. */
+  hiddenCollections: Set<number>;
+  hiddenObjects: Set<number>;
+}
+
+function viewLayerState(viewLayer: BlendStruct | null): ViewLayerState {
+  const state: ViewLayerState = {
+    excludedCollections: new Set(),
+    hiddenCollections: new Set(),
+    hiddenObjects: new Set(),
   };
-  for (const layerCollection of viewLayer?.list("layer_collections") ?? []) visit(layerCollection);
-  return excluded;
+  const visit = (layerCollection: BlendStruct, parentHidden: boolean) => {
+    const collection = layerCollection.deref("collection");
+    const flag = layerCollection.number("flag");
+    const hidden = parentHidden || (flag & LAYER_COLLECTION_HIDE) !== 0;
+    if (collection && (flag & LAYER_COLLECTION_EXCLUDE) !== 0) state.excludedCollections.add(collection.offset);
+    if (collection && hidden) state.hiddenCollections.add(collection.offset);
+    for (const child of layerCollection.list("layer_collections")) visit(child, hidden);
+  };
+  for (const layerCollection of viewLayer?.list("layer_collections") ?? []) visit(layerCollection, false);
+  for (const base of viewLayer?.list("object_bases") ?? []) {
+    const object = base.deref("object");
+    if (object && (base.number("flag") & BASE_HIDDEN) !== 0) state.hiddenObjects.add(object.offset);
+  }
+  return state;
 }
 
-function describe(struct: BlendStruct, shown: boolean): SceneObject {
+/** The collection an object instances, such as one linked in from an asset library, or null. */
+export function instancedCollection(object: BlendStruct): BlendStruct | null {
+  return (object.number("transflag") & OBJECT_INSTANCES_COLLECTION) !== 0 ? object.deref("dup_group") : null;
+}
+
+function usesLinkedData(object: BlendStruct): boolean {
+  const type = object.number("type");
+  if (type !== ObjectType.mesh && type !== ObjectType.armature) return false;
+  const data = object.deref("data");
+  return data !== null && isLinked(data);
+}
+
+function describe(struct: BlendStruct, shown: boolean, hidden: boolean): SceneObject {
   const data = struct.deref("data");
   return {
     struct,
@@ -110,6 +144,7 @@ function describe(struct: BlendStruct, shown: boolean): SceneObject {
     parentType: struct.number("partype") & PARENT_TYPE_MASK,
     parentBone: struct.string("parsubstr"),
     shown,
+    hidden,
   };
 }
 
@@ -134,31 +169,42 @@ export function deformingArmatures(object: BlendStruct): { target: BlendStruct; 
 /**
  * The objects of the file's active scene, in the order its collections list them, with every object's parent before
  * it. Collections the active view layer excludes or that are disabled in viewports are left out with their children,
- * as are objects disabled in viewports. Objects the shown ones need come along unshown.
+ * as are objects disabled in viewports. Objects the shown ones need come along unshown. Objects hidden with the eye,
+ * a per-view-layer state that exporters keep, stay in and are marked hidden.
  */
 export function collectSceneObjects(file: BlendFile): SceneContents {
   const scene = activeScene(file);
   if (!scene) return { scene: null, objects: [], linkedObjects: [] };
-  const excluded = excludedCollections(activeViewLayer(file, scene));
+  const layer = viewLayerState(activeViewLayer(file, scene));
   const ordered: BlendStruct[] = [];
   const shown = new Set<number>();
+  const unhiddenByCollection = new Set<number>();
   const seenCollections = new Set<number>();
   const linked = new Set<string>();
 
   const visit = (collection: BlendStruct) => {
     if (seenCollections.has(collection.offset)) return;
     seenCollections.add(collection.offset);
-    if (excluded.has(collection.offset) || (collection.number("flag") & COLLECTION_HIDE_VIEWPORT) !== 0) return;
+    if (
+      layer.excludedCollections.has(collection.offset) ||
+      (collection.number("flag") & COLLECTION_HIDE_VIEWPORT) !== 0
+    ) {
+      return;
+    }
+    const collectionHidden = layer.hiddenCollections.has(collection.offset);
     for (const entry of collection.list("gobject")) {
       const object = entry.deref("ob");
-      if (!object || shown.has(object.offset)) continue;
+      if (!object) continue;
       if (isLinked(object)) {
         linked.add(idName(object));
         continue;
       }
       if ((object.number("restrictflag") & OBJECT_HIDE_VIEWPORT) !== 0) continue;
+      if (!collectionHidden) unhiddenByCollection.add(object.offset);
+      if (shown.has(object.offset)) continue;
       shown.add(object.offset);
       ordered.push(object);
+      if (usesLinkedData(object)) linked.add(idName(object));
     }
     for (const child of collection.list("children")) {
       const nested = child.deref("collection");
@@ -180,9 +226,11 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     for (const { target } of deformingArmatures(object)) need(target);
   }
 
+  const hidden = (object: BlendStruct) =>
+    layer.hiddenObjects.has(object.offset) || !unhiddenByCollection.has(object.offset);
   const all = [
-    ...ordered.map((object) => describe(object, true)),
-    ...[...needed.values()].map((o) => describe(o, false)),
+    ...ordered.map((object) => describe(object, true, hidden(object))),
+    ...[...needed.values()].map((object) => describe(object, false, false)),
   ];
   return { scene, objects: parentsFirst(all), linkedObjects: [...linked] };
 }

@@ -125,7 +125,8 @@ function buildSkin(mesh: MeshData, bones: SkinBone[], meshNode: number) {
   };
 }
 
-function shapeKeyOffsets(mesh: MeshData, conversion: Mat4) {
+/** Each shape key's offsets at full weight from the shape it is relative to, in Blender's space. */
+function shapeKeyOffsets(mesh: MeshData) {
   const targets: { name: string; defaultWeight: number; offsets: Float32Array }[] = [];
   const groupIndex = new Map(mesh.vertexGroupNames.map((name, index) => [name, index]));
   mesh.shapeKeys.forEach((key, index) => {
@@ -137,13 +138,9 @@ function shapeKeyOffsets(mesh: MeshData, conversion: Mat4) {
     const offsets = new Float32Array(mesh.vertexCount * 3);
     for (let v = 0; v < mesh.vertexCount; v++) {
       const factor = factors ? (factors[v] ?? 0) : 1;
-      const d = transformDirection(
-        conversion,
-        ((key.positions[v * 3] ?? 0) - (base.positions[v * 3] ?? 0)) * factor,
-        ((key.positions[v * 3 + 1] ?? 0) - (base.positions[v * 3 + 1] ?? 0)) * factor,
-        ((key.positions[v * 3 + 2] ?? 0) - (base.positions[v * 3 + 2] ?? 0)) * factor,
-      );
-      offsets.set(d, v * 3);
+      for (let k = 0; k < 3; k++) {
+        offsets[v * 3 + k] = ((key.positions[v * 3 + k] ?? 0) - (base.positions[v * 3 + k] ?? 0)) * factor;
+      }
     }
     targets.push({ name: key.name, defaultWeight: Math.min(Math.max(key.value, 0), 1), offsets });
   });
@@ -160,6 +157,18 @@ function vertexGroupFactors(mesh: MeshData, group: number): Float32Array {
     }
   }
   return factors;
+}
+
+/** A Blender-space normal, rounded to 32 bits as a vertex stores it, in the scene's axes at unit length. */
+function sceneNormal(conversion: Mat4, normal: readonly number[]): [number, number, number] {
+  const [x, y, z] = transformDirection(
+    conversion,
+    Math.fround(normal[0] ?? 0),
+    Math.fround(normal[1] ?? 0),
+    Math.fround(normal[2] ?? 0),
+  );
+  const length = Math.hypot(x, y, z) || 1;
+  return [x / length, y / length, z / length];
 }
 
 function cornerNormalsOf(mesh: MeshData): Float32Array {
@@ -222,6 +231,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     return values.map(Math.fround);
   };
   const vertexKeys: number[][] = [];
+  const cornerOf: number[] = [];
   const renderedVertex = (corner: number): number => {
     const vertex = mesh.cornerVerts[corner] ?? 0;
     const attributes = attributesOf(corner);
@@ -234,6 +244,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     candidates.push(index);
     rendered.set(vertex, candidates);
     vertexKeys.push(attributes);
+    cornerOf.push(corner);
     sourceVertex.push(vertex);
     positions.push(
       ...transformDirection(
@@ -243,14 +254,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
         mesh.positions[vertex * 3 + 2] ?? 0,
       ),
     );
-    const [nx, ny, nz] = transformDirection(
-      options.conversion,
-      attributes[0] ?? 0,
-      attributes[1] ?? 0,
-      attributes[2] ?? 0,
-    );
-    const length = Math.hypot(nx, ny, nz) || 1;
-    outNormals.push(nx / length, ny / length, nz / length);
+    outNormals.push(...sceneNormal(options.conversion, attributes));
     uvMaps.forEach((_, m) => {
       uvValues[m]?.push(attributes[3 + m * 2] ?? 0, attributes[4 + m * 2] ?? 0);
     });
@@ -268,16 +272,24 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
   });
 
   const source = Uint32Array.from(sourceVertex);
-  const morphs = shapeKeyOffsets(mesh, options.conversion);
+  const morphs = shapeKeyOffsets(mesh);
   const morphTargets = morphs.map((target) => {
     const values = new Float32Array(source.length * 3);
+    const normalOffsets = new Float32Array(source.length * 3);
+    const shaped = Float32Array.from(mesh.positions, (value, index) => value + (target.offsets[index] ?? 0));
+    const shapedNormals = target.offsets.some((value) => value !== 0)
+      ? cornerNormalsOf({ ...mesh, positions: shaped })
+      : null;
     for (let r = 0; r < source.length; r++) {
       const v = source[r] ?? 0;
-      values[r * 3] = target.offsets[v * 3] ?? 0;
-      values[r * 3 + 1] = target.offsets[v * 3 + 1] ?? 0;
-      values[r * 3 + 2] = target.offsets[v * 3 + 2] ?? 0;
+      const offset = target.offsets.subarray(v * 3, v * 3 + 3);
+      values.set(transformDirection(options.conversion, offset[0] ?? 0, offset[1] ?? 0, offset[2] ?? 0), r * 3);
+      if (!shapedNormals) continue;
+      const corner = cornerOf[r] ?? 0;
+      const normal = sceneNormal(options.conversion, Array.from(shapedNormals.subarray(corner * 3, corner * 3 + 3)));
+      for (let k = 0; k < 3; k++) normalOffsets[r * 3 + k] = (normal[k] ?? 0) - (outNormals[r * 3 + k] ?? 0);
     }
-    return { name: target.name, defaultWeight: target.defaultWeight, positions: values, normals: null };
+    return { name: target.name, defaultWeight: target.defaultWeight, positions: values, normals: normalOffsets };
   });
 
   let skin: BuiltMesh["skin"] = null;

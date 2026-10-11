@@ -31,7 +31,10 @@ export interface ScenePart {
   node: number;
   /** Meshes by LOD level, lowest level first. A part without LODs has level 0 only; a socket without a mesh has none. */
   levels: PartLevel[];
-  /** A composition hides the part until someone shows it, such as the second of two alternative bodies. */
+  /**
+   * The file or a composition hides the part until someone shows it, such as a mesh hidden in Blender's viewport or
+   * the second of two alternative bodies.
+   */
   hiddenByDefault?: boolean;
 }
 

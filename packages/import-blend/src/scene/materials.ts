@@ -46,6 +46,18 @@ interface Graph {
 }
 
 /** The material Blender shows for an empty slot. */
+/** The images a material samples. */
+export function imageUses(draft: MaterialDraft): ImageUse[] {
+  return [
+    draft.baseColorImage,
+    draft.metallicRoughnessImage,
+    draft.roughnessImage,
+    draft.metalnessImage,
+    draft.normalImage,
+    draft.emissiveImage,
+  ].filter((use): use is ImageUse => use !== null);
+}
+
 export function defaultMaterial(name = "Default"): MaterialDraft {
   return {
     name,

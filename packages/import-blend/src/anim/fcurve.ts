@@ -16,10 +16,26 @@ export interface Keys {
   period: Float32Array;
 }
 
-export type CurveModifier =
-  | { type: "cycles"; before: number; after: number; beforeCycles: number; afterCycles: number }
-  | { type: "stepped"; step: number; offset: number; start: number; end: number; noBefore: boolean; noAfter: boolean }
-  | { type: "limits"; rect: [number, number, number, number]; flag: number };
+/** The frames a modifier acts on, with its effect ramping up over `blendIn` frames and down over `blendOut`. */
+export interface ModifierRange {
+  start: number;
+  end: number;
+  blendIn: number;
+  blendOut: number;
+}
+
+interface ModifierScope {
+  /** The frame range the modifier is restricted to, or null for every frame. */
+  range: ModifierRange | null;
+  influence: number;
+}
+
+export type CurveModifier = ModifierScope &
+  (
+    | { type: "cycles"; before: number; after: number; beforeCycles: number; afterCycles: number }
+    | { type: "stepped"; step: number; offset: number; start: number; end: number; noBefore: boolean; noAfter: boolean }
+    | { type: "limits"; rect: [number, number, number, number]; flag: number }
+  );
 
 export interface FCurve {
   path: string;
@@ -60,7 +76,10 @@ const EASE_IN_OUT = 3;
 const FCURVE_MUTED = 1 << 4;
 const FCURVE_DISCRETE_VALUES = 1 << 12;
 const FCURVE_EXTRAPOLATE_LINEAR = 1;
+const FMODIFIER_DISABLED = 1 << 0;
 const FMODIFIER_MUTED = 1 << 3;
+const FMODIFIER_RANGE_RESTRICTED = 1 << 4;
+const FMODIFIER_USE_INFLUENCE = 1 << 5;
 const FMODIFIER_CYCLES = 4;
 const FMODIFIER_LIMITS = 8;
 const FMODIFIER_STEPPED = 9;
@@ -93,11 +112,25 @@ function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupp
   const modifiers: CurveModifier[] = [];
   const unsupported: string[] = [];
   for (const modifier of curve.list("modifiers")) {
-    if ((modifier.number("flag") & FMODIFIER_MUTED) !== 0) continue;
+    const flag = modifier.number("flag");
+    if ((flag & (FMODIFIER_MUTED | FMODIFIER_DISABLED)) !== 0) continue;
     const type = modifier.number("type");
     const data = modifier.deref("data");
+    const scope: ModifierScope = {
+      range:
+        (flag & FMODIFIER_RANGE_RESTRICTED) !== 0
+          ? {
+              start: modifier.number("sfra"),
+              end: modifier.number("efra"),
+              blendIn: modifier.number("blendin"),
+              blendOut: modifier.number("blendout"),
+            }
+          : null,
+      influence: (flag & FMODIFIER_USE_INFLUENCE) !== 0 ? modifier.number("influence") : 1,
+    };
     if (type === FMODIFIER_CYCLES && data) {
       modifiers.push({
+        ...scope,
         type: "cycles",
         before: data.number("before_mode"),
         after: data.number("after_mode"),
@@ -105,19 +138,21 @@ function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupp
         afterCycles: data.number("after_cycles"),
       });
     } else if (type === FMODIFIER_STEPPED && data) {
-      const flag = data.number("flag");
+      const steppedFlag = data.number("flag");
       modifiers.push({
+        ...scope,
         type: "stepped",
         step: data.number("step_size"),
         offset: data.number("offset"),
         start: data.number("start_frame"),
         end: data.number("end_frame"),
-        noBefore: (flag & 1) !== 0,
-        noAfter: (flag & 2) !== 0,
+        noBefore: (steppedFlag & 1) !== 0,
+        noAfter: (steppedFlag & 2) !== 0,
       });
     } else if (type === FMODIFIER_LIMITS && data) {
       const rect = data.struct("rect");
       modifiers.push({
+        ...scope,
         type: "limits",
         rect: [
           rect?.number("xmin") ?? 0,
@@ -460,7 +495,7 @@ function eased(keys: Keys, key: number, time: number, begin: number, change: num
       if (ease === EASE_OUT) return expoOut(time, begin, change, duration);
       const half = duration * 0.5;
       if (time === 0) return begin;
-      if (time === half) return begin + change;
+      if (time === half) return begin + change * 0.5;
       return time < half
         ? expoIn(time, begin, change * 0.5, half)
         : expoOut(time - half, begin + change * 0.5, change * 0.5, half);
@@ -616,31 +651,70 @@ function cyclesTime(curve: FCurve, modifier: Extract<CurveModifier, { type: "cyc
   return { frame: time, offset };
 }
 
-/** The curve's value at a frame, with its Cycles, Stepped and Limits modifiers applied. */
+function inRange(modifier: CurveModifier, frame: number): boolean {
+  const { range } = modifier;
+  return range === null || (range.start <= frame && frame <= range.end);
+}
+
+/** Blender's `eval_fmodifier_influence`: the modifier's influence, ramped over its blend frames. */
+function influenceAt(modifier: CurveModifier, frame: number): number {
+  const { range, influence } = modifier;
+  if (range === null) return influence;
+  if (frame < range.start || frame > range.end) return 0;
+  if (range.blendIn !== 0 && frame <= range.start + range.blendIn) {
+    return (influence * (frame - range.start)) / range.blendIn;
+  }
+  if (range.blendOut !== 0 && frame >= range.end - range.blendOut) {
+    return (influence * (range.end - frame)) / range.blendOut;
+  }
+  return influence;
+}
+
+function mix(target: number, origin: number, factor: number): number {
+  return factor * target + (1 - factor) * origin;
+}
+
+/**
+ * The curve's value at a frame, with its Cycles, Stepped and Limits modifiers applied as Blender's
+ * `evaluate_fcurve_ex` does: time modifiers last to first, then the curve, then value modifiers first to last.
+ */
 export function evaluateFCurve(curve: FCurve, frame: number): number {
   let time = frame;
   let offset = 0;
   for (let i = curve.modifiers.length - 1; i >= 0; i--) {
     const modifier = curve.modifiers[i];
-    if (!modifier) continue;
-    if (modifier.type === "cycles" && i === 0) {
+    if (!modifier || !inRange(modifier, time)) continue;
+    let target = time;
+    if (modifier.type === "cycles") {
+      if (i !== 0) continue;
       const cycled = cyclesTime(curve, modifier, time);
-      time = cycled.frame;
-      offset += cycled.offset;
-    } else if (modifier.type === "stepped" && modifier.step !== 0) {
+      target = cycled.frame;
+      offset = cycled.offset;
+    } else if (modifier.type === "stepped") {
+      if (modifier.step === 0) continue;
       if ((modifier.noBefore && time < modifier.start) || (modifier.noAfter && time > modifier.end)) continue;
-      time = Math.trunc((time - modifier.offset) / modifier.step) * modifier.step + modifier.offset;
-    } else if (modifier.type === "limits") {
-      if (modifier.flag & 1) time = Math.max(time, modifier.rect[0]);
-      if (modifier.flag & 2) time = Math.min(time, modifier.rect[1]);
+      target = Math.trunc((time - modifier.offset) / modifier.step) * modifier.step + modifier.offset;
+    } else {
+      if (modifier.flag & 1) target = Math.max(target, modifier.rect[0]);
+      if (modifier.flag & 2) target = Math.min(target, modifier.rect[1]);
     }
+    time = mix(target, time, influenceAt(modifier, time));
   }
-  let value = rawValue(curve, time) + offset;
-  for (const modifier of curve.modifiers) {
-    if (modifier.type !== "limits") continue;
-    if (modifier.flag & 4) value = Math.max(value, modifier.rect[2]);
-    if (modifier.flag & 8) value = Math.min(value, modifier.rect[3]);
-  }
+  let value = rawValue(curve, time);
+  curve.modifiers.forEach((modifier, i) => {
+    if (!inRange(modifier, time)) return;
+    let target = value;
+    if (modifier.type === "cycles") {
+      if (i !== 0) return;
+      target = value + offset;
+    } else if (modifier.type === "limits") {
+      if (modifier.flag & 4) target = Math.max(target, modifier.rect[2]);
+      if (modifier.flag & 8) target = Math.min(target, modifier.rect[3]);
+    } else {
+      return;
+    }
+    value = mix(target, value, influenceAt(modifier, time));
+  });
   return value;
 }
 

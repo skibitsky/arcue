@@ -159,6 +159,24 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       const placed = placedSourceVertices(scene, index, worldMatrices(scene), weights);
       expect(pointsError(placed, shaped.positions)).toBeLessThan(TOLERANCE);
     });
+
+    it("turns each rendered normal as Blender shades the shape key at full weight", () => {
+      const blob = scene.meshes[meshIndex(scene, "Blob")];
+      const normals = expected.shapeKeys?.Blob?.normals;
+      if (!blob || !normals) throw new Error("no Blob shape key normals");
+      for (const target of blob.morphTargets) {
+        const corners = normals[target.name] ?? [];
+        expect(corners.length, target.name).toBeGreaterThan(0);
+        for (let r = 0; r < blob.sourceVertex.length; r++) {
+          const turned = [0, 1, 2].map((k) => (blob.normals[r * 3 + k] ?? 0) + (target.normals?.[r * 3 + k] ?? 0));
+          const length = Math.hypot(...turned);
+          const normal = turned.map((value) => value / length);
+          const vertex = blob.sourceVertex[r];
+          const found = corners.some((corner) => corner[0] === vertex && pointsError(corner.slice(1), normal) < 1e-3);
+          expect(found, `${target.name} vertex ${vertex}`).toBe(true);
+        }
+      }
+    });
   });
 
   describe("rig", async () => {
@@ -185,12 +203,20 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
     it("makes a clip of every action, assigned or not, over its frame range", () => {
       expect(scene.clips.map((entry) => [entry.name, entry.frameCount, entry.fps])).toEqual([
         ["Ease", 61, 30],
+        ["Pulse", 7, 30],
         ["Spin", 10, 30],
         ["Stretch", 9, 30],
         ["Swell", 8, 30],
         ["Wave", 20, 30],
       ]);
       expect(Array.from(clip(scene, "Wave").keyTimes)).toEqual([0, 5 / 30, 11 / 30].map(Math.fround));
+    });
+
+    it("steps shape key weights that only constant keys move", () => {
+      const weights = (name: string) =>
+        clip(scene, name).tracks.map((track) => [scene.nodes[track.node]?.name, track.property, track.interpolation]);
+      expect(weights("Pulse")).toEqual([["Body", "weights", "step"]]);
+      expect(weights("Swell")).toEqual([["Body", "weights", "linear"]]);
     });
 
     it("evaluates every bone's pose in armature space as Blender does, inheritance modes included", async () => {
@@ -319,6 +345,19 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       expect(textured.emissive).toEqual([2, 1, 0]);
     });
 
+    it("copies a material for a mesh whose UV maps put its textures on other UV sets", () => {
+      const planes = ["TexturedPlane", "SwappedPlane"].map((name) => scene.meshes[meshIndex(scene, name)]);
+      expect(planes.map((plane) => plane?.uvs.map((uv) => uv.name))).toEqual([
+        ["UVMap", "Detail"],
+        ["Detail", "UVMap"],
+      ]);
+      const used = planes.map((plane) => scene.materials[plane?.groups[0]?.material ?? -1]);
+      expect(used.map((entry) => [entry?.name, entry?.baseColorTexture?.uvSet, entry?.normalTexture?.uvSet])).toEqual([
+        ["Textured", 1, 0],
+        ["Textured", 0, 1],
+      ]);
+    });
+
     it("reads alpha, backface culling and simple shaders", () => {
       expect(material("Glass")).toMatchObject({ alphaMode: "blend", doubleSided: false });
       expect(material("Glass").baseColor[3]).toBeCloseTo(0.4);
@@ -344,6 +383,29 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["texture-path-absolute", "absolute.png"],
       ]);
     });
+  });
+});
+
+describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) => {
+  const scene = await importFixture("scenes", version);
+
+  it("keeps objects hidden with the eye and starts their parts hidden, unless a level of the part shows", () => {
+    expect(scene.parts.map((part) => [part.name, part.hiddenByDefault === true])).toEqual([
+      ["Visible", false],
+      ["EyeHidden", true],
+      ["Rock", false],
+      ["Morph", false],
+      ["TuckedAway", true],
+    ]);
+  });
+
+  it("warns about collection instances, absolute shape keys and data linked from other files", () => {
+    expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
+      ["object-not-shown", "KitInstance", "Arcue does not expand instances of Kit"],
+      ["deform-approximated", "Morph", "Shown in its basis shape"],
+      ["library-not-loaded", `scenes-${version}.blend`, "From other .blend files: Borrowed, LibraryRock"],
+    ]);
+    expect(scene.meshes[meshIndex(scene, "Morph")]?.morphTargets).toEqual([]);
   });
 });
 

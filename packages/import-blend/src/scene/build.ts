@@ -1,12 +1,12 @@
 import type { ImportWarningCode, ImportWarningSubject, Mesh, NodeKind, Skeleton } from "@arcue/scene";
 import type { BlendFile, BlendStruct } from "../blend/file";
-import { isLinked } from "../blend/ids";
+import { idName, isLinked } from "../blend/ids";
 import type { Mat4 } from "../math";
 import { identity, invert, mat4From, multiply, multiplyAll, transformPoint, translation } from "../math";
 import type { Bone } from "./armature";
 import { readBones } from "./armature";
 import type { MaterialDraft } from "./materials";
-import { defaultMaterial, readMaterial } from "./materials";
+import { defaultMaterial, imageUses, readMaterial } from "./materials";
 import type { BuiltMesh, SkinBone } from "./mesh-build";
 import { buildMesh, MAX_UV_SETS } from "./mesh-build";
 import type { MeshData } from "./mesh-data";
@@ -17,6 +17,7 @@ import {
   ARMATURE_DEFORM_VERTEX_GROUPS,
   collectSceneObjects,
   deformingArmatures,
+  instancedCollection,
   ObjectType,
   ParentType,
   UNSHOWN_GEOMETRY,
@@ -81,8 +82,8 @@ export interface BuiltScene {
   meshes: Omit<Mesh, "topology">[];
   skeletons: Skeleton[];
   materials: MaterialDraft[];
-  /** For each material, the UV maps of the meshes that use it. */
-  materialUvs: MaterialUvMaps[][];
+  /** For each material, the UV maps of the meshes it is drawn on, which all resolve its textures' UV maps alike. */
+  materialUvs: MaterialUvMaps[];
   objects: ObjectRecord[];
   meshRecords: MeshRecord[];
   /** Takes Blender's space into the scene's: −90° about X and the unit scale. */
@@ -241,6 +242,11 @@ function objectNodes(contents: SceneContents, warn: Warn) {
       const kind = UNSHOWN_GEOMETRY.get(object.type);
       warn("object-not-shown", object.name, `Not shown: ${object.name}`, `Arcue shows meshes; this is ${kind} data`);
     }
+    const instanced = object.shown ? instancedCollection(object.struct) : null;
+    if (instanced) {
+      const detail = `Arcue does not expand instances of ${idName(instanced)}`;
+      warn("object-not-shown", object.name, `Collection instance not shown: ${object.name}`, detail);
+    }
     if (object.parentType === ParentType.vertex || object.parentType === ParentType.vertices) {
       warn("invalid-data", object.name, `Vertex parent not followed: ${object.name}`);
     }
@@ -250,35 +256,36 @@ function objectNodes(contents: SceneContents, warn: Warn) {
   return { nodes, objects, byOffset };
 }
 
-/** The scene's materials, read once each, with the default material for empty slots. */
+/**
+ * The scene's materials, read once each, with the default material for empty slots. A material gets a copy for each
+ * mesh whose UV maps put its textures on other UV sets, since Blender finds a texture's UV map by name in each mesh.
+ */
 class MaterialTable {
   readonly drafts: MaterialDraft[] = [];
-  readonly uvMaps = new Map<number, MaterialUvMaps[]>();
-  readonly #index = new Map<number, number>();
+  readonly uvMaps: MaterialUvMaps[] = [];
+  readonly #read = new Map<number, MaterialDraft>();
+  readonly #index = new Map<string, number>();
   readonly #version: number;
-  #default = -1;
 
   constructor(version: number) {
     this.#version = version;
   }
 
-  indexOf(material: BlendStruct | null): number {
-    if (!material || isLinked(material)) {
-      if (this.#default < 0) {
-        this.#default = this.drafts.length;
-        this.drafts.push(defaultMaterial());
-      }
-      return this.#default;
+  indexOf(material: BlendStruct | null, uvMaps: MaterialUvMaps): number {
+    const usable = material && !isLinked(material) ? material : null;
+    let draft = usable ? this.#read.get(usable.offset) : undefined;
+    if (usable && !draft) {
+      draft = readMaterial(usable, this.#version);
+      this.#read.set(usable.offset, draft);
     }
-    const known = this.#index.get(material.offset);
+    const sets = draft ? imageUses(draft).map((use) => uvSetFor(uvMaps, use.uvMap)) : [];
+    const key = `${usable?.offset ?? "default"}:${sets.join(",")}`;
+    const known = this.#index.get(key);
     if (known !== undefined) return known;
-    this.#index.set(material.offset, this.drafts.length);
-    this.drafts.push(readMaterial(material, this.#version));
+    this.#index.set(key, this.drafts.length);
+    this.drafts.push(draft ?? defaultMaterial());
+    this.uvMaps.push(uvMaps);
     return this.drafts.length - 1;
-  }
-
-  usedBy(material: number, uvMaps: MaterialUvMaps): void {
-    this.uvMaps.set(material, [...(this.uvMaps.get(material) ?? []), uvMaps]);
   }
 }
 
@@ -404,6 +411,14 @@ export function buildScene(file: BlendFile): BuiltScene {
       continue;
     }
     if (data.faceCount === 0) continue;
+    if (data.absoluteKeys) {
+      warn(
+        "deform-approximated",
+        object.name,
+        `Absolute shape keys not shown: ${object.name}`,
+        "Shown in its basis shape",
+      );
+    }
     const smoothing = smoothByAngle(object.struct);
     if (smoothing) data = applySmoothByAngle(data, smoothing);
     modifierWarnings(object, smoothing, warn);
@@ -428,15 +443,14 @@ export function buildScene(file: BlendFile): BuiltScene {
       restPositions.set(transformPoint(placement, x, y, z), v * 3);
     }
     const slotMaterial = slotMaterials(file, object.struct, data);
-    const groups = built.groups.map((group) => ({
-      ...group,
-      material: materials.indexOf(slotMaterial(group.material)),
-    }));
     const uvMaps: MaterialUvMaps = {
       names: built.uvs.map((uv) => uv.name),
       defaultIndex: data.defaultUv < built.uvs.length ? data.defaultUv : 0,
     };
-    for (const group of groups) materials.usedBy(group.material, uvMaps);
+    const groups = built.groups.map((group) => ({
+      ...group,
+      material: materials.indexOf(slotMaterial(group.material), uvMaps),
+    }));
 
     const node = nodes[record.node];
     if (node) {
@@ -474,8 +488,8 @@ export function buildScene(file: BlendFile): BuiltScene {
     warnings.push({
       code: "library-not-loaded",
       subject: { kind: "file", name: "" },
-      message: "Linked objects not shown",
-      detail: `Objects from other .blend files: ${contents.linkedObjects.join(", ")}`,
+      message: "Linked data not shown",
+      detail: `From other .blend files: ${contents.linkedObjects.join(", ")}`,
     });
   }
 
@@ -484,7 +498,7 @@ export function buildScene(file: BlendFile): BuiltScene {
     meshes,
     skeletons,
     materials: materials.drafts,
-    materialUvs: materials.drafts.map((_, index) => materials.uvMaps.get(index) ?? []),
+    materialUvs: materials.uvMaps,
     objects,
     meshRecords,
     conversion,
@@ -494,11 +508,9 @@ export function buildScene(file: BlendFile): BuiltScene {
   };
 }
 
-/** The UV set index a texture samples: its UV Map node's map, or else the default map, in the first mesh that has it. */
-export function uvSetFor(meshes: readonly MaterialUvMaps[], uvMap: string | null): number {
-  for (const mesh of meshes) {
-    const found = uvMap === null ? mesh.defaultIndex : mesh.names.indexOf(uvMap);
-    if (found >= 0) return found;
-  }
-  return 0;
+/** The UV set index a texture samples in a mesh: its UV Map node's map, or else the mesh's default map. */
+export function uvSetFor(mesh: MaterialUvMaps | undefined, uvMap: string | null): number {
+  if (!mesh) return 0;
+  const found = uvMap === null ? mesh.defaultIndex : mesh.names.indexOf(uvMap);
+  return found >= 0 ? found : 0;
 }
