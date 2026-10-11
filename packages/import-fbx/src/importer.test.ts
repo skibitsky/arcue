@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { FoundFile, ImportRequest, SceneDescription } from "@arcue/scene";
-import { cleanClipName, collectTransferables, lastFrame, parseStoredPath } from "@arcue/scene";
+import { boundsOfPoints, cleanClipName, collectTransferables, lastFrame, parseStoredPath } from "@arcue/scene";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   ABSOLUTE_TEXTURE_FBX,
@@ -207,10 +207,11 @@ describe.each(manifest.files)("$file", (expected) => {
 
   it("places the rest pose in meters with Y up", () => {
     const { min, max } = expected.rest_bounds_m;
-    for (const [axis, value] of scene.bounds.min.entries()) {
+    const bounds = boundsOfPoints(scene.meshes.map((mesh) => mesh.restPositions));
+    for (const [axis, value] of bounds.min.entries()) {
       expect(Math.abs(value - (min[axis] ?? 0))).toBeLessThan(BOUNDS_TOLERANCE);
     }
-    for (const [axis, value] of scene.bounds.max.entries()) {
+    for (const [axis, value] of bounds.max.entries()) {
       expect(Math.abs(value - (max[axis] ?? 0))).toBeLessThan(BOUNDS_TOLERANCE);
     }
     expect(scene.source.fps).toBe(expected.fps);

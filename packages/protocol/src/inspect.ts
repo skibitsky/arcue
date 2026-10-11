@@ -15,6 +15,13 @@ export const inspectedMeshSchema = z.object({
   skinned: z.boolean(),
 });
 
+export const inspectedBoneSchema = z.object({
+  /** The bone's name in the file. */
+  name: z.string(),
+  /** The node path through the bones above it, or "<file>//<node path>" for a bone from another file of the model. */
+  path: z.string(),
+});
+
 export const inspectedTextureRefSchema = z.object({
   /** The material property the texture feeds, such as "baseColor" or "normal". */
   slot: z.string(),
@@ -74,7 +81,8 @@ export const assetInspectionSchema = z.object({
   /** Every mesh in exactly one part; LOD groups, collision helpers and sockets are parts with their own roles. */
   parts: z.array(partSummarySchema),
   triangles: countSchema,
-  bones: countSchema,
+  /** Parents before their children. A file attaches to one of the model's own bones by its name or path. */
+  bones: z.array(inspectedBoneSchema),
   materials: z.array(inspectedMaterialSchema),
   textures: z.array(inspectedTextureSchema),
   clips: z.array(inspectedClipSchema),
@@ -86,6 +94,7 @@ export const assetInspectionSchema = z.object({
 });
 
 export type InspectedMesh = z.output<typeof inspectedMeshSchema>;
+export type InspectedBone = z.output<typeof inspectedBoneSchema>;
 export type InspectedMaterial = z.output<typeof inspectedMaterialSchema>;
 export type InspectedTexture = z.output<typeof inspectedTextureSchema>;
 export type InspectedClip = z.output<typeof inspectedClipSchema>;

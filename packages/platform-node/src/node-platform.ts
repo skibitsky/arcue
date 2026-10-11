@@ -259,7 +259,9 @@ function watchPath(
     } catch {
       watching = null;
       poll();
+      return;
     }
+    if (folder !== parent) void arm().then(report);
   };
 
   void lstat(native(path)).then(
