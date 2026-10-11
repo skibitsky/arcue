@@ -29,6 +29,8 @@ export interface ImageUse {
   coordinates: string | null;
   /** Whether the image is transparent outside its edges, Blender's Clip extension, which the preview shows as Extend. */
   clipped: boolean;
+  /** Box, Sphere or Tube projection, which the preview shows as flat, or null for flat. */
+  projection: string | null;
 }
 
 export interface MaterialDraft {
@@ -62,6 +64,7 @@ const BLEND_METHOD_CLIP = 3;
 
 const WRAPS: readonly WrapMode[] = ["repeat", "clamp", "clamp", "mirror"];
 const EXTENSION_CLIP = 2;
+const PROJECTIONS: Readonly<Record<number, string>> = { 1: "Box", 2: "Sphere", 3: "Tube" };
 const SIMPLE_SHADERS = new Set([
   "ShaderNodeEmission",
   "ShaderNodeBsdfDiffuse",
@@ -212,6 +215,21 @@ function imageFeeding(graph: Graph, socket: BlendStruct | null, depth = 0): FedI
   return null;
 }
 
+/** Notes an input that nodes other than an image drive, which the preview shows at its own value. */
+function noteNodeInput(
+  graph: Graph,
+  draft: MaterialDraft,
+  input: string,
+  socket: BlendStruct | null,
+  found: FedImage | null,
+): void {
+  if (found || !socket) return;
+  const link = linkInto(graph, socket);
+  if (!link) return;
+  const name = link.node.string("name") || nodeType(link.node);
+  draft.approximations.push(`${input} comes from ${name}, shown at the value set on the input`);
+}
+
 /** The image an input samples, noting on the draft any nodes between that change its values. */
 function imageInput(graph: Graph, draft: MaterialDraft, input: string, found: FedImage | null): ImageUse | null {
   if (!found) return null;
@@ -272,7 +290,8 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
     else if (vector.socket !== "UV") coordinates = vector.socket;
     break;
   }
-  return { image, uvMap, wrap, transform, coordinates, clipped: extension === EXTENSION_CLIP };
+  const projection = PROJECTIONS[storage?.number("projection") ?? 0] ?? null;
+  return { image, uvMap, wrap, transform, coordinates, clipped: extension === EXTENSION_CLIP, projection };
 }
 
 function graphOf(tree: BlendStruct): Graph {
@@ -336,6 +355,7 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   draft.baseColor = [color[0] ?? 0.8, color[1] ?? 0.8, color[2] ?? 0.8, 1];
   const baseImage = imageFeeding(graph, baseSocket);
   draft.baseColorImage = imageInput(graph, draft, "Base color", baseImage);
+  noteNodeInput(graph, draft, "Base color", baseSocket, baseImage);
 
   const metallicSocket = inputSocket(node, "Metallic");
   const roughnessSocket = inputSocket(node, "Roughness");
@@ -357,6 +377,8 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
     draft.roughnessImage = channelImage(graph, draft, "Roughness", roughnessImage, ["Green", "G"]);
     draft.metalnessImage = channelImage(graph, draft, "Metallic", metallicImage, ["Blue", "B"]);
   }
+  noteNodeInput(graph, draft, "Roughness", roughnessSocket, roughnessImage);
+  noteNodeInput(graph, draft, "Metallic", metallicSocket, metallicImage);
 
   const normalLink = linkInto(graph, inputSocket(node, "Normal") ?? node);
   const normalSpace = normalLink?.node.deref("storage")?.number("space") ?? TANGENT_SPACE;
@@ -365,11 +387,16 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
     draft.approximations.push(`Its normal map is in ${space} space, which the preview leaves out`);
   } else if (normalLink && nodeType(normalLink.node) === "ShaderNodeNormalMap") {
     const strength = inputSocket(normalLink.node, "Strength");
-    const image = imageFeeding(graph, inputSocket(normalLink.node, "Color"));
+    const colorSocket = inputSocket(normalLink.node, "Color");
+    const image = imageFeeding(graph, colorSocket);
     if (image) {
       draft.normalImage = imageInput(graph, draft, "Normal", image);
       draft.normalScale = defaultFloat(strength, 1);
     }
+    noteNodeInput(graph, draft, "Normal map color", colorSocket, image);
+  } else if (normalLink) {
+    const name = normalLink.node.string("name") || nodeType(normalLink.node);
+    draft.approximations.push(`Normal comes from ${name}, which the preview leaves out`);
   }
 
   const emissionSocket = inputSocket(node, "Emission Color", "Emission");
@@ -380,6 +407,7 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   draft.emissive = [(emission[0] ?? 0) * strength, (emission[1] ?? 0) * strength, (emission[2] ?? 0) * strength];
   draft.emissionStrength = strength;
   if (emissionImage && strength > 0) draft.emissiveImage = imageInput(graph, draft, "Emission", emissionImage);
+  noteNodeInput(graph, draft, "Emission", emissionSocket, emissionImage);
 
   const alphaSocket = inputSocket(node, "Alpha");
   const alpha = clamp01(defaultFloat(alphaSocket, 1));
@@ -425,6 +453,7 @@ function readSimpleShader(graph: Graph, node: BlendStruct, draft: MaterialDraft)
   const colorSocket = inputSocket(node, "Color");
   const color = defaultVector(colorSocket, [0.8, 0.8, 0.8, 1]);
   const image = imageFeeding(graph, colorSocket);
+  noteNodeInput(graph, draft, "Color", colorSocket, image);
   if (type === "ShaderNodeEmission") {
     const strength = defaultFloat(inputSocket(node, "Strength"), 1);
     draft.baseColor = [0, 0, 0, 1];
@@ -485,6 +514,7 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
       draft.approximations.push(`${name} uses ${use.coordinates} coordinates, shown with the UV map`);
     }
     if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
+    if (use.projection) draft.approximations.push(`${name} uses ${use.projection} projection, shown flat`);
   }
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";

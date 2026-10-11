@@ -75,6 +75,8 @@ export interface SceneContents {
   objects: SceneObject[];
   /** Objects that are, or whose mesh or armature data is, linked from other files, which this file does not hold. */
   linkedObjects: string[];
+  /** Collections the scene links straight from other files. */
+  linkedCollections: string[];
 }
 
 function activeScene(file: BlendFile): BlendStruct | null {
@@ -168,13 +170,14 @@ export function deformingArmatures(object: BlendStruct): ArmatureDeform[] {
  */
 export function collectSceneObjects(file: BlendFile): SceneContents {
   const scene = activeScene(file);
-  if (!scene) return { scene: null, objects: [], linkedObjects: [] };
+  if (!scene) return { scene: null, objects: [], linkedObjects: [], linkedCollections: [] };
   const viewLayer = activeViewLayer(file, scene);
   const hiddenBases = eyeHiddenObjects(viewLayer);
   const ordered: BlendStruct[] = [];
   const shown = new Set<number>();
   const unhiddenByCollection = new Set<number>();
   const linked = new Set<string>();
+  const linkedCollections = new Set<string>();
 
   /** Walks one place a collection has in the tree, with the view layer's layer collection for that place. */
   const visit = (
@@ -211,6 +214,10 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     for (const child of collection.list("children")) {
       const nested = child.deref("collection");
       if (!nested) continue;
+      if (isLinked(nested)) {
+        linkedCollections.add(idName(nested));
+        continue;
+      }
       const nestedLayer = childLayers.find((candidate) => candidate.deref("collection")?.offset === nested.offset);
       visit(nested, nestedLayer ?? null, collectionHidden, path);
     }
@@ -240,7 +247,7 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     ...ordered.map((object) => describe(object, true, hidden(object))),
     ...[...needed.values()].map((object) => describe(object, false, false)),
   ];
-  return { scene, objects: parentsFirst(all), linkedObjects: [...linked] };
+  return { scene, objects: parentsFirst(all), linkedObjects: [...linked], linkedCollections: [...linkedCollections] };
 }
 
 /** Orders objects so each comes after its parent, keeping the given order among roots and among siblings. */

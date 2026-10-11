@@ -984,8 +984,25 @@ def build_materials():
     image.extension = "CLIP"
     tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
 
+    procedural = bpy.data.materials.new("Procedural")
+    bsdf = principled(procedural)
+    tree = procedural.node_tree
+    noise = tree.nodes.new("ShaderNodeTexNoise")
+    tree.links.new(noise.outputs["Color"], bsdf.inputs["Base Color"])
+    bump = tree.nodes.new("ShaderNodeBump")
+    tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    boxed = bpy.data.materials.new("Boxed")
+    bsdf = principled(boxed)
+    tree = boxed.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    image.projection = "BOX"
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+
     materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout, blended]
-    materials += [object_normal, generated, glassy, decal]
+    materials += [object_normal, generated, glassy, decal, procedural, boxed]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
@@ -1007,6 +1024,15 @@ def build_materials():
     swapped = mesh_object("SwappedPlane", bm, (textured,))
     swapped.data.uv_layers["UVMap"].active_render = True
     swapped.location = (0, 1.5, 0)
+
+    bm = bmesh.new()
+    bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
+    uv = bm.loops.layers.uv.new("UVMap")
+    for face in bm.faces:
+        for loop in face.loops:
+            loop[uv].uv = (loop.vert.co.x + 0.5, loop.vert.co.y + 0.5)
+    lacking = mesh_object("NoDetailPlane", bm, (textured,))
+    lacking.location = (1.5, 1.5, 0)
 
     save_blend("materials")
     for image in (checker, orm, missing):
@@ -1030,6 +1056,8 @@ def build_scenes():
     paint = material("LibraryPaint", (0.2, 0.5, 0.9))
     skeleton = bpy.data.armatures.new("LibrarySkeleton")
     library_rig = bpy.data.objects.new("LibraryRig", skeleton)
+    kit_library = bpy.data.collections.new("LibraryKit")
+    kit_library.objects.link(bpy.data.objects.new("KitPart", shared))
     holder = bpy.data.objects.new("WaveHolder", None)
     for frame, x in ((1, 0.0), (10, 1.0)):
         holder.location.x = x
@@ -1042,10 +1070,12 @@ def build_scenes():
         holder.keyframe_insert("location", index=0, frame=frame)
     idle = holder.animation_data.action
     idle.name = "LibraryIdle"
-    datablocks = {shared, library_rock, paint, library_rig, wave, idle}
+    datablocks = {shared, library_rock, paint, library_rig, wave, idle, kit_library}
     bpy.data.libraries.write(library_path, datablocks, path_remap="RELATIVE_ALL")
     bpy.data.objects.remove(library_rock)
     bpy.data.objects.remove(library_rig)
+    bpy.data.objects.remove(bpy.data.objects["KitPart"])
+    bpy.data.collections.remove(kit_library)
     bpy.data.meshes.remove(shared)
     bpy.data.materials.remove(paint)
     bpy.data.armatures.remove(skeleton)
@@ -1057,8 +1087,10 @@ def build_scenes():
         target.objects = ["LibraryRock", "LibraryRig"]
         target.materials = ["LibraryPaint"]
         target.actions = ["LibraryWave", "LibraryIdle"]
+        target.collections = ["LibraryKit"]
     link(bpy.data.objects.new("Borrowed", target.meshes[0]))
     link(target.objects[0])
+    scene.collection.children.link(target.collections[0])
     mesh_object("Painted", box_bmesh(), (target.materials[0],))
     rigs = bpy.data.collections.new("Rigs")
     scene.collection.children.link(rigs)

@@ -86,6 +86,8 @@ export interface MeshRecord {
 
 /** The UV maps of a mesh that uses a material, by name, with the one rendering uses by default. */
 export interface MaterialUvMaps {
+  /** The mesh's object, for people. */
+  mesh: string;
   names: string[];
   defaultIndex: number;
 }
@@ -324,6 +326,11 @@ class MaterialTable {
       draft = readMaterial(usable, this.#version);
       this.#read.set(usable.offset, draft);
     }
+    for (const use of draft ? imageUses(draft) : []) {
+      if (use.uvMap === null || uvMaps.names.includes(use.uvMap)) continue;
+      const note = `${uvMaps.mesh} has no UV map ${use.uvMap}, shown with its first`;
+      if (!draft?.approximations.includes(note)) draft?.approximations.push(note);
+    }
     const sets = draft ? imageUses(draft).map((use) => uvSetFor(uvMaps, use.uvMap)) : [];
     const key = `${usable?.offset ?? "default"}:${sets.join(",")}`;
     const known = this.#index.get(key);
@@ -494,6 +501,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
     }
     const slotMaterial = slotMaterials(file, object.struct, data);
     const uvMaps: MaterialUvMaps = {
+      mesh: object.name,
       names: built.uvs.map((uv) => uv.name),
       defaultIndex: data.defaultUv < built.uvs.length ? data.defaultUv : 0,
     };
@@ -559,6 +567,7 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
     ),
   ];
   const linked = [
+    contents.linkedCollections.length > 0 ? `collections ${contents.linkedCollections.join(", ")}` : "",
     contents.linkedObjects.length > 0 ? `objects ${contents.linkedObjects.join(", ")}` : "",
     materials.linked.size > 0 ? `materials ${[...materials.linked].join(", ")}` : "",
     linkedActions.length > 0 ? `actions ${linkedActions.join(", ")}` : "",

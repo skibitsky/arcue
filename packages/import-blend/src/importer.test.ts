@@ -379,13 +379,16 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       });
       expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name]).sort()).toEqual([
         ["material-approximated", "Blended"],
+        ["material-approximated", "Boxed"],
         ["material-approximated", "Cutout"],
         ["material-approximated", "Decal"],
         ["material-approximated", "Generated"],
         ["material-approximated", "Glassy"],
         ["material-approximated", "ObjectNormal"],
+        ["material-approximated", "Procedural"],
         ["material-approximated", "Projected"],
         ["material-approximated", "RedRough"],
+        ["material-approximated", "Textured"],
         ["material-approximated", "Tinted"],
         ["texture-not-found", "absolute.png"],
         ["texture-not-found", "missing.png"],
@@ -395,28 +398,26 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
 
     it("warns about textures it cannot map or read as Blender does", () => {
       const approximated = scene.source.warnings.filter((warning) => warning.code === "material-approximated");
-      expect(approximated.map((warning) => [warning.subject, warning.detail])).toEqual([
-        [{ kind: "material", name: "Projected" }, "checker.png uses Generated coordinates, shown with the UV map"],
+      expect(approximated.map((warning) => [warning.subject.name, warning.detail])).toEqual([
+        ["Textured", "NoDetailPlane has no UV map Detail, shown with its first"],
+        ["Projected", "checker.png uses Generated coordinates, shown with the UV map"],
+        ["RedRough", "Roughness comes from the Red channel of orm.png, which the preview leaves out"],
+        ["Tinted", "Base color passes checker.png through Hue/Saturation/Value, which the preview leaves out"],
+        ["Cutout", "Alpha comes from orm.png, which the preview leaves out"],
+        ["Blended", "Mix Shader mixes by nodes, shown half and half; 2 shaders mix, shown as Principled BSDF"],
+        ["ObjectNormal", "Its normal map is in object space, which the preview leaves out"],
+        ["Generated", "UVGrid is a generated image, which the preview leaves out"],
+        ["Glassy", "Its surface is Glass BSDF, shown as a plain shader of its color"],
+        ["Decal", "checker.png is clipped at its edges, shown extended"],
         [
-          { kind: "material", name: "RedRough" },
-          "Roughness comes from the Red channel of orm.png, which the preview leaves out",
+          "Procedural",
+          "Base color comes from Noise Texture, shown at the value set on the input; Normal comes from Bump, which the preview leaves out",
         ],
-        [
-          { kind: "material", name: "Tinted" },
-          "Base color passes checker.png through Hue/Saturation/Value, which the preview leaves out",
-        ],
-        [{ kind: "material", name: "Cutout" }, "Alpha comes from orm.png, which the preview leaves out"],
-        [
-          { kind: "material", name: "Blended" },
-          "Mix Shader mixes by nodes, shown half and half; 2 shaders mix, shown as Principled BSDF",
-        ],
-        [{ kind: "material", name: "ObjectNormal" }, "Its normal map is in object space, which the preview leaves out"],
-        [{ kind: "material", name: "Generated" }, "UVGrid is a generated image, which the preview leaves out"],
-        [{ kind: "material", name: "Glassy" }, "Its surface is Glass BSDF, shown as a plain shader of its color"],
-        [{ kind: "material", name: "Decal" }, "checker.png is clipped at its edges, shown extended"],
+        ["Boxed", "checker.png uses Box projection, shown flat"],
       ]);
-      expect(material("ObjectNormal").normalTexture).toBeNull();
+      expect(approximated.every((warning) => warning.subject.kind === "material")).toBe(true);
       expect(material("RedRough").roughnessTexture).toBeNull();
+      expect(material("ObjectNormal").normalTexture).toBeNull();
     });
   });
 });
@@ -473,7 +474,7 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
       [
         "library-not-loaded",
         `scenes-${version}.blend`,
-        "From other .blend files: objects Borrowed, LibraryRock, LibraryRig; materials LibraryPaint; actions LibraryWave",
+        "From other .blend files: collections LibraryKit; objects Borrowed, LibraryRock, LibraryRig; materials LibraryPaint; actions LibraryWave",
       ],
       [
         "deform-approximated",
