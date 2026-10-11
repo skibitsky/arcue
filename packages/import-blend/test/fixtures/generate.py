@@ -939,7 +939,39 @@ def build_materials():
     mask.image = orm
     tree.links.new(mask.outputs["Color"], bsdf.inputs["Alpha"])
 
-    materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout]
+    blended = bpy.data.materials.new("Blended")
+    principled(blended)
+    tree = blended.node_tree
+    mask = tree.nodes.new("ShaderNodeTexImage")
+    mask.image = checker
+    blend = tree.nodes.new("ShaderNodeMixShader")
+    rough = tree.nodes.new("ShaderNodeBsdfDiffuse")
+    tree.links.new(mask.outputs["Color"], blend.inputs["Fac"])
+    tree.links.new(tree.nodes["Principled BSDF"].outputs["BSDF"], blend.inputs[1])
+    tree.links.new(rough.outputs["BSDF"], blend.inputs[2])
+    tree.links.new(blend.outputs["Shader"], tree.nodes["Material Output"].inputs["Surface"])
+
+    object_normal = bpy.data.materials.new("ObjectNormal")
+    bsdf = principled(object_normal)
+    tree = object_normal.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = packed
+    normal_map = tree.nodes.new("ShaderNodeNormalMap")
+    normal_map.space = "OBJECT"
+    tree.links.new(image.outputs["Color"], normal_map.inputs["Color"])
+    tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+
+    grid = bpy.data.images.new("UVGrid", 8, 8)
+    grid.generated_type = "UV_GRID"
+    generated = bpy.data.materials.new("Generated")
+    bsdf = principled(generated)
+    tree = generated.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = grid
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+
+    materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout, blended]
+    materials += [object_normal, generated]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
@@ -1021,6 +1053,14 @@ def build_scenes():
     masking = masked.modifiers.new("Armature", "ARMATURE")
     masking.object = mask_rig
     masking.vertex_group = "Blend"
+    masking.use_deform_preserve_volume = True
+
+    spinner = link(bpy.data.objects.new("Spinner", None))
+    for frame, mode in ((1, "XYZ"), (10, "QUATERNION")):
+        spinner.rotation_mode = mode
+        spinner.keyframe_insert("rotation_mode", frame=frame)
+        spinner.keyframe_insert("rotation_euler", frame=frame)
+    spinner.rotation_mode = "XYZ"
 
     mesh_object("Visible", box_bmesh())
     eye = mesh_object("EyeHidden", box_bmesh())

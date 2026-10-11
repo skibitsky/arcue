@@ -39,10 +39,10 @@ import { decompose, invert, multiplyAll } from "./math";
 import type { BlendWarning, BuiltScene } from "./scene/build";
 import { buildScene, uvSetFor } from "./scene/build";
 import type { ImageUse } from "./scene/materials";
+import { IMAGE_SOURCE_FILE, packedFile } from "./scene/materials";
 
 /** Blender's own rotation for Z-up content in a Y-up scene: −90° about X. */
 const MINUS_90_ABOUT_X: [number, number, number, number] = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
-const IMAGE_SOURCE_FILE = 1;
 /** The gray Blender's default material shows, for a base color whose image is missing. */
 const UNTEXTURED = 0.8;
 
@@ -70,11 +70,6 @@ function imagePaths(image: BlendStruct): { relative: string; absolute: string } 
   if (stored.startsWith("//")) return { relative: stored.slice(2), absolute: "" };
   if (stored === "") return { relative: idName(image), absolute: "" };
   return { relative: stored, absolute: stored };
-}
-
-/** The image's packed file, from the list newer files keep or the single pointer older ones do. */
-function packedFile(image: BlendStruct): BlendStruct | null {
-  return image.deref("packedfile") ?? image.list("packedfiles")[0]?.deref("packedfile") ?? null;
 }
 
 function packedBytes(file: BlendFile, image: BlendStruct): Uint8Array | null {
@@ -185,6 +180,27 @@ function buildClipList(clips: readonly ParsedClip[], fps: number): Clip[] {
   });
 }
 
+/**
+ * One warning for each code and subject, since a review keeps one warning per id: several, such as two ways a mesh
+ * deforms differently, join their messages and details.
+ */
+function mergeWarnings(warnings: readonly BlendWarning[]): BlendWarning[] {
+  const groups = new Map<string, BlendWarning[]>();
+  for (const warning of warnings) {
+    const key = JSON.stringify([warning.code, warning.subject.kind, warning.subject.name]);
+    groups.set(key, [...(groups.get(key) ?? []), warning]);
+  }
+  return [...groups.values()].flatMap((group) => {
+    const [first, ...rest] = group;
+    if (!first) return [];
+    if (rest.length === 0) return [first];
+    const details = group.flatMap((warning) => (warning.detail === undefined ? [] : [warning.detail]));
+    const merged: BlendWarning = { ...first, message: group.map((warning) => warning.message).join("; ") };
+    if (details.length > 0) merged.detail = details.join("; ");
+    return [merged];
+  });
+}
+
 function toImportWarning(warning: BlendWarning, fileName: string): ImportWarning {
   const subject =
     warning.subject.kind === "file" && warning.subject.name === ""
@@ -263,7 +279,7 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const materials = await buildMaterials(scene, images, textures);
   const nodes = buildNodes(scene);
   const parts = hideEyeHiddenParts(describeParts(nodes), scene);
-  const warnings = [...scene.warnings, ...driverWarnings(scene)].map((warning) =>
+  const warnings = mergeWarnings([...scene.warnings, ...driverWarnings(scene)]).map((warning) =>
     toImportWarning(warning, request.fileName),
   );
   return {

@@ -378,7 +378,10 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         emissive: "/nonexistent/arcue/absolute.png",
       });
       expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name]).sort()).toEqual([
+        ["material-approximated", "Blended"],
         ["material-approximated", "Cutout"],
+        ["material-approximated", "Generated"],
+        ["material-approximated", "ObjectNormal"],
         ["material-approximated", "Projected"],
         ["material-approximated", "RedRough"],
         ["material-approximated", "Tinted"],
@@ -401,7 +404,14 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
           "Base color passes checker.png through Hue/Saturation/Value, which the preview leaves out",
         ],
         [{ kind: "material", name: "Cutout" }, "Alpha comes from orm.png, which the preview leaves out"],
+        [
+          { kind: "material", name: "Blended" },
+          "Mix Shader mixes by nodes, shown half and half; 2 shaders mix, shown as Principled BSDF",
+        ],
+        [{ kind: "material", name: "ObjectNormal" }, "Its normal map is in object space, which the preview leaves out"],
+        [{ kind: "material", name: "Generated" }, "UVGrid is a generated image, which the preview leaves out"],
       ]);
+      expect(material("ObjectNormal").normalTexture).toBeNull();
       expect(material("RedRough").roughnessTexture).toBeNull();
     });
   });
@@ -461,8 +471,17 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
         `scenes-${version}.blend`,
         "From other .blend files: objects Borrowed, LibraryRock, LibraryRig; materials LibraryPaint; actions LibraryWave",
       ],
+      [
+        "deform-approximated",
+        "SpinnerAction",
+        "Keys on rotation mode are left out; each object and bone keeps the mode it was saved with",
+      ],
     ]);
     expect(scene.meshes[meshIndex(scene, "Morph")]?.morphTargets).toEqual([]);
+    const masked = scene.source.warnings.find(
+      (warning) => warning.code === "deform-approximated" && warning.subject.name === "Masked",
+    );
+    expect(masked?.message).toBe("Preserve volume shown as linear skinning: Masked; Armature mask not applied: Masked");
     expect(scene.materials[scene.meshes[meshIndex(scene, "Painted")]?.groups[0]?.material ?? -1]?.name).toBe("Default");
   });
 });

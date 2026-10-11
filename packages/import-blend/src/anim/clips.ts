@@ -43,6 +43,10 @@ function relevantObjectCurve(curve: FCurve, record: ObjectRecord): boolean {
   return pose !== null && record.armature !== null && isTransformProperty(pose.property, false);
 }
 
+function keysRotationMode(curve: FCurve): boolean {
+  return !curve.muted && (curve.path === "rotation_mode" || parsePosePath(curve.path)?.property === "rotation_mode");
+}
+
 function relevantKeyCurve(curve: FCurve): boolean {
   return !curve.muted && parseShapeKeyPath(curve.path) !== null;
 }
@@ -234,6 +238,15 @@ export function buildClips(scene: BuiltScene, actions: readonly Action[], warnin
     const unsupported = new Set<string>();
     for (const { curves } of [...objectTargets, ...keyTargets]) {
       for (const curve of curves) for (const name of curve.unsupportedModifiers) unsupported.add(name);
+    }
+    const modeKeyed = objectTargets.length > 0 && action.slots.some((slot) => slot.curves.some(keysRotationMode));
+    if (modeKeyed) {
+      warnings.push({
+        code: "deform-approximated",
+        subject: { kind: "clip", name: action.name },
+        message: `Rotation mode changes not followed: ${action.name}`,
+        detail: "Keys on rotation mode are left out; each object and bone keeps the mode it was saved with",
+      });
     }
     if (unsupported.size > 0) {
       warnings.push({

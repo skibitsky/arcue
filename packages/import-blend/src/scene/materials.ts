@@ -2,6 +2,22 @@ import type { AlphaMode, UvTransform, Vec3, Vec4, WrapMode } from "@arcue/scene"
 import type { BlendStruct } from "../blend/file";
 import { idName } from "../blend/ids";
 
+export const IMAGE_SOURCE_FILE = 1;
+const IMAGE_SOURCES: Readonly<Record<number, string>> = {
+  2: "image sequence",
+  3: "movie",
+  4: "generated",
+  5: "viewer",
+  6: "UDIM tiled",
+};
+const TANGENT_SPACE = 0;
+const NORMAL_SPACES: Readonly<Record<number, string>> = { 1: "object", 2: "world", 3: "object", 4: "world" };
+
+/** The image's packed file, from the list newer files keep or the single pointer older ones do. */
+export function packedFile(image: BlendStruct): BlendStruct | null {
+  return image.deref("packedfile") ?? image.list("packedfiles")[0]?.deref("packedfile") ?? null;
+}
+
 /** An Image Texture node a material samples. */
 export interface ImageUse {
   image: BlendStruct;
@@ -262,6 +278,8 @@ interface SurfaceShader {
   node: BlendStruct | null;
   /** How much of the surface is not a Transparent BSDF, from the mix and add shaders that lead to it. */
   alpha: number;
+  /** What the preview shows differently from Blender's shader mix. */
+  notes: string[];
 }
 
 /**
@@ -270,6 +288,7 @@ interface SurfaceShader {
  */
 function surfaceShader(graph: Graph, output: BlendStruct): SurfaceShader {
   const leaves: { node: BlendStruct; weight: number }[] = [];
+  const notes: string[] = [];
   let transparent = 0;
   const visit = (node: BlendStruct | null, weight: number, depth: number) => {
     if (!node || weight <= 0 || depth > 16) return;
@@ -277,7 +296,9 @@ function surfaceShader(graph: Graph, output: BlendStruct): SurfaceShader {
     const inputs = node.list("inputs");
     if (type === "ShaderNodeMixShader") {
       const fac = inputs[0] ?? null;
-      const factor = fac && linkInto(graph, fac) === null ? clamp01(defaultFloat(fac, 0.5)) : 0.5;
+      const linked = fac !== null && linkInto(graph, fac) !== null;
+      if (linked) notes.push(`${node.string("name") || "A Mix Shader"} mixes by nodes, shown half and half`);
+      const factor = fac && !linked ? clamp01(defaultFloat(fac, 0.5)) : 0.5;
       visit(linkInto(graph, inputs[1] ?? node)?.node ?? null, weight * (1 - factor), depth + 1);
       visit(linkInto(graph, inputs[2] ?? node)?.node ?? null, weight * factor, depth + 1);
     } else if (type === "ShaderNodeAddShader") {
@@ -293,7 +314,10 @@ function surfaceShader(graph: Graph, output: BlendStruct): SurfaceShader {
     (best, leaf) => (best === null || leaf.weight > best.weight ? leaf : best),
     null,
   );
-  return { node: strongest?.node ?? null, alpha: clamp01(1 - transparent) };
+  if (leaves.length > 1 && strongest) {
+    notes.push(`${leaves.length} shaders mix, shown as ${strongest.node.string("name") || "the strongest"}`);
+  }
+  return { node: strongest?.node ?? null, alpha: clamp01(1 - transparent), notes };
 }
 
 function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): void {
@@ -325,7 +349,11 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   }
 
   const normalLink = linkInto(graph, inputSocket(node, "Normal") ?? node);
-  if (normalLink && nodeType(normalLink.node) === "ShaderNodeNormalMap") {
+  const normalSpace = normalLink?.node.deref("storage")?.number("space") ?? TANGENT_SPACE;
+  if (normalLink && nodeType(normalLink.node) === "ShaderNodeNormalMap" && normalSpace !== TANGENT_SPACE) {
+    const space = NORMAL_SPACES[normalSpace] ?? "non-tangent";
+    draft.approximations.push(`Its normal map is in ${space} space, which the preview leaves out`);
+  } else if (normalLink && nodeType(normalLink.node) === "ShaderNodeNormalMap") {
     const strength = inputSocket(normalLink.node, "Strength");
     const image = imageFeeding(graph, inputSocket(normalLink.node, "Color"));
     if (image) {
@@ -423,6 +451,7 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
     if (surface.node && nodeType(surface.node) === "ShaderNodeBsdfPrincipled")
       readPrincipled(graph, surface.node, draft);
     else if (surface.node) readSimpleShader(graph, surface.node, draft);
+    draft.approximations.push(...surface.notes);
     if (surface.alpha < 1) {
       draft.baseColor[3] *= surface.alpha;
       draft.alphaMode = "blend";
@@ -430,8 +459,14 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
   }
 
   for (const use of imageUses(draft)) {
-    if (!use.coordinates) continue;
-    draft.approximations.push(`${idName(use.image)} uses ${use.coordinates} coordinates, shown with the UV map`);
+    const name = idName(use.image);
+    const source = use.image.has("source") ? use.image.number("source") : IMAGE_SOURCE_FILE;
+    if (source !== IMAGE_SOURCE_FILE && !packedFile(use.image)) {
+      const kind = IMAGE_SOURCES[source] ?? "non-file";
+      draft.approximations.push(`${name} is a ${kind} image, which the preview leaves out`);
+    }
+    if (use.coordinates)
+      draft.approximations.push(`${name} uses ${use.coordinates} coordinates, shown with the UV map`);
   }
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";

@@ -139,10 +139,10 @@ export function animationUses(id: BlendStruct): AnimatedId {
 export function animatedPaths(file: BlendFile, actions: readonly Action[]): Set<string> {
   const paths = new Set<string>();
   for (const action of actions) {
-    for (const slot of action.slots) for (const curve of slot.curves) paths.add(curve.path);
+    for (const slot of action.slots) for (const curve of slot.curves) if (!curve.muted) paths.add(curve.path);
   }
   for (const object of datablocks(file, "OB")) {
-    for (const driver of animationUses(object).drivers) paths.add(driver.path);
+    for (const driver of animationUses(object).drivers) if (!driver.muted) paths.add(driver.path);
   }
   return paths;
 }
