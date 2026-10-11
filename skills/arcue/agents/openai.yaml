@@ -1,0 +1,5 @@
+interface:
+  display_name: "Arcue"
+  short_description: "Review 3D models in Arcue and apply the feedback"
+  default_prompt: "Use $arcue to apply the Arcue review I pasted."
+  brand_color: "#DD653D"
