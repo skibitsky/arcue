@@ -2,6 +2,8 @@ name: Publish plugin
 
 # A push to main rebuilds the agent plugin and commits it to the plugin branch once the CI workflow has passed for that
 # commit. Claude Code and Codex install from that branch. It holds only what apps/plugin builds, so never edit it.
+# CI runs can finish out of order, so a run publishes only while its commit is still the head of main; a newer commit's
+# own run publishes that one.
 
 on:
   workflow_run:
@@ -16,6 +18,9 @@ concurrency:
   group: publish-plugin
   cancel-in-progress: false
 
+env:
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+
 jobs:
   publish:
     name: Publish
@@ -27,22 +32,39 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check that the commit is still the head of main
+        id: head
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          head=$(git ls-remote "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1)
+          if [ "$head" = "$SOURCE_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping ${SOURCE_SHA}: main has moved on to ${head}, whose own run publishes the plugin."
+          fi
+      - if: steps.head.outputs.current == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - if: steps.head.outputs.current == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.head.outputs.current == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @arcue/plugin build
+      - if: steps.head.outputs.current == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.head.outputs.current == 'true'
+        run: pnpm --filter @arcue/plugin build
       - name: Commit to the plugin branch
+        if: steps.head.outputs.current == 'true'
         working-directory: apps/plugin/dist
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git init --quiet
