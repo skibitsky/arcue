@@ -21,12 +21,12 @@ Name a clip as the file does, such as `--clip "Armature|Walk"`, from `inspect` o
 A pasted review contains `3D review · round N`, the model on its `Asset:` line and the round folder on its `Data and screenshots:` line.
 
 1. Read `round.json` in the round folder for each comment's exact vertices, positions, bones and camera, using [references/round-json.md](references/round-json.md), and look at the screenshots beside it.
-2. If a comment's file comes from Blender, per `asset.exporter` or, for a `<file>//` member, `arcue inspect <file> --json`, read [references/blender.md](references/blender.md) first.
+2. If a comment's file comes from Blender, per `asset.exporter` or, for a `<file>//` member, `arcue inspect` on that file in the model's folder, read [references/blender.md](references/blender.md) first.
 3. Fix what the model is exported from, and export to the `Asset:` path, or, for a comment whose `meshPath` or `time.clip` starts with `<file>//`, to that file in the model's folder. Arcue reloads the files and carries the comments over to the new version.
 4. Show the result at a comment's moment: `arcue open <asset> --clip "<time.clip>" --frame <frame>`, with the first frame of a range, and neither flag when `time` is null.
 5. Report back by comment number; the user resolves or reopens comments in Arcue.
 
-If the round folder isn't on disk (`.arcue/` isn't committed, and Arcue in a browser keeps reviews in its tab), work from the prompt alone, and fix the model at the `Asset:` path or, if that path is from another machine, the same file in this checkout.
+If the round folder isn't on disk (`.arcue/` isn't committed, and Arcue in a browser keeps reviews in its tab), work from the prompt alone, and fix the model at the `Asset:` path or, if that path is from another machine, the same file in this checkout. When the prompt lists other loaded files, it doesn't say which one a comment is on: check with `arcue inspect` which file has its mesh or clip.
 
 A list that starts `Fix these import warnings for <model>` comes from Arcue's warnings panel. Fix the source and re-export, or the composition file, then check that `arcue inspect <model> --json` no longer reports them.
 
