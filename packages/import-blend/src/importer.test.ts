@@ -380,7 +380,9 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name]).sort()).toEqual([
         ["material-approximated", "Blended"],
         ["material-approximated", "Cutout"],
+        ["material-approximated", "Decal"],
         ["material-approximated", "Generated"],
+        ["material-approximated", "Glassy"],
         ["material-approximated", "ObjectNormal"],
         ["material-approximated", "Projected"],
         ["material-approximated", "RedRough"],
@@ -410,6 +412,8 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ],
         [{ kind: "material", name: "ObjectNormal" }, "Its normal map is in object space, which the preview leaves out"],
         [{ kind: "material", name: "Generated" }, "UVGrid is a generated image, which the preview leaves out"],
+        [{ kind: "material", name: "Glassy" }, "Its surface is Glass BSDF, shown as a plain shader of its color"],
+        [{ kind: "material", name: "Decal" }, "checker.png is clipped at its edges, shown extended"],
       ]);
       expect(material("ObjectNormal").normalTexture).toBeNull();
       expect(material("RedRough").roughnessTexture).toBeNull();

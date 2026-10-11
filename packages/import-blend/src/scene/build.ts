@@ -1,6 +1,7 @@
 import type { ImportWarningCode, ImportWarningSubject, Mesh, NodeKind, Skeleton } from "@arcue/scene";
+import { usedActions } from "../anim/actions";
 import type { BlendFile, BlendStruct } from "../blend/file";
-import { idName, isLinked, linkedDatablocks } from "../blend/ids";
+import { idName, isLinked } from "../blend/ids";
 import type { Mat4 } from "../math";
 import {
   identity,
@@ -546,7 +547,17 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
     });
   }
 
-  const linkedActions = linkedDatablocks(file, "AC").map(idName);
+  const animationOwners = contents.objects.flatMap((object) => {
+    const key = object.type === ObjectType.mesh ? object.data?.deref("key") : null;
+    return key ? [object.struct, key] : [object.struct];
+  });
+  const linkedActions = [
+    ...new Set(
+      animationOwners.flatMap((id) =>
+        usedActions(id).flatMap(({ action }) => (isLinked(action) ? [idName(action)] : [])),
+      ),
+    ),
+  ];
   const linked = [
     contents.linkedObjects.length > 0 ? `objects ${contents.linkedObjects.join(", ")}` : "",
     materials.linked.size > 0 ? `materials ${[...materials.linked].join(", ")}` : "",

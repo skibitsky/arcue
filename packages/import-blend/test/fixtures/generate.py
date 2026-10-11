@@ -970,8 +970,22 @@ def build_materials():
     image.image = grid
     tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
 
+    glassy = bpy.data.materials.new("Glassy")
+    principled(glassy)
+    tree = glassy.node_tree
+    shader = tree.nodes.new("ShaderNodeBsdfGlass")
+    tree.links.new(shader.outputs["BSDF"], tree.nodes["Material Output"].inputs["Surface"])
+
+    decal = bpy.data.materials.new("Decal")
+    bsdf = principled(decal)
+    tree = decal.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    image.extension = "CLIP"
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+
     materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout, blended]
-    materials += [object_normal, generated]
+    materials += [object_normal, generated, glassy, decal]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
@@ -1022,7 +1036,13 @@ def build_scenes():
         holder.keyframe_insert("location", index=0, frame=frame)
     wave = holder.animation_data.action
     wave.name = "LibraryWave"
-    datablocks = {shared, library_rock, paint, library_rig, wave}
+    holder.animation_data.action = None
+    for frame, x in ((1, 0.0), (5, 2.0)):
+        holder.location.x = x
+        holder.keyframe_insert("location", index=0, frame=frame)
+    idle = holder.animation_data.action
+    idle.name = "LibraryIdle"
+    datablocks = {shared, library_rock, paint, library_rig, wave, idle}
     bpy.data.libraries.write(library_path, datablocks, path_remap="RELATIVE_ALL")
     bpy.data.objects.remove(library_rock)
     bpy.data.objects.remove(library_rig)
@@ -1031,17 +1051,20 @@ def build_scenes():
     bpy.data.armatures.remove(skeleton)
     bpy.data.objects.remove(holder)
     bpy.data.actions.remove(wave)
+    bpy.data.actions.remove(idle)
     with bpy.data.libraries.load(library_path, link=True, relative=True) as (source, target):
         target.meshes = ["SharedMesh"]
         target.objects = ["LibraryRock", "LibraryRig"]
         target.materials = ["LibraryPaint"]
-        target.actions = ["LibraryWave"]
+        target.actions = ["LibraryWave", "LibraryIdle"]
     link(bpy.data.objects.new("Borrowed", target.meshes[0]))
     link(target.objects[0])
     mesh_object("Painted", box_bmesh(), (target.materials[0],))
     rigs = bpy.data.collections.new("Rigs")
     scene.collection.children.link(rigs)
     link(target.objects[1], rigs)
+    idler = link(bpy.data.objects.new("Idler", None), rigs)
+    idler.animation_data_create().action = target.actions[1]
     rigged = mesh_object("Rigged", box_bmesh())
     rigged.modifiers.new("Armature", "ARMATURE").object = target.objects[1]
     animated = link(bpy.data.objects.new("Animated", None))

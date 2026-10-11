@@ -74,6 +74,21 @@ describe("evaluateFCurve", () => {
     expect(isStepped(stepped)).toBe(true);
   });
 
+  it("counts a curve as stepped by the keys that start a segment, not by the last key", () => {
+    const stepped = curve(
+      [
+        [0, 1],
+        [4, 3],
+        [8, 5],
+      ],
+      { interpolation: Interpolation.constant },
+    );
+    stepped.keys.interpolation[2] = Interpolation.bezier;
+    expect(isStepped(stepped)).toBe(true);
+    stepped.keys.interpolation[1] = Interpolation.linear;
+    expect(isStepped(stepped)).toBe(false);
+  });
+
   it("follows a Bezier segment with flat handles through its midpoint", () => {
     const smooth = curve(
       [

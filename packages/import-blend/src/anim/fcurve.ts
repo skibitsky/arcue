@@ -724,6 +724,6 @@ export function isStepped(curve: FCurve): boolean {
   if (curve.discrete) return true;
   const { count, interpolation } = curve.keys;
   if (count === 0) return false;
-  for (let i = 0; i < count; i++) if (interpolation[i] !== Interpolation.constant) return false;
+  for (let i = 0; i < count - 1; i++) if (interpolation[i] !== Interpolation.constant) return false;
   return true;
 }

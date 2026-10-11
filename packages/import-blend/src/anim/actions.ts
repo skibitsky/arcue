@@ -118,10 +118,18 @@ export interface AnimatedId {
 /** The actions, slots and drivers an ID's animation data uses: its active action, tweak action and NLA strips. */
 export function animationUses(id: BlendStruct): AnimatedId {
   const adt = id.deref("adt");
-  const uses: { action: number; slot: number }[] = [];
-  if (!adt) return { id, uses, drivers: [] };
+  if (!adt) return { id, uses: [], drivers: [] };
+  const uses = usedActions(id).map(({ action, slot }) => ({ action: action.offset, slot }));
+  return { id, uses, drivers: adt.list("drivers").map(readFCurve) };
+}
+
+/** The actions an ID's animation data plays, as its active, tweaked and NLA strip actions, with their slot handles. */
+export function usedActions(id: BlendStruct): { action: BlendStruct; slot: number }[] {
+  const adt = id.deref("adt");
+  const uses: { action: BlendStruct; slot: number }[] = [];
+  if (!adt) return uses;
   const add = (action: BlendStruct | null, slot: number) => {
-    if (action) uses.push({ action: action.offset, slot });
+    if (action) uses.push({ action, slot });
   };
   add(adt.deref("action"), adt.has("slot_handle") ? adt.number("slot_handle") : -1);
   add(adt.deref("tmpact"), adt.has("tmp_slot_handle") ? adt.number("tmp_slot_handle") : -1);
@@ -132,7 +140,7 @@ export function animationUses(id: BlendStruct): AnimatedId {
     }
   };
   for (const track of adt.list("nla_tracks")) visitStrips(track.list("strips"));
-  return { id, uses, drivers: adt.list("drivers").map(readFCurve) };
+  return uses;
 }
 
 /** Every property path an action, or a driver on an object, animates, such as `constraints["Follow"].influence`. */

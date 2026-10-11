@@ -27,6 +27,8 @@ export interface ImageUse {
   transform: UvTransform | null;
   /** The coordinates the image samples when they are not a UV map, such as "Generated", which the preview cannot. */
   coordinates: string | null;
+  /** Whether the image is transparent outside its edges, Blender's Clip extension, which the preview shows as Extend. */
+  clipped: boolean;
 }
 
 export interface MaterialDraft {
@@ -59,6 +61,13 @@ const BACKFACE_CULLING = 1 << 2;
 const BLEND_METHOD_CLIP = 3;
 
 const WRAPS: readonly WrapMode[] = ["repeat", "clamp", "clamp", "mirror"];
+const EXTENSION_CLIP = 2;
+const SIMPLE_SHADERS = new Set([
+  "ShaderNodeEmission",
+  "ShaderNodeBsdfDiffuse",
+  "ShaderNodeBsdfGlossy",
+  "ShaderNodeBsdfAnisotropic",
+]);
 
 interface Graph {
   nodes: BlendStruct[];
@@ -238,7 +247,8 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
   const image = node.deref("id");
   if (!image) return null;
   const storage = node.deref("storage");
-  const wrap = WRAPS[storage?.number("extension") ?? 0] ?? "repeat";
+  const extension = storage?.number("extension") ?? 0;
+  const wrap = WRAPS[extension] ?? "repeat";
   let uvMap: string | null = null;
   let transform: UvTransform | null = null;
   let coordinates: string | null = null;
@@ -262,7 +272,7 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
     else if (vector.socket !== "UV") coordinates = vector.socket;
     break;
   }
-  return { image, uvMap, wrap, transform, coordinates };
+  return { image, uvMap, wrap, transform, coordinates, clipped: extension === EXTENSION_CLIP };
 }
 
 function graphOf(tree: BlendStruct): Graph {
@@ -450,7 +460,13 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
     const surface = surfaceShader(graph, output);
     if (surface.node && nodeType(surface.node) === "ShaderNodeBsdfPrincipled")
       readPrincipled(graph, surface.node, draft);
-    else if (surface.node) readSimpleShader(graph, surface.node, draft);
+    else if (surface.node) {
+      readSimpleShader(graph, surface.node, draft);
+      if (!SIMPLE_SHADERS.has(nodeType(surface.node))) {
+        const label = surface.node.string("name") || nodeType(surface.node);
+        draft.approximations.push(`Its surface is ${label}, shown as a plain shader of its color`);
+      }
+    }
     draft.approximations.push(...surface.notes);
     if (surface.alpha < 1) {
       draft.baseColor[3] *= surface.alpha;
@@ -465,8 +481,10 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
       const kind = IMAGE_SOURCES[source] ?? "non-file";
       draft.approximations.push(`${name} is a ${kind} image, which the preview leaves out`);
     }
-    if (use.coordinates)
+    if (use.coordinates) {
       draft.approximations.push(`${name} uses ${use.coordinates} coordinates, shown with the UV map`);
+    }
+    if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
   }
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";
