@@ -4,7 +4,7 @@ Arcue can load other files into a model's view, for pipelines that spread one as
 
 **By name.** An FBX beside the model named `<model name>@<anything>.fbx`, such as `Hero@Walk.fbx` beside `Hero.fbx`, joins it as an animation file.
 
-**Through composition.json** in the model's review folder, `.arcue/reviews/<model path from the repository root>/composition.json`, such as `.arcue/reviews/Assets/Hero/Hero.fbx/composition.json`. Outside a repository the review folder is `reviews/<absolute model path>/` in Arcue's data folder: `$ARCUE_USER_DATA`, else `~/Library/Application Support/Arcue`, `%APPDATA%\Arcue` or `~/.config/Arcue`. If you create `.arcue/`, also write `.arcue/.gitignore` containing `*`, as Arcue does, so the reviews stay out of git. Arcue reloads the view when the file changes.
+**Through composition.json** in the model's review folder, `.arcue/reviews/<model path from the repository root>/composition.json`, such as `.arcue/reviews/Assets/Hero/Hero.fbx/composition.json`. Outside a repository the review folder is `reviews/<model path without its root>/` in Arcue's data folder, such as `reviews/C/Art/Hero.fbx/` for `C:\Art\Hero.fbx`. The data folder is `$ARCUE_USER_DATA`, else `~/Library/Application Support/Arcue` on macOS, `%APPDATA%\Arcue` on Windows, or `Arcue` in `$XDG_CONFIG_HOME` or `~/.config` on Linux. If you create `.arcue/`, also write `.arcue/.gitignore` containing `*`, as Arcue does, so the reviews stay out of git. Arcue reloads the view when the file changes.
 
 ```json
 {
