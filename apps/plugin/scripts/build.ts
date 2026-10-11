@@ -7,7 +7,7 @@ const out = fromRoot("apps/plugin/dist");
 await assemblePlugin(
   {
     skill: fromRoot("skills/arcue"),
-    cli: fromRoot("apps/cli/dist"),
+    cliBuild: fromRoot("apps/cli/dist"),
     readme: fromRoot("apps/plugin/README.md"),
     license: fromRoot("LICENSE"),
   },

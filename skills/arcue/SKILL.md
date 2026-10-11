@@ -8,7 +8,7 @@ license: MIT
 
 ## The arcue command
 
-Use `arcue`, or `node <this skill's folder>/scripts/arcue.js` (Node 22 or later) when only that exists.
+Use `arcue`, or `node "<this skill's folder>/scripts/arcue.js"` (Node 22 or later) when only that exists.
 
 - `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in the user's Arcue window and starts the app if needed. If it says Arcue has not been started on this computer yet, ask the user to start it once.
 - `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, clips, materials, missing textures, composed files and import warnings.
@@ -21,12 +21,12 @@ Name a clip as the file does, such as `--clip "Armature|Walk"`, from `inspect` o
 A pasted review contains `3D review · round N`, the model on its `Asset:` line and the round folder on its `Data and screenshots:` line.
 
 1. Read `round.json` in the round folder for each comment's exact vertices, positions, bones and camera, using [references/round-json.md](references/round-json.md), and look at the screenshots beside it.
-2. If `asset.exporter` starts with Blender, read [references/blender.md](references/blender.md) before mapping vertex numbers, positions, clips or frames.
+2. If a comment's file comes from Blender, per `asset.exporter` or, for a `<file>//` member, `arcue inspect <file> --json`, read [references/blender.md](references/blender.md) first.
 3. Fix what the model is exported from, and export to the `Asset:` path, or, for a comment whose `meshPath` or `time.clip` starts with `<file>//`, to that file in the model's folder. Arcue reloads the files and carries the comments over to the new version.
 4. Show the result at a comment's moment: `arcue open <asset> --clip "<time.clip>" --frame <frame>`, with the first frame of a range, and neither flag when `time` is null.
 5. Report back by comment number; the user resolves or reopens comments in Arcue.
 
-If the round folder isn't on disk, as with Arcue in a browser, the `Asset:` path isn't real either: work from the prompt and fix the user's own file.
+If the round folder isn't on disk (`.arcue/` isn't committed, and Arcue in a browser keeps reviews in its tab), work from the prompt alone, and fix the model at the `Asset:` path or, if that path is from another machine, the same file in this checkout.
 
 A list that starts `Fix these import warnings for <model>` comes from Arcue's warnings panel. Fix the source and re-export, or the composition file, then check that `arcue inspect <model> --json` no longer reports them.
 

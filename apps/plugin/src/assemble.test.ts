@@ -25,7 +25,12 @@ afterEach(async () => {
   await rm(temp, { recursive: true, force: true });
 });
 
-const sources = () => ({ skill, cli, readme: fromRoot("apps/plugin/README.md"), license: fromRoot("LICENSE") });
+const sources = () => ({
+  skill,
+  cliBuild: cli,
+  readme: fromRoot("apps/plugin/README.md"),
+  license: fromRoot("LICENSE"),
+});
 
 async function readJson(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
