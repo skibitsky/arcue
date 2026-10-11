@@ -52,7 +52,7 @@ export function inspectScene(scene: SceneDescription, file: InspectedFiles): Ass
     meshes,
     parts: partsOf(scene),
     triangles: meshes.reduce((sum, mesh) => sum + mesh.triangles, 0),
-    bones: scene.nodes.filter((node) => node.kind === "bone").length,
+    bones: scene.nodes.flatMap(({ name, path, kind }) => (kind === "bone" ? [{ name, path }] : [])),
     materials: scene.materials.map((material) => inspectMaterial(scene, material)),
     textures: inspectTextures(scene),
     clips: scene.clips.map((clip) => ({

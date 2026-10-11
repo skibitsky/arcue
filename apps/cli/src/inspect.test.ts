@@ -102,13 +102,21 @@ describe("arcue inspect", () => {
       format: "fbx",
       fps: 30,
       upAxis: "+Y",
-      bones: 27,
       meshes: [{ name: "PebbleGolem", triangles: 18_000, skinned: true }],
       materials: [
         { name: "Stone", textures: [] },
         { name: "Glow", textures: [] },
       ],
       warnings: [],
+    });
+    expect(inspection.bones).toHaveLength(27);
+    expect(inspection.bones.slice(0, 2)).toEqual([
+      { name: "Hips", path: "Armature/Hips" },
+      { name: "Spine", path: "Armature/Hips/Spine" },
+    ]);
+    expect(inspection.bones).toContainEqual({
+      name: "Hand.R",
+      path: "Armature/Hips/Spine/Chest/Shoulder.R/UpperArm.R/Forearm.R/Hand.R",
     });
     expect(inspection.clips.map((clip) => [clip.displayName, clip.frames, clip.fps])).toEqual([
       ["Hit", 16, 30],
@@ -216,7 +224,7 @@ describe("formatInspection", () => {
         },
       ],
       triangles: 3,
-      bones: 0,
+      bones: [],
       materials: [
         {
           name: "Stone",

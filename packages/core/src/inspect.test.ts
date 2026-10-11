@@ -92,7 +92,7 @@ describe("inspectScene", () => {
         part("Hero/Head", "Head", [{ level: 0, meshes: ["Hero/Head"], triangles: 2 }]),
       ],
       triangles: 10,
-      bones: 0,
+      bones: [],
       materials: [
         { name: "Stone", textures: [{ slot: "baseColor", texture: "Stone_BaseColor" }] },
         { name: "Moss", textures: [{ slot: "emissive", texture: "Stone_BaseColor" }] },
@@ -109,7 +109,7 @@ describe("inspectScene", () => {
     expect(JSON.parse(JSON.stringify(inspection))).toEqual(inspection);
   });
 
-  it("counts bone nodes and reports skinned meshes", () => {
+  it("lists bone nodes by name and path and reports skinned meshes", () => {
     const scene = fakeScene({ meshes: [{ name: "Body", grid: 2 }] });
     const body = scene.meshes[0];
     if (body) body.skeleton = 0;
@@ -125,7 +125,10 @@ describe("inspectScene", () => {
     });
     scene.nodes.push(bone("Root", "Hero/Root", 0), bone("Spine", "Hero/Root/Spine", 2));
     const inspection = inspectScene(scene, { ...plain, path: "/work/Rig.fbx", bytes: 1 });
-    expect(inspection.bones).toBe(2);
+    expect(inspection.bones).toEqual([
+      { name: "Root", path: "Hero/Root" },
+      { name: "Spine", path: "Hero/Root/Spine" },
+    ]);
     expect(inspection.meshes[0]?.skinned).toBe(true);
   });
 
@@ -210,7 +213,7 @@ describe("asset.inspect", () => {
         attach: [{ file: "Shield.fbx", bone: "Spine" }, { file: "Gone.fbx" }],
         materials: { Skin: { baseColor: "Skin.png" } },
       }),
-      [`${art}/Shield.fbx`]: fakeAsset({ meshes: [{ name: "Shield", grid: 2 }] }),
+      [`${art}/Shield.fbx`]: fakeAsset({ meshes: [{ name: "Shield", grid: 2 }], bones: [{ name: "Strap" }] }),
       [`${art}/Hero@Idle.fbx`]: fakeAsset({ meshes: [], clips: [{ name: "Armature|Idle", frames: 11 }] }),
     });
     const fromModel = await test.core.client.query("asset.inspect", { path: HERO });
@@ -226,6 +229,10 @@ describe("asset.inspect", () => {
       ["Hero/Body", "model", true],
       ["Hero/UCX_Body", "collision", false],
       ["Shield.fbx//Hero/Shield", "model", true],
+    ]);
+    expect(fromModel.bones).toEqual([
+      { name: "Spine", path: "Hero/Spine" },
+      { name: "Strap", path: "Shield.fbx//Hero/Strap" },
     ]);
     expect(fromModel.clips.map((clip) => clip.name)).toContain("Hero@Idle.fbx//Armature|Idle");
     expect(

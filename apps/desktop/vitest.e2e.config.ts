@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { softwareRendering } from "./e2e/rendering.ts";
 
 export default defineConfig({
   test: {
@@ -7,5 +8,6 @@ export default defineConfig({
     testTimeout: 60_000,
     hookTimeout: 60_000,
     fileParallelism: false,
+    expect: softwareRendering ? { poll: { timeout: 10_000 } } : {},
   },
 });

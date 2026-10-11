@@ -55,7 +55,7 @@ export function formatInspection(inspection: AssetInspection): string {
     "Parts",
     columns(inspection.parts.flatMap((part) => (partDetail(part) === "" ? [] : [[part.name, partDetail(part)]]))),
   );
-  if (inspection.bones > 0) add("Bones", [String(inspection.bones)]);
+  if (inspection.bones.length > 0) add("Bones", [String(inspection.bones.length)]);
   add(
     "Materials",
     columns(
