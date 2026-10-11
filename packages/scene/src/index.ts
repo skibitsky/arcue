@@ -19,6 +19,7 @@ export type {
   TextureRef,
   TextureSlot,
   UvTransform,
+  VertexColorUse,
   WrapMode,
 } from "./material";
 export { TEXTURE_SLOTS } from "./material";

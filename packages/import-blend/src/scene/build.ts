@@ -1,7 +1,7 @@
 import type { ImportWarningCode, ImportWarningSubject, Mesh, NodeKind, Skeleton } from "@arcue/scene";
 import { usedActions } from "../anim/actions";
 import type { OpeningPose } from "../anim/opening";
-import { openingPose, openingWeights } from "../anim/opening";
+import { currentFrame, openingPose, openingWeights } from "../anim/opening";
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { idName, isLinked } from "../blend/ids";
 import type { Mat4 } from "../math";
@@ -24,7 +24,7 @@ import { defaultMaterial, imageUses, readMaterial } from "./materials";
 import type { BuiltMesh, SkinBone } from "./mesh-build";
 import { buildMesh, MAX_UV_SETS } from "./mesh-build";
 import type { MeshData } from "./mesh-data";
-import { MeshReadError, meshMaterials, readMeshData } from "./mesh-data";
+import { defaultColorAttribute, MeshReadError, meshMaterials, readMeshData } from "./mesh-data";
 import { changesPreview, ModifierType, modifierName, modifierType, viewportModifiers } from "./modifiers";
 import type { SceneContents, SceneObject } from "./objects";
 import {
@@ -96,6 +96,26 @@ export interface MaterialUvMaps {
   defaultIndex: number;
 }
 
+/** The color attributes of a mesh that uses a material. */
+interface MeshColors {
+  /** The attribute the mesh's colors hold, or null for none. */
+  read: string | null;
+  names: string[];
+  /** The attribute a Color Attribute node without a name reads, or "" for none. */
+  defaultName: string;
+}
+
+/**
+ * How a material shows the color attribute an input reads on one mesh: from the mesh's colors, or black, as Blender
+ * shows an attribute the mesh does not have. Null where the input reads none, or one the preview leaves out.
+ */
+export type AttributeShown = "colors" | "black" | null;
+
+export interface MaterialColors {
+  baseColor: AttributeShown;
+  emissive: AttributeShown;
+}
+
 export interface BuiltScene {
   nodes: NodeDraft[];
   meshes: Omit<Mesh, "topology">[];
@@ -103,6 +123,8 @@ export interface BuiltScene {
   materials: MaterialDraft[];
   /** For each material, the UV maps of the meshes it is drawn on, which all resolve its textures' UV maps alike. */
   materialUvs: MaterialUvMaps[];
+  /** For each material, how it shows the color attributes it reads on the meshes it is drawn on. */
+  materialColors: MaterialColors[];
   objects: ObjectRecord[];
   meshRecords: MeshRecord[];
   /** Takes Blender's space into the scene's: −90° about X and the unit scale. */
@@ -336,43 +358,73 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
 
 /**
  * The scene's materials, read once each, with the default material for empty slots. A material gets a copy for each
- * mesh whose UV maps put its textures on other UV sets, since Blender finds a texture's UV map by name in each mesh.
+ * mesh whose UV maps put its textures on other UV sets, since Blender finds a texture's UV map by name in each mesh,
+ * and for each mesh that shows the color attributes it reads differently.
  */
 class MaterialTable {
   readonly drafts: MaterialDraft[] = [];
   readonly uvMaps: MaterialUvMaps[] = [];
+  readonly colors: MaterialColors[] = [];
   /** Names of materials linked from other files, which show as the default material. */
   readonly linked = new Set<string>();
   readonly #read = new Map<number, MaterialDraft>();
   readonly #index = new Map<string, number>();
   readonly #version: number;
   readonly #isGray: GrayCheck;
+  readonly #frame: number;
 
-  constructor(version: number, isGray: GrayCheck) {
+  constructor(version: number, isGray: GrayCheck, frame: number) {
     this.#version = version;
     this.#isGray = isGray;
+    this.#frame = frame;
   }
 
-  indexOf(material: BlendStruct | null, uvMaps: MaterialUvMaps): number {
-    if (material && isLinked(material)) this.linked.add(idName(material));
-    const usable = material && !isLinked(material) ? material : null;
-    let draft = usable ? this.#read.get(usable.offset) : undefined;
-    if (usable && !draft) {
-      draft = readMaterial(usable, this.#version, this.#isGray);
-      this.#read.set(usable.offset, draft);
+  #draftOf(material: BlendStruct | null): MaterialDraft | null {
+    if (!material || isLinked(material)) return null;
+    let draft = this.#read.get(material.offset);
+    if (!draft) {
+      draft = readMaterial(material, this.#version, this.#isGray, this.#frame);
+      this.#read.set(material.offset, draft);
     }
+    return draft;
+  }
+
+  /** The color attributes the material's inputs read, as its Color Attribute nodes name them. */
+  attributesOf(material: BlendStruct | null): string[] {
+    const draft = this.#draftOf(material);
+    return [draft?.baseColorAttribute ?? null, draft?.emissiveAttribute ?? null].filter((name) => name !== null);
+  }
+
+  indexOf(material: BlendStruct | null, uvMaps: MaterialUvMaps, meshColors: MeshColors): number {
+    if (material && isLinked(material)) this.linked.add(idName(material));
+    const draft = this.#draftOf(material);
+    const note = (text: string) => {
+      if (!draft?.approximations.includes(text)) draft?.approximations.push(text);
+    };
     for (const use of draft ? imageUses(draft) : []) {
       if (use.uvMap === null || uvMaps.names.includes(use.uvMap)) continue;
-      const note = `${uvMaps.mesh} has no UV map ${use.uvMap}, shown with its first`;
-      if (!draft?.approximations.includes(note)) draft?.approximations.push(note);
+      note(`${uvMaps.mesh} has no UV map ${use.uvMap}, shown with its first`);
     }
+    const shown = (input: string, attribute: string | null): AttributeShown => {
+      if (attribute === null) return null;
+      const name = attribute || meshColors.defaultName;
+      if (name !== "" && name === meshColors.read) return "colors";
+      if (!meshColors.names.includes(name)) return "black";
+      note(`${input} comes from color attribute ${name} of ${uvMaps.mesh}, which the preview leaves out`);
+      return null;
+    };
+    const colors: MaterialColors = {
+      baseColor: shown("Base color", draft?.baseColorAttribute ?? null),
+      emissive: shown("Emission", draft?.emissiveAttribute ?? null),
+    };
     const sets = draft ? imageUses(draft).map((use) => uvSetFor(uvMaps, use.uvMap)) : [];
-    const key = `${usable?.offset ?? "default"}:${sets.join(",")}`;
+    const key = `${material && draft ? material.offset : "default"}:${sets.join(",")}:${colors.baseColor}:${colors.emissive}`;
     const known = this.#index.get(key);
     if (known !== undefined) return known;
     this.#index.set(key, this.drafts.length);
     this.drafts.push(draft ?? defaultMaterial());
     this.uvMaps.push(uvMaps);
+    this.colors.push(colors);
     return this.drafts.length - 1;
   }
 }
@@ -404,7 +456,9 @@ export function grayCandidates(file: BlendFile): BlendStruct[] {
     return false;
   };
   const read = new Set<number>();
-  for (const object of collectSceneObjects(file).objects) {
+  const contents = collectSceneObjects(file);
+  const frame = imageFrame(contents.scene);
+  for (const object of contents.objects) {
     if (object.type !== ObjectType.mesh || !object.data || !object.shown) continue;
     const meshSlots = meshMaterials(file, object.data);
     const slotMaterial = slotMaterials(file, object.struct, meshSlots);
@@ -413,10 +467,15 @@ export function grayCandidates(file: BlendFile): BlendStruct[] {
       const material = slotMaterial(slot);
       if (!material || isLinked(material) || read.has(material.offset)) continue;
       read.add(material.offset);
-      readMaterial(material, file.version, ask);
+      readMaterial(material, file.version, ask, frame);
     }
   }
   return [...asked.values()];
+}
+
+/** The scene frame at which Blender picks the frame an image sequence shows: the current one, whole. */
+function imageFrame(scene: BlendStruct | null): number {
+  return Math.trunc(currentFrame(scene));
 }
 
 /** The deform bones that skin the object, from its first Armature modifier, with warnings about what is left out. */
@@ -542,7 +601,7 @@ export function buildScene(
   }
   const sceneWorld = (node: number) => multiplyAll(conversion, restWorld[node] ?? identity(), toScene);
 
-  const materials = new MaterialTable(file.version, isGray);
+  const materials = new MaterialTable(file.version, isGray, imageFrame(contents.scene));
   const meshes: Omit<Mesh, "topology">[] = [];
   const skeletons: Skeleton[] = [];
   const meshRecords: MeshRecord[] = [];
@@ -561,12 +620,23 @@ export function buildScene(
   for (const record of objects) {
     const { object } = record;
     if (object.type !== ObjectType.mesh || !object.data || !object.shown) continue;
+    const meshSlots = meshMaterials(file, object.data);
+    const slotMaterial = slotMaterials(file, object.struct, meshSlots);
+    const defaultColor = defaultColorAttribute(object.data);
+    const slots = Math.max(object.struct.number("totcol"), meshSlots.length);
+    const wantedColors = Array.from({ length: slots }, (_, slot) =>
+      materials
+        .attributesOf(slotMaterial(slot))
+        .map((name) => name || defaultColor)
+        .filter((name) => name !== ""),
+    );
     let data: MeshData;
     try {
       data = readMeshData(
         file,
         object.data,
         object.struct.list("defbase").map((group) => group.string("name")),
+        wantedColors,
       );
     } catch (error) {
       if (!(error instanceof MeshReadError)) throw error;
@@ -616,15 +686,19 @@ export function buildScene(
       const [x = 0, y = 0, z = 0] = data.positions.subarray(v * 3, v * 3 + 3);
       restPositions.set(transformPoint(placement, x, y, z), v * 3);
     }
-    const slotMaterial = slotMaterials(file, object.struct, data.materials);
     const uvMaps: MaterialUvMaps = {
       mesh: object.name,
       names: built.uvs.map((uv) => uv.name),
       defaultIndex: data.defaultUv < built.uvs.length ? data.defaultUv : 0,
     };
+    const meshColors: MeshColors = {
+      read: data.colors?.name ?? null,
+      names: data.attributeNames,
+      defaultName: defaultColor,
+    };
     const groups = built.groups.map((group) => ({
       ...group,
-      material: materials.indexOf(slotMaterial(group.material), uvMaps),
+      material: materials.indexOf(slotMaterial(group.material), uvMaps, meshColors),
     }));
 
     const key = object.data.deref("key");
@@ -720,6 +794,7 @@ export function buildScene(
     skeletons,
     materials: materials.drafts,
     materialUvs: materials.uvMaps,
+    materialColors: materials.colors,
     objects,
     meshRecords,
     conversion,

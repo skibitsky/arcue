@@ -33,8 +33,34 @@ function material(overrides: Partial<Material>): Material {
   };
 }
 
-function lit(input: Material) {
-  return litMaterial({ material: input, images: [image, image], uvSetCount: 1, anisotropy: 1, fallbackColor: "#888" });
+function lit(input: Material, vertexColors = false) {
+  return litMaterial({
+    material: input,
+    images: [image, image],
+    uvSetCount: 1,
+    vertexColors,
+    anisotropy: 1,
+    fallbackColor: "#888",
+  });
+}
+
+/** The material's fragment shader and program key, compiled from the chunks it patches. */
+function compiled(result: ReturnType<typeof lit>) {
+  const tint = { regionTint: { value: new DataTexture() }, regionTintWidth: { value: 1 } };
+  const tinted = withRegionTint(result, tint);
+  const shader = {
+    uniforms: {},
+    vertexShader: "#include <common>\n#include <begin_vertex>",
+    fragmentShader:
+      "#include <common>\n#include <map_fragment>\n#include <color_fragment>\n#include <emissivemap_fragment>\n" +
+      "#include <colorspace_fragment>",
+  } as unknown as WebGLProgramParametersWithUniforms;
+  tinted.onBeforeCompile(shader, {} as WebGLRenderer);
+  return { fragment: shader.fragmentShader, key: tinted.customProgramCacheKey() };
+}
+
+function lines(fragment: string): string[] {
+  return fragment.split("\n").map((line) => line.trim());
 }
 
 describe("litMaterial", () => {
@@ -60,24 +86,13 @@ describe("litMaterial", () => {
   });
 
   it("premultiplies or leaves out the alpha of maps as the texture says, keeping a cutout's alpha", () => {
-    const compiled = (overrides: Partial<Material>) => {
-      const tint = { regionTint: { value: new DataTexture() }, regionTintWidth: { value: 1 } };
-      const result = withRegionTint(lit(material(overrides)), tint);
-      const shader = {
-        uniforms: {},
-        vertexShader: "#include <common>\n#include <begin_vertex>",
-        fragmentShader:
-          "#include <common>\n#include <map_fragment>\n#include <emissivemap_fragment>\n#include <colorspace_fragment>",
-      } as unknown as WebGLProgramParametersWithUniforms;
-      result.onBeforeCompile(shader, {} as WebGLRenderer);
-      return { fragment: shader.fragmentShader, key: result.customProgramCacheKey() };
-    };
-    const premultiplied = compiled({ baseColorTexture: { ...ref(0), alpha: "premultiply" } });
-    const ignored = compiled({ baseColorTexture: { ...ref(0), alpha: "none" }, alphaMode: "blend" });
-    const cutout = compiled({ baseColorTexture: { ...ref(0), alpha: "premultiply" }, alphaMode: "mask" });
-    const glowing = compiled({ emissiveTexture: { ...ref(1), alpha: "premultiply" } });
-    const plain = compiled({ baseColorTexture: ref(0), emissiveTexture: ref(1), alphaMode: "blend" });
-    const lines = (fragment: string) => fragment.split("\n").map((line) => line.trim());
+    const premultiplied = compiled(lit(material({ baseColorTexture: { ...ref(0), alpha: "premultiply" } })));
+    const ignored = compiled(lit(material({ baseColorTexture: { ...ref(0), alpha: "none" }, alphaMode: "blend" })));
+    const cutout = compiled(
+      lit(material({ baseColorTexture: { ...ref(0), alpha: "premultiply" }, alphaMode: "mask" })),
+    );
+    const glowing = compiled(lit(material({ emissiveTexture: { ...ref(1), alpha: "premultiply" } })));
+    const plain = compiled(lit(material({ baseColorTexture: ref(0), emissiveTexture: ref(1), alphaMode: "blend" })));
     expect(lines(premultiplied.fragment)).toContain(
       "diffuseColor.rgb *= sampledDiffuseColor.rgb * sampledDiffuseColor.a;",
     );
@@ -95,5 +110,23 @@ describe("litMaterial", () => {
     expect(plain.fragment).toContain("#include <emissivemap_fragment>");
     expect(ShaderChunk.map_fragment).toContain("diffuseColor *= sampledDiffuseColor;");
     expect(ShaderChunk.emissivemap_fragment).toContain("totalEmissiveRadiance *= emissiveColor.rgb;");
+  });
+
+  it("multiplies only the colors the material names by the vertex colors, where the geometry has them", () => {
+    const base = lit(material({ vertexColors: { baseColor: true, emissive: false } }), true);
+    const glow = lit(material({ vertexColors: { baseColor: false, emissive: true } }), true);
+    const both = lit(material({ vertexColors: { baseColor: true, emissive: true } }), true);
+    expect([base, glow, both].map((result) => result.vertexColors)).toEqual([true, true, true]);
+    const shaders = [base, glow, both].map((result) => lines(compiled(result).fragment).join("\n"));
+    const [baseShader = "", glowShader = "", bothShader = ""] = shaders;
+    expect(baseShader).toContain("#include <color_fragment>");
+    expect(glowShader).toContain("totalEmissiveRadiance *= vColor.rgb;");
+    expect(glowShader).not.toContain("diffuseColor *= vColor;");
+    expect(bothShader).toContain("diffuseColor *= vColor; totalEmissiveRadiance *= vColor.rgb;");
+    expect(new Set([base, glow, both].map((result) => compiled(result).key)).size).toBe(3);
+    expect(ShaderChunk.color_fragment).toContain("diffuseColor *= vColor;");
+
+    expect(lit(material({ vertexColors: { baseColor: true, emissive: true } }), false).vertexColors).toBe(false);
+    expect(lit(material({}), true).vertexColors).toBe(false);
   });
 });

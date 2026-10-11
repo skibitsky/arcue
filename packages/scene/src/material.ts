@@ -42,6 +42,12 @@ export interface TextureOverride {
   found: boolean;
 }
 
+/** Which of a material's colors the mesh's vertex colors multiply. */
+export interface VertexColorUse {
+  baseColor: boolean;
+  emissive: boolean;
+}
+
 /** A metallic-roughness approximation of the file's material, for a neutral preview. */
 export interface Material {
   name: string;
@@ -65,6 +71,11 @@ export interface Material {
   alphaMode: AlphaMode;
   alphaCutoff: number;
   doubleSided: boolean;
+  /**
+   * The colors the mesh's `colors` multiply, as a Color Attribute node feeding them does in Blender. Unset, the
+   * mesh's colors are left out, as most engines' default shaders do.
+   */
+  vertexColors?: VertexColorUse;
   /** Images the file names for a slot that were not found, by the path the file stores. Their slots are empty. */
   missingTextures?: Partial<Record<TextureSlot, string>>;
   /** Slots whose texture a composition file sets in place of the file's own. */

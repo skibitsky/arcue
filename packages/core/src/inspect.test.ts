@@ -109,6 +109,26 @@ describe("inspectScene", () => {
     expect(JSON.parse(JSON.stringify(inspection))).toEqual(inspection);
   });
 
+  it("lists a material once with the textures of all the copies an importer made of it", () => {
+    const scene = texturedScene();
+    scene.materials.push(
+      material("Stone", { baseColorTexture: { ...ref(0), uvSet: 1 } }),
+      material("Stone", { baseColorTexture: ref(0), vertexColors: { baseColor: true, emissive: false } }),
+      material("Stone", { emissiveTexture: ref(0) }),
+    );
+    const inspection = inspectScene(scene, { ...plain, path: "/work/Assets/Golem.fbx", bytes: 1 });
+    expect(inspection.materials).toEqual([
+      {
+        name: "Stone",
+        textures: [
+          { slot: "baseColor", texture: "Stone_BaseColor" },
+          { slot: "emissive", texture: "Stone_BaseColor" },
+        ],
+      },
+      { name: "Moss", textures: [{ slot: "emissive", texture: "Stone_BaseColor" }] },
+    ]);
+  });
+
   it("lists bone nodes by name and path and reports skinned meshes", () => {
     const scene = fakeScene({ meshes: [{ name: "Body", grid: 2 }] });
     const body = scene.meshes[0];

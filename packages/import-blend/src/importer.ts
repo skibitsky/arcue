@@ -41,11 +41,18 @@ import type { BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
 import { idName, idOf } from "./blend/ids";
 import { isGrayImage } from "./gray-images";
+import { sequencePath, tilePath } from "./image-paths";
 import { decompose, invert, multiplyAll } from "./math";
 import type { BlendWarning, BuiltScene } from "./scene/build";
 import { buildScene, grayCandidates, uvSetFor } from "./scene/build";
 import type { GrayCheck, ImageUse } from "./scene/materials";
-import { IMAGE_SOURCE_FILE, packedFile } from "./scene/materials";
+import {
+  IMAGE_SOURCE_FILE,
+  IMAGE_SOURCE_SEQUENCE,
+  IMAGE_SOURCE_TILED,
+  imageSource,
+  packedFile,
+} from "./scene/materials";
 import { joinWarningsById, normalizedPath, shareFoundTextures } from "./texture-files";
 
 /** Blender's own rotation for Z-up content in a Y-up scene: −90° about X. */
@@ -80,18 +87,44 @@ function relativePathFolder(datablock: BlendStruct): string {
   return path.slice(0, path.replaceAll("\\", "/").lastIndexOf("/") + 1) || "//";
 }
 
-/** The image's stored path with Blender's "//" relative prefix removed, or the image's name when it has no path. */
-function imagePaths(image: BlendStruct): { relative: string; absolute: string } {
+/**
+ * Whether the preview reads the file an image stores, rather than its packed bytes or nothing: an image file's, a
+ * UDIM image's first tile, or the frame `frame` of a sequence.
+ */
+function readsFile(image: BlendStruct, frame: number | null): boolean {
+  const source = imageSource(image);
+  return (
+    source === IMAGE_SOURCE_FILE ||
+    source === IMAGE_SOURCE_TILED ||
+    (source === IMAGE_SOURCE_SEQUENCE && frame !== null)
+  );
+}
+
+/** The file Blender reads for an image at `path`: a UDIM image's first tile, or the frame `frame` of a sequence. */
+function shownFile(image: BlendStruct, path: string, frame: number | null): string {
+  if (packedFile(image)) return path;
+  const source = imageSource(image);
+  if (source === IMAGE_SOURCE_TILED) return tilePath(path, image.list("tiles")[0]?.number("tile_number") ?? 1001);
+  if (source === IMAGE_SOURCE_SEQUENCE && frame !== null) return sequencePath(path, frame);
+  return path;
+}
+
+/**
+ * The stored path of the file the preview reads for an image, at `frame` for a sequence, with Blender's "//" relative
+ * prefix removed, or the image's name when it has no path.
+ */
+function imagePaths(image: BlendStruct, frame: number | null): { relative: string; absolute: string } {
   const own = image.string("name") || image.string("filepath");
-  const stored = own.startsWith("//") ? `${relativePathFolder(image)}${own.slice(2)}` : own;
+  const folder = own.startsWith("//") ? `${relativePathFolder(image)}${own.slice(2)}` : own;
+  const stored = shownFile(image, folder, frame);
   if (stored.startsWith("//")) return { relative: stored.slice(2), absolute: "" };
   if (stored === "") return { relative: idName(image), absolute: "" };
   return { relative: stored, absolute: stored };
 }
 
-/** The path the texture resolver names for an image: its relative path when it has one. */
-function storedPathOf(image: BlendStruct): string {
-  const paths = imagePaths(image);
+/** The path the texture resolver names for an image use: its relative path when it has one. */
+function storedPathOf(use: ImageUse): string {
+  const paths = imagePaths(use.image, use.frame);
   return parseStoredPath(paths.relative).relative ?? paths.absolute;
 }
 
@@ -119,13 +152,16 @@ function findingOnce(findFile: FindFile): FindFile {
   };
 }
 
-/** An image's bytes: packed in the file, or found by the paths it stores. Null for an image that is not one file. */
+/**
+ * An image's bytes: packed in the file, or found by the paths it stores, its first tile's for a UDIM image. Null for an
+ * image that is not one file, such as a sequence, whose frame each Image Texture node picks.
+ */
 async function imageBytes(file: BlendFile, image: BlendStruct, findFile: FindFile): Promise<Uint8Array | null> {
   if (image.typeName !== "Image") return null;
   const packed = packedBytes(file, image);
   if (packed) return packed;
-  if (image.has("source") && image.number("source") !== IMAGE_SOURCE_FILE) return null;
-  const { relative, absolute } = imagePaths(image);
+  if (!readsFile(image, null)) return null;
+  const { relative, absolute } = imagePaths(image, null);
   for (const path of new Set([relative, absolute])) {
     const found = path === "" ? null : await findFile(path);
     if (found) return found.bytes;
@@ -157,11 +193,11 @@ class ImageFiles {
     this.#file = file;
   }
 
-  indexOf(image: BlendStruct): number | null {
+  indexOf({ image, frame }: ImageUse): number | null {
     if (image.typeName !== "Image") return null;
     const packed = packedFile(image);
-    if (image.has("source") && image.number("source") !== IMAGE_SOURCE_FILE && !packed) return null;
-    const paths = imagePaths(image);
+    if (!packed && !readsFile(image, frame)) return null;
+    const paths = imagePaths(image, frame);
     const key = packed ? `packed ${image.offset}` : `path ${normalizedPath(paths.relative)}`;
     const known = this.#index.get(key);
     if (known !== undefined) return known;
@@ -183,12 +219,12 @@ async function buildMaterials(
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
     const ref = async (use: ImageUse | null, slot?: TextureSlot): Promise<TextureRef | null> => {
       if (!use) return null;
-      const file = images.indexOf(use.image);
+      const file = images.indexOf(use);
       if (file === null) return null;
       const textures = resolver();
       const texture = await textures.resolve(file, draft.name, slot);
       if (texture === null) {
-        if (slot) missingTextures[slot] = storedPathOf(use.image);
+        if (slot) missingTextures[slot] = storedPathOf(use);
         return null;
       }
       return {
@@ -203,14 +239,18 @@ async function buildMaterials(
     const metallicRoughnessTexture = await ref(draft.metallicRoughnessImage);
     const emissiveTexture = withAlpha(await ref(draft.emissiveImage, "emissive"), draft.emissiveImage, "none");
     const missingPacked = draft.metallicRoughnessImage !== null && !metallicRoughnessTexture;
+    const colors = scene.materialColors[index];
     const [red, green, blue, alpha] = draft.baseColor;
     const material: Material = {
       name: draft.name,
-      baseColor: baseColorTexture
-        ? [red, green, blue, alpha]
-        : draft.baseColorImage
-          ? [UNTEXTURED, UNTEXTURED, UNTEXTURED, alpha]
-          : draft.baseColor,
+      baseColor:
+        colors?.baseColor === "black"
+          ? [0, 0, 0, alpha]
+          : baseColorTexture
+            ? [red, green, blue, alpha]
+            : draft.baseColorImage
+              ? [UNTEXTURED, UNTEXTURED, UNTEXTURED, alpha]
+              : draft.baseColor,
       baseColorTexture,
       metallic: missingPacked ? 0 : draft.metallic,
       roughness: missingPacked ? UNTEXTURED_ROUGHNESS : draft.roughness,
@@ -220,12 +260,15 @@ async function buildMaterials(
       normalTexture: await ref(draft.normalImage, "normal"),
       normalScale: draft.normalScale,
       occlusionTexture: null,
-      emissive: !emissiveTexture && draft.emissiveImage ? [0, 0, 0] : draft.emissive,
+      emissive: (!emissiveTexture && draft.emissiveImage) || colors?.emissive === "black" ? [0, 0, 0] : draft.emissive,
       emissiveTexture,
       alphaMode: draft.alphaMode,
       alphaCutoff: draft.alphaCutoff,
       doubleSided: draft.doubleSided,
     };
+    if (colors?.baseColor === "colors" || colors?.emissive === "colors") {
+      material.vertexColors = { baseColor: colors.baseColor === "colors", emissive: colors.emissive === "colors" };
+    }
     if (Object.keys(missingTextures).length > 0) material.missingTextures = missingTextures;
     result.push(material);
   }

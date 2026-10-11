@@ -130,11 +130,15 @@ export class Model {
     anisotropy: number,
   ): MeshRuntime {
     const triangleCount = Math.floor(mesh.indices.length / 3);
-    const geometry = deindexedGeometry(mesh);
+    const groups = mesh.groups.length > 0 ? mesh.groups : [{ start: 0, triangleCount, material: -1 }];
+    const colored = groups.some((group) => {
+      const uses = this.scene.materials[group.material]?.vertexColors;
+      return uses?.baseColor === true || uses?.emissive === true;
+    });
+    const geometry = deindexedGeometry(mesh, colored);
     this.geometries.push(geometry);
     const tint = new RegionTint(triangleCount);
     const slots = new Map<number, number>();
-    const groups = mesh.groups.length > 0 ? mesh.groups : [{ start: 0, triangleCount, material: -1 }];
     for (const group of groups) {
       if (!slots.has(group.material)) slots.set(group.material, slots.size);
       geometry.addGroup(group.start * 3, group.triangleCount * 3, slots.get(group.material) ?? 0);
@@ -145,6 +149,7 @@ export class Model {
           material: this.scene.materials[material],
           images: this.images,
           uvSetCount: mesh.uvs.length,
+          vertexColors: geometry.hasAttribute("color"),
           anisotropy,
           fallbackColor: palette.textMuted,
         }),
@@ -301,9 +306,10 @@ export class Model {
 
 /**
  * Three corners per triangle, none shared, so each triangle can carry its own number for the ID pass and the region
- * tint. Display, wireframe and ID pass all draw this one geometry.
+ * tint. Display, wireframe and ID pass all draw this one geometry. With `colors`, it carries the mesh's colors as its
+ * RGB color attribute, for materials that multiply by them.
  */
-export function deindexedGeometry(mesh: Mesh): BufferGeometry {
+export function deindexedGeometry(mesh: Mesh, colors = false): BufferGeometry {
   const indices = mesh.indices;
   const corners = Math.floor(indices.length / 3) * 3;
   const gather = <T extends Float32Array | Uint16Array>(source: T, size: number, create: (length: number) => T): T => {
@@ -322,6 +328,14 @@ export function deindexedGeometry(mesh: Mesh): BufferGeometry {
   mesh.uvs.slice(0, uvNames.length).forEach((set, index) => {
     geometry.setAttribute(uvNames[index] ?? "uv", new BufferAttribute(gather(set.values, 2, floats), 2));
   });
+  if (colors && mesh.colors) {
+    const rgb = new Float32Array(corners * 3);
+    for (let corner = 0; corner < corners; corner++) {
+      const vertex = indices[corner] ?? 0;
+      for (let k = 0; k < 3; k++) rgb[corner * 3 + k] = mesh.colors[vertex * 4 + k] ?? 0;
+    }
+    geometry.setAttribute("color", new BufferAttribute(rgb, 3));
+  }
   if (mesh.joints && mesh.weights) {
     geometry.setAttribute(
       "skinIndex",

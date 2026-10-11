@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { Material, UvTransform } from "@arcue/scene";
+import type { Material, Mesh, UvTransform } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import { findInFixtures, fixturesDir, importFixture, VERSIONS } from "../../test/fixtures";
 
@@ -23,6 +23,12 @@ interface ShadingReference {
   premultiplied: number[];
   /** The base color of the shader EEVEE's output shows. */
   eevee: Record<string, number[]>;
+  /** The diffuse color EEVEE renders under a white world, as a share of what it renders for a white base color. */
+  albedo: Record<string, number[]>;
+  /** The color each UDIM tile and sequence frame file stores, by its path. */
+  files: Record<string, number[]>;
+  /** The scene frame the fixture is saved at. */
+  frame: number;
 }
 
 function shadingReference(version: string): ShadingReference {
@@ -70,6 +76,14 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
   const notes = (name: string) =>
     scene.source.warnings.find((warning) => warning.code === "material-approximated" && warning.subject.name === name)
       ?.detail;
+  /** The mesh of a material's plane, and the material each of its groups shows. */
+  const plane = (name: string) => {
+    const mesh = scene.meshes.find((candidate) => candidate.name === `${name}Plane`);
+    if (!mesh) throw new RangeError(`No plane for ${name}.`);
+    const shown = mesh.groups.map((group) => scene.materials[group.material]);
+    return { mesh, shown };
+  };
+  const firstColor = (mesh: Mesh) => Array.from(mesh.colors?.subarray(0, 3) ?? []);
 
   it("reads RGB and Value nodes, reroutes, muted nodes and muted links as Blender evaluates them", () => {
     for (const name of [
@@ -253,7 +267,7 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
       ["NonColorBase", "data.png is Non-Color, shown as sRGB"],
       ["SrgbRoughness", "gray.png is sRGB, shown as Non-Color"],
       ["Closest", "checker.png uses Closest interpolation, shown Linear"],
-      ["Sequence", "sequence is an image sequence, which the preview leaves out"],
+      ["Sequence", `sequence is an image sequence, shown as it is at frame ${expected.frame}`],
       ["VolumeOnly", "Its volume comes from Principled Volume, which the preview leaves out"],
       ["MappingNoVector", "checker.png's Mapping has no vector input, shown with the UV map"],
       ["AlphaDoubled", "Alpha passes cutout.png's alpha through Math, which the preview leaves out"],
@@ -329,6 +343,23 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
         "SurfaceRedThroughRamp",
         "Emission comes from the Red channel of cutout.png through Color Ramp, which the preview leaves out",
       ],
+      [
+        "AttributeOther",
+        "Base color comes from color attribute Tint of AttributeSharedPlane, which the preview leaves out",
+      ],
+      ["MixEmitter", "2 shaders mix, shown as Principled BSDF"],
+      ["AddPrincipledGlow", "2 shaders mix, shown as Diffuse BSDF"],
+      ["AddGlowOverImage", "Emission adds light the preview leaves out"],
+      ["SpecularBase", "Its surface is Specular BSDF, shown as a plain shader of its color"],
+      ["UdimBase", "udim is a UDIM tiled image, shown with its first tile"],
+      ["SequenceOffset", `sequence-offset is an image sequence, shown as it is at frame ${expected.frame}`],
+      ["SequenceCyclic", `sequence-cyclic is an image sequence, shown as it is at frame ${expected.frame}`],
+      ...(version === "5.2"
+        ? [
+            ["MetallicBase", "Its surface is Metallic BSDF, shown as a plain shader of its color"],
+            ["MetallicConductor", "Its surface is Metallic BSDF, shown as a plain shader of its color"],
+          ]
+        : []),
     ]);
     const roughness = (name: string) => material(name).roughnessTexture;
     for (const name of ["RoughFromAlpha", "RerouteSeparate", "HsvSeparate", "RoughMathSeparate", "FloatMixLeftover"]) {
@@ -375,6 +406,83 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
     expectNear(baked("GrayRampEmission").emission, gray, 4);
     expect(material("GrayHueThroughRamp").baseColorTexture).toBeNull();
     expectNear(baked("GrayHueThroughRamp").base, [0, 0, 0], 4);
+  });
+
+  it("multiplies the base color or the light by the color attribute a Color Attribute node reads, as Blender does", () => {
+    for (const name of ["AttributeBase", "AttributeNamed", "AttributeFactor"]) {
+      const { mesh, shown } = plane(name);
+      const [colored] = shown;
+      expect(colored?.vertexColors, name).toEqual({ baseColor: true, emissive: false });
+      const color = firstColor(mesh).map((channel, index) => channel * (colored?.baseColor[index] ?? Number.NaN));
+      expectNear(color, baked(name).base, 3, name);
+      expect(notes(name), name).toBeUndefined();
+    }
+    for (const name of ["AttributeEmission", "AttributeSurface"]) {
+      const { mesh, shown } = plane(name);
+      const [colored] = shown;
+      expect(colored?.vertexColors, name).toEqual({ baseColor: false, emissive: true });
+      const light = firstColor(mesh).map((channel, index) => channel * (colored?.emissive[index] ?? Number.NaN));
+      expectNear(light, baked(name).emission, 3, name);
+      expect(notes(name), name).toBeUndefined();
+    }
+    const missing = plane("AttributeMissing").shown[0];
+    expect(missing?.vertexColors).toBeUndefined();
+    expectNear(missing?.baseColor.slice(0, 3) ?? [], baked("AttributeMissing").base, 4);
+    const glowMissing = plane("AttributeGlowMissing").shown[0];
+    expect(glowMissing?.vertexColors).toBeUndefined();
+    expectNear(glowMissing?.emissive ?? [], baked("AttributeGlowMissing").emission, 4);
+    const shared = plane("AttributeShared");
+    expectNear(firstColor(shared.mesh), baked("AttributeBase").base, 4);
+    expect(shared.shown.map((shown) => [shown?.name, shown?.vertexColors])).toEqual([
+      ["AttributeShared", { baseColor: true, emissive: false }],
+      ["AttributeOther", undefined],
+    ]);
+    const unused = plane("AttributeUnusedSlot");
+    expectNear(firstColor(unused.mesh), baked("AttributeBase").base, 4);
+    expect(unused.shown.map((shown) => [shown?.name, shown?.vertexColors])).toEqual([
+      ["AttributeUnusedSlot", { baseColor: true, emissive: false }],
+    ]);
+    expect(plane("CheckerBase").shown[0]?.vertexColors).toBeUndefined();
+  });
+
+  it("adds the light of the Emission shaders and Principled BSDFs that Add and Mix shaders put over the surface", () => {
+    for (const name of ["AddGlow", "AddGlowFirst", "MixGlow", "MixEmitter", "AddPrincipledGlow"]) {
+      expectNear(material(name).emissive, baked(name).emission, 4, name);
+    }
+    for (const name of ["AddGlow", "AddGlowFirst", "MixGlow", "MixHalfEmpty", "AddPrincipledGlow", "AddImageGlow"]) {
+      const shown = material(name);
+      const diffuse = shown.baseColor.slice(0, 3).map((channel) => channel * (1 - shown.metallic));
+      expectNear(diffuse, baked(name).base, 4, name);
+    }
+    for (const name of ["AddGlow", "AddGlowFirst", "MixGlow", "MixHalfEmpty", "AddImageGlow"]) {
+      expect(notes(name), name).toBeUndefined();
+    }
+    const image = material("AddImageGlow");
+    expect(scene.textures[image.emissiveTexture?.texture ?? -1]?.name).toBe("checker");
+    expect(image.emissive).toEqual([1, 1, 1]);
+    expectNear(baked("AddImageGlow").emission, baked("CheckerBase").base, 4);
+    expect(scene.textures[material("AddGlowOverImage").emissiveTexture?.texture ?? -1]?.name).toBe("checker");
+  });
+
+  it("shows the Specular BSDF's base color as EEVEE renders it, and the Metallic BSDF's as a metal's", () => {
+    expectNear(material("SpecularBase").baseColor.slice(0, 3), expected.albedo.SpecularBase, 2);
+    expect(material("SpecularBase").metallic).toBe(0);
+    if (version === "5.2") {
+      expectNear(material("MetallicBase").baseColor.slice(0, 3), expected.eevee.MetallicBase, 4);
+      expect(material("MetallicBase").metallic).toBe(1);
+      expectNear(material("MetallicConductor").baseColor.slice(0, 3), expected.albedo.MetallicConductor ?? [], 3);
+      expect(material("MetallicConductor").metallic).toBe(1);
+    }
+  });
+
+  it("shows a UDIM image's first tile and the frame an image sequence shows at the scene's frame, as Blender does", () => {
+    const found = (name: string) => scene.textures[material(name).baseColorTexture?.texture ?? -1]?.foundPath ?? "";
+    expect(found("UdimBase")).toBe("textures/udim.1001.png");
+    const frames = ["Sequence", "SequenceOffset", "SequenceCyclic"].map(found);
+    expect(new Set(frames).size).toBe(3);
+    for (const name of ["UdimBase", "Sequence", "SequenceOffset", "SequenceCyclic"]) {
+      expectNear(expected.files[found(name)]?.map(decodeSrgb) ?? [], baked(name).base, 4, name);
+    }
   });
 
   it("gives no light where it leaves out the image an emission comes from", () => {

@@ -1,4 +1,4 @@
-import type { Material as SceneMaterial, TextureAlpha, TextureRef, WrapMode } from "@arcue/scene";
+import type { Material as SceneMaterial, TextureAlpha, TextureRef, VertexColorUse, WrapMode } from "@arcue/scene";
 import type { DataTexture, Material, Side, Texture, WebGLProgramParametersWithUniforms, Wrapping } from "three";
 import {
   ClampToEdgeWrapping,
@@ -25,6 +25,12 @@ export interface RegionTintUniforms {
 /** The lines of three.js's shader chunks that multiply the base color and emissive maps into the material. */
 const MAP_LINE = "diffuseColor *= sampledDiffuseColor;";
 const EMISSIVE_MAP_LINE = "totalEmissiveRadiance *= emissiveColor.rgb;";
+/**
+ * The line of three.js's shader chunk that multiplies the vertex colors into the base color, and the line that does
+ * so for the emission, which runs there too, before the emissive map.
+ */
+const COLOR_LINE = "diffuseColor *= vColor;";
+const EMISSIVE_COLOR_LINE = "totalEmissiveRadiance *= vColor.rgb;";
 
 const TINT_VERTEX_PARS = /* glsl */ `
 attribute float triangle;
@@ -80,7 +86,7 @@ export function withRegionTint(material: MeshStandardMaterial, uniforms: RegionT
 /** Replaces a line of one of three.js's fragment shader chunks. */
 function replaceLine(
   material: MeshStandardMaterial,
-  chunk: "map_fragment" | "emissivemap_fragment",
+  chunk: "map_fragment" | "emissivemap_fragment" | "color_fragment",
   line: string,
   replacement: string,
 ): void {
@@ -141,12 +147,32 @@ export interface LitMaterialInput {
   material: SceneMaterial | undefined;
   images: readonly (DecodedImage | null)[];
   uvSetCount: number;
+  /** Whether the geometry carries the mesh's colors as its color attribute. */
+  vertexColors: boolean;
   anisotropy: number;
   fallbackColor: string;
 }
 
-/** The file's material as a metallic-roughness preview. Vertex colors are left out, as most engines' default shaders do. */
-export function litMaterial({ material, images, uvSetCount, anisotropy, fallbackColor }: LitMaterialInput) {
+/** Multiplies the colors the material names by the geometry's vertex colors, and only those. */
+function multiplyVertexColors(result: MeshStandardMaterial, uses: VertexColorUse): void {
+  if (!uses.baseColor && !uses.emissive) return;
+  result.vertexColors = true;
+  if (!uses.emissive) return;
+  replaceLine(result, "color_fragment", COLOR_LINE, `${uses.baseColor ? COLOR_LINE : ""} ${EMISSIVE_COLOR_LINE}`);
+}
+
+/**
+ * The file's material as a metallic-roughness preview. Vertex colors multiply only the colors the material says they
+ * do; elsewhere they are left out, as most engines' default shaders do.
+ */
+export function litMaterial({
+  material,
+  images,
+  uvSetCount,
+  vertexColors,
+  anisotropy,
+  fallbackColor,
+}: LitMaterialInput) {
   if (!material) return new MeshStandardMaterial({ color: new Color(fallbackColor), roughness: 0.8, metalness: 0 });
   const result = new MeshStandardMaterial({ name: material.name });
   const [r, g, b, alpha] = material.baseColor;
@@ -155,6 +181,7 @@ export function litMaterial({ material, images, uvSetCount, anisotropy, fallback
   result.roughness = material.roughness;
   result.emissive.setRGB(...material.emissive);
   result.side = sideOf(material.doubleSided);
+  if (vertexColors && material.vertexColors) multiplyVertexColors(result, material.vertexColors);
   const texture = (ref: TextureRef | null, color: boolean) => mapTexture(ref, images, uvSetCount, color, anisotropy);
   result.map = texture(material.baseColorTexture, true);
   result.emissiveMap = texture(material.emissiveTexture, true);

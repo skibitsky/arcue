@@ -1773,6 +1773,25 @@ BAKE_OFFSET = 16.0
 # Sixteen alpha levels, as bytes, so that no two cutoffs the fixture uses keep the same texels. The first texel is
 # partly see-through, which shows in what the bake keeps of the color there.
 CUTOUT_ALPHA = (136, 0, 248, 72, 200, 24, 104, 232, 56, 168, 40, 184, 88, 216, 120, 152)
+# The colors of two UDIM tiles and of three frames of an image sequence, each one byte value exactly.
+TILE_COLORS = {1001: (0.8, 0.2, 0.0, 1.0), 1002: (0.0, 0.2, 0.8, 1.0)}
+FRAME_COLORS = ((0.2, 0.8, 0.2, 1.0), (0.8, 0.8, 0.2, 1.0), (0.2, 0.8, 0.8, 1.0))
+# The scene frame the shading fixture is saved at, which picks the frame each image sequence shows.
+SHADING_FRAME = 2
+# Start frames, frame counts, cycling, offsets and scene frames of an Image Texture node of a sequence, whose frames
+# the reference bakes.
+SEQUENCE_USERS = (
+    (5, 100, False, 0, 2),
+    (1, 1, False, 0, 2),
+    (1, 3, False, 0, 7),
+    (0, 2, True, 0, 1),
+    (2, 3, True, 0, 1),
+    (3, 2, True, 1, 1),
+    (1, 3, True, 0, -5),
+)
+# The color attributes the planes of the materials named Attribute... carry: the default, and one of bytes per corner.
+PAINT = (0.1, 0.4, 0.9, 1.0)
+TINT = (0.8, 0.5, 0.2, 1.0)
 
 
 def socket_named(sockets, identifier):
@@ -1893,9 +1912,9 @@ def bake(scene, objects, kind):
     return result
 
 
-def rendered_color(scene, obj, engine="CYCLES"):
-    """The color and alpha Cycles, or `engine`, renders at the middle of the object, seen from above over a black world
-    and a transparent film, which shows what a bake leaves out of a see-through surface."""
+def rendered_color(scene, obj, engine="CYCLES", world_color=(0.0, 0.0, 0.0)):
+    """The color and alpha Cycles, or `engine`, renders at the middle of the object, seen from above over a black world,
+    or one of `world_color`, and a transparent film, which shows what a bake leaves out of a see-through surface."""
     scene.render.engine = engine
     scene.cycles.samples = 1
     scene.cycles.use_denoising = False
@@ -1905,9 +1924,11 @@ def rendered_color(scene, obj, engine="CYCLES"):
     scene.render.resolution_x = scene.render.resolution_y = 4
     scene.render.image_settings.file_format = "OPEN_EXR"
     world = bpy.data.worlds.new("Black")
-    world.color = (0.0, 0.0, 0.0)
+    world.color = world_color
+    if bpy.app.version < (5, 0, 0) and world_color != (0.0, 0.0, 0.0):
+        world.use_nodes = True
     if world.node_tree:
-        world.node_tree.nodes["Background"].inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+        world.node_tree.nodes["Background"].inputs["Color"].default_value = (*world_color, 1.0)
     scene.world = world
     camera = bpy.data.objects.new("Above", bpy.data.cameras.new("Above"))
     camera.data.type = "ORTHO"
@@ -1931,12 +1952,15 @@ def build_shading():
     expected, Mapping types, glTF's factors and alpha clips, a clip under a constant mix with a Transparent BSDF, image
     channels, also through Math, Color Ramp and Mix nodes and of an image whose every pixel is gray, an image mixed by
     another's alpha, the alpha Blender multiplies into an image's color, premultiplied images, color spaces and
-    interpolation. The reference holds what Cycles bakes for them: at the first texel each material's diffuse color,
-    with specular turned off so that it is the base color times one minus metallic, and its emission; where each
-    Mapping sends the UVs of each texel; and the alpha each clip leaves there. It also holds what Cycles renders over a
-    transparent film for surfaces a bake cannot show, one that adds light to a Transparent BSDF, one with only a volume
-    and a holdout, what EEVEE renders for an image's color where nodes read its alpha and where none do, and the color
-    of the shader EEVEE's output shows."""
+    interpolation, color attributes, light that Add and Mix shaders add, the Specular BSDF, a UDIM image whose tiles
+    are files and image sequences at a frame. The reference holds what Cycles bakes for them: at the first texel each
+    material's diffuse color, with specular turned off so that it is the base color times one minus metallic, and its
+    emission; where each Mapping sends the UVs of each texel; and the alpha each clip leaves there. It also holds what
+    Cycles renders over a transparent film for surfaces a bake cannot show, one that adds light to a Transparent BSDF,
+    one with only a volume and a holdout, what EEVEE renders for an image's color where nodes read its alpha and where
+    none do, the color of the shader EEVEE's output shows, the diffuse color EEVEE renders for the Specular BSDF, which
+    Cycles cannot bake, the color of each tile and frame file, and the color Cycles bakes for an image sequence under
+    each of a few frame settings."""
     scene = reset_scene()
     checker = save_png("checker.png", 4, 4, checker_pixel)
     orm = save_png("orm.png", 2, 2, orm_pixel)
@@ -1945,9 +1969,28 @@ def build_shading():
     data = save_png("data.png", 2, 2, lambda x, y: (0.5, 0.5, 0.5, 1.0))
     data.colorspace_settings.name = "Non-Color"
     gray = save_png("gray.png", 2, 2, lambda x, y: (0.5, 0.5, 0.5, 1.0))
-    sequence = bpy.data.images.new("sequence", 1, 1)
-    sequence.source = "SEQUENCE"
-    sequence.filepath = "//textures/sequence.0001.png"
+    files = {}
+    for number, color in TILE_COLORS.items():
+        tile = save_png("udim.%d.png" % number, 2, 2, lambda x, y, color=color: color)
+        files["textures/udim.%d.png" % number] = rounded(list(tile.pixels)[0:3])
+        bpy.data.images.remove(tile)
+    udim = bpy.data.images.load(os.path.join(HERE, "textures", "udim.1001.png"), check_existing=False)
+    udim.name = "udim"
+    udim.source = "TILED"
+    for frame, color in enumerate(FRAME_COLORS, 1):
+        still = save_png("sequence.%04d.png" % frame, 2, 2, lambda x, y, color=color: color)
+        files["textures/sequence.%04d.png" % frame] = rounded(list(still.pixels)[0:3])
+        bpy.data.images.remove(still)
+
+    def sequence_node(tree, name, **user):
+        """An Image Texture node of its own image sequence, as EEVEE shows one frame of an image for all its nodes."""
+        image = bpy.data.images.load(os.path.join(HERE, "textures", "sequence.0001.png"), check_existing=False)
+        image.name = name
+        image.source = "SEQUENCE"
+        node = image_node(tree, image)
+        for key, value in user.items():
+            setattr(node.image_user, key, value)
+        return node
 
     materials = [
         mapped_material(
@@ -2163,7 +2206,7 @@ def build_shading():
     materials.append(mat)
 
     mat, tree, bsdf = shading_material("Sequence")
-    tree.links.new(image_node(tree, sequence).outputs["Color"], bsdf.inputs["Base Color"])
+    tree.links.new(sequence_node(tree, "sequence").outputs["Color"], bsdf.inputs["Base Color"])
     materials.append(mat)
 
     mat, tree, bsdf = shading_material("VolumeOnly")
@@ -2540,28 +2583,199 @@ def build_shading():
     tree.links.new(through_ramp(tree, cutout, "RGB"), tree.nodes["Material Output"].inputs["Surface"])
     materials.append(mat)
 
+    def attribute_output(tree, name):
+        node = tree.nodes.new("ShaderNodeVertexColor")
+        node.layer_name = name
+        return node.outputs["Color"]
+
+    mat, tree, bsdf = shading_material("AttributeBase")
+    tree.links.new(attribute_output(tree, ""), bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AttributeNamed")
+    tree.links.new(attribute_output(tree, "Tint"), bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AttributeFactor")
+    tree.links.new(multiply_color(tree, attribute_output(tree, ""), (1.0, 0.5, 0.5)), bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AttributeMissing")
+    tree.links.new(attribute_output(tree, "Absent"), bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AttributeEmission")
+    tree.links.new(attribute_output(tree, "Paint"), bsdf.inputs["Emission Color"])
+    bsdf.inputs["Emission Strength"].default_value = 2.0
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AttributeGlowMissing")
+    tree.links.new(attribute_output(tree, "Absent"), bsdf.inputs["Emission Color"])
+    bsdf.inputs["Emission Strength"].default_value = 2.0
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AttributeSurface")
+    tree.links.new(attribute_output(tree, "Tint"), tree.nodes["Material Output"].inputs["Surface"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AttributeShared")
+    tree.links.new(attribute_output(tree, ""), bsdf.inputs["Base Color"])
+    materials.append(mat)
+    mat, tree, bsdf = shading_material("AttributeUnusedSlot")
+    tree.links.new(attribute_output(tree, ""), bsdf.inputs["Base Color"])
+    materials.append(mat)
+    other_attribute = bpy.data.materials.new("AttributeOther")
+    other_bsdf = principled(other_attribute)
+    other_attribute.node_tree.links.new(
+        attribute_output(other_attribute.node_tree, "Tint"), other_bsdf.inputs["Base Color"]
+    )
+
+    def glow_shader(tree, color, strength):
+        node = tree.nodes.new("ShaderNodeEmission")
+        node.inputs["Color"].default_value = (*color, 1.0)
+        node.inputs["Strength"].default_value = strength
+        return node.outputs["Emission"]
+
+    def combine(tree, kind, first, second, factor=None):
+        node = tree.nodes.new(kind)
+        if factor is not None:
+            node.inputs["Fac"].default_value = factor
+        shaders = [socket for socket in node.inputs if socket.type == "SHADER"]
+        tree.links.new(first, shaders[0])
+        tree.links.new(second, shaders[1])
+        tree.links.new(node.outputs["Shader"], tree.nodes["Material Output"].inputs["Surface"])
+
+    mat, tree, bsdf = shading_material("AddGlow")
+    bsdf.inputs["Base Color"].default_value = (0.2, 0.3, 0.4, 1.0)
+    combine(tree, "ShaderNodeAddShader", bsdf.outputs["BSDF"], glow_shader(tree, (1.0, 0.4, 0.0), 5.0))
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AddGlowFirst")
+    bsdf.inputs["Base Color"].default_value = (0.5, 0.1, 0.1, 1.0)
+    combine(tree, "ShaderNodeAddShader", glow_shader(tree, (0.2, 0.6, 1.0), 2.0), bsdf.outputs["BSDF"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("MixGlow")
+    bsdf.inputs["Base Color"].default_value = (0.2, 0.3, 0.4, 1.0)
+    combine(tree, "ShaderNodeMixShader", bsdf.outputs["BSDF"], glow_shader(tree, (1.0, 0.4, 0.0), 4.0), 0.25)
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("MixEmitter")
+    bsdf.inputs["Base Color"].default_value = (0.2, 0.3, 0.4, 1.0)
+    bsdf.inputs["Emission Color"].default_value = (1.0, 0.5, 0.0, 1.0)
+    bsdf.inputs["Emission Strength"].default_value = 2.0
+    diffuse = tree.nodes.new("ShaderNodeBsdfDiffuse")
+    diffuse.inputs["Color"].default_value = (0.1, 0.6, 0.1, 1.0)
+    combine(tree, "ShaderNodeMixShader", bsdf.outputs["BSDF"], diffuse.outputs["BSDF"], 0.25)
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("MixHalfEmpty")
+    bsdf.inputs["Base Color"].default_value = (0.2, 0.3, 0.4, 1.0)
+    half = tree.nodes.new("ShaderNodeMixShader")
+    half.inputs["Fac"].default_value = 0.5
+    tree.links.new(bsdf.outputs["BSDF"], [socket for socket in half.inputs if socket.type == "SHADER"][0])
+    tree.links.new(half.outputs["Shader"], tree.nodes["Material Output"].inputs["Surface"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AddPrincipledGlow")
+    bsdf.inputs["Base Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+    bsdf.inputs["Emission Color"].default_value = (0.0, 1.0, 0.5, 1.0)
+    bsdf.inputs["Emission Strength"].default_value = 3.0
+    diffuse = tree.nodes.new("ShaderNodeBsdfDiffuse")
+    diffuse.inputs["Color"].default_value = (0.2, 0.3, 0.4, 1.0)
+    combine(tree, "ShaderNodeAddShader", diffuse.outputs["BSDF"], bsdf.outputs["BSDF"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AddImageGlow")
+    bsdf.inputs["Base Color"].default_value = (0.2, 0.3, 0.4, 1.0)
+    glow = tree.nodes.new("ShaderNodeEmission")
+    tree.links.new(image_node(tree, checker).outputs["Color"], glow.inputs["Color"])
+    combine(tree, "ShaderNodeAddShader", bsdf.outputs["BSDF"], glow.outputs["Emission"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("AddGlowOverImage")
+    tree.links.new(image_node(tree, checker).outputs["Color"], bsdf.inputs["Emission Color"])
+    bsdf.inputs["Emission Strength"].default_value = 1.0
+    combine(tree, "ShaderNodeAddShader", bsdf.outputs["BSDF"], glow_shader(tree, (1.0, 0.4, 0.0), 1.0))
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("SpecularBase")
+    tree.nodes.remove(bsdf)
+    specular = tree.nodes.new("ShaderNodeEeveeSpecular")
+    specular.inputs["Base Color"].default_value = (0.1, 0.7, 0.1, 1.0)
+    tree.links.new(specular.outputs["BSDF"], tree.nodes["Material Output"].inputs["Surface"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("UdimBase")
+    tree.links.new(image_node(tree, udim).outputs["Color"], bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("SequenceOffset")
+    tree.links.new(sequence_node(tree, "sequence-offset", frame_offset=1).outputs["Color"], bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    mat, tree, bsdf = shading_material("SequenceCyclic")
+    cyclic = sequence_node(tree, "sequence-cyclic", frame_duration=2, frame_start=0, use_cyclic=True)
+    tree.links.new(cyclic.outputs["Color"], bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    if bpy.app.version >= (4, 3, 0):
+        mat, tree, bsdf = shading_material("MetallicBase")
+        tree.nodes.remove(bsdf)
+        metal = tree.nodes.new("ShaderNodeBsdfMetallic")
+        metal.inputs["Base Color"].default_value = (0.6, 0.3, 0.1, 1.0)
+        tree.links.new(metal.outputs["BSDF"], tree.nodes["Material Output"].inputs["Surface"])
+        materials.append(mat)
+
+        mat, tree, bsdf = shading_material("MetallicConductor")
+        tree.nodes.remove(bsdf)
+        metal = tree.nodes.new("ShaderNodeBsdfMetallic")
+        metal.fresnel_type = "PHYSICAL_CONDUCTOR"
+        metal.inputs["Roughness"].default_value = 0.0
+        tree.links.new(metal.outputs["BSDF"], tree.nodes["Material Output"].inputs["Surface"])
+        materials.append(mat)
+
     objects = []
     for index, mat in enumerate(materials):
         bm = bmesh.new()
-        bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
+        shared = mat.name == "AttributeShared"
+        bmesh.ops.create_grid(bm, x_segments=2 if shared else 1, y_segments=1, size=0.5)
         uv = bm.loops.layers.uv.new("UVMap")
         detail = bm.loops.layers.uv.new("Detail")
         for face in bm.faces:
             for loop in face.loops:
                 loop[uv].uv = (loop.vert.co.x + 0.5, loop.vert.co.y + 0.5)
                 loop[detail].uv = ((loop.vert.co.x + 0.5) * 0.5, (loop.vert.co.y + 0.5) * 0.5)
-        obj = mesh_object(mat.name + "Plane", bm, (mat,))
+        unused_first = mat.name == "AttributeUnusedSlot"
+        if shared:
+            max(bm.faces, key=lambda face: face.calc_center_median().x).material_index = 1
+        if unused_first:
+            for face in bm.faces:
+                face.material_index = 1
+        slots = (mat, other_attribute) if shared else (other_attribute, mat) if unused_first else (mat,)
+        obj = mesh_object(mat.name + "Plane", bm, slots)
         obj.location = ((index % 8) * 1.5, (index // 8) * 1.5, 0)
+        if mat.name.startswith("Attribute"):
+            for name, kind, domain, color in (("Paint", "FLOAT_COLOR", "POINT", PAINT), ("Tint", "BYTE_COLOR", "CORNER", TINT)):
+                attribute = obj.data.color_attributes.new(name, kind, domain)
+                for value in attribute.data:
+                    value.color = color
+            assert obj.data.color_attributes.default_color_name == "Paint"
         objects.append(obj)
 
+    scene.frame_set(SHADING_FRAME)
     save_blend("shading")
 
     eevee = {}
-    for name in ("TargetEevee", "TargetAllAndEevee", "TargetActiveAll"):
+    for name in ("TargetEevee", "TargetAllAndEevee", "TargetActiveAll", "MetallicBase"):
+        if name not in bpy.data.materials:
+            continue
         eevee_output = bpy.data.materials[name].node_tree.get_output_node("EEVEE")
         eevee_shader = eevee_output.inputs["Surface"].links[0].from_node
         eevee[name] = rounded(eevee_shader.inputs["Base Color"].default_value[0:3])
-    shown = [obj for obj in objects if obj.active_material.name not in mapping_names]
+    shown = [
+        obj for obj in objects if obj.active_material.name not in mapping_names and len(obj.material_slots) == 1
+    ]
     for mat in materials:
         for node in mat.node_tree.nodes:
             if node.bl_idname == "ShaderNodeBsdfPrincipled":
@@ -2602,6 +2816,48 @@ def build_shading():
         for name in ("VeilUnread", "VeilRead", "VeilPremulUnread")
     }
 
+    specular_plane = next(obj for obj in objects if obj.name == "SpecularBasePlane")
+    specular_node = next(
+        node
+        for node in specular_plane.active_material.node_tree.nodes
+        if node.bl_idname == "ShaderNodeEeveeSpecular"
+    )
+    specular_node.inputs["Specular"].default_value = (0.0, 0.0, 0.0, 1.0)
+    white_world = (1.0, 1.0, 1.0)
+    shaded = rendered_color(scene, specular_plane, eevee_engine, white_world)
+    specular_node.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    white = rendered_color(scene, specular_plane, eevee_engine, white_world)
+    albedo = {"SpecularBase": rounded([color / light for color, light in zip(shaded[0:3], white[0:3])])}
+
+    conductor_plane = next((obj for obj in objects if obj.name == "MetallicConductorPlane"), None)
+    if conductor_plane:
+        conductor = next(
+            node
+            for node in conductor_plane.active_material.node_tree.nodes
+            if node.bl_idname == "ShaderNodeBsdfMetallic"
+        )
+        shaded = rendered_color(scene, conductor_plane, eevee_engine, white_world)
+        conductor.fresnel_type = "F82"
+        conductor.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+        conductor.inputs["Edge Tint"].default_value = (1.0, 1.0, 1.0, 1.0)
+        white = rendered_color(scene, conductor_plane, eevee_engine, white_world)
+        albedo["MetallicConductor"] = rounded([color / light for color, light in zip(shaded[0:3], white[0:3])])
+
+    sequence_plane = next(obj for obj in objects if obj.name == "SequencePlane")
+    sequence_user = next(
+        node for node in sequence_plane.active_material.node_tree.nodes if node.bl_idname == "ShaderNodeTexImage"
+    ).image_user
+    sequence_frames = []
+    for start, duration, cyclic, offset, frame in SEQUENCE_USERS:
+        sequence_user.frame_start = start
+        sequence_user.frame_duration = duration
+        sequence_user.use_cyclic = cyclic
+        sequence_user.frame_offset = offset
+        scene.frame_set(frame)
+        texel = bake(scene, [sequence_plane], "DIFFUSE")[sequence_plane.name][0:3]
+        sequence_frames.append([start, duration, int(cyclic), offset, frame, rounded(texel)])
+    scene.frame_set(SHADING_FRAME)
+
     clip_objects = [obj for obj in objects if obj.active_material.name in clip_names]
     for obj in clip_objects:
         tree = obj.active_material.node_tree
@@ -2629,6 +2885,10 @@ def build_shading():
             "veil": rounded(list(veil.pixels)[0:4]),
             "premultiplied": rounded(premultiplied_texel),
             "eevee": eevee,
+            "albedo": albedo,
+            "files": files,
+            "frame": SHADING_FRAME,
+            "sequenceFrames": sequence_frames,
         },
     )
 

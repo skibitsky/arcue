@@ -62,6 +62,7 @@ export const CustomDataType = {
   loop: 26,
   shapeKeyIndex: 27,
   customLoopNormal: 41,
+  floatColor: 47,
 } as const;
 
 const COMPONENTS: Readonly<Record<AttributeType, number>> = {
@@ -157,8 +158,13 @@ export interface MeshData {
   uvMaps: UvMap[];
   /** Index into `uvMaps` of the map rendering uses by default. */
   defaultUv: number;
-  /** Linear RGBA of the default color attribute, four values per element of its domain. */
-  colors: { domain: "point" | "corner"; values: Float32Array } | null;
+  /**
+   * Linear RGBA of one color attribute, four values per element of its domain: the first one asked for that the mesh
+   * has, else the default.
+   */
+  colors: { name: string; domain: "point" | "corner"; values: Float32Array } | null;
+  /** The names of the mesh's attributes, which a Color Attribute node can read whatever their type and domain. */
+  attributeNames: string[];
   customNormals: CustomNormals | null;
   deformWeights: DeformWeights | null;
   vertexGroupNames: string[];
@@ -321,25 +327,67 @@ function srgbToLinear(value: number): number {
   return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
-function readColors(reader: AttributeReader, mesh: BlendStruct): MeshData["colors"] {
+function colorAttributes(reader: AttributeReader): MeshAttribute[] {
   const colorTypes: AttributeType[] = ["byteColor", "floatColor"];
-  const candidates = reader.attributes.filter(
+  return reader.attributes.filter(
     (attribute) =>
       colorTypes.includes(attribute.type) &&
       (attribute.domain === "point" || attribute.domain === "corner") &&
       !attribute.name.startsWith("."),
   );
-  const wanted = mesh.text("default_color_attribute") || mesh.text("active_color_attribute");
-  const attribute = candidates.find((candidate) => candidate.name === wanted) ?? candidates[0];
+}
+
+const LEGACY_COLOR_RENDER = 1 << 6;
+
+/**
+ * The color attribute that a Color Attribute node without a name reads: the mesh's default. Files from before Blender
+ * 3.5 mark it as Blender converts them: a layer flag, else the render layer of float and then byte colors, points
+ * first. Empty when the mesh names none, where Blender reads black.
+ */
+export function defaultColorAttribute(mesh: BlendStruct): string {
+  if (mesh.has("default_color_attribute")) return mesh.text("default_color_attribute");
+  const fields = ["vdata", "ldata"];
+  for (const field of fields) {
+    const data = mesh.struct(field);
+    const layers = data?.derefAll("layers").slice(0, data.number("totlayer")) ?? [];
+    const flagged = layers.find((layer) => layer.has("flag") && (layer.number("flag") & LEGACY_COLOR_RENDER) !== 0);
+    if (flagged) return flagged.string("name");
+  }
+  for (const field of fields) {
+    for (const type of [CustomDataType.floatColor, CustomDataType.byteColor]) {
+      const layers = customDataLayers(mesh, field, type);
+      const render = layers.find((layer) => isActiveLayer(mesh, field, type, layer, "active_rnd"));
+      if (render) return render.string("name");
+    }
+  }
+  return "";
+}
+
+function readColors(reader: AttributeReader, mesh: BlendStruct, wanted: readonly string[]): MeshData["colors"] {
+  const candidates = colorAttributes(reader);
+  const fallback = defaultColorAttribute(mesh) || mesh.text("active_color_attribute");
+  const attribute =
+    wanted.map((name) => candidates.find((candidate) => candidate.name === name)).find((found) => found) ??
+    candidates.find((candidate) => candidate.name === fallback) ??
+    candidates[0];
   if (!attribute || (attribute.domain !== "point" && attribute.domain !== "corner")) return null;
-  if (attribute.type === "floatColor") return { domain: attribute.domain, values: reader.float32(attribute) };
+  const { name, domain } = attribute;
+  if (attribute.type === "floatColor") return { name, domain, values: reader.float32(attribute) };
   const bytes = reader.bytes(attribute);
   const values = new Float32Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) {
     const unit = (bytes[i] ?? 0) / 255;
     values[i] = i % 4 === 3 ? unit : srgbToLinear(unit);
   }
-  return { domain: attribute.domain, values };
+  return { name, domain, values };
+}
+
+/** The names each slot wants, those of the slots that faces use first, as Blender clamps a face's slot to the last. */
+function usedFirst(wanted: readonly (readonly string[])[], materialIndices: Int32Array | null): string[] {
+  const last = wanted.length - 1;
+  const used = new Set<number>();
+  for (const index of materialIndices ?? [0]) used.add(Math.min(Math.max(index, 0), last));
+  return [...wanted.filter((_, slot) => used.has(slot)), ...wanted.filter((_, slot) => !used.has(slot))].flat();
 }
 
 function legacyStructs(mesh: BlendStruct, field: string, type: number): BlendStruct[] {
@@ -590,8 +638,16 @@ function checkCounts(mesh: BlendStruct, reader: AttributeReader, sizes: Sizes): 
   }
 }
 
-/** Reads a mesh datablock. `objectGroups` are the vertex group names an object stores in files before Blender 3.0. */
-export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: readonly string[] = []): MeshData {
+/**
+ * Reads a mesh datablock. `objectGroups` are the vertex group names an object stores in files before Blender 3.0, and
+ * `wantedColors` name, for each material slot, the color attributes to read in place of the default one.
+ */
+export function readMeshData(
+  file: BlendFile,
+  mesh: BlendStruct,
+  objectGroups: readonly string[] = [],
+  wantedColors: readonly (readonly string[])[] = [],
+): MeshData {
   const sizes: Sizes = {
     point: Math.max(mesh.number("totvert"), 0),
     edge: Math.max(mesh.number("totedge"), 0),
@@ -621,7 +677,8 @@ export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: r
     autoSmoothAngle: autoSmooth ? mesh.number("smoothresh") : null,
     uvMaps: uvs.maps,
     defaultUv: uvs.default,
-    colors: readColors(reader, mesh),
+    colors: readColors(reader, mesh, usedFirst(wantedColors, topology.materialIndices)),
+    attributeNames: reader.attributes.map((attribute) => attribute.name).filter((name) => !name.startsWith(".")),
     customNormals: readCustomNormals(mesh, reader, file, sizes),
     deformWeights: readDeformWeights(mesh, sizes),
     vertexGroupNames: groupNames,

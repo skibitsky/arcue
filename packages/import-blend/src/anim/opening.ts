@@ -32,7 +32,7 @@ const LIMIT_X_MIN = 1 << 0;
 const LIMIT_X_MAX = 1 << 1;
 
 /** Blender's `BKE_scene_ctime_get`: the current frame with its subframe, through the scene's time remapping. */
-function currentFrame(scene: BlendStruct | null): number {
+export function currentFrame(scene: BlendStruct | null): number {
   const render = scene?.struct("r");
   if (!render) return 1;
   const length = render.number("framelen");

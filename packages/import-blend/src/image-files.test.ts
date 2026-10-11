@@ -12,8 +12,11 @@ import {
   VERSIONS,
 } from "../test/fixtures";
 import { decompressBlend } from "./blend/decompress";
+import type { BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
 import { datablocks, idName } from "./blend/ids";
+import { sequencePath } from "./image-paths";
+import { sequenceFrame } from "./scene/materials";
 
 interface ImageReference {
   image: string;
@@ -234,5 +237,69 @@ describe.each(VERSIONS)("image paths spelled differently in a file from Blender 
     expect(missing(scene).map((warning) => [warning.subject.name, warning.materials])).toEqual([
       ["absent.png", ["AbsentA", "AbsentB"]],
     ]);
+  });
+});
+
+/** The shading fixture, with the image user of the Image Texture node of its Sequence material. */
+async function sequenceUser(version: Version): Promise<{ bytes: Uint8Array; node: BlendStruct; set: SetUser }> {
+  const bytes = await decompressBlend(readFixture("shading", version));
+  const file = readBlendFile(bytes);
+  const material = datablocks(file, "MA").find((candidate) => idName(candidate) === "Sequence");
+  const nodes = material?.deref("nodetree")?.list("nodes") ?? [];
+  const node = nodes.find((candidate) => candidate.string("idname") === "ShaderNodeTexImage");
+  const user = node?.deref("storage")?.struct("iuser");
+  if (!node || !user) throw new Error("The Sequence material has no image user.");
+  return { bytes, node, set: (values) => setNumbers(file, user, values) };
+}
+
+type SetUser = (values: Record<string, number>) => void;
+
+function setNumbers(file: BlendFile, struct: BlendStruct, values: Record<string, number>): void {
+  for (const [name, value] of Object.entries(values)) {
+    const field = struct.field(name);
+    if (!field) throw new Error(`No field ${name}.`);
+    const at = struct.offset + field.offset;
+    if (field.size === 1) file.view.setInt8(at, value);
+    else if (field.size === 2) file.view.setInt16(at, value, file.little);
+    else file.view.setInt32(at, value, file.little);
+  }
+}
+
+interface SequenceReference {
+  /** The color each sequence frame file stores, by its path. */
+  files: Record<string, number[]>;
+  /** Start frame, frame count, cycling, offset and scene frame of an image user, and the color Cycles bakes for it. */
+  sequenceFrames: [sfra: number, frames: number, cycl: number, offset: number, scene: number, baked: number[]][];
+}
+
+/** The color Blender shows for an image file it cannot find. */
+const MISSING_IMAGE = [1, 0, 1];
+
+function decodeSrgb(channel: number): number {
+  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+describe.each(VERSIONS)("the image sequences of the shading fixture from Blender %s", (version) => {
+  it("show the frame Blender's Image Texture node picks at a scene frame", async () => {
+    const { node, set } = await sequenceUser(version);
+    const expected = reference("shading", version) as unknown as SequenceReference;
+    expect(expected.sequenceFrames).toHaveLength(7);
+    for (const [sfra, frames, cycl, offset, scene, baked] of expected.sequenceFrames) {
+      set({ sfra, frames, cycl, offset });
+      const file = sequencePath("textures/sequence.0001.png", sequenceFrame(node, scene));
+      const shown = expected.files[file]?.map(decodeSrgb) ?? MISSING_IMAGE;
+      const label = JSON.stringify({ sfra, frames, cycl, offset, scene, file });
+      for (const [index, channel] of shown.entries()) expect(channel, label).toBeCloseTo(baked[index] ?? Number.NaN, 3);
+    }
+  });
+
+  it("report the frame file Blender reads before the sequence starts as missing", async () => {
+    const { bytes, set } = await sequenceUser(version);
+    set({ sfra: 5 });
+    const scene = await importBytes("shading.blend", bytes, findInFixtures);
+    expect(materialNamed(scene, "Sequence")).toMatchObject({
+      baseColorTexture: null,
+      missingTextures: { baseColor: "textures/sequence.0000.png" },
+    });
   });
 });

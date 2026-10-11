@@ -1,6 +1,6 @@
 import type { SceneDescription, Material as SceneMaterial } from "@arcue/scene";
 import { describeParts, visibleMeshes } from "@arcue/scene";
-import type { Material } from "three";
+import type { Material, MeshStandardMaterial } from "three";
 import { PerspectiveCamera, Raycaster, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
 import { stripScene } from "../math/test-fixture";
@@ -96,6 +96,41 @@ describe("Model pick materials", () => {
     expect(alphaTests(runtime.pick.material)).toEqual([0]);
     model.setDisplayMode("lit");
     expect(alphaTests(runtime.pick.material)).toEqual([0.4]);
+    model.dispose();
+  });
+});
+
+describe("Model vertex colors", () => {
+  const colored = (vertexColors: SceneMaterial["vertexColors"]) => {
+    const scene = stripScene();
+    const mesh = scene.meshes[0];
+    if (!mesh) throw new Error("the strip has a mesh");
+    mesh.colors = Float32Array.from([...mesh.sourceVertex].flatMap((source) => [source / 10, 0.5, 1, 0.25]));
+    scene.materials = vertexColors ? [{ ...cutout, alphaMode: "opaque", vertexColors }] : [cutout];
+    return scene;
+  };
+
+  it("gives the geometry the mesh's colors where a material multiplies by them", async () => {
+    const model = await Model.build(colored({ baseColor: true, emissive: false }), DEFAULT_PALETTE, 1);
+    const runtime = model.meshes[0];
+    if (!runtime) throw new Error("the strip has a mesh");
+    const color = runtime.display.geometry.getAttribute("color");
+    expect(color?.itemSize).toBe(3);
+    const indices = runtime.data.indices;
+    const corner = 3;
+    const vertex = indices[corner] ?? -1;
+    const source = runtime.data.sourceVertex[vertex] ?? -1;
+    expect([color?.getX(corner), color?.getY(corner), color?.getZ(corner)]).toEqual([Math.fround(source / 10), 0.5, 1]);
+    expect(runtime.lit.map((material) => (material as MeshStandardMaterial).vertexColors)).toEqual([true]);
+    model.dispose();
+  });
+
+  it("leaves the mesh's colors out where no material multiplies by them, as for FBX files", async () => {
+    const model = await Model.build(colored(undefined), DEFAULT_PALETTE, 1);
+    const runtime = model.meshes[0];
+    if (!runtime) throw new Error("the strip has a mesh");
+    expect(runtime.display.geometry.hasAttribute("color")).toBe(false);
+    expect(runtime.lit.map((material) => (material as MeshStandardMaterial).vertexColors)).toEqual([false]);
     model.dispose();
   });
 });

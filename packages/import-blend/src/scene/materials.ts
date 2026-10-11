@@ -21,13 +21,12 @@ import {
 } from "./shader-graph";
 
 export const IMAGE_SOURCE_FILE = 1;
-const IMAGE_SOURCE_TILED = 6;
+export const IMAGE_SOURCE_SEQUENCE = 2;
+export const IMAGE_SOURCE_TILED = 6;
 const IMAGE_SOURCES: Readonly<Record<number, string>> = {
-  2: "an image sequence",
   3: "a movie",
   4: "a generated image",
   5: "a viewer image",
-  6: "a UDIM tiled image",
 };
 const TANGENT_SPACE = 0;
 const NORMAL_SPACES: Readonly<Record<number, string>> = { 1: "object", 2: "world", 3: "object", 4: "world" };
@@ -55,12 +54,16 @@ export interface ImageUse {
   interpolation: string | null;
   /** What the material does with the image's alpha. */
   alpha: TextureAlpha;
+  /** For an image sequence, the frame Blender reads at the scene's current frame; null for other images. */
+  frame: number | null;
 }
 
 export interface MaterialDraft {
   name: string;
   baseColor: Vec4;
   baseColorImage: ImageUse | null;
+  /** The color attribute that multiplies the base color, as a Color Attribute node names it: "" for the default. */
+  baseColorAttribute: string | null;
   metallic: number;
   roughness: number;
   /** One image holding roughness in green and metalness in blue, as glTF packs them. */
@@ -72,6 +75,8 @@ export interface MaterialDraft {
   /** The emission color times its strength, which multiplies an emission image. */
   emissive: Vec3;
   emissiveImage: ImageUse | null;
+  /** The color attribute that multiplies the emission, as a Color Attribute node names it: "" for the default. */
+  emissiveAttribute: string | null;
   alphaMode: AlphaMode;
   alphaCutoff: number;
   doubleSided: boolean;
@@ -92,6 +97,8 @@ const MATH_LESS_THAN = 15;
 const MATH_GREATER_THAN = 16;
 /** What a strict comparison adds to its cutoff, as the preview keeps alpha that equals the cutoff. */
 const STRICT = 1e-6;
+/** The Metallic BSDF's Fresnel type that takes its color from IOR and Extinction instead of Base Color. */
+const PHYSICAL_CONDUCTOR = 0;
 const SEPARATE_RGB = 0;
 const SEPARATED_CHANNELS: Readonly<Record<number, readonly string[]>> = {
   1: ["Hue", "Saturation", "Value"],
@@ -128,6 +135,7 @@ const SIMPLE_SHADERS = new Set([
   "ShaderNodeBsdfGlossy",
   "ShaderNodeBsdfAnisotropic",
 ]);
+const METAL_SHADERS = new Set(["ShaderNodeBsdfGlossy", "ShaderNodeBsdfAnisotropic", "ShaderNodeBsdfMetallic"]);
 /** The color spaces whose values Blender reads as they are, as the preview reads data images. */
 const RAW_SPACES = new Set(["", "Non-Color", "Raw", "Generic Data", "Linear", "scene_linear"]);
 
@@ -152,6 +160,7 @@ export function defaultMaterial(name = "Default"): MaterialDraft {
     name,
     baseColor: [0.8, 0.8, 0.8, 1],
     baseColorImage: null,
+    baseColorAttribute: null,
     metallic: 0,
     roughness: 0.5,
     metallicRoughnessImage: null,
@@ -161,6 +170,7 @@ export function defaultMaterial(name = "Default"): MaterialDraft {
     normalScale: 1,
     emissive: [0, 0, 0],
     emissiveImage: null,
+    emissiveAttribute: null,
     alphaMode: "opaque",
     alphaCutoff: 0.5,
     doubleSided: true,
@@ -373,7 +383,19 @@ function imageUse(graph: ShaderGraph, draft: MaterialDraft, node: BlendStruct): 
   const projection = PROJECTIONS[storage?.number("projection") ?? 0] ?? null;
   const interpolation = INTERPOLATIONS[storage?.number("interpolation") ?? 0] ?? null;
   const clipped = extension === EXTENSION_CLIP;
-  return { node, image, uvMap, wrap, transform, coordinates, clipped, projection, interpolation, alpha: "none" };
+  return {
+    node,
+    image,
+    uvMap,
+    wrap,
+    transform,
+    coordinates,
+    clipped,
+    projection,
+    interpolation,
+    alpha: "none",
+    frame: null,
+  };
 }
 
 function isOutput(node: BlendStruct): boolean {
@@ -397,10 +419,28 @@ function outputNode(graph: ShaderGraph): BlendStruct | null {
   return chosen;
 }
 
-interface SurfaceShader {
-  node: BlendStruct | null;
+/** A shader the surface reaches through mix and add shaders, with its share of the surface. */
+interface Leaf {
+  node: BlendStruct;
+  weight: number;
   /** The shader input that reads a color or a value, which Blender shows as light, or null where a shader feeds it. */
   emitted: BlendStruct | null;
+}
+
+/** Whether a shader only gives light: an Emission shader, or a color or value where a shader is expected. */
+function onlyLight(leaf: Leaf): boolean {
+  return leaf.emitted !== null || nodeType(leaf.node) === "ShaderNodeEmission";
+}
+
+function strongest(leaves: readonly Leaf[]): Leaf | null {
+  return leaves.reduce<Leaf | null>((best, leaf) => (best === null || leaf.weight > best.weight ? leaf : best), null);
+}
+
+interface SurfaceShader {
+  /** The shader the preview shows: the strongest that is not only light, else the strongest light. */
+  shown: Leaf | null;
+  /** The other shaders, whose light the preview adds to the shown one's. */
+  others: Leaf[];
   /** How much of the surface is not a Transparent BSDF, from the mix and add shaders that lead to it. */
   alpha: number;
   /** Image alphas that mix the surface with a Transparent BSDF. */
@@ -415,11 +455,12 @@ function isTransparent(graph: ShaderGraph, socket: BlendStruct | null): boolean 
 }
 
 /**
- * The shader the output's surface shows most of, looking through mix and add shaders, which weigh their inputs. A
- * Transparent BSDF in the mix makes the surface see-through rather than becoming the shader.
+ * The shader the output's surface shows most of, looking through mix and add shaders, which weigh their inputs, and
+ * the others, which add their light. A Transparent BSDF in the mix makes the surface see-through rather than becoming
+ * the shader.
  */
 function surfaceShader(graph: ShaderGraph, output: BlendStruct): SurfaceShader {
-  const leaves: { node: BlendStruct; weight: number; emitted: BlendStruct | null }[] = [];
+  const leaves: Leaf[] = [];
   const notes: string[] = [];
   const alphaImages: ImageAlpha[] = [];
   let transparent = 0;
@@ -467,20 +508,65 @@ function surfaceShader(graph: ShaderGraph, output: BlendStruct): SurfaceShader {
     }
   };
   visit(inputSocket(output, "Surface"), 1, 0);
-  const strongest = leaves.reduce<(typeof leaves)[number] | null>(
-    (best, leaf) => (best === null || leaf.weight > best.weight ? leaf : best),
-    null,
-  );
-  if (leaves.length > 1 && strongest) {
-    notes.push(`${leaves.length} shaders mix, shown as ${strongest.node.string("name") || "the strongest"}`);
+  const alpha = clamp01(1 - transparent);
+  const shaders = leaves.filter((leaf) => !onlyLight(leaf));
+  const shown = strongest(shaders) ?? strongest(leaves);
+  if (shaders.length > 1 && shown) {
+    notes.push(`${leaves.length} shaders mix, shown as ${shown.node.string("name") || "the strongest"}`);
   }
-  return {
-    node: strongest?.node ?? null,
-    emitted: strongest?.emitted ?? null,
-    alpha: clamp01(1 - transparent),
-    alphaImages,
-    notes,
-  };
+  return { shown, others: leaves.filter((leaf) => leaf !== shown), alpha, alphaImages, notes };
+}
+
+/**
+ * The light a shader adds to the surface: an Emission shader's, a color's or value's where a shader is expected, or a
+ * Principled BSDF's emission. Other shaders give none.
+ */
+function lightOf(graph: ShaderGraph, leaf: Leaf, isGray: GrayCheck): MaterialDraft {
+  const light = defaultMaterial(nodeLabel(leaf.node));
+  const type = nodeType(leaf.node);
+  if (leaf.emitted) readEmitted(graph, leaf.emitted, leaf.node, light, isGray);
+  else if (type === "ShaderNodeEmission") readSimpleShader(graph, leaf.node, light, isGray);
+  else if (type === "ShaderNodeBsdfPrincipled") readPrincipledEmission(graph, leaf.node, light, isGray);
+  return light;
+}
+
+function emits(draft: MaterialDraft): boolean {
+  return draft.emissive.some((channel) => channel !== 0);
+}
+
+/**
+ * Adds a shader's light, at `scale` of its strength, to the material's: to its constant light, or in place of none,
+ * as an image or a color attribute. Light the material cannot add to its own it notes.
+ */
+function addLight(draft: MaterialDraft, light: MaterialDraft, scale: number): void {
+  draft.approximations.push(...light.approximations);
+  if (!emits(light)) return;
+  const scaled = light.emissive.map((channel) => channel * scale) as Vec3;
+  const plain = (material: MaterialDraft) => material.emissiveImage === null && material.emissiveAttribute === null;
+  if (plain(draft) && plain(light)) {
+    draft.emissive = draft.emissive.map((channel, index) => channel + (scaled[index] ?? 0)) as Vec3;
+  } else if (!emits(draft)) {
+    draft.emissive = scaled;
+    draft.emissiveImage = light.emissiveImage;
+    draft.emissiveAttribute = light.emissiveAttribute;
+  } else {
+    draft.approximations.push(`${light.name} adds light the preview leaves out`);
+  }
+}
+
+/**
+ * Gives the material the light of the surface's shaders by their share of its opaque part: the shown shader's own, and
+ * the others' added to it.
+ */
+function applySurfaceLight(graph: ShaderGraph, draft: MaterialDraft, surface: SurfaceShader, isGray: GrayCheck): void {
+  const opaque = surface.alpha > 0 ? surface.alpha : 1;
+  const share = (surface.shown?.weight ?? opaque) / opaque;
+  draft.emissive = draft.emissive.map((channel) => channel * share) as Vec3;
+  if (surface.others.every(onlyLight)) {
+    const [r, g, b, a] = draft.baseColor;
+    draft.baseColor = [r * share, g * share, b * share, a];
+  }
+  for (const leaf of surface.others) addLight(draft, lightOf(graph, leaf, isGray), leaf.weight / opaque);
 }
 
 /** The Shader to RGB node a color comes from without an image, as toon shading does. */
@@ -683,6 +769,21 @@ function factoredImage(graph: ShaderGraph, socket: BlendStruct | null): { found:
 }
 
 /**
+ * The color attribute an input reads from a Color Attribute node, as the node names it with "" for the mesh's default,
+ * times a constant color as glTF's importer builds a factor.
+ */
+function factoredAttribute(
+  graph: ShaderGraph,
+  socket: BlendStruct | null,
+): { attribute: string; factor: number[] } | null {
+  const scaled = socket ? colorScaledBy(graph, socket) : null;
+  const source = linkedOutput(graph, scaled?.input ?? socket);
+  if (!source || nodeType(source.node) !== "ShaderNodeVertexColor" || source.name !== "Color") return null;
+  const attribute = source.node.deref("storage")?.string("layer_name") ?? "";
+  return { attribute, factor: scaled?.factor ?? [1, 1, 1] };
+}
+
+/**
  * The image a color input samples, unless every way from it to the input carries one value, such as one channel, the
  * brightness or the alpha, which it notes on the draft instead. One value that equals the color of a gray image, as
  * its red channel or its brightness do, shows the image where `isGray` says it is gray.
@@ -743,11 +844,15 @@ function readPacked(
 
 function readPrincipled(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft, isGray: GrayCheck): void {
   const baseSocket = inputSocket(node, "Base Color");
+  const attribute = factoredAttribute(graph, baseSocket);
   const base = factoredImage(graph, baseSocket);
   draft.baseColorImage = colorImage(graph, draft, "Base color", base?.found ?? null, isGray);
-  const color = draft.baseColorImage ? (base?.factor ?? [1, 1, 1]) : inputValue(graph, baseSocket, [0.8, 0.8, 0.8, 1]);
+  draft.baseColorAttribute = attribute?.attribute ?? null;
+  const color =
+    attribute?.factor ??
+    (draft.baseColorImage ? (base?.factor ?? [1, 1, 1]) : inputValue(graph, baseSocket, [0.8, 0.8, 0.8, 1]));
   draft.baseColor = [color[0] ?? 0.8, color[1] ?? 0.8, color[2] ?? 0.8, 1];
-  noteNodeInput(graph, draft, "Base color", baseSocket, base?.found ?? null);
+  if (!attribute) noteNodeInput(graph, draft, "Base color", baseSocket, base?.found ?? null);
 
   const metallicSocket = inputSocket(node, "Metallic");
   const roughnessSocket = inputSocket(node, "Roughness");
@@ -778,21 +883,29 @@ function readPrincipled(graph: ShaderGraph, node: BlendStruct, draft: MaterialDr
     draft.approximations.push(`Normal comes from ${nodeLabel(normal.node)}, which the preview leaves out`);
   }
 
+  readPrincipledEmission(graph, node, draft, isGray);
+  readAlpha(graph, draft, inputSocket(node, "Alpha"));
+}
+
+/** The light of a Principled BSDF: its emission color times its strength. */
+function readPrincipledEmission(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft, isGray: GrayCheck): void {
   const emissionSocket = inputSocket(node, "Emission Color", "Emission");
   const strengthSocket = inputSocket(node, "Emission Strength");
   const strength = strengthSocket ? scalarOf(graph, strengthSocket, 1) : 1;
+  const attribute = strength !== 0 ? factoredAttribute(graph, emissionSocket) : null;
   const emission = factoredImage(graph, emissionSocket);
   draft.emissiveImage = strength > 0 ? colorImage(graph, draft, "Emission", emission?.found ?? null, isGray) : null;
-  const emissionColor = draft.emissiveImage
-    ? (emission?.factor ?? [1, 1, 1])
-    : emission
-      ? [0, 0, 0]
-      : inputValue(graph, emissionSocket, [0, 0, 0, 1]);
+  draft.emissiveAttribute = attribute?.attribute ?? null;
+  const emissionColor =
+    attribute?.factor ??
+    (draft.emissiveImage
+      ? (emission?.factor ?? [1, 1, 1])
+      : emission
+        ? [0, 0, 0]
+        : inputValue(graph, emissionSocket, [0, 0, 0, 1]));
   draft.emissive = [0, 1, 2].map((index) => (emissionColor[index] ?? 0) * strength) as Vec3;
-  if (strength !== 0) noteNodeInput(graph, draft, "Emission", emissionSocket, emission?.found ?? null);
+  if (strength !== 0 && !attribute) noteNodeInput(graph, draft, "Emission", emissionSocket, emission?.found ?? null);
   noteNodeInput(graph, draft, "Emission strength", strengthSocket, null);
-
-  readAlpha(graph, draft, inputSocket(node, "Alpha"));
 }
 
 /** Notes the transmission of a Principled BSDF, which shows only where it is not metallic. */
@@ -871,33 +984,57 @@ function channelName(channel: { name: string }): string {
   return channel.name === "Alpha" ? "the alpha" : `the ${channel.name} channel`;
 }
 
+/** A shader other than the Principled BSDF, by its color, which the Specular and Metallic BSDFs call Base Color. */
+/** The color of a metal from its complex index of refraction: its reflectance seen head-on. */
+function conductorColor(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft): number[] {
+  const iorSocket = inputSocket(node, "IOR");
+  const extinctionSocket = inputSocket(node, "Extinction");
+  noteNodeInput(graph, draft, "IOR", iorSocket, null);
+  noteNodeInput(graph, draft, "Extinction", extinctionSocket, null);
+  const ior = inputValue(graph, iorSocket, [1, 1, 1]);
+  const extinction = inputValue(graph, extinctionSocket, [0, 0, 0]);
+  return [0, 1, 2].map((index) => {
+    const n = ior[index] ?? 1;
+    const k = extinction[index] ?? 0;
+    return ((n - 1) ** 2 + k ** 2) / ((n + 1) ** 2 + k ** 2);
+  });
+}
+
 function readSimpleShader(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft, isGray: GrayCheck): void {
   const type = nodeType(node);
-  const emits = type === "ShaderNodeEmission";
-  const colorSocket = inputSocket(node, "Color");
+  const glows = type === "ShaderNodeEmission";
+  const conductor = type === "ShaderNodeBsdfMetallic" && node.number("custom2") === PHYSICAL_CONDUCTOR;
+  const colorSocket = conductor ? null : inputSocket(node, "Color", "Base Color");
+  const attribute = factoredAttribute(graph, colorSocket);
   const fed = factoredImage(graph, colorSocket);
-  const image = colorImage(graph, draft, emits ? "Emission" : "Base color", fed?.found ?? null, isGray);
-  const color = image
-    ? (fed?.factor ?? [1, 1, 1])
-    : fed && emits
-      ? [0, 0, 0]
-      : inputValue(graph, colorSocket, [0.8, 0.8, 0.8, 1]);
-  noteNodeInput(graph, draft, "Color", colorSocket, fed?.found ?? null);
-  if (emits) {
+  const image = colorImage(graph, draft, glows ? "Emission" : "Base color", fed?.found ?? null, isGray);
+  const color =
+    attribute?.factor ??
+    (image
+      ? (fed?.factor ?? [1, 1, 1])
+      : fed && glows
+        ? [0, 0, 0]
+        : conductor
+          ? conductorColor(graph, node, draft)
+          : inputValue(graph, colorSocket, [0.8, 0.8, 0.8, 1]));
+  if (!attribute) noteNodeInput(graph, draft, "Color", colorSocket, fed?.found ?? null);
+  if (glows) {
     const strengthSocket = inputSocket(node, "Strength");
     const strength = scalarOf(graph, strengthSocket, 1);
     noteNodeInput(graph, draft, "Strength", strengthSocket, null);
     draft.baseColor = [0, 0, 0, 1];
     draft.emissiveImage = image;
+    draft.emissiveAttribute = attribute?.attribute ?? null;
     draft.emissive = [0, 1, 2].map((index) => (color[index] ?? 0) * strength) as Vec3;
     return;
   }
   draft.baseColor = [color[0] ?? 0.8, color[1] ?? 0.8, color[2] ?? 0.8, 1];
   draft.baseColorImage = image;
+  draft.baseColorAttribute = attribute?.attribute ?? null;
   const roughness = inputSocket(node, "Roughness");
   if (type === "ShaderNodeBsdfDiffuse") draft.roughness = 1;
   else if (roughness) draft.roughness = clamp01(scalarOf(graph, roughness, 0.5));
-  draft.metallic = type === "ShaderNodeBsdfGlossy" || type === "ShaderNodeBsdfAnisotropic" ? 1 : 0;
+  draft.metallic = METAL_SHADERS.has(type) ? 1 : 0;
 }
 
 /**
@@ -912,14 +1049,17 @@ function readEmitted(
   draft: MaterialDraft,
   isGray: GrayCheck,
 ): void {
+  const attribute = factoredAttribute(graph, socket);
   const found = colorFeeding(graph, socket);
   const image = colorImage(graph, draft, "Emission", found, isGray);
   const constant = constantOf(graph, socket, SocketType.color);
-  if (found || constant) {
+  if (attribute || found || constant) {
     draft.baseColor = [0, 0, 0, 1];
     draft.metallic = 0;
     draft.emissiveImage = image;
-    draft.emissive = image ? [1, 1, 1] : [constant?.[0] ?? 0, constant?.[1] ?? 0, constant?.[2] ?? 0];
+    draft.emissiveAttribute = attribute?.attribute ?? null;
+    const color = attribute?.factor ?? (image ? [1, 1, 1] : (constant ?? []));
+    draft.emissive = [color[0] ?? 0, color[1] ?? 0, color[2] ?? 0];
   } else {
     draft.approximations.push(`Its surface emits the output of ${nodeLabel(node)}, which the preview leaves out`);
   }
@@ -933,17 +1073,41 @@ function readNoSurface(draft: MaterialDraft, volume: boolean): void {
   if (volume) draft.alphaMode = "blend";
 }
 
-function noteImages(draft: MaterialDraft): void {
+export function imageSource(image: BlendStruct): number {
+  return image.has("source") ? image.number("source") : IMAGE_SOURCE_FILE;
+}
+
+/**
+ * Blender's `BKE_image_user_frame_get`: the frame of an image sequence that an Image Texture node shows at a scene
+ * frame, from the node's start frame, frame count, offset and whether it cycles.
+ */
+export function sequenceFrame(node: BlendStruct, sceneFrame: number): number {
+  const user = node.deref("storage")?.struct("iuser");
+  const length = user?.number("frames") ?? 0;
+  if (!user || length <= 0) return 0;
+  let frame = sceneFrame - user.number("sfra") + 1;
+  if (user.number("cycl") !== 0) {
+    frame %= length;
+    if (frame <= 0) frame += length;
+  }
+  return Math.min(Math.max(frame, 0), length) + user.number("offset");
+}
+
+/** Notes what the preview shows differently of the images, the sequences' at `sceneFrame`. */
+function noteImages(draft: MaterialDraft, sceneFrame: number): void {
   const colorImages = new Set([draft.baseColorImage, draft.emissiveImage]);
   for (const use of imageUses(draft)) {
     const name = idName(use.image);
-    const source = use.image.has("source") ? use.image.number("source") : IMAGE_SOURCE_FILE;
-    if (source !== IMAGE_SOURCE_FILE && !packedFile(use.image)) {
+    const source = imageSource(use.image);
+    const packed = packedFile(use.image) !== null;
+    if (source === IMAGE_SOURCE_TILED) {
+      const tiles = packed ? use.image.list("packedfiles") : use.image.list("tiles");
+      if (tiles.length > 1) draft.approximations.push(`${name} is a UDIM tiled image, shown with its first tile`);
+    } else if (source === IMAGE_SOURCE_SEQUENCE && !packed) {
+      draft.approximations.push(`${name} is an image sequence, shown as it is at frame ${sceneFrame}`);
+    } else if (source !== IMAGE_SOURCE_FILE && !packed) {
       const kind = IMAGE_SOURCES[source] ?? "not an image file";
       draft.approximations.push(`${name} is ${kind}, which the preview leaves out`);
-    }
-    if (source === IMAGE_SOURCE_TILED && use.image.list("packedfiles").length > 1) {
-      draft.approximations.push(`${name} is a UDIM tiled image, shown with its first tile`);
     }
     if (use.coordinates) {
       draft.approximations.push(`${name} uses ${use.coordinates} coordinates, shown with the UV map`);
@@ -961,11 +1125,16 @@ function noteImages(draft: MaterialDraft): void {
 }
 
 /**
- * A metallic-roughness approximation of a Blender material from its node tree. A material without nodes takes its
- * color, metallic and roughness, opaque, as EEVEE renders it. `isGray` is asked only about images that reach a color
- * input as one value.
+ * A metallic-roughness approximation of a Blender material from its node tree, with its image sequences as they are at
+ * `sceneFrame`. A material without nodes takes its color, metallic and roughness, opaque, as EEVEE renders it.
+ * `isGray` is asked only about images that reach a color input as one value.
  */
-export function readMaterial(material: BlendStruct, version: number, isGray: GrayCheck): MaterialDraft {
+export function readMaterial(
+  material: BlendStruct,
+  version: number,
+  isGray: GrayCheck,
+  sceneFrame: number,
+): MaterialDraft {
   const draft = defaultMaterial(idName(material));
   draft.baseColor = [material.number("r"), material.number("g"), material.number("b"), 1];
   draft.metallic = clamp01(material.number("metallic"));
@@ -981,16 +1150,18 @@ export function readMaterial(material: BlendStruct, version: number, isGray: Gra
       draft.approximations.push("Its output is for Cycles only, shown black as EEVEE renders it");
     }
     const surface = output ? surfaceShader(graph, output) : null;
+    const shown = surface?.shown ?? null;
     const volume = output ? linkedOutput(graph, inputSocket(output, "Volume")) : null;
-    if (!surface?.node) readNoSurface(draft, volume !== null);
-    else if (surface.emitted) readEmitted(graph, surface.emitted, surface.node, draft, isGray);
-    else if (nodeType(surface.node) === "ShaderNodeBsdfPrincipled") readPrincipled(graph, surface.node, draft, isGray);
+    if (!shown) readNoSurface(draft, volume !== null);
+    else if (shown.emitted) readEmitted(graph, shown.emitted, shown.node, draft, isGray);
+    else if (nodeType(shown.node) === "ShaderNodeBsdfPrincipled") readPrincipled(graph, shown.node, draft, isGray);
     else {
-      readSimpleShader(graph, surface.node, draft, isGray);
-      if (!SIMPLE_SHADERS.has(nodeType(surface.node))) {
-        draft.approximations.push(`Its surface is ${nodeLabel(surface.node)}, shown as a plain shader of its color`);
+      readSimpleShader(graph, shown.node, draft, isGray);
+      if (!SIMPLE_SHADERS.has(nodeType(shown.node))) {
+        draft.approximations.push(`Its surface is ${nodeLabel(shown.node)}, shown as a plain shader of its color`);
       }
     }
+    if (surface) applySurfaceLight(graph, draft, surface, isGray);
     if (volume) {
       draft.approximations.push(`Its volume comes from ${nodeLabel(volume.node)}, which the preview leaves out`);
     }
@@ -1008,7 +1179,10 @@ export function readMaterial(material: BlendStruct, version: number, isGray: Gra
       notePremultiplied(draft, use, read);
     }
   }
-  noteImages(draft);
+  for (const use of imageUses(draft)) {
+    if (imageSource(use.image) === IMAGE_SOURCE_SEQUENCE) use.frame = sequenceFrame(use.node, sceneFrame);
+  }
+  noteImages(draft, sceneFrame);
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";
     draft.alphaCutoff = material.number("alpha_threshold") || 0.5;
