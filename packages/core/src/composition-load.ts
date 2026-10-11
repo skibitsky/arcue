@@ -261,8 +261,15 @@ function versionFile(file: ReadFile, id: string): VersionFile {
 /** How many member files parse at once, each in its own import worker. */
 export const MEMBER_IMPORTS_AT_ONCE = 4;
 
-/** The warnings of an animation file's own parser that matter for its clips; the rest are about meshes and rest poses. */
+/**
+ * The warnings of an animation file's own parser that matter for its clips, besides every warning about a clip; the
+ * rest are about meshes and rest poses.
+ */
 const CLIP_WARNINGS: ReadonlySet<ImportWarningCode> = new Set(["clip-not-sampled", "invalid-data", "left-handed-axes"]);
+
+function mattersForClips(warning: ImportWarning): boolean {
+  return warning.subject.kind === "clip" || CLIP_WARNINGS.has(warning.code);
+}
 
 export interface BuildSceneOptions {
   /** A scene parsed from the same bytes before, which a member takes without waiting for a free import. */
@@ -312,7 +319,7 @@ export async function buildAssetScene(
       scenes.set(file.path, { file: file.label, scene });
       const animationOnly = !attached.has(file.path);
       for (const warning of scene.source.warnings) {
-        if (!animationOnly || CLIP_WARNINGS.has(warning.code)) warnings.push({ ...warning, file: file.label });
+        if (!animationOnly || mattersForClips(warning)) warnings.push({ ...warning, file: file.label });
       }
       continue;
     }

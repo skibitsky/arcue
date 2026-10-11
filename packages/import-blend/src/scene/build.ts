@@ -469,7 +469,11 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
     }
     const smoothing = smoothByAngle(object.struct);
     modifierWarnings(object, smoothing, warn);
-    if (data.faceCount === 0) continue;
+    if (data.faceCount === 0) {
+      if (data.vertexCount > 0)
+        warn("object-not-shown", object.name, `Not shown: ${object.name}`, "Its mesh has no faces");
+      continue;
+    }
     if (data.absoluteKeys) {
       warn(
         "deform-approximated",

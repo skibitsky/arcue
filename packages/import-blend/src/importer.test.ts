@@ -388,8 +388,10 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["material-approximated", "Procedural"],
         ["material-approximated", "Projected"],
         ["material-approximated", "RedRough"],
+        ["material-approximated", "SrgbRough"],
         ["material-approximated", "Textured"],
         ["material-approximated", "Tinted"],
+        ["material-approximated", "Vectored"],
         ["texture-not-found", "absolute.png"],
         ["texture-not-found", "missing.png"],
         ["texture-path-absolute", "absolute.png"],
@@ -414,8 +416,11 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
           "Base color comes from Noise Texture, shown at the value set on the input; Normal comes from Bump, which the preview leaves out",
         ],
         ["Boxed", "checker.png uses Box projection, shown flat"],
+        ["SrgbRough", "checker.png is sRGB but holds data, read as Non-Color"],
+        ["Vectored", "checker.png uses a Vector Mapping, shown as Point"],
       ]);
       expect(approximated.every((warning) => warning.subject.kind === "material")).toBe(true);
+      expect(material("Muted").baseColorTexture).not.toBeNull();
       expect(material("RedRough").roughnessTexture).toBeNull();
       expect(material("ObjectNormal").normalTexture).toBeNull();
     });
@@ -471,6 +476,7 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
       ["unweighted-vertices", "Masked", "Some vertices have no skin weights"],
       ["deform-approximated", "Morph", "Shown in its basis shape"],
       ["modifier-not-applied", "Generated", "Shown without MakeCube"],
+      ["object-not-shown", "Wire", "Its mesh has no faces"],
       [
         "library-not-loaded",
         `scenes-${version}.blend`,

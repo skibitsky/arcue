@@ -13,6 +13,11 @@ const IMAGE_SOURCES: Readonly<Record<number, string>> = {
 const TANGENT_SPACE = 0;
 const NORMAL_SPACES: Readonly<Record<number, string>> = { 1: "object", 2: "world", 3: "object", 4: "world" };
 
+/** The color space Blender reads an image's values in, such as "sRGB" or "Non-Color". */
+function colorSpace(image: BlendStruct): string {
+  return image.struct("colorspace_settings")?.string("name") ?? "";
+}
+
 /** The image's packed file, from the list newer files keep or the single pointer older ones do. */
 export function packedFile(image: BlendStruct): BlendStruct | null {
   return image.deref("packedfile") ?? image.list("packedfiles")[0]?.deref("packedfile") ?? null;
@@ -31,6 +36,8 @@ export interface ImageUse {
   clipped: boolean;
   /** Box, Sphere or Tube projection, which the preview shows as flat, or null for flat. */
   projection: string | null;
+  /** A Mapping node's Texture, Vector or Normal type, which the preview maps as Point, or null for Point. */
+  mapping: string | null;
 }
 
 export interface MaterialDraft {
@@ -65,6 +72,10 @@ const BLEND_METHOD_CLIP = 3;
 const WRAPS: readonly WrapMode[] = ["repeat", "clamp", "clamp", "mirror"];
 const EXTENSION_CLIP = 2;
 const PROJECTIONS: Readonly<Record<number, string>> = { 1: "Box", 2: "Sphere", 3: "Tube" };
+const MAPPING_TYPES: Readonly<Record<number, string>> = { 1: "Texture", 2: "Vector", 3: "Normal" };
+const IMAGE_SOURCE_TILED = 6;
+/** Color spaces that hold data rather than color, which Blender reads without converting. */
+const DATA_SPACES = new Set(["Non-Color", "Raw", "Generic Data"]);
 const SIMPLE_SHADERS = new Set([
   "ShaderNodeEmission",
   "ShaderNodeBsdfDiffuse",
@@ -129,7 +140,8 @@ function inputSocket(node: BlendStruct, ...names: string[]): BlendStruct | null 
   return null;
 }
 
-function linkInto(graph: Graph, socket: BlendStruct): { node: BlendStruct; socket: string } | null {
+/** The node and output a socket's link comes from, through muted nodes as Blender passes data through them. */
+function linkInto(graph: Graph, socket: BlendStruct, depth = 0): { node: BlendStruct; socket: string } | null {
   for (const link of graph.links) {
     if (link.pointer("tosock") === 0n) continue;
     const target = link.deref("tosock");
@@ -137,8 +149,26 @@ function linkInto(graph: Graph, socket: BlendStruct): { node: BlendStruct; socke
     const from = link.deref("fromnode");
     const fromSocket = link.deref("fromsock");
     if (!from) return null;
-    if ((from.number("flag") & NODE_MUTED) !== 0) return null;
+    if ((from.number("flag") & NODE_MUTED) !== 0) return mutedPassThrough(graph, from, fromSocket, depth);
     return { node: from, socket: fromSocket ? socketName(fromSocket) : "" };
+  }
+  return null;
+}
+
+/** What a muted node passes on: the link into its first input of the output's type, or else its first linked input. */
+function mutedPassThrough(
+  graph: Graph,
+  node: BlendStruct,
+  output: BlendStruct | null,
+  depth: number,
+): { node: BlendStruct; socket: string } | null {
+  if (depth > 16) return null;
+  const inputs = node.list("inputs");
+  const type = output?.number("type");
+  const ordered = [...inputs.filter((input) => input.number("type") === type), ...inputs];
+  for (const input of ordered) {
+    const passed = linkInto(graph, input, depth + 1);
+    if (passed) return passed;
   }
   return null;
 }
@@ -270,6 +300,7 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
   let uvMap: string | null = null;
   let transform: UvTransform | null = null;
   let coordinates: string | null = null;
+  let mapping: string | null = null;
   let vector = linkInto(graph, inputSocket(node, "Vector") ?? node);
   for (let depth = 0; vector && depth < 8; depth++) {
     const type = nodeType(vector.node);
@@ -278,6 +309,7 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
       break;
     }
     if (type === "ShaderNodeMapping") {
+      mapping ??= MAPPING_TYPES[vector.node.number("custom1")] ?? null;
       transform ??= uvTransformOf(vector.node);
       vector = linkInto(graph, inputSocket(vector.node, "Vector") ?? vector.node);
       continue;
@@ -291,7 +323,7 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
     break;
   }
   const projection = PROJECTIONS[storage?.number("projection") ?? 0] ?? null;
-  return { image, uvMap, wrap, transform, coordinates, clipped: extension === EXTENSION_CLIP, projection };
+  return { image, uvMap, wrap, transform, coordinates, clipped: extension === EXTENSION_CLIP, projection, mapping };
 }
 
 function graphOf(tree: BlendStruct): Graph {
@@ -506,7 +538,7 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
   for (const use of imageUses(draft)) {
     const name = idName(use.image);
     const source = use.image.has("source") ? use.image.number("source") : IMAGE_SOURCE_FILE;
-    if (source !== IMAGE_SOURCE_FILE && !packedFile(use.image)) {
+    if (source !== IMAGE_SOURCE_FILE && (source === IMAGE_SOURCE_TILED || !packedFile(use.image))) {
       const kind = IMAGE_SOURCES[source] ?? "non-file";
       draft.approximations.push(`${name} is a ${kind} image, which the preview leaves out`);
     }
@@ -515,6 +547,19 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
     }
     if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
     if (use.projection) draft.approximations.push(`${name} uses ${use.projection} projection, shown flat`);
+    if (use.mapping) draft.approximations.push(`${name} uses a ${use.mapping} Mapping, shown as Point`);
+  }
+  for (const use of [draft.baseColorImage, draft.emissiveImage]) {
+    const space = use ? colorSpace(use.image) : "";
+    if (use && DATA_SPACES.has(space)) {
+      draft.approximations.push(`${idName(use.image)} is ${space} but colors the surface, shown as sRGB`);
+    }
+  }
+  const dataImages = [draft.metallicRoughnessImage, draft.roughnessImage, draft.metalnessImage, draft.normalImage];
+  for (const use of dataImages) {
+    if (use && colorSpace(use.image) === "sRGB") {
+      draft.approximations.push(`${idName(use.image)} is sRGB but holds data, read as Non-Color`);
+    }
   }
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";

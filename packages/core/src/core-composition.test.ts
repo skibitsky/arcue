@@ -344,7 +344,7 @@ describe("a composition file that cannot be read", () => {
 });
 
 describe("warnings from the files of a composition", () => {
-  it("lists each file's own warnings with its file, and only the clip warnings of an animation file", async () => {
+  it("lists each file's own warnings with its file, and only the warnings about clips from an animation file", async () => {
     const shellWarning = importWarning(
       "unweighted-vertices",
       { kind: "node", name: "ShellA" },
@@ -353,6 +353,11 @@ describe("warnings from the files of a composition", () => {
     const turnWarnings = [
       importWarning("root-scale", { kind: "node", name: "Body" }, "Root scale x100: Body"),
       importWarning("clip-not-sampled", { kind: "clip", name: "Armature|Turn" }, "Clip not sampled: Armature|Turn"),
+      importWarning(
+        "curve-modifier-not-applied",
+        { kind: "clip", name: "Armature|Turn" },
+        "Curve modifiers not applied: Armature|Turn",
+      ),
     ];
     const test = await setup({
       [SHELLS]: fakeAsset({ ...shells, warnings: [shellWarning] }),
@@ -362,6 +367,10 @@ describe("warnings from the files of a composition", () => {
     expect(warnings.map((warning) => [warning.id, warning.fix])).toEqual([
       [
         "clip-not-sampled:clip:Anim/BugTurn.fbx//Armature|Turn",
+        { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
+      ],
+      [
+        "curve-modifier-not-applied:clip:Anim/BugTurn.fbx//Armature|Turn",
         { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
       ],
       ["unweighted-vertices:node:BugShells.fbx//ShellA", null],

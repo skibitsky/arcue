@@ -819,6 +819,8 @@ def build_materials():
     packed = bpy.data.images.new("PackedNormal", 2, 2)
     packed.pixels = [0.5, 0.5, 1.0, 1.0] * 4
     packed.pack()
+    for data in (orm, packed):
+        data.colorspace_settings.name = "Non-Color"
     missing = bpy.data.images.new("missing.png", 1, 1)
     missing.source = "FILE"
     missing.filepath = os.path.join(HERE, "textures", "missing.png")
@@ -1001,8 +1003,39 @@ def build_materials():
     image.projection = "BOX"
     tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
 
+    muted = bpy.data.materials.new("Muted")
+    bsdf = principled(muted)
+    tree = muted.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    hue = tree.nodes.new("ShaderNodeHueSaturation")
+    hue.inputs["Hue"].default_value = 0.2
+    hue.mute = True
+    tree.links.new(image.outputs["Color"], hue.inputs["Color"])
+    tree.links.new(hue.outputs["Color"], bsdf.inputs["Base Color"])
+
+    srgb_rough = bpy.data.materials.new("SrgbRough")
+    bsdf = principled(srgb_rough)
+    tree = srgb_rough.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    separate = tree.nodes.new("ShaderNodeSeparateColor")
+    tree.links.new(image.outputs["Color"], separate.inputs["Color"])
+    tree.links.new(separate.outputs["Green"], bsdf.inputs["Roughness"])
+
+    vectored = bpy.data.materials.new("Vectored")
+    bsdf = principled(vectored)
+    tree = vectored.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    mapping = tree.nodes.new("ShaderNodeMapping")
+    mapping.vector_type = "VECTOR"
+    tree.links.new(tree.nodes.new("ShaderNodeUVMap").outputs["UV"], mapping.inputs["Vector"])
+    tree.links.new(mapping.outputs["Vector"], image.inputs["Vector"])
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+
     materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout, blended]
-    materials += [object_normal, generated, glassy, decal, procedural, boxed]
+    materials += [object_normal, generated, glassy, decal, procedural, boxed, muted, srgb_rough, vectored]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
@@ -1047,7 +1080,7 @@ def build_materials():
 def build_scenes():
     """Objects hidden with the eye, a collection in two places, a collection instance, absolute shape keys, a sheared
     child, a constraint whose influence is animated from zero, geometry only a modifier makes, an Armature modifier
-    limited by a vertex group, and data linked from another file."""
+    limited by a vertex group, a mesh with only edges, and data linked from another file."""
     scene = reset_scene()
     library_path = os.path.join(HERE, "library-%s.blend" % VERSION)
     shared = bpy.data.meshes.new("SharedMesh")
@@ -1189,6 +1222,11 @@ def build_scenes():
     squashed.scale = (1, 2, 1)
     skewed = mesh_object("Skewed", box_bmesh())
     skewed.location = (1, 0, 0)
+
+    wire = bmesh.new()
+    ends = [wire.verts.new(point) for point in ((0, 0, 0), (0, 0, 1))]
+    wire.edges.new(ends)
+    mesh_object("Wire", wire)
 
     layer = bpy.context.view_layer
     layer.update()
