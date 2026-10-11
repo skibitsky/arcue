@@ -188,4 +188,10 @@ describe("evaluateFCurve", () => {
     expect(evaluateFCurve(baked, 11.5)).toBeCloseTo(3);
     expect(keyFrames(baked)).toEqual([10, 11, 12]);
   });
+
+  it("interpolates baked samples between the frames around a negative time", () => {
+    const baked = curve([], { samples: Float32Array.of(0, 10, 20), sampleStart: -2 });
+    expect(evaluateFCurve(baked, -1.5)).toBeCloseTo(5);
+    expect(evaluateFCurve(baked, -0.5)).toBeCloseTo(15);
+  });
 });

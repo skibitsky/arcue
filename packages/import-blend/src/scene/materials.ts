@@ -148,23 +148,56 @@ const PASS_THROUGH = new Set([
   "NodeReroute",
 ]);
 
+/** Pass-through nodes that only pick or convert channels, which leave an image's values as the preview reads them. */
+const KEEPS_VALUES = new Set([
+  "ShaderNodeSeparateColor",
+  "ShaderNodeSeparateRGB",
+  "ShaderNodeSeparateXYZ",
+  "ShaderNodeRGBToBW",
+  "NodeReroute",
+]);
+
+/** An Image Texture node that feeds an input, the output it feeds from and the nodes between. */
+interface FedImage {
+  node: BlendStruct;
+  /** The image node's output, such as "Color" or "Alpha". */
+  output: string;
+  /** Each node between, as its type and the output it feeds from, such as "ShaderNodeSeparateColor:Green". */
+  via: string[];
+  /** Names of the nodes between that change the image's values, such as "Hue/Saturation/Value". */
+  changes: string[];
+}
+
 /** Follows a socket upstream through color adjustments to the Image Texture node that feeds it. */
-function imageFeeding(
-  graph: Graph,
-  socket: BlendStruct | null,
-  depth = 0,
-): { node: BlendStruct; via: string[] } | null {
+function imageFeeding(graph: Graph, socket: BlendStruct | null, depth = 0): FedImage | null {
   if (!socket || depth > 16) return null;
   const link = linkInto(graph, socket);
   if (!link) return null;
   const type = nodeType(link.node);
-  if (type === "ShaderNodeTexImage") return link.node.pointer("id") !== 0n ? { node: link.node, via: [] } : null;
+  if (type === "ShaderNodeTexImage") {
+    return link.node.pointer("id") !== 0n ? { node: link.node, output: link.socket, via: [], changes: [] } : null;
+  }
   if (!PASS_THROUGH.has(type)) return null;
   for (const input of link.node.list("inputs")) {
     const found = imageFeeding(graph, input, depth + 1);
-    if (found) return { node: found.node, via: [`${type}:${link.socket}`, ...found.via] };
+    if (!found) continue;
+    const change = KEEPS_VALUES.has(type) ? [] : [link.node.string("name") || type];
+    return { ...found, via: [`${type}:${link.socket}`, ...found.via], changes: [...change, ...found.changes] };
   }
   return null;
+}
+
+/** The image an input samples, noting on the draft any nodes between that change its values. */
+function imageInput(graph: Graph, draft: MaterialDraft, input: string, found: FedImage | null): ImageUse | null {
+  if (!found) return null;
+  if (found.changes.length > 0) {
+    const image = found.node.deref("id");
+    const nodes = [...new Set(found.changes)].join(", ");
+    draft.approximations.push(
+      `${input} passes ${image ? idName(image) : "an image"} through ${nodes}, which the preview leaves out`,
+    );
+  }
+  return imageUse(graph, found.node);
 }
 
 function uvTransformOf(mapping: BlendStruct): UvTransform | null {
@@ -268,7 +301,7 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   const color = defaultVector(baseSocket, [0.8, 0.8, 0.8, 1]);
   draft.baseColor = [color[0] ?? 0.8, color[1] ?? 0.8, color[2] ?? 0.8, 1];
   const baseImage = imageFeeding(graph, baseSocket);
-  draft.baseColorImage = baseImage ? imageUse(graph, baseImage.node) : null;
+  draft.baseColorImage = imageInput(graph, draft, "Base color", baseImage);
 
   const metallicSocket = inputSocket(node, "Metallic");
   const roughnessSocket = inputSocket(node, "Roughness");
@@ -285,7 +318,7 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
     (separated(metallicImage, "Blue") || separated(metallicImage, "B")) &&
     (separated(roughnessImage, "Green") || separated(roughnessImage, "G"))
   ) {
-    draft.metallicRoughnessImage = imageUse(graph, metallicImage.node);
+    draft.metallicRoughnessImage = imageInput(graph, draft, "Metallic and roughness", metallicImage);
   } else {
     draft.roughnessImage = channelImage(graph, draft, "Roughness", roughnessImage, ["Green", "G"]);
     draft.metalnessImage = channelImage(graph, draft, "Metallic", metallicImage, ["Blue", "B"]);
@@ -296,7 +329,7 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
     const strength = inputSocket(normalLink.node, "Strength");
     const image = imageFeeding(graph, inputSocket(normalLink.node, "Color"));
     if (image) {
-      draft.normalImage = imageUse(graph, image.node);
+      draft.normalImage = imageInput(graph, draft, "Normal", image);
       draft.normalScale = defaultFloat(strength, 1);
     }
   }
@@ -308,13 +341,24 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   const emissionImage = imageFeeding(graph, emissionSocket);
   draft.emissive = [(emission[0] ?? 0) * strength, (emission[1] ?? 0) * strength, (emission[2] ?? 0) * strength];
   draft.emissionStrength = strength;
-  if (emissionImage && strength > 0) draft.emissiveImage = imageUse(graph, emissionImage.node);
+  if (emissionImage && strength > 0) draft.emissiveImage = imageInput(graph, draft, "Emission", emissionImage);
 
   const alphaSocket = inputSocket(node, "Alpha");
   const alpha = clamp01(defaultFloat(alphaSocket, 1));
   draft.baseColor[3] = alpha;
   const alphaLinked = linkInto(graph, alphaSocket ?? node) !== null;
   if (alpha < 1 || alphaLinked) draft.alphaMode = "blend";
+  const alphaImage = imageFeeding(graph, alphaSocket);
+  const fromBaseImage =
+    alphaImage !== null &&
+    alphaImage.node.offset === baseImage?.node.offset &&
+    alphaImage.output === "Alpha" &&
+    alphaImage.via.length === 0;
+  if (alphaLinked && !fromBaseImage) {
+    const image = alphaImage?.node.deref("id");
+    const source = image ? idName(image) : "nodes";
+    draft.approximations.push(`Alpha comes from ${source}, which the preview leaves out`);
+  }
 }
 
 /**
@@ -325,13 +369,13 @@ function channelImage(
   graph: Graph,
   draft: MaterialDraft,
   input: string,
-  found: { node: BlendStruct; via: string[] } | null,
+  found: FedImage | null,
   readable: readonly string[],
 ): ImageUse | null {
   if (!found) return null;
   const [separate] = found.via;
   const channel = separate?.startsWith("ShaderNodeSeparate") ? separate.slice(separate.indexOf(":") + 1) : null;
-  if (channel === null || readable.includes(channel)) return imageUse(graph, found.node);
+  if (channel === null || readable.includes(channel)) return imageInput(graph, draft, input, found);
   const image = found.node.deref("id");
   const name = image ? idName(image) : "an image";
   draft.approximations.push(`${input} comes from the ${channel} channel of ${name}, which the preview leaves out`);
@@ -346,13 +390,13 @@ function readSimpleShader(graph: Graph, node: BlendStruct, draft: MaterialDraft)
   if (type === "ShaderNodeEmission") {
     const strength = defaultFloat(inputSocket(node, "Strength"), 1);
     draft.baseColor = [0, 0, 0, 1];
-    draft.emissiveImage = image ? imageUse(graph, image.node) : null;
+    draft.emissiveImage = imageInput(graph, draft, "Emission", image);
     draft.emissionStrength = strength;
     draft.emissive = [(color[0] ?? 0) * strength, (color[1] ?? 0) * strength, (color[2] ?? 0) * strength];
     return;
   }
   draft.baseColor = [color[0] ?? 0.8, color[1] ?? 0.8, color[2] ?? 0.8, 1];
-  draft.baseColorImage = image ? imageUse(graph, image.node) : null;
+  draft.baseColorImage = imageInput(graph, draft, "Base color", image);
   const roughness = inputSocket(node, "Roughness");
   if (type === "ShaderNodeBsdfDiffuse") draft.roughness = 1;
   else if (roughness) draft.roughness = clamp01(defaultFloat(roughness, 0.5));

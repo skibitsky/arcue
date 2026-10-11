@@ -14,7 +14,7 @@ import {
   translation,
 } from "../math";
 import type { Bone } from "./armature";
-import { readBones } from "./armature";
+import { BoneFlag, readBones } from "./armature";
 import type { MaterialDraft } from "./materials";
 import { defaultMaterial, imageUses, readMaterial } from "./materials";
 import type { BuiltMesh, SkinBone } from "./mesh-build";
@@ -155,12 +155,18 @@ function headTailFactor(object: BlendStruct): number {
   return object.has("parent_bone_head_tail_factor") ? object.number("parent_bone_head_tail_factor") : 1;
 }
 
+/** Whether a child of the bone follows only its channel transform, which is identity at rest, as Blender's option. */
+function relativeParent(bone: Bone): boolean {
+  return (bone.flag & BoneFlag.relativeParenting) !== 0;
+}
+
 /** The rest matrix of the bone an object is parented to, moved to the bone's tail, in armature space. */
 function boneParentMatrix(object: BlendStruct, armature: BlendStruct): Mat4 {
   const data = armature.deref("data");
   const name = object.string("parsubstr");
   const bone = data ? readBones(data).find((candidate) => candidate.name === name) : undefined;
-  return bone ? multiply(bone.rest, translation(0, bone.length * headTailFactor(object), 0)) : identity();
+  if (!bone || relativeParent(bone)) return identity();
+  return multiply(bone.rest, translation(0, bone.length * headTailFactor(object), 0));
 }
 
 /** Rest world matrices in Blender's space of any object, shown or not, with every bone at rest. */
@@ -253,7 +259,10 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
     if (parentBones && object.parentType === ParentType.bone) {
       const index = parentBones.bones.findIndex((bone) => bone.name === object.parentBone);
       const bone = parentBones.bones[index];
-      if (bone) {
+      if (bone && relativeParent(bone)) {
+        const detail = `It stays with ${parentRecord?.object.name} at rest instead of following bone ${bone.name}`;
+        warn("deform-approximated", object.name, `Relative bone parent not followed: ${object.name}`, detail);
+      } else if (bone) {
         parentNode = parentBones.nodes[index] ?? parentNode;
         parentPart = translation(0, bone.length * headTailFactor(object.struct), 0);
       }

@@ -74,6 +74,7 @@ const EASE_OUT = 2;
 const EASE_IN_OUT = 3;
 
 const FCURVE_MUTED = 1 << 4;
+const ACTION_GROUP_MUTED = 1 << 4;
 const FCURVE_DISCRETE_VALUES = 1 << 12;
 const FCURVE_EXTRAPOLATE_LINEAR = 1;
 const FMODIFIER_DISABLED = 1 << 0;
@@ -231,7 +232,7 @@ export function readFCurve(curve: BlendStruct): FCurve {
     sampleStart: sampled?.start ?? 0,
     linearExtrapolation: curve.number("extend") === FCURVE_EXTRAPOLATE_LINEAR,
     discrete: (flag & FCURVE_DISCRETE_VALUES) !== 0,
-    muted: (flag & FCURVE_MUTED) !== 0,
+    muted: (flag & FCURVE_MUTED) !== 0 || ((curve.deref("grp")?.number("flag") ?? 0) & ACTION_GROUP_MUTED) !== 0,
     modifiers,
     unsupportedModifiers: unsupported,
   };
@@ -587,7 +588,7 @@ function evaluateSamples(samples: Float32Array, start: number, frame: number): n
   if (frame <= start) return samples[0] ?? 0;
   if (frame >= start + count - 1) return samples[count - 1] ?? 0;
   const fraction = Math.abs(frame - Math.floor(frame));
-  const index = Math.trunc(frame) - Math.trunc(start);
+  const index = Math.floor(frame) - Math.floor(start);
   const value = samples[index] ?? 0;
   if (fraction !== 0 && fraction < 1) return value + ((samples[index + 1] ?? value) - value) * fraction;
   return value;

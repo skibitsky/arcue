@@ -378,8 +378,10 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         emissive: "/nonexistent/arcue/absolute.png",
       });
       expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name]).sort()).toEqual([
+        ["material-approximated", "Cutout"],
         ["material-approximated", "Projected"],
         ["material-approximated", "RedRough"],
+        ["material-approximated", "Tinted"],
         ["texture-not-found", "absolute.png"],
         ["texture-not-found", "missing.png"],
         ["texture-path-absolute", "absolute.png"],
@@ -394,6 +396,11 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
           { kind: "material", name: "RedRough" },
           "Roughness comes from the Red channel of orm.png, which the preview leaves out",
         ],
+        [
+          { kind: "material", name: "Tinted" },
+          "Base color passes checker.png through Hue/Saturation/Value, which the preview leaves out",
+        ],
+        [{ kind: "material", name: "Cutout" }, "Alpha comes from orm.png, which the preview leaves out"],
       ]);
       expect(material("RedRough").roughnessTexture).toBeNull();
     });
@@ -402,6 +409,18 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
 
 describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) => {
   const scene = await importFixture("scenes", version);
+  const expected = reference("scenes", version);
+
+  it("keeps a child of a bone with relative parenting where Blender shows it at rest", () => {
+    const world = worldMatrices(scene)[nodeIndex(scene, "RelChild")] ?? [];
+    expect(matrixError(world, expected.objects.RelChild?.world ?? [])).toBeLessThan(TOLERANCE);
+  });
+
+  it("leaves out curves in a muted group", async () => {
+    const actions = readActions(readBlendFile(await decompressBlend(readFixture("scenes", version))));
+    const curves = actions.find((action) => action.name.startsWith("Grouped"))?.slots.flatMap((slot) => slot.curves);
+    expect(curves?.map((curve) => [curve.path, curve.muted])).toEqual([["location", true]]);
+  });
 
   it("keeps objects hidden with the eye and starts their parts hidden, unless a level of the part shows", () => {
     expect(scene.parts.map((part) => [part.name, part.hiddenByDefault === true])).toEqual([
@@ -427,6 +446,7 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
     expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
       ["object-not-shown", "KitInstance", "Arcue does not expand instances of Kit"],
       ["constraint-not-evaluated", "Follower", undefined],
+      ["deform-approximated", "RelChild", "It stays with RelRig at rest instead of following bone Holder"],
       ["deform-approximated", "Skewed", "Its parent's scale shears it, which the preview drops"],
       [
         "deform-approximated",

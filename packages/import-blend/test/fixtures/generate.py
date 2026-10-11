@@ -919,7 +919,28 @@ def build_materials():
     tree.links.new(image.outputs["Color"], separate.inputs["Color"])
     tree.links.new(separate.outputs["Red"], bsdf.inputs["Roughness"])
 
-    for index, mat in enumerate([textured, glass, absent, diffuse, glow, mixed, projected, red_rough]):
+    tinted = bpy.data.materials.new("Tinted")
+    bsdf = principled(tinted)
+    tree = tinted.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    hue = tree.nodes.new("ShaderNodeHueSaturation")
+    hue.inputs["Hue"].default_value = 0.2
+    tree.links.new(image.outputs["Color"], hue.inputs["Color"])
+    tree.links.new(hue.outputs["Color"], bsdf.inputs["Base Color"])
+
+    cutout = bpy.data.materials.new("Cutout")
+    bsdf = principled(cutout)
+    tree = cutout.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+    mask = tree.nodes.new("ShaderNodeTexImage")
+    mask.image = orm
+    tree.links.new(mask.outputs["Color"], bsdf.inputs["Alpha"])
+
+    materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout]
+    for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
         uv = bm.loops.layers.uv.new("UVMap")
@@ -1043,6 +1064,31 @@ def build_scenes():
     generated = link(bpy.data.objects.new("Generated", bpy.data.meshes.new("GeneratedMesh")))
     generated.modifiers.new("MakeCube", "NODES").node_group = tree
 
+    grouped = link(bpy.data.objects.new("Grouped", None))
+    for frame, y in ((1, 0.0), (10, 5.0)):
+        grouped.location.y = y
+        grouped.keyframe_insert("location", index=1, frame=frame, group="Moves")
+    grouped_action = grouped.animation_data.action
+    if hasattr(grouped_action, "layers") and len(grouped_action.layers) > 0:
+        grouped_action.layers[0].strips[0].channelbags[0].groups["Moves"].mute = True
+    else:
+        grouped_action.groups["Moves"].mute = True
+    grouped.location.y = 0.0
+
+    rel_rig = link(bpy.data.objects.new("RelRig", bpy.data.armatures.new("RelSkeleton")))
+    rel_rig.location = (1, 2, 0)
+    activate(rel_rig)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bone = rel_rig.data.edit_bones.new("Holder")
+    bone.head, bone.tail = (1, 0, 0), (1, 0, 2)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    rel_rig.data.bones["Holder"].use_relative_parent = True
+    rel_child = link(bpy.data.objects.new("RelChild", None))
+    rel_child.location = (0.5, 0.5, 0.5)
+    rel_child.parent = rel_rig
+    rel_child.parent_type = "BONE"
+    rel_child.parent_bone = "Holder"
+
     squashed = link(bpy.data.objects.new("Squashed", None))
     squashed.rotation_euler = (0, 0, 0.5)
     squashed.scale = (1, 2, 1)
@@ -1058,9 +1104,11 @@ def build_scenes():
     eye.hide_set(True)
     lod1.hide_set(True)
     layer.layer_collection.children["Tucked"].hide_viewport = True
+    scene.frame_set(1)
+    reference = {"fps": 24.0, "unitScale": 1.0, "objects": world_matrices(scene)}
     save_blend("scenes", compress=False)
     os.remove(library_path)
-    save_reference("scenes", {"fps": 24.0, "unitScale": 1.0})
+    save_reference("scenes", reference)
 
 
 def main():
