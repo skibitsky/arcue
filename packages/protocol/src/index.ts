@@ -94,6 +94,7 @@ export {
 } from "./import-worker";
 export type {
   AssetInspection,
+  InspectedBone,
   InspectedClip,
   InspectedMaterial,
   InspectedMember,
