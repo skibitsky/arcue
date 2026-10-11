@@ -935,24 +935,35 @@ def build_materials():
 
 def build_scenes():
     """Objects hidden with the eye, a collection in two places, a collection instance, absolute shape keys, a sheared
-    child and data linked from another file."""
+    child, a constraint whose influence is animated from zero, geometry only a modifier makes, and data linked from
+    another file."""
     scene = reset_scene()
     library_path = os.path.join(HERE, "library-%s.blend" % VERSION)
     shared = bpy.data.meshes.new("SharedMesh")
     box_bmesh().to_mesh(shared)
     library_rock = bpy.data.objects.new("LibraryRock", shared)
     paint = material("LibraryPaint", (0.2, 0.5, 0.9))
-    bpy.data.libraries.write(library_path, {shared, library_rock, paint}, path_remap="RELATIVE_ALL")
+    skeleton = bpy.data.armatures.new("LibrarySkeleton")
+    library_rig = bpy.data.objects.new("LibraryRig", skeleton)
+    datablocks = {shared, library_rock, paint, library_rig}
+    bpy.data.libraries.write(library_path, datablocks, path_remap="RELATIVE_ALL")
     bpy.data.objects.remove(library_rock)
+    bpy.data.objects.remove(library_rig)
     bpy.data.meshes.remove(shared)
     bpy.data.materials.remove(paint)
+    bpy.data.armatures.remove(skeleton)
     with bpy.data.libraries.load(library_path, link=True, relative=True) as (source, target):
         target.meshes = ["SharedMesh"]
-        target.objects = ["LibraryRock"]
+        target.objects = ["LibraryRock", "LibraryRig"]
         target.materials = ["LibraryPaint"]
     link(bpy.data.objects.new("Borrowed", target.meshes[0]))
     link(target.objects[0])
     mesh_object("Painted", box_bmesh(), (target.materials[0],))
+    rigs = bpy.data.collections.new("Rigs")
+    scene.collection.children.link(rigs)
+    link(target.objects[1], rigs)
+    rigged = mesh_object("Rigged", box_bmesh())
+    rigged.modifiers.new("Armature", "ARMATURE").object = target.objects[1]
 
     mesh_object("Visible", box_bmesh())
     eye = mesh_object("EyeHidden", box_bmesh())
@@ -981,6 +992,21 @@ def build_scenes():
     bpy.data.collections["Right"].children.link(both)
     mesh_object("SharedPiece", box_bmesh(), collection=both)
 
+    follower = mesh_object("Follower", box_bmesh())
+    follow = follower.constraints.new("COPY_LOCATION")
+    follow.target = bpy.data.objects["Visible"]
+    for frame, influence in ((1, 0.0), (10, 1.0)):
+        follow.influence = influence
+        follow.keyframe_insert("influence", frame=frame)
+    follow.influence = 0.0
+
+    tree = bpy.data.node_groups.new("MakeCube", "GeometryNodeTree")
+    tree.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    cube = tree.nodes.new("GeometryNodeMeshCube")
+    tree.links.new(cube.outputs["Mesh"], tree.nodes.new("NodeGroupOutput").inputs["Geometry"])
+    generated = link(bpy.data.objects.new("Generated", bpy.data.meshes.new("GeneratedMesh")))
+    generated.modifiers.new("MakeCube", "NODES").node_group = tree
+
     squashed = link(bpy.data.objects.new("Squashed", None))
     squashed.rotation_euler = (0, 0, 0.5)
     squashed.scale = (1, 2, 1)
@@ -992,6 +1018,7 @@ def build_scenes():
     skewed.parent = squashed
     skewed.matrix_parent_inverse = squashed.matrix_world.inverted()
     layer.layer_collection.children["Left"].children["Both"].exclude = True
+    layer.layer_collection.children["Rigs"].exclude = True
     eye.hide_set(True)
     lod1.hide_set(True)
     layer.layer_collection.children["Tucked"].hide_viewport = True

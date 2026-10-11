@@ -129,12 +129,26 @@ export function conversionMatrix(unitScale: number): Mat4 {
   return Float64Array.of(s, 0, 0, 0, 0, 0, -s, 0, 0, s, 0, 0, 0, 0, 0, 1);
 }
 
-/** The constraints Blender evaluates: on, valid and with some influence. */
-export function activeConstraints(owner: BlendStruct): BlendStruct[] {
+/**
+ * The constraints Blender evaluates: on, valid, and with some influence now or an animated influence. `path` is the
+ * owner's path to its constraints, such as `pose.bones["Arm"].` for a bone or empty for an object.
+ */
+export function activeConstraints(
+  owner: BlendStruct,
+  path = "",
+  animated: ReadonlySet<string> = new Set(),
+): BlendStruct[] {
   return owner.list("constraints").filter((constraint) => {
     const flag = constraint.number("flag");
-    return (flag & CONSTRAINT_OFF) === 0 && (flag & CONSTRAINT_DISABLE) === 0 && constraint.number("enforce") > 0;
+    if ((flag & CONSTRAINT_OFF) !== 0 || (flag & CONSTRAINT_DISABLE) !== 0) return false;
+    const influence = `${path}constraints["${quoted(constraint.string("name"))}"].influence`;
+    return constraint.number("enforce") > 0 || animated.has(influence);
   });
+}
+
+/** A name as Blender quotes it inside a property path. */
+function quoted(name: string): string {
+  return name.replace(/["\\]/g, "\\$&");
 }
 
 function headTailFactor(object: BlendStruct): number {
@@ -180,7 +194,13 @@ class WorldMatrices {
   }
 }
 
-function addArmature(record: ObjectRecord, data: BlendStruct, nodes: NodeDraft[], warn: Warn): void {
+function addArmature(
+  record: ObjectRecord,
+  data: BlendStruct,
+  nodes: NodeDraft[],
+  animated: ReadonlySet<string>,
+  warn: Warn,
+): void {
   const { object, node } = record;
   const bones = readBones(data);
   const channels = new Map<string, BlendStruct>();
@@ -205,7 +225,9 @@ function addArmature(record: ObjectRecord, data: BlendStruct, nodes: NodeDraft[]
   }
   const constrained = bones.filter((bone) => {
     const channel = channels.get(bone.name);
-    return channel !== undefined && activeConstraints(channel).length > 0;
+    return (
+      channel !== undefined && activeConstraints(channel, `pose.bones["${quoted(bone.name)}"].`, animated).length > 0
+    );
   });
   if (constrained.length > 0) {
     warn(
@@ -218,7 +240,7 @@ function addArmature(record: ObjectRecord, data: BlendStruct, nodes: NodeDraft[]
 }
 
 /** A node for every object, each armature's bones under it, and an object parented to a bone under that bone. */
-function objectNodes(contents: SceneContents, warn: Warn) {
+function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, warn: Warn) {
   const worlds = new WorldMatrices();
   const nodes: NodeDraft[] = [];
   const objects: ObjectRecord[] = [];
@@ -245,8 +267,8 @@ function objectNodes(contents: SceneContents, warn: Warn) {
       const detail = "Its parent's scale shears it, which the preview drops";
       warn("deform-approximated", object.name, `Shear not shown: ${object.name}`, detail);
     }
-    if (object.type === ObjectType.armature && object.data) addArmature(record, object.data, nodes, warn);
-    if (activeConstraints(object.struct).length > 0) {
+    if (object.type === ObjectType.armature && object.data) addArmature(record, object.data, nodes, animated, warn);
+    if (activeConstraints(object.struct, "", animated).length > 0) {
       warn("constraint-not-evaluated", object.name, `Constraints not evaluated: ${object.name}`);
     }
     if (object.shown && UNSHOWN_GEOMETRY.has(object.type)) {
@@ -375,7 +397,7 @@ function sameValues(a: Float32Array, b: Float32Array): boolean {
 }
 
 /** Reads the active scene of a .blend file into nodes, meshes, skeletons and material drafts. */
-export function buildScene(file: BlendFile): BuiltScene {
+export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new Set()): BuiltScene {
   const warnings: BlendWarning[] = [];
   const warn: Warn = (code, name, message, detail) => {
     const subject: ImportWarningSubject = { kind: "node", name };
@@ -385,7 +407,7 @@ export function buildScene(file: BlendFile): BuiltScene {
   const { fps, unitScale } = sceneSettings(contents.scene);
   const conversion = conversionMatrix(unitScale);
   const toScene = invert(conversion);
-  const { nodes, objects, byOffset } = objectNodes(contents, warn);
+  const { nodes, objects, byOffset } = objectNodes(contents, animated, warn);
 
   const restWorld: Mat4[] = [];
   for (const node of nodes) {
@@ -424,6 +446,8 @@ export function buildScene(file: BlendFile): BuiltScene {
       warn("invalid-data", object.name, `Mesh not read: ${object.name}`, error.message);
       continue;
     }
+    const smoothing = smoothByAngle(object.struct);
+    modifierWarnings(object, smoothing, warn);
     if (data.faceCount === 0) continue;
     if (data.absoluteKeys) {
       warn(
@@ -433,9 +457,7 @@ export function buildScene(file: BlendFile): BuiltScene {
         "Shown in its basis shape",
       );
     }
-    const smoothing = smoothByAngle(object.struct);
     if (smoothing) data = applySmoothByAngle(data, smoothing);
-    modifierWarnings(object, smoothing, warn);
     const slotCount = Math.max(object.struct.number("totcol"), data.materials.length);
     const bones = skinBones(object, byOffset, warn);
     const built = buildMesh(data, { conversion, slotCount, skinBones: bones, meshNode: record.node });

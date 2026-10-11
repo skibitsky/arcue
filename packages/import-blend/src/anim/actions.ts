@@ -135,6 +135,18 @@ export function animationUses(id: BlendStruct): AnimatedId {
   return { id, uses, drivers: adt.list("drivers").map(readFCurve) };
 }
 
+/** Every property path an action, or a driver on an object, animates, such as `constraints["Follow"].influence`. */
+export function animatedPaths(file: BlendFile, actions: readonly Action[]): Set<string> {
+  const paths = new Set<string>();
+  for (const action of actions) {
+    for (const slot of action.slots) for (const curve of slot.curves) paths.add(curve.path);
+  }
+  for (const object of datablocks(file, "OB")) {
+    for (const driver of animationUses(object).drivers) paths.add(driver.path);
+  }
+  return paths;
+}
+
 /** A bone name in a `pose.bones["Name"]` path, with Blender's escapes undone, and the property after it. */
 export function parsePosePath(path: string): { bone: string; property: string } | null {
   const match = /^pose\.bones\["((?:[^"\\]|\\.)*)"\]\.([a-z_]+)$/.exec(path);

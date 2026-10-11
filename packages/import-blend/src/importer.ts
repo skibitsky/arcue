@@ -27,7 +27,7 @@ import {
   mergeKeyTimes,
   topologyFingerprint,
 } from "@arcue/scene";
-import { readActions } from "./anim/actions";
+import { animatedPaths, readActions } from "./anim/actions";
 import type { ParsedClip } from "./anim/clips";
 import { buildClips, driverWarnings } from "./anim/clips";
 import { decompressBlend } from "./blend/decompress";
@@ -72,8 +72,13 @@ function imagePaths(image: BlendStruct): { relative: string; absolute: string } 
   return { relative: stored, absolute: stored };
 }
 
+/** The image's packed file, from the list newer files keep or the single pointer older ones do. */
+function packedFile(image: BlendStruct): BlendStruct | null {
+  return image.deref("packedfile") ?? image.list("packedfiles")[0]?.deref("packedfile") ?? null;
+}
+
 function packedBytes(file: BlendFile, image: BlendStruct): Uint8Array | null {
-  const packed = image.deref("packedfile") ?? image.list("packedfiles")[0]?.deref("packedfile") ?? null;
+  const packed = packedFile(image);
   if (!packed) return null;
   const block = packed.target("data");
   if (!block) return null;
@@ -93,7 +98,7 @@ class ImageFiles {
   indexOf(image: BlendStruct): number | null {
     const known = this.#index.get(image.offset);
     if (known !== undefined) return known;
-    if (image.has("source") && image.number("source") !== IMAGE_SOURCE_FILE && !image.deref("packedfile")) return null;
+    if (image.has("source") && image.number("source") !== IMAGE_SOURCE_FILE && !packedFile(image)) return null;
     const paths = imagePaths(image);
     const index = this.files.length;
     this.files.push({ ...paths, linked: true, content: packedBytes(this.#file, image) });
@@ -239,8 +244,9 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   let scene: BuiltScene;
   let clips: ParsedClip[];
   try {
-    scene = buildScene(file);
-    clips = buildClips(scene, readActions(file), scene.warnings);
+    const actions = readActions(file);
+    scene = buildScene(file, animatedPaths(file, actions));
+    clips = buildClips(scene, actions, scene.warnings);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, {

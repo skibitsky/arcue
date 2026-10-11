@@ -128,13 +128,17 @@ function describe(struct: BlendStruct, shown: boolean, hidden: boolean): SceneOb
   };
 }
 
-/** The armatures that deform an object through Armature modifiers on in viewports or an armature-deform parent. */
+/**
+ * The armatures that deform an object through Armature modifiers on in viewports or an armature-deform parent. A
+ * linked target, whose type this file does not hold, counts as one.
+ */
 export function deformingArmatures(object: BlendStruct): { target: BlendStruct; flags: number }[] {
   const result: { target: BlendStruct; flags: number }[] = [];
   for (const modifier of viewportModifiers(object)) {
     if (modifierType(modifier) !== ModifierType.armature) continue;
     const target = modifier.deref("object");
-    if (target?.number("type") === ObjectType.armature) result.push({ target, flags: modifier.number("deformflag") });
+    const armature = target && (isLinked(target) || target.number("type") === ObjectType.armature);
+    if (target && armature) result.push({ target, flags: modifier.number("deformflag") });
   }
   const parent = object.deref("parent");
   if (
@@ -206,7 +210,12 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
 
   const needed = new Map<number, BlendStruct>();
   const need = (object: BlendStruct | null) => {
-    if (!object || isLinked(object) || shown.has(object.offset) || needed.has(object.offset)) return;
+    if (!object || shown.has(object.offset) || needed.has(object.offset)) return;
+    if (isLinked(object)) {
+      linked.add(idName(object));
+      return;
+    }
+    if (usesLinkedData(object)) linked.add(idName(object));
     needed.set(object.offset, object);
     need(object.deref("parent"));
     for (const { target } of deformingArmatures(object)) need(target);
