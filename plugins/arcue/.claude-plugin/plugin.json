@@ -1,0 +1,19 @@
+{
+  "name": "arcue",
+  "displayName": "Arcue",
+  "description": "Lets Claude Code and Codex apply Arcue's 3D model reviews and open models in Arcue at a clip and frame.",
+  "author": {
+    "name": "Arcue",
+    "url": "https://github.com/skibitsky/arcue"
+  },
+  "homepage": "https://github.com/skibitsky/arcue",
+  "repository": "https://github.com/skibitsky/arcue",
+  "license": "MIT",
+  "keywords": [
+    "3d",
+    "fbx",
+    "animation",
+    "review",
+    "feedback"
+  ]
+}

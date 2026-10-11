@@ -1,0 +1,5 @@
+interface:
+  display_name: "Arcue"
+  short_description: "Apply Arcue reviews and open models in Arcue"
+  default_prompt: "Use $arcue to apply the Arcue review I pasted."
+  brand_color: "#DD653D"
