@@ -552,6 +552,10 @@ export function readMeshData(file: BlendFile, mesh: BlendStruct, objectGroups: r
     face: Math.max(mesh.number("totpoly"), 0),
     corner: Math.max(mesh.number("totloop"), 0),
   };
+  const mostElements = file.bytes.length / 4;
+  if (Object.values(sizes).some((size) => size > mostElements)) {
+    throw new MeshReadError(`Mesh ${idName(mesh)} counts more elements than the file holds`);
+  }
   const attributes = [...storageAttributes(mesh), ...customDataAttributes(mesh)];
   const reader = new AttributeReader(file, attributes, sizes);
   const topology = readTopology(file, mesh, reader, sizes);

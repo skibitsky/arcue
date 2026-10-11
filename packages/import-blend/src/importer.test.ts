@@ -26,6 +26,7 @@ import { parsePosePath, readActions } from "./anim/actions";
 import { evaluateFCurve } from "./anim/fcurve";
 import { decompressBlend } from "./blend/decompress";
 import { readBlendFile } from "./blend/file";
+import { datablocks, idName } from "./blend/ids";
 import { blendImporter } from "./importer";
 import { toSceneAxes } from "./math";
 import { poseMatrices } from "./scene/armature";
@@ -364,6 +365,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       expect(material("Glass").metallic).toBeCloseTo(0.25);
       expect(material("Diffuse")).toMatchObject({ roughness: 1, metallic: 0, doubleSided: true });
       expect(material("Glow").baseColor).toEqual([0, 0, 0, 1]);
+      expect(material("Empty")).toMatchObject({ baseColor: [0, 0, 0, 1], metallic: 0, roughness: 1 });
       expect(material("Glow").emissive.map((value) => Math.round(value * 100) / 100)).toEqual([4, 0.8, 0.8]);
       expect(material("Mixed").alphaMode).toBe("blend");
       expect(material("Mixed").baseColor[3]).toBeCloseTo(0.5);
@@ -378,16 +380,20 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         emissive: "/nonexistent/arcue/absolute.png",
       });
       expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name]).sort()).toEqual([
+        ["material-approximated", "AlphaTint"],
         ["material-approximated", "Blended"],
         ["material-approximated", "Boxed"],
         ["material-approximated", "Cutout"],
         ["material-approximated", "Decal"],
+        ["material-approximated", "Displaced"],
         ["material-approximated", "Generated"],
         ["material-approximated", "Glassy"],
         ["material-approximated", "ObjectNormal"],
+        ["material-approximated", "Pixelated"],
         ["material-approximated", "Procedural"],
         ["material-approximated", "Projected"],
         ["material-approximated", "RedRough"],
+        ["material-approximated", "Smoke"],
         ["material-approximated", "SrgbRough"],
         ["material-approximated", "Textured"],
         ["material-approximated", "Tinted"],
@@ -418,9 +424,14 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["Boxed", "checker.png uses Box projection, shown flat"],
         ["SrgbRough", "checker.png is sRGB but holds data, read as Non-Color"],
         ["Vectored", "checker.png uses a Vector Mapping, shown as Point"],
+        ["Pixelated", "checker.png uses Closest interpolation, shown Linear"],
+        ["AlphaTint", "Base color comes from the alpha of checker.png, which the preview leaves out"],
+        ["Displaced", "Displacement comes from Displacement, which the preview leaves out"],
+        ["Smoke", "Only its volume renders, which the preview leaves out"],
       ]);
       expect(approximated.every((warning) => warning.subject.kind === "material")).toBe(true);
       expect(material("Muted").baseColorTexture).not.toBeNull();
+      expect(material("AlphaTint").baseColorTexture).toBeNull();
       expect(material("RedRough").roughnessTexture).toBeNull();
       expect(material("ObjectNormal").normalTexture).toBeNull();
     });
@@ -584,6 +595,22 @@ describe("reading", () => {
       message:
         "old.blend was saved by Blender 2.79. Arcue opens files from Blender 2.80 on; save it in a newer Blender.",
     });
+  });
+
+  it("leaves out a mesh that counts more vertices than the file holds, with a warning", async () => {
+    const bytes = await decompressed(VERSIONS[1]);
+    const file = readBlendFile(bytes);
+    const mesh = datablocks(file, "ME").find((candidate) => idName(candidate) === "PropMesh") ?? null;
+    const field = mesh?.field("totvert");
+    if (!mesh || !field) throw new Error("The features fixture has no PropMesh");
+    file.view.setInt32(mesh.offset + field.offset, 2 ** 30, file.little);
+    const scene = await importBytes("huge.blend", bytes);
+    expect(scene.source.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-data",
+        detail: "Mesh PropMesh counts more elements than the file holds",
+      }),
+    );
   });
 
   it("refuses a file that is cut short", async () => {

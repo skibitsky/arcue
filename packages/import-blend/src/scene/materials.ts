@@ -38,6 +38,8 @@ export interface ImageUse {
   projection: string | null;
   /** A Mapping node's Texture, Vector or Normal type, which the preview maps as Point, or null for Point. */
   mapping: string | null;
+  /** Closest, Cubic or Smart sampling, which the preview samples as Linear, or null for Linear. */
+  interpolation: string | null;
 }
 
 export interface MaterialDraft {
@@ -72,6 +74,7 @@ const BLEND_METHOD_CLIP = 3;
 const WRAPS: readonly WrapMode[] = ["repeat", "clamp", "clamp", "mirror"];
 const EXTENSION_CLIP = 2;
 const PROJECTIONS: Readonly<Record<number, string>> = { 1: "Box", 2: "Sphere", 3: "Tube" };
+const INTERPOLATIONS: Readonly<Record<number, string>> = { 1: "Closest", 2: "Cubic", 3: "Smart" };
 const MAPPING_TYPES: Readonly<Record<number, string>> = { 1: "Texture", 2: "Vector", 3: "Normal" };
 const IMAGE_SOURCE_TILED = 6;
 /** Color spaces that hold data rather than color, which Blender reads without converting. */
@@ -263,8 +266,14 @@ function noteNodeInput(
 /** The image an input samples, noting on the draft any nodes between that change its values. */
 function imageInput(graph: Graph, draft: MaterialDraft, input: string, found: FedImage | null): ImageUse | null {
   if (!found) return null;
+  const image = found.node.deref("id");
+  if (found.output === "Alpha") {
+    draft.approximations.push(
+      `${input} comes from the alpha of ${image ? idName(image) : "an image"}, which the preview leaves out`,
+    );
+    return null;
+  }
   if (found.changes.length > 0) {
-    const image = found.node.deref("id");
     const nodes = [...new Set(found.changes)].join(", ");
     draft.approximations.push(
       `${input} passes ${image ? idName(image) : "an image"} through ${nodes}, which the preview leaves out`,
@@ -323,7 +332,9 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
     break;
   }
   const projection = PROJECTIONS[storage?.number("projection") ?? 0] ?? null;
-  return { image, uvMap, wrap, transform, coordinates, clipped: extension === EXTENSION_CLIP, projection, mapping };
+  const interpolation = INTERPOLATIONS[storage?.number("interpolation") ?? 0] ?? null;
+  const clipped = extension === EXTENSION_CLIP;
+  return { image, uvMap, wrap, transform, coordinates, clipped, projection, mapping, interpolation };
 }
 
 function graphOf(tree: BlendStruct): Graph {
@@ -503,6 +514,19 @@ function readSimpleShader(graph: Graph, node: BlendStruct, draft: MaterialDraft)
 }
 
 /**
+ * A surface no shader draws, which Blender leaves out when a volume fills the object and otherwise renders black.
+ */
+function emptySurface(graph: Graph, output: BlendStruct, draft: MaterialDraft): void {
+  if (linkInto(graph, inputSocket(output, "Volume") ?? output)) {
+    draft.approximations.push("Only its volume renders, which the preview leaves out");
+    return;
+  }
+  draft.baseColor = [0, 0, 0, draft.baseColor[3] ?? 1];
+  draft.metallic = 0;
+  draft.roughness = 1;
+}
+
+/**
  * A metallic-roughness approximation of a Blender material from its node tree. A material without nodes takes its
  * color, metallic and roughness, opaque, as EEVEE renders it.
  */
@@ -527,8 +551,13 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
         const label = surface.node.string("name") || nodeType(surface.node);
         draft.approximations.push(`Its surface is ${label}, shown as a plain shader of its color`);
       }
-    }
+    } else if (surface.alpha === 1) emptySurface(graph, output, draft);
     draft.approximations.push(...surface.notes);
+    const displacement = linkInto(graph, inputSocket(output, "Displacement") ?? output);
+    if (displacement) {
+      const name = displacement.node.string("name") || nodeType(displacement.node);
+      draft.approximations.push(`Displacement comes from ${name}, which the preview leaves out`);
+    }
     if (surface.alpha < 1) {
       draft.baseColor[3] *= surface.alpha;
       draft.alphaMode = "blend";
@@ -548,6 +577,7 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
     if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
     if (use.projection) draft.approximations.push(`${name} uses ${use.projection} projection, shown flat`);
     if (use.mapping) draft.approximations.push(`${name} uses a ${use.mapping} Mapping, shown as Point`);
+    if (use.interpolation) draft.approximations.push(`${name} uses ${use.interpolation} interpolation, shown Linear`);
   }
   for (const use of [draft.baseColorImage, draft.emissiveImage]) {
     const space = use ? colorSpace(use.image) : "";

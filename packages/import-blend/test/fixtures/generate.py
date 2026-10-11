@@ -1034,8 +1034,43 @@ def build_materials():
     tree.links.new(mapping.outputs["Vector"], image.inputs["Vector"])
     tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
 
+    pixelated = bpy.data.materials.new("Pixelated")
+    bsdf = principled(pixelated)
+    tree = pixelated.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    image.interpolation = "Closest"
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+
+    alpha_tint = bpy.data.materials.new("AlphaTint")
+    bsdf = principled(alpha_tint)
+    tree = alpha_tint.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    tree.links.new(image.outputs["Alpha"], bsdf.inputs["Base Color"])
+
+    displaced = bpy.data.materials.new("Displaced")
+    principled(displaced)
+    tree = displaced.node_tree
+    displacement = tree.nodes.new("ShaderNodeDisplacement")
+    displacement.inputs["Height"].default_value = 0.2
+    tree.links.new(displacement.outputs["Displacement"], tree.nodes["Material Output"].inputs["Displacement"])
+
+    empty = bpy.data.materials.new("Empty")
+    principled(empty)
+    tree = empty.node_tree
+    tree.nodes.remove(tree.nodes["Principled BSDF"])
+
+    smoke = bpy.data.materials.new("Smoke")
+    principled(smoke)
+    tree = smoke.node_tree
+    tree.nodes.remove(tree.nodes["Principled BSDF"])
+    volume = tree.nodes.new("ShaderNodeVolumePrincipled")
+    tree.links.new(volume.outputs["Volume"], tree.nodes["Material Output"].inputs["Volume"])
+
     materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout, blended]
     materials += [object_normal, generated, glassy, decal, procedural, boxed, muted, srgb_rough, vectored]
+    materials += [pixelated, alpha_tint, displaced, empty, smoke]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
