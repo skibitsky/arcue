@@ -63,7 +63,7 @@ function inspection(meshes: number, clips: number): AssetInspection {
     })),
     parts: [],
     triangles: meshes,
-    bones: 0,
+    bones: [],
     materials: [],
     textures: [],
     clips: Array.from({ length: clips }, (_, index) => ({

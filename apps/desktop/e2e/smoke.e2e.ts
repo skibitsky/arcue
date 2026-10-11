@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import type { AssetSummary, CoreClient, ViewState } from "@arcue/protocol";
+import type { AssetInspection, AssetSummary, CoreClient, ViewState } from "@arcue/protocol";
 import type { BrowserWindow } from "electron";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron } from "playwright";
@@ -208,11 +208,13 @@ describe("arcue inspect", () => {
       cwd: workDir,
       env: { ...process.env, ARCUE_USER_DATA: userData },
     });
-    expect(JSON.parse(inspected.stdout)).toMatchObject({
+    const inspection = JSON.parse(inspected.stdout) as AssetInspection;
+    expect(inspection).toMatchObject({
       file: { path: golem },
-      bones: 27,
       meshes: [{ name: "PebbleGolem", skinned: true }],
     });
+    expect(inspection.bones).toHaveLength(27);
+    expect(inspection.bones).toContainEqual({ name: "Head", path: "Armature/Hips/Spine/Chest/Neck/Head" });
     expect(bridgeInfo().pid).toBe(0);
   });
 });
