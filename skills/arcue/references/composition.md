@@ -18,7 +18,7 @@ Arcue can load other files into a model's view, for pipelines that spread one as
 
 - Paths are relative to the model's folder and use `/`. Model files must sit inside the repository, or outside one in the model's folder or below it, and not be reached through a link.
 - `animations`: files whose clips play on the model's bones, matched by bone name.
-- `attach`: a file, or one `node` in it with its children, placed where it was exported, so export a prop where it sits on the model in the rest pose. With `bone` it follows that bone of the model.
+- `attach`: a file, or one `node` in it with its children, placed where it was exported, so export a prop where it sits on the model in the rest pose. With `bone` it follows that bone of the model, by a name or path that `arcue inspect <model> --json` lists under `bones` without a `<file>//` prefix.
 - `materials`: textures by material name and slot: `baseColor`, `normal`, `roughness`, `metalness` or `emissive`. They replace what the files say.
 - `hidden`: parts hidden until someone shows them, by the part ids that `arcue inspect <model> --json` lists.
 

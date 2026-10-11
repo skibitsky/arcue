@@ -11,7 +11,7 @@ license: MIT
 Use `arcue`, or `node "<this skill's folder>/scripts/arcue.js"` (Node 22 or later) when only that exists.
 
 - `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in the user's Arcue window and starts the app if needed. If it says Arcue has not been started on this computer yet, ask the user to start it once.
-- `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, clips, materials, missing textures, composed files and import warnings.
+- `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, bones, clips, materials, missing textures, composed files and import warnings.
 - `arcue status` lists the models Arcue has open, and exits with 1 when it isn't running.
 
 Name a clip as the file does, such as `--clip "Armature|Walk"`, from `inspect` or `time.clip`. People's name for it, `Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
