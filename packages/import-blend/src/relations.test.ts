@@ -177,16 +177,13 @@ describe.each(VERSIONS)("the relations fixture from Blender %s", async (version)
     expect(shown.sort()).toEqual(expected.instancersDrawn.filter((name) => INSTANCERS.includes(name)));
   });
 
-  it("warns about a part whose most detailed level Blender hides while it shows another level", () => {
+  it("keeps every LOD level of a part, whichever level Blender shows", () => {
     expect(expected.levelsShown).toEqual(["Pebble_LOD0", "Rock_LOD1", "Stone_LOD2"]);
-    const rock = scene.parts.find((part) => part.name === "Rock");
-    expect(rock?.levels.map((level) => level.level)).toEqual([0, 1]);
-    expect(rock?.hiddenByDefault).toBeUndefined();
-    const levels = scene.source.warnings.filter((entry) => entry.message.startsWith("Level not shown"));
-    expect(levels.map((entry) => [entry.code, entry.subject.name, entry.detail])).toEqual([
-      ["object-not-shown", "Rock_LOD1", "Blender hides Rock_LOD0 and shows this level instead"],
-      ["object-not-shown", "Stone_LOD2", "Blender hides Stone_LOD0, Stone_LOD1 and shows this level instead"],
-    ]);
+    const levels = (name: string) => scene.parts.find((part) => part.name === name)?.levels.map((level) => level.level);
+    expect(levels("Rock")).toEqual([0, 1]);
+    expect(levels("Stone")).toEqual([0, 1, 2]);
+    expect(scene.parts.find((part) => part.name === "Stone")?.hiddenByDefault).toBeUndefined();
+    expect(scene.source.warnings.filter((entry) => entry.subject.name.includes("_LOD"))).toEqual([]);
   });
 
   it("names linked data that local collections hold, and not a linked collection the view layer excludes", () => {

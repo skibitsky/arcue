@@ -328,29 +328,6 @@ function hideBlenderHiddenParts(parts: ScenePart[], scene: BuiltScene): ScenePar
   });
 }
 
-/**
- * Warnings for parts whose most detailed level Blender hides while it shows another level. The view starts at the most
- * detailed level, so it shows the hidden one.
- */
-function hiddenLevelWarnings(parts: readonly ScenePart[], scene: BuiltScene): BlendWarning[] {
-  const hidden = (mesh: number) => hiddenInBlender(scene, mesh);
-  const name = (mesh: number) => scene.meshRecords[mesh]?.object.name ?? "";
-  return parts.flatMap(({ levels }): BlendWarning[] => {
-    const shownLevel = levels.findIndex((level) => level.meshes.some((mesh) => !hidden(mesh)));
-    const shown = levels[shownLevel]?.meshes.find((mesh) => !hidden(mesh));
-    const hiddenMeshes = levels.slice(0, Math.max(shownLevel, 0)).flatMap((level) => level.meshes);
-    if (shown === undefined || hiddenMeshes.length === 0) return [];
-    return [
-      {
-        code: "object-not-shown",
-        subject: { kind: "node", name: name(shown) },
-        message: `Level not shown by default: ${name(shown)}`,
-        detail: `Blender hides ${hiddenMeshes.map(name).join(", ")} and shows this level instead`,
-      },
-    ];
-  });
-}
-
 /** Blender 2.80 brought collections and view layers, which the scene is read from. */
 const OLDEST_VERSION = 280;
 
@@ -396,11 +373,7 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const materials = await buildMaterials(scene, images, textures);
   const nodes = buildNodes(scene);
   const parts = hideBlenderHiddenParts(describeParts(nodes), scene);
-  scene.warnings.push(
-    ...skinMotionWarnings(scene, clips),
-    ...restPositionWarnings(scene, clips),
-    ...hiddenLevelWarnings(parts, scene),
-  );
+  scene.warnings.push(...skinMotionWarnings(scene, clips), ...restPositionWarnings(scene, clips));
   const warnings = mergeWarnings([...scene.warnings, ...driverWarnings(scene)]).map((warning) =>
     toImportWarning(warning, request.fileName),
   );
