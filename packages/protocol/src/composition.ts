@@ -6,6 +6,9 @@ export const COMPOSITION_FILE_NAME = "composition.json";
 
 export const COMPOSITION_VERSION = 1;
 
+/** Extensions of the model files Arcue opens: FBX files, and Blender's own .blend files. */
+export const MODEL_FILE_EXTENSIONS: readonly string[] = [".fbx", ".blend"];
+
 /** Extensions of the images a composition may name and an importer may read beside a model. */
 export const IMAGE_FILE_EXTENSIONS: readonly string[] = [
   ".png",

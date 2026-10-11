@@ -1,5 +1,5 @@
 import type { MemberRole } from "@arcue/protocol";
-import { IMAGE_FILE_EXTENSIONS, joinsByName } from "@arcue/protocol";
+import { IMAGE_FILE_EXTENSIONS, joinsByName, MODEL_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { Clip, TextureSlot } from "@arcue/scene";
 import { fileNameOf } from "@arcue/scene";
 
@@ -39,15 +39,13 @@ export interface DroppedModel {
 
 export type DropChoice = "tab" | "view";
 
-const MODEL_EXTENSIONS = [".fbx"];
-
 function hasExtension(name: string, extensions: readonly string[]): boolean {
   const lower = name.toLowerCase();
   return extensions.some((extension) => lower.endsWith(extension));
 }
 
 export function isModelFile(name: string): boolean {
-  return hasExtension(name, MODEL_EXTENSIONS);
+  return hasExtension(name, MODEL_FILE_EXTENSIONS);
 }
 
 export function isImageFile(name: string): boolean {

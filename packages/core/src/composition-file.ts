@@ -1,11 +1,17 @@
 import type { CompositionAttach, CompositionFile, ErrorCode, MaterialTextures, TextureSlotName } from "@arcue/protocol";
-import { ArcueError, COMPOSITION_VERSION, compositionFileSchema, joinsByName } from "@arcue/protocol";
+import {
+  ArcueError,
+  COMPOSITION_VERSION,
+  compositionFileSchema,
+  joinsByName,
+  MODEL_FILE_EXTENSIONS,
+} from "@arcue/protocol";
 import { TEXTURE_SLOTS } from "@arcue/scene";
 import { basename } from "./paths";
 import type { Platform } from "./platform";
 
 /** Extensions of the model files a composition may load. */
-export const MODEL_EXTENSIONS: readonly string[] = [".fbx", ".glb", ".gltf"];
+export const MODEL_EXTENSIONS: readonly string[] = [...MODEL_FILE_EXTENSIONS, ".glb", ".gltf"];
 
 export function hasExtension(path: string, extensions: readonly string[]): boolean {
   const lower = path.toLowerCase();

@@ -160,6 +160,9 @@ importers:
       '@arcue/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@arcue/import-blend':
+        specifier: workspace:*
+        version: link:../../packages/import-blend
       '@arcue/import-fbx':
         specifier: workspace:*
         version: link:../../packages/import-fbx
@@ -223,6 +226,28 @@ importers:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@22.20.5)(jsdom@30.1.2)(vite@8.3.3(@types/node@22.20.5)(esbuild@0.28.2))
 
+  packages/import-blend:
+    dependencies:
+      '@arcue/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@arcue/scene':
+        specifier: workspace:*
+        version: link:../scene
+      fzstd:
+        specifier: 0.1.1
+        version: 0.1.1
+    devDependencies:
+      '@arcue/import-fbx':
+        specifier: workspace:*
+        version: link:../import-fbx
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.20.5
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@22.20.5)(jsdom@30.1.2)(vite@8.3.3(@types/node@22.20.5)(esbuild@0.28.2))
+
   packages/import-fbx:
     dependencies:
       '@arcue/protocol':
@@ -247,6 +272,9 @@ importers:
       '@arcue/core':
         specifier: workspace:*
         version: link:../core
+      '@arcue/import-blend':
+        specifier: workspace:*
+        version: link:../import-blend
       '@arcue/import-fbx':
         specifier: workspace:*
         version: link:../import-fbx
@@ -2120,6 +2148,9 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  fzstd@0.1.1:
+    resolution: {integrity: sha512-dkuVSOKKwh3eas5VkJy1AW1vFpet8TA/fGmVA5krThl8YcOVE/8ZIoEA1+U1vEn5ckxxhLirSdY837azmbaNHA==}
 
   galactus@2.0.2:
     resolution: {integrity: sha512-HmKyTFGomdAchz4umx8MwBnrnfFmdpwiTyGA4ZOF7rya2Lmgbc9qate4yweInL+0gUBVImhaz12SBGpW3SY4Yg==}
@@ -4239,6 +4270,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  fzstd@0.1.1: {}
 
   galactus@2.0.2(supports-color@10.2.2):
     dependencies:

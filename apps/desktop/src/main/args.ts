@@ -1,8 +1,9 @@
 import { isAbsolute, resolve } from "node:path";
+import { MODEL_FILE_EXTENSIONS } from "@arcue/protocol";
 import { z } from "zod";
 
 /** The model files Arcue opens. */
-export const ASSET_EXTENSIONS = [".fbx"];
+export const ASSET_EXTENSIONS: readonly string[] = MODEL_FILE_EXTENSIONS;
 
 /** What a second launch hands the running instance through the single-instance lock. */
 export const launchDataSchema = z.object({ paths: z.array(z.string().min(1).max(4096)).max(100) });

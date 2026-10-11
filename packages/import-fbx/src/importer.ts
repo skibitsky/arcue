@@ -8,11 +8,13 @@ import type {
   SceneDescription,
   SceneNode,
   TextureRef,
+  TextureResolver,
   TextureSlot,
 } from "@arcue/scene";
 import {
   buildNodePaths,
   clipNames,
+  createTextureResolver,
   defaultViewBounds,
   describeParts,
   displayNames,
@@ -24,8 +26,6 @@ import {
 import type { ParsedClip, ParsedFbx, WireMaterial, WireTextureRef } from "./decode";
 import { FbxParseError } from "./decode";
 import { parseFbx } from "./parser";
-import type { TextureResolver } from "./textures";
-import { createTextureResolver } from "./textures";
 import { parserWarnings, rootTransformWarnings } from "./warnings";
 
 function buildNodes(parsed: ParsedFbx): SceneNode[] {

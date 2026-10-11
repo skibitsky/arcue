@@ -1,8 +1,9 @@
 import type { MessagePort } from "node:worker_threads";
 import { parentPort } from "node:worker_threads";
-import { startFbxImportWorker } from "@arcue/import-fbx";
-import { portEndpoint } from "@arcue/protocol";
+import { blendImporter } from "@arcue/import-blend";
+import { fbxImporter } from "@arcue/import-fbx";
+import { portEndpoint, serveImportWorker } from "@arcue/protocol";
 
 parentPort?.once("message", (port: MessagePort) => {
-  startFbxImportWorker(portEndpoint(port));
+  serveImportWorker(portEndpoint(port), [fbxImporter, blendImporter]);
 });

@@ -1,7 +1,7 @@
 import type { TextureSlot } from "./material";
 import type { Quat } from "./math";
 
-export type SourceFormat = "fbx" | "gltf" | "glb";
+export type SourceFormat = "fbx" | "blend" | "gltf" | "glb";
 
 export type AxisDirection = "+X" | "-X" | "+Y" | "-Y" | "+Z" | "-Z";
 
@@ -53,7 +53,14 @@ export type ImportWarningCode =
   | "model-not-found"
   | "composition-not-loaded"
   | "node-not-found"
-  | "material-not-found";
+  | "material-not-found"
+  | "modifier-not-applied"
+  | "constraint-not-evaluated"
+  | "driver-not-evaluated"
+  | "curve-modifier-not-applied"
+  | "deform-approximated"
+  | "object-not-shown"
+  | "library-not-loaded";
 
 export type ImportWarningSeverity = "warning" | "error";
 
@@ -127,6 +134,13 @@ export const importWarningSeverity: Readonly<Record<ImportWarningCode, ImportWar
   "composition-not-loaded": "error",
   "node-not-found": "error",
   "material-not-found": "warning",
+  "modifier-not-applied": "warning",
+  "constraint-not-evaluated": "warning",
+  "driver-not-evaluated": "warning",
+  "curve-modifier-not-applied": "warning",
+  "deform-approximated": "warning",
+  "object-not-shown": "warning",
+  "library-not-loaded": "error",
 };
 
 export function importWarning(

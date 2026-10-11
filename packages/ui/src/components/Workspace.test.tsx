@@ -170,7 +170,7 @@ describe("Workspace", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "New tab" }));
     expect(store.state.get().tabs).toHaveLength(2);
-    expect(screen.getByText("Drop an FBX file")).toBeTruthy();
+    expect(screen.getByText("Drop an FBX or Blender file")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "StoneResonator.fbx" }));
     await act(() => flush());
     expect(client.calls.filter((call) => call.name === "asset.open")).toHaveLength(2);

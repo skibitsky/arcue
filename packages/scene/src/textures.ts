@@ -1,6 +1,18 @@
-import type { FoundFile, ImportWarning, ImportWarningSubject, Texture, TextureSlot, TextureUse } from "@arcue/scene";
-import { describeTextureUses, fileNameOf, imageMimeType, importWarning, parseStoredPath } from "@arcue/scene";
-import type { TextureFile } from "./decode";
+import { fileNameOf, imageMimeType } from "./image";
+import type { FoundFile } from "./importer";
+import { parseStoredPath } from "./importer";
+import type { Texture, TextureSlot } from "./material";
+import type { ImportWarning, ImportWarningSubject, TextureUse } from "./source";
+import { describeTextureUses, importWarning } from "./source";
+
+/** An image path a file stores, with the image's bytes when the file embeds it. */
+export interface TextureFile {
+  relative: string;
+  absolute: string;
+  /** Some material of the file links the texture, in any of its properties. */
+  linked: boolean;
+  content: Uint8Array | null;
+}
 
 function textureName(path: string): string {
   const name = fileNameOf(path);

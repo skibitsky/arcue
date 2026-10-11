@@ -55,7 +55,7 @@ export function EmptyState({
     >
       <div className="drop">
         <Icon name="upload" />
-        <strong>Drop an FBX file</strong>
+        <strong>Drop an FBX or Blender file</strong>
         {dropHint ? <span>{dropHint}</span> : null}
         {onOpenFile ? (
           <button type="button" className="btn btn-open" onClick={onOpenFile}>

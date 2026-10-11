@@ -5,6 +5,7 @@ import "@arcue/ui/workspace.css";
 import "./main.css";
 import samples from "virtual:arcue-samples";
 import type { CoreClient } from "@arcue/protocol";
+import { MODEL_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { WorkspaceStore } from "@arcue/ui";
 import { Workspace } from "@arcue/ui";
 import { createViewport } from "@arcue/viewport";
@@ -50,7 +51,7 @@ function openFiles(files: readonly File[]): void {
 }
 
 function pickFiles(): void {
-  void chooseFiles({ accept: ".fbx,image/*", multiple: true }).then((files) => {
+  void chooseFiles({ accept: `${MODEL_FILE_EXTENSIONS.join(",")},image/*`, multiple: true }).then((files) => {
     if (files.length > 0) openFiles(files);
   });
 }

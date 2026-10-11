@@ -649,7 +649,7 @@ describe("asset.relink", () => {
     await settle(test);
     await expect(
       test.window.client.execute("asset.relink", { assetId, path: `${ART}/Notes.txt` }),
-    ).rejects.toMatchObject({ code: "invalid-input", message: "Notes.txt is not one of .fbx, .glb, .gltf." });
+    ).rejects.toMatchObject({ code: "invalid-input", message: "Notes.txt is not one of .fbx, .blend, .glb, .gltf." });
     await expect(
       test.window.client.execute("asset.relink", { assetId, path: "/elsewhere/Striker.fbx" }),
     ).rejects.toMatchObject({

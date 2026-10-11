@@ -45,6 +45,7 @@ export {
   compositionFileSchema,
   IMAGE_FILE_EXTENSIONS,
   joinsByName,
+  MODEL_FILE_EXTENSIONS,
   materialTexturesSchema,
   memberRoleFor,
   memberRoleSchema,

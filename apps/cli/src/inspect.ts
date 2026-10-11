@@ -27,7 +27,7 @@ export async function inspectFile(nativePath: string, options: InspectOptions): 
   }
 }
 
-const FORMAT_NAMES: Readonly<Record<string, string>> = { fbx: "FBX", gltf: "glTF", glb: "GLB" };
+const FORMAT_NAMES: Readonly<Record<string, string>> = { fbx: "FBX", blend: ".blend", gltf: "glTF", glb: "GLB" };
 
 /** A few aligned lines for people. Empty sections are left out. */
 export function formatInspection(inspection: AssetInspection): string {

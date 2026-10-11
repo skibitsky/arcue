@@ -29,7 +29,7 @@ interface CreateOptions {
 }
 
 const DEFAULT_SIZE = { width: 1440, height: 900 };
-const MODEL_FILTER = { name: "Models", extensions: ["fbx"] };
+const MODEL_FILTER = { name: "Models", extensions: ASSET_EXTENSIONS.map((extension) => extension.slice(1)) };
 const IMAGE_FILTER = { name: "Images", extensions: IMAGE_FILE_EXTENSIONS.map((extension) => extension.slice(1)) };
 const CLOSE_TIMEOUT_MS = 5000;
 const CASCADE = 28;
@@ -295,7 +295,7 @@ export class WindowManager {
     });
   }
 
-  /** The open dialog for files to add to a view: FBX models, or one image for a texture slot. */
+  /** The open dialog for files to add to a view: FBX or Blender models, or one image for a texture slot. */
   #pickViewFiles(parent: BrowserWindow, kind: FileKind): Promise<string[]> {
     return this.#showOpenDialog(
       parent,

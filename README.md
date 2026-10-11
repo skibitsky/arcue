@@ -4,7 +4,7 @@ Arcue is a desktop app for reviewing 3D models and animations and handing the fe
 
 Feedback on a model is usually a sentence such as "the right thumb in Charge around frame 35 bends the wrong way," and the agent has to guess which vertices, bones and frames that means. In Arcue you click or paint on the model at the moment that looks wrong and write one line. Arcue adds the mesh, vertex numbers, bones, frame, camera and a screenshot, and copies everything as one prompt.
 
-Arcue is in early development. It opens FBX files.
+Arcue is in early development. It opens FBX and Blender files.
 
 ## Use with Claude Code and Codex
 

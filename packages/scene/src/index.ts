@@ -69,6 +69,8 @@ export type {
 export { describeTextureUses, importWarning, importWarningSeverity, SCENE_SPACE } from "./source";
 export type { SubjectRef } from "./subject";
 export { subjectMeshes } from "./subject";
+export type { TextureFile, TextureResolver } from "./textures";
+export { createTextureResolver } from "./textures";
 export {
   frameCountFor,
   frameToSeconds,

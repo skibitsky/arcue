@@ -156,7 +156,7 @@ describe("adding files to a view", () => {
 
     const images = await openStone({ files: fakeHost({ model: [`${FOLDER}/Shell.png`] }).host });
     await images.store.addFileToView(images.session.assetId);
-    expect(images.store.state.get().toast).toMatchObject({ message: "Choose an FBX file.", kind: "alert" });
+    expect(images.store.state.get().toast).toMatchObject({ message: "Choose an FBX or Blender file.", kind: "alert" });
   });
 
   it("shows why the core refused a file", async () => {
@@ -354,7 +354,10 @@ describe("dropping files on a model's view", () => {
   it("refuses files that are neither models nor images", async () => {
     const { store, session } = await openStone({ files: fakeHost().host });
     await store.dropOnView(session.assetId, [file("notes.txt")], { x: 0, y: 0 });
-    expect(store.state.get().toast).toMatchObject({ message: "Drop an FBX file or an image.", kind: "alert" });
+    expect(store.state.get().toast).toMatchObject({
+      message: "Drop an FBX or Blender file, or an image.",
+      kind: "alert",
+    });
   });
 });
 

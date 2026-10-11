@@ -455,7 +455,8 @@ export class WorkspaceStore {
     try {
       const picked = await host.pick("model", this.#assetPath(assetId));
       const models = picked.filter(isModelFile);
-      if (picked.length > 0 && models.length === 0) throw new ArcueError("invalid-input", "Choose an FBX file.");
+      if (picked.length > 0 && models.length === 0)
+        throw new ArcueError("invalid-input", "Choose an FBX or Blender file.");
       for (const model of models) await this.#addFile(assetId, model);
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
@@ -554,7 +555,7 @@ export class WorkspaceStore {
         return;
       }
       const [image] = images;
-      if (!image) throw new ArcueError("invalid-input", "Drop an FBX file or an image.");
+      if (!image) throw new ArcueError("invalid-input", "Drop an FBX or Blender file, or an image.");
       await this.#imageOnView(assetId, image);
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });

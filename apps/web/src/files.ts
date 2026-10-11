@@ -1,5 +1,5 @@
 import type { CompositionFile } from "@arcue/protocol";
-import { joinsByName } from "@arcue/protocol";
+import { joinsByName, MODEL_FILE_EXTENSIONS } from "@arcue/protocol";
 
 /** The image types an importer may read beside a model, as the core's referenced-file check allows them. */
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "tga", "tif", "tiff", "bmp", "dds", "exr", "hdr", "webp"]);
@@ -76,7 +76,7 @@ export function partitionFiles<Item extends { name: string }>(
   const ignored: Item[] = [];
   for (const file of files) {
     const extension = extensionOf(file.name);
-    if (extension === "fbx") models.push(file);
+    if (MODEL_FILE_EXTENSIONS.includes(`.${extension}`)) models.push(file);
     else if (IMAGE_EXTENSIONS.has(extension)) textures.push(file);
     else ignored.push(file);
   }

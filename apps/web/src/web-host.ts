@@ -1,5 +1,11 @@
 import type { CoreClient, Peer } from "@arcue/protocol";
-import { createPeer, createRemoteClient, IMAGE_FILE_EXTENSIONS, portEndpoint } from "@arcue/protocol";
+import {
+  createPeer,
+  createRemoteClient,
+  IMAGE_FILE_EXTENSIONS,
+  MODEL_FILE_EXTENSIONS,
+  portEndpoint,
+} from "@arcue/protocol";
 import type { FileHost, FileKind, SampleAsset, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore, isImageFile, isModelFile } from "@arcue/ui";
 import { chooseFiles } from "./choose-files";
@@ -22,7 +28,10 @@ const RELOAD_HINT = "reload the page to get the current version.";
 
 const IMAGE_ACCEPT = IMAGE_FILE_EXTENSIONS.join(",");
 /** Models come with the textures picked beside them, since the page cannot read the folder they were in. */
-const ACCEPT: Record<FileKind, string> = { model: `.fbx,${IMAGE_ACCEPT}`, image: IMAGE_ACCEPT };
+const ACCEPT: Record<FileKind, string> = {
+  model: `${MODEL_FILE_EXTENSIONS.join(",")},${IMAGE_ACCEPT}`,
+  image: IMAGE_ACCEPT,
+};
 
 /** A script that fails to load fires a plain "error" event; an uncaught error inside a running worker fires an ErrorEvent. */
 function isLoadFailure(event: Event): boolean {
@@ -126,7 +135,7 @@ export class WebHost {
   /** Writes each model into its own folder with copies of the files picked with it, then opens them; see `planOpen`. */
   async openFiles(files: readonly File[]): Promise<string[]> {
     const { models } = partitionFiles(files);
-    if (models.length === 0) throw new Error("Choose an .fbx file. Its textures can come along with it.");
+    if (models.length === 0) throw new Error("Choose an .fbx or .blend file. Its textures can come along with it.");
     const plans = planOpen(files);
     const seeds = await Promise.all(
       plans.flatMap((plan) =>

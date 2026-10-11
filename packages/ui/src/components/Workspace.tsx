@@ -29,7 +29,7 @@ export interface WorkspaceProps extends TabDragHandlers {
   onDropFiles?: (files: File[]) => void;
   /** Replaces opening a sample by its path, as when the host must fetch the file first. */
   onOpenSample?: (sample: SampleAsset) => void;
-  /** The line under "Drop an FBX file". */
+  /** The line under "Drop an FBX or Blender file". */
   dropHint?: string;
   /** Replaces the "+" button's default, which adds an empty tab. */
   onNewTab?: () => void;

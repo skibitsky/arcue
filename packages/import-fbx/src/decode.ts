@@ -10,6 +10,7 @@ import type {
   Skeleton,
   Space,
   SpaceConversion,
+  TextureFile,
   Track,
   TrackProperty,
   UvTransform,
@@ -140,15 +141,6 @@ interface WireScene {
   originalSpace: Space;
   conversion: SpaceConversion;
   warnings: WireWarning[];
-}
-
-/** A file path stored in the FBX, with the embedded image bytes when the file carries them. */
-export interface TextureFile {
-  relative: string;
-  absolute: string;
-  /** Some material of the file links the texture, in any of its properties. */
-  linked: boolean;
-  content: Uint8Array | null;
 }
 
 export interface ParsedClip {
