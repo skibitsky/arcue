@@ -1,45 +1,41 @@
 ---
 name: arcue
-description: Work with Arcue, the desktop app for reviewing 3D models and animations. Use this skill whenever a pasted message starts with "3D review · round", the user mentions Arcue, or asks you to show them a model, clip or frame, or to check an FBX export. It covers opening a model in Arcue at a clip and frame, inspecting a file without the app, and turning Arcue's anchored comments (vertex numbers, bones, frames, screenshots) into exact fixes.
+description: Arcue is a desktop app where people pin or paint comments on 3D models at a frame and copy them to a coding agent. Use this skill when a message contains "3D review · round" or "Fix these import warnings for", or a path under .arcue/, when the user mentions Arcue or asks to see a model, clip or frame in it, or wants an FBX file checked for its meshes, clips, missing textures or import warnings. It covers `arcue open`, `arcue inspect`, round.json, composition files, and turning Arcue's anchored comments (vertex numbers, bones, frames, screenshots) into exact fixes. Not for working on Arcue's own source code.
 license: MIT
 ---
 
 # Arcue
 
-In Arcue a person pins or paints comments on a 3D model at a frame of a clip. Its Copy prompt button gives you those comments as a numbered review and writes the exact data behind them to a round folder on disk.
+In Arcue a person pins or paints comments on a 3D model at a frame. Copy prompt hands them to you as a numbered review, with the exact data in a round folder.
 
 ## The arcue command
 
-Run `arcue`. If that command isn't found and this skill's folder has `scripts/arcue.js`, which the Arcue plugin includes, run `node <this skill's folder>/scripts/arcue.js` instead; it needs Node 22 or later. `arcue help` prints the full usage. Exit codes: 0 success, 1 failure, 2 usage error.
+Use `arcue`, or `node <this skill's folder>/scripts/arcue.js` (Node 22 or later) when only that exists. `arcue help` prints the full usage.
 
-- `arcue open <file> --clip <name> --frame <number>` shows a model in the user's Arcue window, starting the app if needed. Both flags are optional.
-- `arcue inspect <file> --json` reads a model without the app: meshes and their vertex counts, parts, bones, materials, textures and whether each was found, clips, the files composed with it, and import warnings.
-- `arcue status` says whether Arcue is running and which models it has open.
+- `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in the user's Arcue window and starts the app if needed. If it says Arcue has not been started on this computer yet, ask the user to start it once.
+- `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, clips, materials, missing textures, composed files and import warnings.
+- `arcue status` lists the models Arcue has open, and exits with 1 when it isn't running.
 
-Pass a clip by its name in the file, such as `Armature|Walk`, as `inspect` lists it, and quote it because `|` is a shell pipe. Prompts show people's name for it, `Walk`. Frames are whole numbers counted from the clip's first frame, which is 0.
-
-`open` and `status` talk to the Arcue desktop app. If `open` says Arcue has not been started on this computer yet, ask the user to start it once.
+Name a clip as the file does, such as `--clip "Armature|Walk"`, from `inspect` or `time.clip`. People's name for it, `Walk`, silently opens the rest pose. Frames count from the clip's first frame, 0.
 
 ## Applying a review
 
-A pasted review starts with `3D review · round N`, names the model on its `Asset:` line and the round folder on its `Data and screenshots:` line, then lists numbered comments.
+A pasted review contains `3D review · round N`, the model on its `Asset:` line and the round folder on its `Data and screenshots:` line.
 
-1. Read `round.json` in the round folder. The prompt is a summary; `round.json` has each comment's exact vertex numbers, weights, rest and posed positions, bones, joints and camera. Its fields are in [references/round-json.md](references/round-json.md).
-2. Look at the screenshots in the same folder. They show what the reviewer saw.
-3. Fix the source and export to the `Asset:` path. Arcue watches the file, reloads it and carries the comments over to the new version: exactly while a mesh keeps its vertices and triangles, by position otherwise.
-4. Show the result: `arcue open <asset> --clip "<time.clip>" --frame <time.frame>`.
-5. Report back by comment number. The user resolves comments in Arcue or reopens them; a reopened comment returns in a later round with its earlier messages.
+1. Read `round.json` in the round folder for each comment's exact vertices, positions, bones and camera, using [references/round-json.md](references/round-json.md), and look at the screenshots beside it.
+2. If the model comes from Blender, read [references/blender.md](references/blender.md) before mapping vertex numbers, positions, clips or frames.
+3. Fix what the model is exported from, and export to the `Asset:` path. Arcue reloads the file and carries the comments over to the new version.
+4. Show the result at a comment's moment: `arcue open <asset> --clip "<time.clip>" --frame <frame>`, with the first frame of a range, and neither flag when `time` is null.
+5. Report back by comment number; the user resolves or reopens comments in Arcue.
 
-If the round folder doesn't exist, as with Arcue in a browser, which keeps reviews in the tab, work from the prompt and ask for screenshots if you need them.
+If the round folder isn't on disk, as with Arcue in a browser, the `Asset:` path isn't real either: work from the prompt and fix the user's own file.
+
+A list that starts `Fix these import warnings for <model>` comes from Arcue's warnings panel. Fix the source, re-export, and check that `arcue inspect <model> --json` no longer reports them.
 
 ## Keep in mind
 
-- Leave `.arcue/` alone except for composition files. Arcue owns the reviews there, and a round folder never changes once written.
-- Keep the model's file path; reviews are keyed by it.
-- Keep a mesh's vertices and triangles when the fix doesn't need new geometry, so comments keep exact anchors.
+- Don't write in `.arcue/` except composition files. Arcue owns the reviews there.
+- Keep the model's path and each mesh object's name and parent: comments find their mesh by its path.
+- When a fix needs no new geometry, move vertices rather than adding, removing or reordering vertices or faces, so comments keep their exact anchors.
 
-## References
-
-- [references/round-json.md](references/round-json.md): every field of `round.json`.
-- [references/composition.md](references/composition.md): showing separate animation files, attachments and textures with a model.
-- [references/blender.md](references/blender.md): how Arcue's vertex numbers, positions, clips and frames map onto Blender.
+To show separate animation files, attachments or textures with a model, see [references/composition.md](references/composition.md).

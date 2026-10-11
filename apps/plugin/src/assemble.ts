@@ -5,8 +5,9 @@ import { dirname, join } from "node:path";
 export const PLUGIN = {
   name: "arcue",
   displayName: "Arcue",
-  description: "Review 3D models and animations in Arcue, and turn its anchored comments into exact fixes.",
-  shortDescription: "Review 3D models in Arcue and apply the feedback",
+  description:
+    "Lets Claude Code and Codex apply Arcue's 3D model reviews and open models in Arcue at a clip and frame.",
+  shortDescription: "Apply Arcue reviews and open models in Arcue",
   homepage: "https://github.com/skibitsky/arcue",
   license: "MIT",
   keywords: ["3d", "fbx", "animation", "review", "feedback"],

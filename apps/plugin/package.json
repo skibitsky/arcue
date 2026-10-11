@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@arcue/protocol": "workspace:*",
     "@types/node": "catalog:",
     "vitest": "catalog:"
   }

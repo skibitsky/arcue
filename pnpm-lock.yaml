@@ -145,6 +145,9 @@ importers:
 
   apps/plugin:
     devDependencies:
+      '@arcue/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.5

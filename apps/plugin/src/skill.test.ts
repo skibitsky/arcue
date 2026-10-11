@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { compositionFileSchema, roundDataSchema } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
 
 const folder = fileURLToPath(new URL("../../../skills/arcue/", import.meta.url));
@@ -53,6 +54,16 @@ describe("the arcue skill", () => {
     const references = (await readdir(join(folder, "references"))).map((file) => `references/${file}`);
 
     expect([...linked].sort()).toEqual(references.sort());
+  });
+
+  it("gives examples of round.json and composition.json that Arcue's schemas accept", async () => {
+    const example = async (reference: string) => {
+      const text = await readFile(join(folder, "references", reference), "utf8");
+      return JSON.parse(/```json\n([\s\S]*?)\n```/.exec(text)?.[1] ?? "null") as unknown;
+    };
+
+    expect(roundDataSchema.safeParse(await example("round-json.md")).error).toBeUndefined();
+    expect(compositionFileSchema.safeParse(await example("composition.md")).error).toBeUndefined();
   });
 
   it("names itself in its Codex default prompt", async () => {

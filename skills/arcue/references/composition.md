@@ -1,10 +1,10 @@
 # Showing other files with a model
 
-Arcue can load other files into a model's view, for pipelines that spread one asset over several files. Clips from those files are named `<file>//<clip>`, such as `Hero@Walk.fbx//Armature|Walk`, and that is the name `--clip` takes. Their meshes and parts get the same prefix.
+Arcue can load other files into a model's view, for pipelines that spread one asset over several files. Their clips, meshes and parts carry the file's path from the model's folder as a prefix, such as `Animations/Hero_Locomotion.fbx//Armature|Walk`, which is the name `--clip` takes.
 
-**By name.** An FBX beside the model named `<model name>@<anything>.fbx`, such as `Hero@Walk.fbx` beside `Hero.fbx`, joins it automatically.
+**By name.** An FBX beside the model named `<model name>@<anything>.fbx`, such as `Hero@Walk.fbx` beside `Hero.fbx`, joins it as an animation file.
 
-**Through composition.json** in the model's review folder, `.arcue/reviews/<model path from the repository root>/composition.json`, such as `.arcue/reviews/Assets/Hero/Hero.fbx/composition.json`. Outside a repository the review folder is `reviews/<absolute model path>/` in Arcue's data folder. Arcue reloads the view when the file changes. Paths are relative to the model's folder and use `/`.
+**Through composition.json** in the model's review folder, `.arcue/reviews/<model path from the repository root>/composition.json`, such as `.arcue/reviews/Assets/Hero/Hero.fbx/composition.json`. Outside a repository the review folder is `reviews/<absolute model path>/` in Arcue's data folder: `$ARCUE_USER_DATA`, else `~/Library/Application Support/Arcue`, `%APPDATA%\Arcue` or `~/.config/Arcue`. If you create `.arcue/`, also write `.arcue/.gitignore` containing `*`, as Arcue does, so the reviews stay out of git. Arcue reloads the view when the file changes.
 
 ```json
 {
@@ -16,8 +16,9 @@ Arcue can load other files into a model's view, for pipelines that spread one as
 }
 ```
 
+- Paths are relative to the model's folder and use `/`. Model files must sit inside the repository, or outside one in the model's folder or below it, and not be reached through a link.
 - `animations`: files whose clips play on the model's bones, matched by bone name.
-- `attach`: a file, or one `node` in it with its children. With `bone` it follows that bone of the model; without, it stays in place.
+- `attach`: a file, or one `node` in it with its children, placed where it was exported, so export a prop where it sits on the model in the rest pose. With `bone` it follows that bone of the model.
 - `materials`: textures by material name and slot: `baseColor`, `normal`, `roughness`, `metalness` or `emissive`. They replace what the files say.
 - `hidden`: parts hidden until someone shows them, by the part ids that `arcue inspect <model> --json` lists.
 

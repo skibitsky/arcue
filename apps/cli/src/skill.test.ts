@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "./args";
+import { parseArgs, USAGE } from "./args";
 
 const skill = fileURLToPath(new URL("../../../skills/arcue/", import.meta.url));
 
@@ -22,9 +22,14 @@ async function commandsInSkill(): Promise<string[]> {
   return commands.filter((code) => code.startsWith("arcue "));
 }
 
-/** The command's arguments, with each `<placeholder>` replaced by a value of the kind it stands for. */
+/**
+ * The command's arguments with every optional `[part]` given, and each `<placeholder>` replaced by a value of the kind
+ * it stands for.
+ */
 function argumentsOf(command: string): string[] {
-  const words = [...command.matchAll(/"([^"]*)"|(\S+)/g)].map((word) => word[1] ?? word[2] ?? "");
+  const words = [...command.replaceAll(/[[\]]/g, "").matchAll(/"([^"]*)"|(\S+)/g)].map(
+    (word) => word[1] ?? word[2] ?? "",
+  );
   return words
     .slice(1)
     .map((word, index, all) => (/^<.+>$/.test(word) ? (all[index - 1] === "--frame" ? "12" : "Hero.fbx") : word));
@@ -35,6 +40,11 @@ describe("the arcue skill", () => {
     const commands = await commandsInSkill();
 
     expect(commands.length).toBeGreaterThanOrEqual(4);
-    for (const command of commands) expect(() => parseArgs(argumentsOf(command)), command).not.toThrow();
+    for (const command of commands) {
+      const args = argumentsOf(command);
+      if (args.length === 1)
+        expect(USAGE, `${command} names no command`).toMatch(new RegExp(`^  arcue ${args[0]}\\b`, "m"));
+      else expect(() => parseArgs(args), command).not.toThrow();
+    }
   });
 });
