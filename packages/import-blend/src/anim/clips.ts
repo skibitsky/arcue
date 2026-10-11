@@ -113,7 +113,7 @@ function guessedTargets(slot: ActionSlot, scene: BuiltScene, shapeKeys: readonly
   if (named) return { targets: [{ kind: "object", record: named }], named: true };
   const armatures = scene.objects.filter((record) => record.object.type === ObjectType.armature && record.armature);
   const scored = armatures.map((record) => ({ record, score: matchingBones(slot, record) }));
-  const best = Math.max(0, ...scored.map((entry) => entry.score));
+  const best = scored.reduce((most, entry) => Math.max(most, entry.score), 0);
   const targets = scored.flatMap((entry) =>
     best > 0 && entry.score === best ? [{ kind: "object" as const, record: entry.record }] : [],
   );

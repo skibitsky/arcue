@@ -24,27 +24,58 @@ function zstdFrame(
   content: number | null,
   windowDescriptor: number | null = content === null ? (20 - 10) << 3 : null,
 ): Uint8Array {
+  const raw = start.length > 0 ? [...blockHeader(start.length, 0, false), ...start] : [];
+  const body = Array.from({ length: blocks }, (_, index) => [...blockHeader(size, 1, index === blocks - 1), byte]);
+  return Uint8Array.from([...frameHeader(content, windowDescriptor), ...raw, ...body.flat()]);
+}
+
+/** A frame header declaring `content` bytes or no size, as a single segment when it has no window descriptor. */
+function frameHeader(content: number | null, windowDescriptor: number | null): number[] {
   const declared = content === null ? [] : littleEndian(content, 8);
-  const header =
-    windowDescriptor === null
-      ? [0x28, 0xb5, 0x2f, 0xfd, 0xe0, ...declared]
-      : [0x28, 0xb5, 0x2f, 0xfd, content === null ? 0x00 : 0xc0, windowDescriptor, ...declared];
-  const raw = start.length > 0 ? [...littleEndian(start.length << 3, 3), ...start] : [];
-  const body = Array.from({ length: blocks }, (_, index) => {
-    const last = index === blocks - 1 ? 1 : 0;
-    return [...littleEndian(size * 8 + (1 << 1) + last, 3), byte];
-  });
-  return Uint8Array.from([...header, ...raw, ...body.flat()]);
+  return windowDescriptor === null
+    ? [0x28, 0xb5, 0x2f, 0xfd, 0xe0, ...declared]
+    : [0x28, 0xb5, 0x2f, 0xfd, content === null ? 0x00 : 0xc0, windowDescriptor, ...declared];
+}
+
+function blockHeader(size: number, type: number, last: boolean): number[] {
+  return littleEndian(size * 8 + type * 2 + (last ? 1 : 0), 3);
+}
+
+/** A compressed block that holds `bytes` as raw literals and no sequences. */
+function literalsBlock(bytes: Uint8Array, last: boolean): number[] {
+  const body = [((bytes.length & 15) << 4) | 0b0100, bytes.length >> 4, ...bytes, 0];
+  return [...blockHeader(body.length, 2, last), ...body];
+}
+
+/**
+ * A compressed block with no literals and `count` sequences, either at most 127 or exactly 32512, that all have the
+ * same literal length, offset and match length `codes`. Their extra bits come from `bits`, read back from its last
+ * byte, whose highest set bit marks where they start.
+ */
+function sequencesBlock(count: number, codes: [number, number, number], bits: number[], last: boolean): number[] {
+  const sequences = count < 128 ? [count] : [0xff, 0, 0];
+  const body = [0, ...sequences, 0b01010100, ...codes, ...bits];
+  return [...blockHeader(body.length, 2, last), ...body];
+}
+
+/**
+ * A compressed block with one literal, whose Huffman weights are coded with a table that gives a single weight all the
+ * probability, so that reading a weight takes no bits.
+ */
+function endlessWeightsBlock(last: boolean): number[] {
+  const literals = [0x12, 0x80, 0x02];
+  const weights = [4, 0xf0, 0x03, 0x00, 0x80];
+  const body = [...literals, ...weights, 0, 0, 0, 0, 0, 0, 0];
+  return [...blockHeader(body.length, 2, last), ...body];
 }
 
 /** A Zstandard frame that declares no size, with one raw block for each part. */
 function rawFrame(...parts: string[]): Uint8Array {
   const blocks = parts.map((part, index) => {
     const bytes = new TextEncoder().encode(part);
-    const last = index === parts.length - 1 ? 1 : 0;
-    return [...littleEndian(bytes.length * 8 + last, 3), ...bytes];
+    return [...blockHeader(bytes.length, 0, index === parts.length - 1), ...bytes];
   });
-  return Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, (20 - 10) << 3, ...blocks.flat()]);
+  return Uint8Array.from([...frameHeader(null, windowOf(20)), ...blocks.flat()]);
 }
 
 function joined(...parts: Uint8Array[]): Uint8Array {
@@ -115,6 +146,7 @@ function refusal(bytes: Uint8Array): Promise<unknown> {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("decompressBlend", () => {
@@ -150,18 +182,142 @@ describe("decompressBlend", () => {
     expect(await refusal(zstdFrame(HEADER, 1, 100, 0, 2 ** 27 + 2))).toEqual(refused);
   });
 
-  it("refuses frames without a declared size whose window the decompressor would move after too many blocks", async () => {
-    const slow = zstdFrame(HEADER, 600, 1, 0, null, windowOf(27));
-    expect(await refusal(slow)).toEqual(
-      new BlendParseError("its compressed data does not declare its size and is too slow to expand"),
+  it("expands frames without a declared size block by block, however many blocks and frames they have", async () => {
+    const blocks = await decompressBlend(zstdFrame(HEADER, 600, 1024, 7, null, windowOf(27)));
+    expect([blocks.length, blocks[12], blocks.at(-1)]).toEqual([12 + 600 * 1024, 7, 7]);
+    const expected = [...HEADER];
+    const matches = Array.from({ length: 2000 }, (_, index) => {
+      expected.push(index % 251);
+      for (let k = 0; k < 3; k++) expected.push(expected[expected.length - 5] ?? -1);
+      return [...blockHeader(1, 0, false), index % 251, ...sequencesBlock(1, [0, 3, 0], [0x80], index === 1999)];
+    });
+    const start = [...blockHeader(12, 0, false), ...HEADER];
+    const windowed = Uint8Array.from([...frameHeader(null, windowOf(10)), ...start, ...matches.flat()]);
+    expect([...(await decompressBlend(windowed))]).toEqual(expected);
+    const empty = new Uint8Array();
+    const frames = Array.from({ length: 20_000 }, (_, index) =>
+      zstdFrame(index === 0 ? HEADER : empty, 1, 1, 9, null, windowOf(10)),
     );
-    const declared = zstdFrame(HEADER, 600, 1, 0, 612, windowOf(27));
-    expect((await decompressBlend(declared)).length).toBe(612);
+    expect((await decompressBlend(joined(...frames))).length).toBe(12 + 20_000);
   });
 
-  it("refuses frames without a declared size whose blocks hold more than the limit", async () => {
+  it("counts the window of each frame without a declared size against the limit", async () => {
+    const empty = new Uint8Array();
+    const frames = (count: number) =>
+      joined(
+        ...Array.from({ length: count }, (_, index) =>
+          zstdFrame(index === 0 ? HEADER : empty, 1, 1, 0, null, windowOf(27)),
+        ),
+      );
+    expect((await decompressBlend(frames(8))).length).toBe(12 + 8);
+    expect(await refusal(frames(9))).toEqual(new BlendParseError("it expands to more than 1 GiB"));
+    const declared = Array.from({ length: 600 }, (_, index) =>
+      index === 0
+        ? zstdFrame(HEADER, 1, 1, 0, 13, windowOf(27))
+        : zstdFrame(new Uint8Array(), 1, 1, 0, 1, windowOf(27)),
+    );
+    expect((await decompressBlend(joined(...declared))).length).toBe(12 + 600);
+  });
+
+  it("refuses frames without a declared size once their blocks expand past the limit", async () => {
     const blocks = zstdFrame(HEADER, 16, 128 * 1024, 0, null);
     await expect(decompressBlend(blocks, MIB)).rejects.toThrow("it expands to more than 1048576 bytes");
+    const literals = Array.from({ length: 16 }, (_, index) =>
+      literalsBlock(new Uint8Array(100).fill(index), index === 15),
+    );
+    const small = Uint8Array.from([
+      ...frameHeader(null, windowOf(20)),
+      ...blockHeader(12, 0, false),
+      ...HEADER,
+      ...literals.flat(),
+    ]);
+    const expanded = await decompressBlend(small, MIB);
+    expect([expanded.length, expanded[12], expanded.at(-1)]).toEqual([12 + 1600, 0, 15]);
+    const declaredFirst = joined(
+      zstdFrame(HEADER, 5, 120 * 1024, 0, 12 + 600 * 1024),
+      zstdFrame(new Uint8Array(), 5, 120 * 1024, 0, null, windowOf(17)),
+    );
+    await expect(decompressBlend(declaredFirst, MIB)).rejects.toThrow("it expands to more than 1048576 bytes");
+  });
+
+  it("stops a frame at the size it declares, as Blender does, without expanding its other blocks", async () => {
+    const damaged = new BlendParseError("its compressed data is damaged (invalid zstd data)");
+    const start = [...blockHeader(12, 0, false), ...HEADER];
+    const rle = Uint8Array.from([...frameHeader(100, windowOf(20)), ...start, ...blockHeader(89, 1, true), 0]);
+    expect(await refusal(rle)).toEqual(damaged);
+    const raw = Uint8Array.from([
+      ...frameHeader(100, windowOf(20)),
+      ...start,
+      ...blockHeader(89, 0, true),
+      ...new Uint8Array(89),
+    ]);
+    expect(await refusal(raw)).toEqual(damaged);
+    const literals = Uint8Array.from([
+      ...frameHeader(100, windowOf(20)),
+      ...start,
+      ...literalsBlock(new Uint8Array(89), true),
+    ]);
+    expect(await refusal(literals)).toEqual(damaged);
+    const sequences = Array.from({ length: 1000 }, (_, index) => sequencesBlock(1, [0, 0, 52], [0x80], index === 999));
+    const matches = Uint8Array.from([...frameHeader(4096, windowOf(20)), ...start, ...sequences.flat()]);
+    expect(await refusal(matches)).toEqual(damaged);
+  });
+
+  it("stops a block whose sequences expand past the largest block a frame allows", async () => {
+    const start = [...blockHeader(12, 0, false), ...HEADER];
+    for (const codes of [
+      [0, 0, 52],
+      [35, 0, 0],
+    ] as const) {
+      const block = sequencesBlock(32_512, [...codes], [0x80], true);
+      const bytes = Uint8Array.from([...frameHeader(null, windowOf(20)), ...start, ...block]);
+      expect(await refusal(bytes)).toEqual(new BlendParseError("its compressed data is damaged (invalid zstd data)"));
+    }
+  });
+
+  it("stops reading Huffman weights after 255, as the reference decoder does", async () => {
+    const start = [...blockHeader(12, 0, false), ...HEADER];
+    for (const header of [frameHeader(4096, windowOf(17)), frameHeader(null, windowOf(17))]) {
+      const bytes = Uint8Array.from([...header, ...start, ...endlessWeightsBlock(true)]);
+      expect(await refusal(bytes)).toEqual(new BlendParseError("its compressed data is damaged (invalid zstd data)"));
+    }
+  });
+
+  it("follows matches that reach back a whole window in a frame without a declared size", async () => {
+    const history = Array.from({ length: 1024 - HEADER.length }, (_, index) => (index * 37 + 11) % 256);
+    const expected = [...HEADER, ...history];
+    const matches = Array.from({ length: 2000 }, (_, index) => {
+      expected.push(index % 251);
+      for (let k = 0; k < 3; k++) expected.push(expected[expected.length - 1024] ?? -1);
+      return [...blockHeader(1, 0, false), index % 251, ...sequencesBlock(1, [0, 10, 0], [0x03, 0x04], index === 1999)];
+    });
+    const start = [...blockHeader(12, 0, false), ...HEADER, ...blockHeader(history.length, 0, false), ...history];
+    const frame = Uint8Array.from([...frameHeader(null, windowOf(10)), ...start, ...matches.flat()]);
+    expect([...(await decompressBlend(frame))]).toEqual(expected);
+  });
+
+  it("moves the window of a frame without a declared size by fewer bytes than the frame expands to", async () => {
+    const copies = vi.spyOn(Uint8Array.prototype, "copyWithin");
+    const moved = () => copies.mock.calls.reduce((sum, [, from, to]) => sum + (to ?? 0) - from, 0);
+    const blocks = await decompressBlend(zstdFrame(HEADER, 600, 1024, 7, null, windowOf(27)));
+    expect(moved()).toBeLessThanOrEqual(blocks.length);
+    copies.mockClear();
+    const small = await decompressBlend(zstdFrame(HEADER, 3000, 100, 7, null, windowOf(10)));
+    expect(moved()).toBeGreaterThan(0);
+    expect(moved()).toBeLessThanOrEqual(small.length);
+  });
+
+  it("follows matches that reach 64 MiB back or more", async () => {
+    const distance = 96 * MIB;
+    const zeros = Array.from({ length: 768 }, (_, index) => [
+      ...blockHeader(index === 767 ? 128 * 1024 - 12 : 128 * 1024, 1, false),
+      0,
+    ]);
+    const reach = sequencesBlock(1, [0, 26, 0], [0x80, 0x01, 0, 0, 0x03], true);
+    const start = [...blockHeader(12, 0, false), ...HEADER];
+    const frame = Uint8Array.from([...frameHeader(distance + 3, null), ...start, ...zeros.flat(), ...reach]);
+    const expanded = await decompressBlend(frame);
+    expect([expanded.length, ...expanded.subarray(distance)]).toEqual([distance + 3, ...HEADER.subarray(0, 3)]);
   });
 
   it("refuses gzip data once it streams past the limit", async () => {
@@ -192,6 +348,11 @@ describe("decompressBlend", () => {
     expect(new TextDecoder().decode(await decompressBlend(acrossFrames))).toBe("BLENDER-v405rest");
     const acrossBlocks = rawFrame("", "BLENDE", "R-v405");
     expect(new TextDecoder().decode(await decompressBlend(acrossBlocks))).toBe("BLENDER-v405");
+  });
+
+  it("refuses data after the last Zstandard frame that is not a frame", async () => {
+    const trailing = joined(rawFrame("BLENDER-v405"), Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8, 9));
+    expect(await refusal(trailing)).toEqual(new BlendParseError("its compressed data is damaged (invalid zstd data)"));
   });
 
   it("gives up on a Zstandard file header after 8 blocks", async () => {

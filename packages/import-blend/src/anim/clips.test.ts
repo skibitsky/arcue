@@ -119,6 +119,53 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
     expect(short.some((frame) => Math.abs(frame - 1.5) < 1e-4)).toBe(true);
   });
 
+  /** The fixture with CycConst's keys, at frames 1, 2.5 and 4, moved to `frames`, and its range ending at `end`. */
+  const cycConstAt = async (frames: readonly number[], end: number) => {
+    const bytes = await decompressBlend(readFixture("clips", version));
+    const file = readBlendFile(bytes);
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    const action = datablocks(file, "AC").find((candidate) => idName(candidate) === "CycConst");
+    const range = action?.field("frame_end");
+    const keys = file
+      .blocksWithCode("DATA")
+      .filter((block) => block.struct?.type === "BezTriple")
+      .map((block) => file.elements(block))
+      .find((triples) => triples.map((triple) => triple.numbers("vec")[3]).join() === "1,2.5,4");
+    if (!action || !range || !keys) throw new Error("No CycConst keys");
+    view.setFloat32(action.offset + range.offset, end, file.little);
+    keys.forEach((triple, index) => {
+      const vec = triple.field("vec")?.offset ?? 0;
+      view.setFloat32(triple.offset + vec + 12, frames[index] ?? 0, file.little);
+    });
+    const scene = await importBytes("cycled.blend", bytes);
+    const warnings = scene.source.warnings.filter((warning) => warning.subject.name === "CycConst");
+    const cycled = scene.clips.find((candidate) => candidate.name === "CycConst");
+    const track = cycled?.tracks.find((candidate) => scene.nodes[candidate.node]?.name === "CycConst");
+    return { warnings: warnings.map((warning) => warning.message), frames: keyFrames(track, 24) };
+  };
+
+  it("samples whole frames without a warning when every jump falls on one, however often a curve repeats it", async () => {
+    const { warnings, frames } = await cycConstAt([1, 2, 3], 90_001);
+    expect(warnings).toEqual([]);
+    expect(frames).toHaveLength(90_001);
+    expect(frames.at(-1)).toBeCloseTo(90_000, 3);
+  });
+
+  it("samples whole frames, and warns, when one curve alone jumps between frames past the limit", async () => {
+    const { warnings, frames } = await cycConstAt([1, 1.5, 2], 60_001);
+    expect(warnings).toEqual(["Jumps between frames not shown: CycConst"]);
+    expect(frames.at(-1)).toBeCloseTo(60_000, 3);
+    expect(frames.filter((frame) => frame > 1.01 && frame < 1.99)).toEqual([]);
+  });
+
+  it("samples the jumps between frames as long as they keep a clip to 100000 frames", async () => {
+    const atLimit = await cycConstAt([1, 2.5, 4], 75_001);
+    expect(atLimit.warnings).toEqual([]);
+    expect(atLimit.frames).toHaveLength(100_001);
+    const past = await cycConstAt([1, 2.5, 4], 75_002);
+    expect(past.warnings).toEqual(["Jumps between frames not shown: CycConst"]);
+  });
+
   it("poses only the armatures a clip animates, from the pose Blender shows when it opens the file", () => {
     expect(new Set(clip("MixedSteps").tracks.map((track) => scene.nodes[track.node]?.name))).toEqual(
       new Set(["Mixed"]),

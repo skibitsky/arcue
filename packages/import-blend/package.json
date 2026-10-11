@@ -12,8 +12,7 @@
   },
   "dependencies": {
     "@arcue/protocol": "workspace:*",
-    "@arcue/scene": "workspace:*",
-    "fzstd": "0.1.1"
+    "@arcue/scene": "workspace:*"
   },
   "devDependencies": {
     "@arcue/import-fbx": "workspace:*",

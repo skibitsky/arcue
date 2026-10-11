@@ -248,6 +248,70 @@ describe("evaluateFCurve", () => {
     expect(jumpFrames({ ...halves, modifiers: [stepped] }, 0, 1e9, 100_000)).toBeNull();
   });
 
+  it("counts each jump once, so that jumps a Cycles or Stepped modifier repeats on whole frames stay under the limit", () => {
+    const wholes = curve(
+      Array.from({ length: 11 }, (_, index): [number, number] => [index, index % 2]),
+      { interpolation: Interpolation.constant },
+    );
+    const cycles: CurveModifier = {
+      type: "cycles",
+      before: 1,
+      after: 1,
+      beforeCycles: 0,
+      afterCycles: 0,
+      range: null,
+      influence: 1,
+    };
+    const stepped: CurveModifier = {
+      type: "stepped",
+      step: 1,
+      offset: 0,
+      start: 0,
+      end: 0,
+      noBefore: false,
+      noAfter: false,
+      range: null,
+      influence: 1,
+    };
+    expect(jumpFrames({ ...wholes, modifiers: [cycles] }, 0, 99_999, 100_000)).toHaveLength(99_998);
+    const mirrored = { ...wholes, modifiers: [{ ...cycles, before: 3, after: 3 }] };
+    expect(jumpFrames(mirrored, 0, 99_999, 100_000)).toHaveLength(99_998);
+    expect(jumpFrames({ ...wholes, modifiers: [cycles, stepped] }, 0, 60_001, 100_000)).toHaveLength(60_000);
+    const shared = curve(
+      Array.from({ length: 20_000 }, (_, index): [number, number] => (index < 10_000 ? [0, 0] : [1, 1])),
+      { interpolation: Interpolation.constant, modifiers: [cycles] },
+    );
+    expect(jumpFrames(shared, 0, 100_000, 100_000)).toHaveLength(99_999);
+  });
+
+  it("mirrors the jumps of a curve with more keys than a call takes arguments", () => {
+    const many = curve(
+      Array.from({ length: 130_000 }, (_, index): [number, number] => [index * 0.37, index % 7]),
+      { interpolation: Interpolation.constant },
+    );
+    const mirror: CurveModifier = {
+      type: "cycles",
+      before: 3,
+      after: 3,
+      beforeCycles: 0,
+      afterCycles: 0,
+      range: null,
+      influence: 1,
+    };
+    const frames = jumpFrames({ ...many, modifiers: [mirror] }, 1, 1001, 100_000) ?? [];
+    expect(frames.length).toBeGreaterThan(2700);
+    expect(frames.every((frame) => frame > 1 && frame < 1001)).toBe(true);
+    const uneven = curve(
+      [
+        [0, 0],
+        [1, 1],
+        [4, 0],
+      ],
+      { interpolation: Interpolation.constant, modifiers: [mirror] },
+    );
+    expect(jumpFrames(uneven, 0, 12, 100)?.sort((a, b) => a - b)).toEqual([1, 3, 4, 5, 7, 8, 9, 11]);
+  });
+
   it("finds jumps under a Stepped modifier of a frame or more per step, at any influence or frame range", () => {
     const step: CurveModifier = {
       type: "stepped",

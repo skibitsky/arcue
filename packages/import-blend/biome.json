@@ -3,6 +3,6 @@
   "root": false,
   "extends": "//",
   "files": {
-    "includes": ["**", "!test/fixtures/*.json"]
+    "includes": ["**", "!test/fixtures/*.json", "!vendor"]
   }
 }

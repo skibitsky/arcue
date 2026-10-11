@@ -1,19 +1,12 @@
-import { Decompress as ZstdStream, decompress as zstdDecompress } from "fzstd";
+import { Decompress as ZstdStream, decompress as zstdDecompress } from "../../vendor/fzstd/index.js";
 import { BlendParseError } from "./errors";
 import { checkHeaderMagic, HEADER_MAGIC } from "./file";
 
 const ZSTD_MAGIC = 0xfd2fb528;
 const ZSTD_SKIPPABLE_MAGIC = 0x184d2a50;
-const ZSTD_MAX_BLOCK = 128 * 1024;
 const ZSTD_BLOCK_RLE = 1;
-const ZSTD_BLOCK_COMPRESSED = 2;
 /** Blender refuses a frame whose window is larger, as the Zstandard library does by default. */
 const ZSTD_MAX_WINDOW = 2 ** 27 + 1;
-/**
- * The most window bytes the decompressor may move for frames that declare no size. It moves the whole window after each
- * of their blocks, so a small file with a large window and many tiny blocks would take minutes.
- */
-const MAX_WINDOW_MOVES = 2 ** 36;
 /** The blocks the header check decodes at most, for a header split over short or empty blocks and frames. */
 const HEADER_BLOCKS = 8;
 const GZIP_MAGIC = [0x1f, 0x8b];
@@ -86,21 +79,20 @@ function littleEndian(bytes: Uint8Array, start: number, length: number): number 
   return value;
 }
 
-interface ZstdFrames {
-  /**
-   * The bytes decompressing takes: a frame that declares its content size takes that, and one that does not takes its
-   * window and what its blocks can hold.
-   */
-  expanded: number;
-  /** The largest window of a frame, which for a single-segment frame is its content size. */
+interface ZstdFrame {
+  start: number;
+  end: number;
+  /** The bytes the frame declares it expands to, or 0 when it does not declare them. */
+  content: number;
+  /** Its window, which for a single-segment frame is its content size. */
   window: number;
-  /** The window bytes the decompressor moves for frames that declare no size: their window after each block. */
-  moved: number;
 }
 
-/** What decompressing Zstandard data takes, from its frame and block headers alone. It stops at damaged headers. */
-function zstdFrames(bytes: Uint8Array): ZstdFrames {
-  const frames: ZstdFrames = { expanded: 0, window: 0, moved: 0 };
+/**
+ * Calls `visit` with each Zstandard frame of the data other than skippable ones, read from its frame and block headers
+ * alone, and returns where the frames end: before a damaged frame header, or with the data when a frame is cut short.
+ */
+function forEachZstdFrame(bytes: Uint8Array, visit: (frame: ZstdFrame) => void): number {
   let offset = 0;
   while (offset + 8 <= bytes.byteLength) {
     const magic = littleEndian(bytes, offset, 4);
@@ -123,44 +115,82 @@ function zstdFrames(bytes: Uint8Array): ZstdFrames {
     const contentBytes = [singleSegment ? 1 : 0, 2, 4, 8][descriptor >> 6] ?? 0;
     const content = littleEndian(bytes, position, contentBytes) + (contentBytes === 2 ? 256 : 0);
     position += contentBytes;
-    frames.window = Math.max(frames.window, singleSegment ? content : window);
-    const largestBlock = window > 0 ? Math.min(window, ZSTD_MAX_BLOCK) : ZSTD_MAX_BLOCK;
-    let held = 0;
-    let blocks = 0;
-    const addFrame = () => {
-      frames.expanded += content > 0 ? content : window + held;
-      if (content === 0) frames.moved += window * blocks;
-    };
-    for (let last = false; !last; ) {
-      if (position + 3 > bytes.byteLength) {
-        addFrame();
-        return frames;
-      }
+    let last = false;
+    while (!last && position + 3 <= bytes.byteLength) {
       const header = littleEndian(bytes, position, 3);
-      const type = (header >> 1) & 3;
-      const size = header >>> 3;
       last = (header & 1) === 1;
-      held += type === ZSTD_BLOCK_COMPRESSED ? largestBlock : size;
-      blocks += 1;
-      position += 3 + (type === ZSTD_BLOCK_RLE ? 1 : size);
+      position += 3 + (((header >> 1) & 3) === ZSTD_BLOCK_RLE ? 1 : header >>> 3);
     }
     position += (descriptor & 0x04) !== 0 ? 4 : 0;
-    addFrame();
-    offset = position;
+    const end = last ? Math.min(position, bytes.byteLength) : bytes.byteLength;
+    visit({ start: offset, end, content, window: singleSegment ? content : window });
+    offset = end;
   }
-  return frames;
+  return offset;
 }
 
-/** Refuses Zstandard data that Blender does not read, that expands past `limit` bytes, or that is slow to expand. */
-function checkZstdFrames(bytes: Uint8Array, limit: number): void {
-  const { expanded, window, moved } = zstdFrames(bytes);
-  if (expanded > limit) throw tooLarge(limit);
+/**
+ * Refuses Zstandard data that Blender does not read, or that takes more than `limit` bytes up front: the bytes its
+ * frames declare, and the window the decompressor sets up for each frame that does not declare its size. Gives the
+ * bytes the frames declare and where they end.
+ */
+function checkZstdFrames(bytes: Uint8Array, limit: number): { declared: number; end: number } {
+  let declared = 0;
+  let windows = 0;
+  let window = 0;
+  const end = forEachZstdFrame(bytes, (frame) => {
+    declared += frame.content;
+    if (frame.content === 0) windows += frame.window;
+    window = Math.max(window, frame.window);
+  });
+  if (declared + windows > limit) throw tooLarge(limit);
   if (window > ZSTD_MAX_WINDOW) {
     throw new BlendParseError("its compressed data needs a window over 128 MiB, which Blender refuses too");
   }
-  if (moved > MAX_WINDOW_MOVES) {
-    throw new BlendParseError("its compressed data does not declare its size and is too slow to expand");
-  }
+  return { declared, end };
+}
+
+/**
+ * Expands each frame: a frame that declares its size into a buffer of that size, and a frame that does not block by
+ * block, refusing data that expands past `limit` bytes. The vendored decompressor refuses a block expanding past the
+ * most its frame allows or coding more Huffman weights than a table holds, so that a block takes work in proportion to
+ * its size, its output and the largest block a frame allows. A first part
+ * that holds all the declared bytes becomes the result without a copy. Data after the frames is left to the
+ * decompressor, which refuses it.
+ */
+function unzstd(bytes: Uint8Array, declared: number, end: number, limit: number): Uint8Array {
+  let output: Uint8Array = new Uint8Array(0);
+  let length = 0;
+  let expanded = declared;
+  const append = (part: Uint8Array) => {
+    if (length === 0 && part.byteLength >= declared) {
+      output = part;
+      length = part.byteLength;
+      return;
+    }
+    if (length + part.byteLength > output.byteLength) {
+      const size = Math.max(length + part.byteLength, declared, output.byteLength * 2);
+      const grown = new Uint8Array(Math.min(limit, size));
+      grown.set(output.subarray(0, length));
+      output = grown;
+    }
+    output.set(part, length);
+    length += part.byteLength;
+  };
+  forEachZstdFrame(bytes, (frame) => {
+    const data = bytes.subarray(frame.start, frame.end);
+    if (frame.content > 0) {
+      append(zstdDecompress(data));
+      return;
+    }
+    new ZstdStream((block) => {
+      expanded += block.byteLength;
+      if (expanded > limit) throw tooLarge(limit);
+      append(block);
+    }).push(data, true);
+  });
+  if (end < bytes.byteLength) append(zstdDecompress(bytes.subarray(end)));
+  return output.subarray(0, length);
 }
 
 async function gunzip(bytes: Uint8Array, limit: number): Promise<Uint8Array> {
@@ -192,7 +222,7 @@ async function gunzip(bytes: Uint8Array, limit: number): Promise<Uint8Array> {
 
 /**
  * The first bytes of Zstandard data, decoded until they hold a Blender file header's magic or `HEADER_BLOCKS` blocks
- * have been decoded. Decoding stops there, since the stream decoder moves all of a frame's window after each block.
+ * have been decoded, so that data that is not a Blender file is refused before the rest is expanded.
  */
 function zstdStart(bytes: Uint8Array): Uint8Array {
   const blocks: Uint8Array[] = [];
@@ -219,15 +249,15 @@ function reasonOf(error: unknown): string {
 /**
  * The file's uncompressed bytes. Blender 3.0 and later compress with Zstandard when "Compress" is on, and earlier
  * versions with gzip; an uncompressed file comes back as it is. A compressed file that Blender would refuse, that
- * expands past `limit` bytes or would be too slow to expand, or whose first bytes are not a Blender file header, is
- * refused before the rest is expanded.
+ * expands past `limit` bytes, or whose first bytes are not a Blender file header, is refused before the rest is
+ * expanded.
  */
 export async function decompressBlend(bytes: Uint8Array, limit = MAX_EXPANDED_BYTES): Promise<Uint8Array> {
   try {
     if (littleEndian(bytes, 0, 4) === ZSTD_MAGIC) {
-      checkZstdFrames(bytes, limit);
+      const { declared, end } = checkZstdFrames(bytes, limit);
       checkHeaderMagic(zstdStart(bytes));
-      return zstdDecompress(bytes);
+      return unzstd(bytes, declared, end, limit);
     }
     if (startsWith(bytes, GZIP_MAGIC)) return await gunzip(bytes, limit);
   } catch (error) {

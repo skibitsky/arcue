@@ -898,9 +898,10 @@ function addCycledFrames(
   const [first, last] = range;
   const period = last - first;
   if (!(period >= 1)) return true;
-  const mirrored = cycles.before === 3 || cycles.after === 3;
-  const offsets = [0, ...within.map((frame) => frame - first)];
-  if (mirrored) offsets.push(...offsets.map((offset) => period - offset));
+  const offsets = new Set([0, ...within.map((frame) => frame - first)]);
+  if (cycles.before === 3 || cycles.after === 3) {
+    for (const offset of [...offsets]) offsets.add(period - offset);
+  }
   const lastCycle = Math.ceil((end - first) / period);
   for (let n = Math.floor((start - first) / period); n <= lastCycle; n++) {
     for (const offset of offsets) if (!add(first + n * period + offset)) return false;
@@ -909,15 +910,16 @@ function addCycledFrames(
 }
 
 /**
- * Frames strictly between `start` and `end` where the curve may jump: its keys after constant or discrete segments
- * and where a Cycles modifier repeats them, the ends of its cycles, the steps of its Stepped modifiers that are at
- * least a frame apart, and the ends of its modifiers' frame ranges. Null when there are more than `limit`.
+ * Frames strictly between `start` and `end` where the curve may jump, each once: its keys after constant or discrete
+ * segments and where a Cycles modifier repeats them, the ends of its cycles, the steps of its Stepped modifiers that
+ * are at least a frame apart, and the ends of its modifiers' frame ranges. Null when there are more than `limit`. As
+ * each frame counts once, jumps on whole frames alone number at most the whole frames inside the range.
  */
 export function jumpFrames(curve: FCurve, start: number, end: number, limit: number): number[] | null {
-  const frames: number[] = [];
+  const frames = new Set<number>();
   const add = (frame: number) => {
-    if (frame > start && frame < end) frames.push(frame);
-    return frames.length <= limit;
+    if (frame > start && frame < end) frames.add(frame);
+    return frames.size <= limit;
   };
   const keyed: number[] = [];
   const { count, frame, interpolation } = curve.keys;
@@ -936,5 +938,5 @@ export function jumpFrames(curve: FCurve, start: number, end: number, limit: num
       if (!add(modifier.offset + n * modifier.step)) return null;
     }
   }
-  return frames;
+  return [...frames];
 }

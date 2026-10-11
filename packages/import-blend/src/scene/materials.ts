@@ -1048,7 +1048,7 @@ function notePremultiplied(draft: MaterialDraft, use: ImageUse, read: ReadonlySe
 
 /** Applies the transparency the surface's shader mix adds, from mix factors and the images whose alpha mixes it. */
 function applySurfaceAlpha(graph: ShaderGraph, draft: MaterialDraft, surface: SurfaceShader): void {
-  draft.approximations.push(...surface.notes);
+  for (const note of surface.notes) draft.approximations.push(note);
   for (const alpha of surface.alphaImages) {
     if (samplesBase(graph, draft, alpha.found)) useImageAlpha(draft, alpha);
     else draft.approximations.push(`Alpha comes from ${imageName(alpha.found)}, which the preview leaves out`);
