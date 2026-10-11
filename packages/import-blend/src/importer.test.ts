@@ -312,6 +312,22 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         }
       }
     });
+
+    it("leaves out the modifiers of a curve that turns them off", async () => {
+      const file = readBlendFile(await decompressBlend(readFixture("rig", version)));
+      const modified = (actions: ReturnType<typeof readActions>) =>
+        actions.flatMap((action) => action.slots.flatMap((slot) => slot.curves)).filter((c) => c.modifiers.length > 0);
+      expect(modified(readActions(file)).map((curve) => curve.path)).toEqual(
+        Array(3).fill('pose.bones["Spine"].rotation_euler'),
+      );
+      for (const block of file.blocks.filter((candidate) => candidate.struct?.type === "FCurve")) {
+        for (const curve of file.elements(block)) {
+          const flag = curve.field("flag");
+          if (flag) file.view.setInt16(curve.offset + flag.offset, curve.number("flag") | (1 << 6), file.little);
+        }
+      }
+      expect(modified(readActions(file))).toEqual([]);
+    });
   });
 
   describe("materials", async () => {
@@ -392,10 +408,12 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["material-approximated", "Pixelated"],
         ["material-approximated", "Procedural"],
         ["material-approximated", "Projected"],
+        ["material-approximated", "Pulsing"],
         ["material-approximated", "RedRough"],
         ["material-approximated", "Smoke"],
         ["material-approximated", "SrgbRough"],
         ["material-approximated", "Textured"],
+        ["material-approximated", "Tilted"],
         ["material-approximated", "Tinted"],
         ["material-approximated", "Vectored"],
         ["texture-not-found", "absolute.png"],
@@ -428,6 +446,8 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["AlphaTint", "Base color comes from the alpha of checker.png, which the preview leaves out"],
         ["Displaced", "Displacement comes from Displacement, which the preview leaves out"],
         ["Smoke", "Only its volume renders, which the preview leaves out"],
+        ["Tilted", "checker.png is mapped with a turn around X or Y, which the preview leaves out"],
+        ["Pulsing", "Emission strength comes from Value, shown at the value set on the input"],
       ]);
       expect(approximated.every((warning) => warning.subject.kind === "material")).toBe(true);
       expect(material("Muted").baseColorTexture).not.toBeNull();
@@ -611,6 +631,14 @@ describe("reading", () => {
         detail: "Mesh PropMesh counts more elements than the file holds",
       }),
     );
+  });
+
+  it("refuses a compressed file that expands past the limit", async () => {
+    const zstd = readFixture("features", VERSIONS[1]);
+    const gzip = gzipSync(await decompressed(VERSIONS[1]));
+    for (const bytes of [zstd, gzip]) {
+      await expect(decompressBlend(bytes, 1000)).rejects.toThrow("it expands to more than 1000 bytes");
+    }
   });
 
   it("refuses a file that is cut short", async () => {

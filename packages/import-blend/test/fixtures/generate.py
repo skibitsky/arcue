@@ -1071,6 +1071,27 @@ def build_materials():
     materials = [textured, glass, absent, diffuse, glow, mixed, projected, red_rough, tinted, cutout, blended]
     materials += [object_normal, generated, glassy, decal, procedural, boxed, muted, srgb_rough, vectored]
     materials += [pixelated, alpha_tint, displaced, empty, smoke]
+
+    tilted = bpy.data.materials.new("Tilted")
+    bsdf = principled(tilted)
+    tree = tilted.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    mapping = tree.nodes.new("ShaderNodeMapping")
+    mapping.inputs["Rotation"].default_value = (0.3, 0, 0)
+    tree.links.new(tree.nodes.new("ShaderNodeUVMap").outputs["UV"], mapping.inputs["Vector"])
+    tree.links.new(mapping.outputs["Vector"], image.inputs["Vector"])
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+
+    pulsing = bpy.data.materials.new("Pulsing")
+    bsdf = principled(pulsing)
+    tree = pulsing.node_tree
+    bsdf.inputs["Emission Color"].default_value = (1.0, 0.5, 0.0, 1.0)
+    bsdf.inputs["Emission Strength"].default_value = 0.0
+    strength = tree.nodes.new("ShaderNodeValue")
+    strength.outputs["Value"].default_value = 2.0
+    tree.links.new(strength.outputs["Value"], bsdf.inputs["Emission Strength"])
+    materials += [tilted, pulsing]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)

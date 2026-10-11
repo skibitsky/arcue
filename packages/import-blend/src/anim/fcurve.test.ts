@@ -89,6 +89,28 @@ describe("evaluateFCurve", () => {
     expect(isStepped(stepped)).toBe(false);
   });
 
+  it("counts a curve as stepped when a Stepped modifier steps all of it by a frame or more", () => {
+    const step: CurveModifier = {
+      type: "stepped",
+      step: 2,
+      offset: 0,
+      start: 0,
+      end: 0,
+      noBefore: false,
+      noAfter: false,
+      range: null,
+      influence: 1,
+    };
+    const points: [number, number][] = [
+      [0, 0],
+      [10, 10],
+    ];
+    expect(isStepped(curve(points, { modifiers: [step] }))).toBe(true);
+    expect(isStepped(curve(points, { modifiers: [{ ...step, influence: 0.5 }] }))).toBe(false);
+    expect(isStepped(curve(points, { modifiers: [{ ...step, noAfter: true }] }))).toBe(false);
+    expect(isStepped(curve(points, { modifiers: [{ ...step, step: 0.5 }] }))).toBe(false);
+  });
+
   it("follows a Bezier segment with flat handles through its midpoint", () => {
     const smooth = curve(
       [

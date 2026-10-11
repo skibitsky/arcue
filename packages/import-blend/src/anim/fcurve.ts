@@ -74,6 +74,7 @@ const EASE_OUT = 2;
 const EASE_IN_OUT = 3;
 
 const FCURVE_MUTED = 1 << 4;
+const FCURVE_MODIFIERS_OFF = 1 << 6;
 const ACTION_GROUP_MUTED = 1 << 4;
 const FCURVE_DISCRETE_VALUES = 1 << 12;
 const FCURVE_EXTRAPOLATE_LINEAR = 1;
@@ -223,7 +224,8 @@ export function readFCurve(curve: BlendStruct): FCurve {
   const keys = readKeys(curve, count);
   const sampled = keys.count === 0 ? readSamples(curve, count) : null;
   const flag = curve.number("flag");
-  const { modifiers, unsupported } = readModifiers(curve);
+  const { modifiers, unsupported } =
+    (flag & FCURVE_MODIFIERS_OFF) !== 0 ? { modifiers: [], unsupported: [] } : readModifiers(curve);
   return {
     path: curve.text("rna_path"),
     index: curve.number("array_index"),
@@ -719,9 +721,20 @@ export function evaluateFCurve(curve: FCurve, frame: number): number {
   return value;
 }
 
-/** Whether every key of the curve holds its value until the next one. */
+/**
+ * Whether the curve holds each value for a frame or more: every key holds until the next one, or a Stepped modifier
+ * steps the whole curve.
+ */
 export function isStepped(curve: FCurve): boolean {
   if (curve.discrete) return true;
+  const steps = (modifier: CurveModifier) =>
+    modifier.type === "stepped" &&
+    modifier.step >= 1 &&
+    modifier.range === null &&
+    modifier.influence >= 1 &&
+    !modifier.noBefore &&
+    !modifier.noAfter;
+  if (curve.modifiers.some(steps)) return true;
   const { count, interpolation } = curve.keys;
   if (count === 0) return false;
   for (let i = 0; i < count - 1; i++) if (interpolation[i] !== Interpolation.constant) return false;

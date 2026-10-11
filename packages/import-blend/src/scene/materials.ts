@@ -38,6 +38,8 @@ export interface ImageUse {
   projection: string | null;
   /** A Mapping node's Texture, Vector or Normal type, which the preview maps as Point, or null for Point. */
   mapping: string | null;
+  /** Whether a Mapping node rotates around X or Y, which the preview leaves out. */
+  tilted: boolean;
   /** Closest, Cubic or Smart sampling, which the preview samples as Linear, or null for Linear. */
   interpolation: string | null;
 }
@@ -310,6 +312,7 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
   let transform: UvTransform | null = null;
   let coordinates: string | null = null;
   let mapping: string | null = null;
+  let tilted = false;
   let vector = linkInto(graph, inputSocket(node, "Vector") ?? node);
   for (let depth = 0; vector && depth < 8; depth++) {
     const type = nodeType(vector.node);
@@ -319,6 +322,8 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
     }
     if (type === "ShaderNodeMapping") {
       mapping ??= MAPPING_TYPES[vector.node.number("custom1")] ?? null;
+      const [x = 0, y = 0] = defaultVector(inputSocket(vector.node, "Rotation"), [0, 0, 0]);
+      tilted ||= x !== 0 || y !== 0;
       transform ??= uvTransformOf(vector.node);
       vector = linkInto(graph, inputSocket(vector.node, "Vector") ?? vector.node);
       continue;
@@ -334,7 +339,7 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
   const projection = PROJECTIONS[storage?.number("projection") ?? 0] ?? null;
   const interpolation = INTERPOLATIONS[storage?.number("interpolation") ?? 0] ?? null;
   const clipped = extension === EXTENSION_CLIP;
-  return { image, uvMap, wrap, transform, coordinates, clipped, projection, mapping, interpolation };
+  return { image, uvMap, wrap, transform, coordinates, clipped, projection, mapping, tilted, interpolation };
 }
 
 function graphOf(tree: BlendStruct): Graph {
@@ -451,6 +456,7 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   draft.emissionStrength = strength;
   if (emissionImage && strength > 0) draft.emissiveImage = imageInput(graph, draft, "Emission", emissionImage);
   noteNodeInput(graph, draft, "Emission", emissionSocket, emissionImage);
+  noteNodeInput(graph, draft, "Emission strength", strengthSocket, null);
 
   const alphaSocket = inputSocket(node, "Alpha");
   const alpha = clamp01(defaultFloat(alphaSocket, 1));
@@ -577,6 +583,8 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
     if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
     if (use.projection) draft.approximations.push(`${name} uses ${use.projection} projection, shown flat`);
     if (use.mapping) draft.approximations.push(`${name} uses a ${use.mapping} Mapping, shown as Point`);
+    if (use.tilted)
+      draft.approximations.push(`${name} is mapped with a turn around X or Y, which the preview leaves out`);
     if (use.interpolation) draft.approximations.push(`${name} uses ${use.interpolation} interpolation, shown Linear`);
   }
   for (const use of [draft.baseColorImage, draft.emissiveImage]) {
