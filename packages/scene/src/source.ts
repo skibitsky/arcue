@@ -60,7 +60,8 @@ export type ImportWarningCode =
   | "curve-modifier-not-applied"
   | "deform-approximated"
   | "object-not-shown"
-  | "library-not-loaded";
+  | "library-not-loaded"
+  | "material-approximated";
 
 export type ImportWarningSeverity = "warning" | "error";
 
@@ -141,6 +142,7 @@ export const importWarningSeverity: Readonly<Record<ImportWarningCode, ImportWar
   "deform-approximated": "warning",
   "object-not-shown": "warning",
   "library-not-loaded": "error",
+  "material-approximated": "warning",
 };
 
 export function importWarning(

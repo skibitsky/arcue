@@ -128,24 +128,34 @@ function describe(struct: BlendStruct, shown: boolean, hidden: boolean): SceneOb
   };
 }
 
+export interface ArmatureDeform {
+  target: BlendStruct;
+  flags: number;
+  /** The vertex group that limits how much the armature moves each vertex, or empty for none. */
+  maskGroup: string;
+}
+
 /**
  * The armatures that deform an object through Armature modifiers on in viewports or an armature-deform parent. A
  * linked target, whose type this file does not hold, counts as one.
  */
-export function deformingArmatures(object: BlendStruct): { target: BlendStruct; flags: number }[] {
-  const result: { target: BlendStruct; flags: number }[] = [];
+export function deformingArmatures(object: BlendStruct): ArmatureDeform[] {
+  const result: ArmatureDeform[] = [];
   for (const modifier of viewportModifiers(object)) {
     if (modifierType(modifier) !== ModifierType.armature) continue;
     const target = modifier.deref("object");
     const armature = target && (isLinked(target) || target.number("type") === ObjectType.armature);
-    if (target && armature) result.push({ target, flags: modifier.number("deformflag") });
+    if (target && armature) {
+      result.push({ target, flags: modifier.number("deformflag"), maskGroup: modifier.string("defgrp_name") });
+    }
   }
   const parent = object.deref("parent");
   if (
     parent?.number("type") === ObjectType.armature &&
     (object.number("partype") & PARENT_TYPE_MASK) === ParentType.armatureDeform
   ) {
-    result.push({ target: parent, flags: parent.deref("data")?.number("deformflag") ?? ARMATURE_DEFORM_VERTEX_GROUPS });
+    const flags = parent.deref("data")?.number("deformflag") ?? ARMATURE_DEFORM_VERTEX_GROUPS;
+    result.push({ target: parent, flags, maskGroup: "" });
   }
   return result;
 }

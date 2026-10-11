@@ -378,10 +378,24 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         emissive: "/nonexistent/arcue/absolute.png",
       });
       expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name]).sort()).toEqual([
+        ["material-approximated", "Projected"],
+        ["material-approximated", "RedRough"],
         ["texture-not-found", "absolute.png"],
         ["texture-not-found", "missing.png"],
         ["texture-path-absolute", "absolute.png"],
       ]);
+    });
+
+    it("warns about textures it cannot map or read as Blender does", () => {
+      const approximated = scene.source.warnings.filter((warning) => warning.code === "material-approximated");
+      expect(approximated.map((warning) => [warning.subject, warning.detail])).toEqual([
+        [{ kind: "material", name: "Projected" }, "checker.png uses Generated coordinates, shown with the UV map"],
+        [
+          { kind: "material", name: "RedRough" },
+          "Roughness comes from the Red channel of orm.png, which the preview leaves out",
+        ],
+      ]);
+      expect(material("RedRough").roughnessTexture).toBeNull();
     });
   });
 });
@@ -393,6 +407,7 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
     expect(scene.parts.map((part) => [part.name, part.hiddenByDefault === true])).toEqual([
       ["Painted", false],
       ["Rigged", false],
+      ["Masked", false],
       ["Visible", false],
       ["EyeHidden", true],
       ["Rock", false],
@@ -413,12 +428,18 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
       ["object-not-shown", "KitInstance", "Arcue does not expand instances of Kit"],
       ["constraint-not-evaluated", "Follower", undefined],
       ["deform-approximated", "Skewed", "Its parent's scale shears it, which the preview drops"],
+      [
+        "deform-approximated",
+        "Masked",
+        "Vertex group Blend limits the Armature modifier; the preview deforms vertices fully",
+      ],
+      ["unweighted-vertices", "Masked", "Some vertices have no skin weights"],
       ["deform-approximated", "Morph", "Shown in its basis shape"],
       ["modifier-not-applied", "Generated", "Shown without MakeCube"],
       [
         "library-not-loaded",
         `scenes-${version}.blend`,
-        "From other .blend files: objects Borrowed, LibraryRock, LibraryRig; materials LibraryPaint",
+        "From other .blend files: objects Borrowed, LibraryRock, LibraryRig; materials LibraryPaint; actions LibraryWave",
       ],
     ]);
     expect(scene.meshes[meshIndex(scene, "Morph")]?.morphTargets).toEqual([]);

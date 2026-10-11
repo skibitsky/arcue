@@ -1,6 +1,6 @@
 import type { ImportWarningCode, ImportWarningSubject, Mesh, NodeKind, Skeleton } from "@arcue/scene";
 import type { BlendFile, BlendStruct } from "../blend/file";
-import { idName, isLinked } from "../blend/ids";
+import { idName, isLinked, linkedDatablocks } from "../blend/ids";
 import type { Mat4 } from "../math";
 import {
   identity,
@@ -352,6 +352,10 @@ function skinBones(object: SceneObject, byOffset: Map<number, ObjectRecord>, war
   if ((first.flags & ARMATURE_DEFORM_QUATERNION) !== 0) {
     warn("deform-approximated", object.name, `Preserve volume shown as linear skinning: ${object.name}`);
   }
+  if (first.maskGroup !== "") {
+    const detail = `Vertex group ${first.maskGroup} limits the Armature modifier; the preview deforms vertices fully`;
+    warn("deform-approximated", object.name, `Armature mask not applied: ${object.name}`, detail);
+  }
   if ((first.flags & ARMATURE_DEFORM_VERTEX_GROUPS) === 0) return null;
   return armature.bones.flatMap((bone, index) =>
     bone.deform ? [{ name: bone.name, node: armature.nodes[index] ?? -1 }] : [],
@@ -521,9 +525,23 @@ export function buildScene(file: BlendFile, animated: ReadonlySet<string> = new 
     });
   }
 
+  const reported = new Set<MaterialDraft>();
+  for (const draft of materials.drafts) {
+    if (draft.approximations.length === 0 || reported.has(draft)) continue;
+    reported.add(draft);
+    warnings.push({
+      code: "material-approximated",
+      subject: { kind: "material", name: draft.name },
+      message: `Material approximated: ${draft.name}`,
+      detail: draft.approximations.join("; "),
+    });
+  }
+
+  const linkedActions = linkedDatablocks(file, "AC").map(idName);
   const linked = [
     contents.linkedObjects.length > 0 ? `objects ${contents.linkedObjects.join(", ")}` : "",
     materials.linked.size > 0 ? `materials ${[...materials.linked].join(", ")}` : "",
+    linkedActions.length > 0 ? `actions ${linkedActions.join(", ")}` : "",
   ].filter((entry) => entry !== "");
   if (linked.length > 0) {
     warnings.push({

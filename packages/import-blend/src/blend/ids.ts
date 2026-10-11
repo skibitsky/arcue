@@ -23,3 +23,9 @@ export function datablocks(file: BlendFile, code: string): BlendStruct[] {
     return first ? [first] : [];
   });
 }
+
+/** Datablocks with `code` that come from other files, which Blender writes as bare ID placeholders. */
+export function linkedDatablocks(file: BlendFile, code: string): BlendStruct[] {
+  const placeholders = datablocks(file, "ID").filter((id) => (idOf(id)?.string("name") ?? "").startsWith(code));
+  return [...datablocks(file, code).filter(isLinked), ...placeholders];
+}

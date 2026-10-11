@@ -901,7 +901,25 @@ def build_materials():
     tree.links.new(bsdf.outputs["BSDF"], mix.inputs[2])
     tree.links.new(mix.outputs["Shader"], tree.nodes["Material Output"].inputs["Surface"])
 
-    for index, mat in enumerate([textured, glass, absent, diffuse, glow, mixed]):
+    projected = bpy.data.materials.new("Projected")
+    bsdf = principled(projected)
+    tree = projected.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = checker
+    coordinates = tree.nodes.new("ShaderNodeTexCoord")
+    tree.links.new(coordinates.outputs["Generated"], image.inputs["Vector"])
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+
+    red_rough = bpy.data.materials.new("RedRough")
+    bsdf = principled(red_rough)
+    tree = red_rough.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = orm
+    separate = tree.nodes.new("ShaderNodeSeparateColor")
+    tree.links.new(image.outputs["Color"], separate.inputs["Color"])
+    tree.links.new(separate.outputs["Red"], bsdf.inputs["Roughness"])
+
+    for index, mat in enumerate([textured, glass, absent, diffuse, glow, mixed, projected, red_rough]):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
         uv = bm.loops.layers.uv.new("UVMap")
@@ -935,8 +953,8 @@ def build_materials():
 
 def build_scenes():
     """Objects hidden with the eye, a collection in two places, a collection instance, absolute shape keys, a sheared
-    child, a constraint whose influence is animated from zero, geometry only a modifier makes, and data linked from
-    another file."""
+    child, a constraint whose influence is animated from zero, geometry only a modifier makes, an Armature modifier
+    limited by a vertex group, and data linked from another file."""
     scene = reset_scene()
     library_path = os.path.join(HERE, "library-%s.blend" % VERSION)
     shared = bpy.data.meshes.new("SharedMesh")
@@ -945,17 +963,26 @@ def build_scenes():
     paint = material("LibraryPaint", (0.2, 0.5, 0.9))
     skeleton = bpy.data.armatures.new("LibrarySkeleton")
     library_rig = bpy.data.objects.new("LibraryRig", skeleton)
-    datablocks = {shared, library_rock, paint, library_rig}
+    holder = bpy.data.objects.new("WaveHolder", None)
+    for frame, x in ((1, 0.0), (10, 1.0)):
+        holder.location.x = x
+        holder.keyframe_insert("location", index=0, frame=frame)
+    wave = holder.animation_data.action
+    wave.name = "LibraryWave"
+    datablocks = {shared, library_rock, paint, library_rig, wave}
     bpy.data.libraries.write(library_path, datablocks, path_remap="RELATIVE_ALL")
     bpy.data.objects.remove(library_rock)
     bpy.data.objects.remove(library_rig)
     bpy.data.meshes.remove(shared)
     bpy.data.materials.remove(paint)
     bpy.data.armatures.remove(skeleton)
+    bpy.data.objects.remove(holder)
+    bpy.data.actions.remove(wave)
     with bpy.data.libraries.load(library_path, link=True, relative=True) as (source, target):
         target.meshes = ["SharedMesh"]
         target.objects = ["LibraryRock", "LibraryRig"]
         target.materials = ["LibraryPaint"]
+        target.actions = ["LibraryWave"]
     link(bpy.data.objects.new("Borrowed", target.meshes[0]))
     link(target.objects[0])
     mesh_object("Painted", box_bmesh(), (target.materials[0],))
@@ -964,6 +991,15 @@ def build_scenes():
     link(target.objects[1], rigs)
     rigged = mesh_object("Rigged", box_bmesh())
     rigged.modifiers.new("Armature", "ARMATURE").object = target.objects[1]
+    animated = link(bpy.data.objects.new("Animated", None))
+    animated.animation_data_create().action = target.actions[0]
+
+    mask_rig = link(bpy.data.objects.new("MaskRig", bpy.data.armatures.new("MaskSkeleton")))
+    masked = mesh_object("Masked", box_bmesh())
+    masked.vertex_groups.new(name="Blend")
+    masking = masked.modifiers.new("Armature", "ARMATURE")
+    masking.object = mask_rig
+    masking.vertex_group = "Blend"
 
     mesh_object("Visible", box_bmesh())
     eye = mesh_object("EyeHidden", box_bmesh())

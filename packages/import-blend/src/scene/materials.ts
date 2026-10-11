@@ -9,6 +9,8 @@ export interface ImageUse {
   uvMap: string | null;
   wrap: WrapMode;
   transform: UvTransform | null;
+  /** The coordinates the image samples when they are not a UV map, such as "Generated", which the preview cannot. */
+  coordinates: string | null;
 }
 
 export interface MaterialDraft {
@@ -31,6 +33,8 @@ export interface MaterialDraft {
   alphaMode: AlphaMode;
   alphaCutoff: number;
   doubleSided: boolean;
+  /** What the preview shows differently from Blender, for people. */
+  approximations: string[];
 }
 
 const NODE_DO_OUTPUT = 1 << 6;
@@ -76,6 +80,7 @@ export function defaultMaterial(name = "Default"): MaterialDraft {
     alphaMode: "opaque",
     alphaCutoff: 0.5,
     doubleSided: true,
+    approximations: [],
   };
 }
 
@@ -187,6 +192,7 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
   const wrap = WRAPS[storage?.number("extension") ?? 0] ?? "repeat";
   let uvMap: string | null = null;
   let transform: UvTransform | null = null;
+  let coordinates: string | null = null;
   let vector = linkInto(graph, inputSocket(node, "Vector") ?? node);
   for (let depth = 0; vector && depth < 8; depth++) {
     const type = nodeType(vector.node);
@@ -199,16 +205,15 @@ function imageUse(graph: Graph, node: BlendStruct): ImageUse | null {
       vector = linkInto(graph, inputSocket(vector.node, "Vector") ?? vector.node);
       continue;
     }
-    if (type === "ShaderNodeTexCoord" || type === "NodeReroute") {
-      if (type === "NodeReroute") {
-        vector = linkInto(graph, vector.node.list("inputs")[0] ?? vector.node);
-        continue;
-      }
-      break;
+    if (type === "NodeReroute") {
+      vector = linkInto(graph, vector.node.list("inputs")[0] ?? vector.node);
+      continue;
     }
+    if (type !== "ShaderNodeTexCoord") coordinates = vector.node.string("name") || type;
+    else if (vector.socket !== "UV") coordinates = vector.socket;
     break;
   }
-  return { image, uvMap, wrap, transform };
+  return { image, uvMap, wrap, transform, coordinates };
 }
 
 function graphOf(tree: BlendStruct): Graph {
@@ -282,8 +287,8 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   ) {
     draft.metallicRoughnessImage = imageUse(graph, metallicImage.node);
   } else {
-    if (roughnessImage) draft.roughnessImage = imageUse(graph, roughnessImage.node);
-    if (metallicImage) draft.metalnessImage = imageUse(graph, metallicImage.node);
+    draft.roughnessImage = channelImage(graph, draft, "Roughness", roughnessImage, ["Green", "G"]);
+    draft.metalnessImage = channelImage(graph, draft, "Metallic", metallicImage, ["Blue", "B"]);
   }
 
   const normalLink = linkInto(graph, inputSocket(node, "Normal") ?? node);
@@ -310,6 +315,27 @@ function readPrincipled(graph: Graph, node: BlendStruct, draft: MaterialDraft): 
   draft.baseColor[3] = alpha;
   const alphaLinked = linkInto(graph, alphaSocket ?? node) !== null;
   if (alpha < 1 || alphaLinked) draft.alphaMode = "blend";
+}
+
+/**
+ * The image a scalar input samples, unless it picks a channel other than the one the preview reads, green for
+ * roughness and blue for metallic, which it notes on the draft instead.
+ */
+function channelImage(
+  graph: Graph,
+  draft: MaterialDraft,
+  input: string,
+  found: { node: BlendStruct; via: string[] } | null,
+  readable: readonly string[],
+): ImageUse | null {
+  if (!found) return null;
+  const [separate] = found.via;
+  const channel = separate?.startsWith("ShaderNodeSeparate") ? separate.slice(separate.indexOf(":") + 1) : null;
+  if (channel === null || readable.includes(channel)) return imageUse(graph, found.node);
+  const image = found.node.deref("id");
+  const name = image ? idName(image) : "an image";
+  draft.approximations.push(`${input} comes from the ${channel} channel of ${name}, which the preview leaves out`);
+  return null;
 }
 
 function readSimpleShader(graph: Graph, node: BlendStruct, draft: MaterialDraft): void {
@@ -359,6 +385,10 @@ export function readMaterial(material: BlendStruct, version: number): MaterialDr
     }
   }
 
+  for (const use of imageUses(draft)) {
+    if (!use.coordinates) continue;
+    draft.approximations.push(`${idName(use.image)} uses ${use.coordinates} coordinates, shown with the UV map`);
+  }
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";
     draft.alphaCutoff = material.number("alpha_threshold") || 0.5;
