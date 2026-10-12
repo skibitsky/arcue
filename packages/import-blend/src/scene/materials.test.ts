@@ -274,6 +274,8 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
       ["MixAlphaOtherNode", "Alpha comes from cutout.png, which the preview leaves out"],
       ["RoughMathSeparate", "Roughness comes from the Red channel of orm.png, which the preview leaves out"],
       ["FloatMixLeftover", "Roughness comes from Mix, shown at the value set on the input"],
+      ["NormalStrengthDriven", "Normal map strength comes from Noise Texture, shown at the value set on the input"],
+      ["GlossyRoughDriven", "Roughness comes from Noise Texture, shown at the value set on the input"],
       ["ClipAtZero", "cutout.png uses Closest interpolation, shown Linear"],
       ["ClipNegativeFactor", "Alpha comes from cutout.png, which the preview leaves out"],
       ["MixClipTranslucent", "Alpha is 0.6 inside the cutout, shown opaque"],

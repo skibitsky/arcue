@@ -2318,6 +2318,19 @@ def build_shading():
     assert any(link.to_socket.identifier == "A_Color" for link in tree.links)
     materials.append(mat)
 
+    mat, tree, bsdf = shading_material("NormalStrengthDriven")
+    normal_map = tree.nodes.new("ShaderNodeNormalMap")
+    tree.links.new(image_node(tree, data).outputs["Color"], normal_map.inputs["Color"])
+    tree.links.new(tree.nodes.new("ShaderNodeTexNoise").outputs["Fac"], normal_map.inputs["Strength"])
+    tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+    materials.append(mat)
+
+    mat, tree, _ = shading_material("GlossyRoughDriven")
+    glossy = tree.nodes.new("ShaderNodeBsdfAnisotropic")
+    tree.links.new(tree.nodes.new("ShaderNodeTexNoise").outputs["Fac"], glossy.inputs["Roughness"])
+    tree.links.new(glossy.outputs["BSDF"], tree.nodes["Material Output"].inputs["Surface"])
+    materials.append(mat)
+
     mat, tree, bsdf = shading_material("UnavailableOutput")
     bsdf.inputs["Base Color"].default_value = (0.9, 0.5, 0.1, 1.0)
     mix = tree.nodes.new("ShaderNodeMix")

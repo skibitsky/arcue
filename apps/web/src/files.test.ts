@@ -65,6 +65,8 @@ describe("virtual paths", () => {
     expect(openedFilePath("Villain.fbx", "BaseColor.png")).toBe("/files/Villain/BaseColor.png");
     expect(openedFilePath("a/b\\c.fbx")).toBe("/files/a_b_c/a_b_c.fbx");
     expect(openedModelFolder(".fbx")).toBe("/files/.fbx");
+    expect(openedFilePath("Hero.FBX")).toBe("/files/Hero/Hero.FBX");
+    expect(openedFilePath("Hero.blend", "BaseColor.png")).toBe("/files/Hero.blend/BaseColor.png");
   });
 });
 

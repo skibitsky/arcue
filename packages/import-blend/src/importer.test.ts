@@ -412,6 +412,22 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       expect(material("Mixed").baseColor[3]).toBeCloseTo(0.5);
     });
 
+    it("clips at an Alpha Clip threshold of 0 as Blender does, dropping only texels with no alpha", async () => {
+      const bytes = await decompressBlend(readFixture("materials", version));
+      const file = readBlendFile(bytes);
+      const glass = datablocks(file, "MA").find((candidate) => idName(candidate) === "Glass");
+      const method = glass?.field("blend_method");
+      const threshold = glass?.field("alpha_threshold");
+      if (!glass || !method || !threshold) throw new Error("No Glass blend method");
+      file.view.setInt8(glass.offset + method.offset, 3);
+      file.view.setFloat32(glass.offset + threshold.offset, 0, file.little);
+      const clipped = await importBytes("clipped.blend", bytes, findInFixtures);
+      const cutout = clipped.materials.find((candidate) => candidate.name === "Glass");
+      expect(cutout?.alphaMode).toBe("mask");
+      expect(cutout?.alphaCutoff).toBeGreaterThan(0);
+      expect(cutout?.alphaCutoff).toBeLessThan(1 / 255);
+    });
+
     it("reports images it cannot find and keeps their slots neutral", () => {
       const absent = material("Absent");
       expect(absent.baseColor).toEqual([0.8, 0.8, 0.8, 1]);

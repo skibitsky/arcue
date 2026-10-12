@@ -33,6 +33,9 @@ export interface Sdna {
   struct(type: string): SdnaStruct | undefined;
 }
 
+/** The longest member or type name the reader takes; Blender's own are under 64 bytes. */
+const MAX_NAME_BYTES = 1024;
+
 class Cursor {
   #offset: number;
   readonly #view: DataView;
@@ -81,6 +84,9 @@ class Cursor {
   string(): string {
     const end = this.#bytes.indexOf(0, this.#offset);
     if (end === -1) throw new BlendParseError("its SDNA block has an unterminated name");
+    if (end - this.#offset > MAX_NAME_BYTES) {
+      throw new BlendParseError(`its SDNA block has a name longer than ${MAX_NAME_BYTES} bytes`);
+    }
     const value = String.fromCharCode(...this.#bytes.subarray(this.#offset, end));
     this.#offset = end + 1;
     return value;

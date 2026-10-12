@@ -287,6 +287,15 @@ describe("readBlendFile", () => {
     expect(fastestRead(collidingBytes)).toBeLessThan(fastestRead(sequentialBytes) * 5 + 50);
   });
 
+  it("refuses an SDNA name far longer than Blender writes", () => {
+    const named = {
+      type: "Thing",
+      fields: [["int", "a".repeat(1_000_000)]],
+    } satisfies FileDefinition["structs"][number];
+    const bytes = writeBlend({ header: "old", pointerSize: 8, little: true, structs: [named], blocks: [] });
+    expect(() => readBlendFile(bytes)).toThrow(new BlendParseError("its SDNA block has a name longer than 1024 bytes"));
+  });
+
   it("refuses bytes without a Blender header, files cut short and newer file formats", () => {
     expect(() => readBlendFile(new TextEncoder().encode("GLTF and more bytes"))).toThrow(BlendParseError);
     const whole = sample("old", 8, true);

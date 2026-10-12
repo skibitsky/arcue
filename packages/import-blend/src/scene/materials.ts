@@ -877,7 +877,11 @@ function readPrincipled(graph: ShaderGraph, node: BlendStruct, draft: MaterialDr
     const colorSocket = inputSocket(normal.node, "Color");
     const image = colorFeeding(graph, colorSocket);
     draft.normalImage = colorImage(graph, draft, "Normal", image, isGray);
-    if (draft.normalImage) draft.normalScale = scalarOf(graph, inputSocket(normal.node, "Strength"), 1);
+    const strength = inputSocket(normal.node, "Strength");
+    if (draft.normalImage) {
+      draft.normalScale = scalarOf(graph, strength, 1);
+      noteNodeInput(graph, draft, "Normal map strength", strength, null);
+    }
     noteNodeInput(graph, draft, "Normal map color", colorSocket, image);
   } else if (normal) {
     draft.approximations.push(`Normal comes from ${nodeLabel(normal.node)}, which the preview leaves out`);
@@ -1033,7 +1037,10 @@ function readSimpleShader(graph: ShaderGraph, node: BlendStruct, draft: Material
   draft.baseColorAttribute = attribute?.attribute ?? null;
   const roughness = inputSocket(node, "Roughness");
   if (type === "ShaderNodeBsdfDiffuse") draft.roughness = 1;
-  else if (roughness) draft.roughness = clamp01(scalarOf(graph, roughness, 0.5));
+  else if (roughness) {
+    draft.roughness = clamp01(scalarOf(graph, roughness, 0.5));
+    noteNodeInput(graph, draft, "Roughness", roughness, null);
+  }
   draft.metallic = METAL_SHADERS.has(type) ? 1 : 0;
 }
 
@@ -1185,7 +1192,7 @@ export function readMaterial(
   noteImages(draft, sceneFrame);
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";
-    draft.alphaCutoff = material.number("alpha_threshold") || 0.5;
+    draft.alphaCutoff = (material.has("alpha_threshold") ? material.number("alpha_threshold") : 0.5) + STRICT;
   }
   draft.approximations = [...new Set(draft.approximations)];
   return draft;

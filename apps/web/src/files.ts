@@ -30,8 +30,9 @@ function safeName(name: string): string {
 }
 
 /**
- * Each opened model gets its own folder, named after the model without its extension, and the textures picked with
- * it go beside it there, so textures of the same name from different drops do not overwrite each other.
+ * Each opened model gets its own folder, and the textures picked with it go beside it there, so textures of the same
+ * name from different drops do not overwrite each other. An FBX file's folder is its name without the extension; other
+ * formats keep theirs, so "Hero.blend" and "Hero.fbx" opened apart keep their textures apart.
  */
 export function openedFilePath(model: string, file: string = model): string {
   return `${openedModelFolder(model)}/${safeName(file)}`;
@@ -40,7 +41,8 @@ export function openedFilePath(model: string, file: string = model): string {
 export function openedModelFolder(model: string): string {
   const name = safeName(model);
   const dot = name.lastIndexOf(".");
-  return `${FILES_FOLDER}/${dot > 0 ? name.slice(0, dot) : name}`;
+  const fbx = dot > 0 && name.slice(dot).toLowerCase() === ".fbx";
+  return `${FILES_FOLDER}/${fbx ? name.slice(0, dot) : name}`;
 }
 
 /**
