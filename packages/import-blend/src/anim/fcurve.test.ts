@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type { FileDefinition } from "../../test/synthetic";
+import { writeBlend } from "../../test/synthetic";
+import { readBlendFile } from "../blend/file";
 import type { CurveModifier, FCurve, Keys } from "./fcurve";
-import { canJump, canJumpAfter, curveEvaluator, evaluateFCurve, Interpolation, jumpFrames, keyFrames } from "./fcurve";
+import {
+  canJump,
+  canJumpAfter,
+  curveEvaluator,
+  evaluateFCurve,
+  Interpolation,
+  jumpFrames,
+  keyFrames,
+  readFCurve,
+} from "./fcurve";
 
 function keys(points: [frame: number, value: number][], interpolation: number = Interpolation.linear): Keys {
   const count = points.length;
@@ -602,5 +614,42 @@ describe("curveEvaluator", () => {
       const expected = frames.map((frame) => evaluateFCurve(tested, frame));
       expect(found.every((value, index) => Object.is(value, expected[index]))).toBe(true);
     }
+  });
+});
+
+describe("readFCurve", () => {
+  /** How many keys a curve of `count` keys reads, each a struct of `fields`, in a file written from scratch. */
+  const keysOf = (fields: [string, string][], count: number) => {
+    const structs: FileDefinition["structs"] = [
+      { type: "BezTriple", fields },
+      {
+        type: "FCurve",
+        fields: [
+          ["BezTriple", "*bezt"],
+          ["int", "totvert"],
+        ],
+      },
+    ];
+    const bytes = writeBlend({
+      header: "old",
+      pointerSize: 8,
+      little: true,
+      structs,
+      blocks: [
+        { code: "DATA", struct: "FCurve", address: 0x100n, data: [{ bezt: 0x200n, totvert: count }] },
+        { code: "DATA", struct: "BezTriple", address: 0x200n, data: Array.from({ length: count }, () => ({})) },
+      ],
+    });
+    const file = readBlendFile(bytes);
+    const block = file.blocksWithCode("DATA").find((candidate) => candidate.struct?.type === "FCurve");
+    const [struct] = block ? file.elements(block) : [];
+    if (!struct) throw new Error("No curve was written.");
+    return readFCurve(struct).keys.count;
+  };
+
+  it("reads keys only from a key struct laid out as Blender's", () => {
+    expect(keysOf([["float", "vec[3][3]"]], 3)).toBe(3);
+    expect(keysOf([["char", "vec"]], 4096)).toBe(0);
+    expect(keysOf([["float", "vec[3]"]], 16)).toBe(0);
   });
 });

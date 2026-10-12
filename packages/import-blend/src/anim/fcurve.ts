@@ -1,4 +1,5 @@
 import type { BlendStruct } from "../blend/file";
+import type { SdnaStruct } from "../blend/sdna";
 
 /** A curve's keyframes as parallel arrays: each key, its two handles, and how it interpolates to the next key. */
 export interface Keys {
@@ -182,31 +183,34 @@ function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupp
   return { modifiers, unsupported };
 }
 
+/** Where a struct holds `count` of `type` under `name`, or -1 where its member is missing or laid out otherwise. */
+function memberOffset(struct: SdnaStruct, name: string, type: "float" | "char", count: number): number {
+  const field = struct.field(name);
+  return field?.type === type && field.pointerDepth === 0 && field.count === count ? field.offset : -1;
+}
+
 /** Reads the BezTriple array of a curve straight from the file through the struct's member offsets. */
 function readKeys(curve: BlendStruct, count: number): Keys {
   const block = curve.target("bezt");
   const type = block?.struct;
-  if (!block || !type || type.size === 0) return emptyKeys(0);
+  const vec = type ? memberOffset(type, "vec", "float", 9) : -1;
+  if (!block || !type || vec < 0) return emptyKeys(0);
   const { view, little } = curve.file;
-  const offset = (name: string) => type.field(name)?.offset ?? -1;
-  const vec = offset("vec");
-  const ipo = offset("ipo");
-  const easing = offset("easing");
-  const back = offset("back");
-  const amplitude = offset("amplitude");
-  const period = offset("period");
+  const ipo = memberOffset(type, "ipo", "char", 1);
+  const easing = memberOffset(type, "easing", "char", 1);
+  const back = memberOffset(type, "back", "float", 1);
+  const amplitude = memberOffset(type, "amplitude", "float", 1);
+  const period = memberOffset(type, "period", "float", 1);
   const keys = emptyKeys(Math.max(0, Math.min(count, Math.floor(block.size / type.size))));
   const float = (at: number) => view.getFloat32(at, little);
   for (let i = 0; i < keys.count; i++) {
     const base = block.offset + i * type.size;
-    if (vec >= 0) {
-      keys.leftFrame[i] = float(base + vec);
-      keys.leftValue[i] = float(base + vec + 4);
-      keys.frame[i] = float(base + vec + 12);
-      keys.value[i] = float(base + vec + 16);
-      keys.rightFrame[i] = float(base + vec + 24);
-      keys.rightValue[i] = float(base + vec + 28);
-    }
+    keys.leftFrame[i] = float(base + vec);
+    keys.leftValue[i] = float(base + vec + 4);
+    keys.frame[i] = float(base + vec + 12);
+    keys.value[i] = float(base + vec + 16);
+    keys.rightFrame[i] = float(base + vec + 24);
+    keys.rightValue[i] = float(base + vec + 28);
     if (ipo >= 0) keys.interpolation[i] = view.getUint8(base + ipo);
     if (easing >= 0) keys.easing[i] = view.getUint8(base + easing);
     if (back >= 0) keys.back[i] = float(base + back);
@@ -219,8 +223,8 @@ function readKeys(curve: BlendStruct, count: number): Keys {
 function readSamples(curve: BlendStruct, count: number): { samples: Float32Array; start: number } | null {
   const block = curve.target("fpt");
   const type = block?.struct;
-  if (!block || !type || type.size === 0) return null;
-  const vec = type.field("vec")?.offset ?? 0;
+  const vec = type ? memberOffset(type, "vec", "float", 2) : -1;
+  if (!block || !type || vec < 0) return null;
   const available = Math.max(0, Math.min(count, Math.floor(block.size / type.size)));
   if (available === 0) return null;
   const { view, little } = curve.file;
