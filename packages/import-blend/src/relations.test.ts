@@ -20,6 +20,8 @@ interface RelationsReference {
   levelsShown: string[];
   /** Instancers with Blender's Smooth by Angle modifier. */
   smoothedByAngle: string[];
+  /** The particle emitters Blender draws as well as their particles. */
+  emittersDrawn: string[];
   clips: Record<string, { frame: number; positions: Record<string, number[]> }[]>;
 }
 
@@ -127,6 +129,7 @@ describe.each(VERSIONS)("the relations fixture from Blender %s", async (version)
       ...(version === "4.2" ? {} : { ImportRealizedScatter: 7 }),
     });
     const others = [
+      "HiddenEmitter",
       "LinkedNodeScatter",
       "NestedScatter",
       "NodeScatter",
@@ -175,6 +178,16 @@ describe.each(VERSIONS)("the relations fixture from Blender %s", async (version)
     expect(parts.map((part) => part.name).sort()).toEqual([...INSTANCERS].sort());
     const shown = parts.filter((part) => !part.hiddenByDefault).map((part) => part.name);
     expect(shown.sort()).toEqual(expected.instancersDrawn.filter((name) => INSTANCERS.includes(name)));
+  });
+
+  it("reports particle systems, and hides an emitter Blender draws only the particles of", () => {
+    expect(expected.emittersDrawn).toEqual(["Hairy"]);
+    for (const name of ["Hairy", "HiddenEmitter"]) {
+      expect(warning("modifier-not-applied", name)?.detail, name).toBe("Shown without Particles");
+      const part = scene.parts.find((candidate) => candidate.name === name);
+      expect(part, name).toBeDefined();
+      expect(part?.hiddenByDefault ?? false, name).toBe(!expected.emittersDrawn.includes(name));
+    }
   });
 
   it("keeps every LOD level of a part, whichever level Blender shows", () => {

@@ -192,9 +192,20 @@ describe("isGrayImage", () => {
     const inflated = countInflated();
     const pixel = (x: number, y: number) => [grayAt(x, y), grayAt(x, y), grayAt(x, y)];
     const image = png({ width: 8, height: 8, colorType: 2, pixel });
-    expect(await isGrayImage(image, 8 * 8 * 3 - 1)).toBe(false);
+    expect(await isGrayImage(image, { bytes: 8 * 8 * 3 - 1 })).toBe(false);
     expect(inflated.streams).toBe(0);
-    expect(await isGrayImage(image, 8 * 8 * 3)).toBe(true);
+    expect(await isGrayImage(image, { bytes: 8 * 8 * 3 })).toBe(true);
+  });
+
+  it("shares one budget across the images of an import, so a file cannot repeat an image to read it many times", async () => {
+    const inflated = countInflated();
+    const pixel = (x: number, y: number) => [grayAt(x, y), grayAt(x, y), grayAt(x, y)];
+    const image = png({ width: 8, height: 8, colorType: 2, pixel });
+    const budget = { bytes: 8 * 8 * 3 * 2 };
+    expect(await isGrayImage(image, budget)).toBe(true);
+    expect(await isGrayImage(image, budget)).toBe(true);
+    expect(await isGrayImage(image, budget)).toBe(false);
+    expect(inflated.streams).toBe(2);
   });
 
   it("reads a palette PNG by its palette", async () => {

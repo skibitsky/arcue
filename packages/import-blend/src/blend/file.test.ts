@@ -287,6 +287,14 @@ describe("readBlendFile", () => {
     expect(fastestRead(collidingBytes)).toBeLessThan(fastestRead(sequentialBytes) * 5 + 50);
   });
 
+  it("refuses an SDNA member with more elements than its struct has bytes, though its elements take none", () => {
+    const empty = { type: "Thing", fields: [["void", "pad[1000000000]"]] } satisfies FileDefinition["structs"][number];
+    const bytes = writeBlend({ header: "old", pointerSize: 8, little: true, structs: [empty], blocks: [] });
+    expect(() => readBlendFile(bytes)).toThrow(
+      new BlendParseError("its SDNA struct Thing has members past its 0 bytes"),
+    );
+  });
+
   it("refuses an SDNA name far longer than Blender writes", () => {
     const named = {
       type: "Thing",

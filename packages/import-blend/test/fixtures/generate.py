@@ -4426,8 +4426,8 @@ def build_relations():
     or a group from another file, or a plain mesh, also through a simulation or beside instancing nodes that are
     unread, muted, behind a muted link or realized, and, where the Blender version has the nodes, that import an OBJ
     file, make grease pencil, hold instances only in a baked simulation or pass them through a bundle or a closure,
-    instancers that hide themselves, LOD levels hidden with the eye, and a collection and an object from another file
-    linked inside a local collection.
+    instancers that hide themselves, particle emitters drawn with their particles or without, LOD levels hidden with
+    the eye, and a collection and an object from another file linked inside a local collection.
 
     The library is written and linked by its bare file name from inside this folder, every library the fixture links,
     Blender's own assets included, is saved under its bare file name without remapping paths, and the file browser's
@@ -4635,6 +4635,23 @@ def build_relations():
     for name in ("Rock_LOD0", "Pebble_LOD1", "Stone_LOD0", "Stone_LOD1"):
         bpy.data.objects[name].hide_set(True)
 
+    spark = mesh_object("Spark", box_bmesh((0.05, 0.05, 0.05)))
+    spark.location = (24, 8, 0)
+    emitters = []
+    for name, x, kind, shows_self in (("Hairy", 20, "HAIR", True), ("HiddenEmitter", 22, "EMITTER", False)):
+        emitter = mesh_object(name, plane_bmesh(1))
+        emitter.location = (x, 8, 0)
+        emitter.modifiers.new("Particles", "PARTICLE_SYSTEM")
+        settings = emitter.particle_systems[0].settings
+        settings.type = kind
+        settings.count = 8
+        settings.frame_start = settings.frame_end = 0
+        if kind == "EMITTER":
+            settings.render_type = "OBJECT"
+            settings.instance_object = spark
+        emitter.show_instancer_for_viewport = shows_self
+        emitters.append(emitter)
+
     layer = bpy.context.view_layer
     layer.layer_collection.children["Props"].children["LibraryAttic"].exclude = True
     layer.update()
@@ -4665,6 +4682,7 @@ def build_relations():
         "linkedShown": sorted(obj.name for obj in scene.objects if obj.library and obj.visible_get()),
         "levelsShown": sorted(obj.name for obj in scene.objects if "_LOD" in obj.name and obj.visible_get()),
         "smoothedByAngle": smoothed,
+        "emittersDrawn": sorted(emitter.name for emitter in emitters if emitter.name in drawn),
     }
     local = [obj for obj in scene.objects if obj.library is None]
     saved = {obj.name: (obj.location.copy(), obj.rotation_euler.copy()) for obj in local}

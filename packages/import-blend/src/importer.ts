@@ -40,7 +40,7 @@ import { BlendParseError } from "./blend/errors";
 import type { BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
 import { idName, idOf } from "./blend/ids";
-import { isGrayImage } from "./gray-images";
+import { GRAY_CHECK_BYTES, isGrayImage } from "./gray-images";
 import { sequencePath, tilePath } from "./image-paths";
 import { decompose, invert, multiplyAll } from "./math";
 import type { BlendWarning, BuiltScene } from "./scene/build";
@@ -172,9 +172,10 @@ async function imageBytes(file: BlendFile, image: BlendStruct, findFile: FindFil
 /** The offsets of the images whose every pixel is gray. */
 async function grayImages(file: BlendFile, images: Iterable<BlendStruct>, findFile: FindFile): Promise<Set<number>> {
   const gray = new Set<number>();
+  const budget = { bytes: GRAY_CHECK_BYTES };
   for (const image of images) {
     const bytes = await imageBytes(file, image, findFile);
-    if (bytes && (await isGrayImage(bytes))) gray.add(image.offset);
+    if (bytes && (await isGrayImage(bytes, budget))) gray.add(image.offset);
   }
   return gray;
 }
