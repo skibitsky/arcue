@@ -188,6 +188,15 @@ describe("isGrayImage", () => {
     expect(inflated.streams).toBe(0);
   });
 
+  it("does not read a PNG whose pixels take more than the limit", async () => {
+    const inflated = countInflated();
+    const pixel = (x: number, y: number) => [grayAt(x, y), grayAt(x, y), grayAt(x, y)];
+    const image = png({ width: 8, height: 8, colorType: 2, pixel });
+    expect(await isGrayImage(image, 8 * 8 * 3 - 1)).toBe(false);
+    expect(inflated.streams).toBe(0);
+    expect(await isGrayImage(image, 8 * 8 * 3)).toBe(true);
+  });
+
   it("reads a palette PNG by its palette", async () => {
     const image = { width: 2, height: 2, colorType: 3, pixel: () => [0] };
     expect(await isGrayImage(png({ ...image, palette: [0, 0, 0, 128, 128, 128, 255, 255, 255] }))).toBe(true);

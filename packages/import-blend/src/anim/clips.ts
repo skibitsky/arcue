@@ -35,6 +35,8 @@ type Target = { kind: "object"; record: ObjectRecord } | { kind: "shapeKeys"; me
 const SNAP_FRAMES = 1e-3;
 /** The most whole frames a clip spans, and the most it samples with the frames between them where a curve jumps. */
 const MAX_FRAMES = 100_000;
+/** The most values a clip's samples hold across its nodes and frames: a gigabyte of doubles. */
+const MAX_SAMPLED_VALUES = 2 ** 27;
 /** How long before or after a jump, in frames, a track still holds the value on the other side of it. */
 const HOLD_FRAMES = 1e-3;
 /** Scales are sampled at least this far from zero, so a flattened transform keeps its rotation. */
@@ -58,6 +60,10 @@ function relevantObjectCurve(curve: FCurve, record: ObjectRecord): boolean {
 
 function keysRotationMode(curve: FCurve): boolean {
   return !curve.muted && (curve.path === "rotation_mode" || parsePosePath(curve.path)?.property === "rotation_mode");
+}
+
+function keysHideViewport(curve: FCurve): boolean {
+  return !curve.muted && !curve.empty && curve.path === "hide_viewport";
 }
 
 function relevantKeyCurve(curve: FCurve): boolean {
@@ -484,6 +490,7 @@ interface ClipScene {
   restTrs: readonly Trs[];
   saved: ReadonlyMap<ObjectRecord, SavedPose>;
   warnings: BlendWarning[];
+  maxValues: number;
 }
 
 interface KeyTarget {
@@ -777,9 +784,6 @@ function buildClip(action: Action, assignments: readonly Assignment[], clipScene
   }
   const objectTargets = [...playedCurves(objectEntries)].map(([record, curves]) => ({ record, curves }));
   const keyTargets: KeyTarget[] = [...playedCurves(keyEntries)].map(([mesh, curves]) => ({ mesh, curves }));
-  if (objectTargets.length === 0 && keyTargets.length === 0) return null;
-  const animated = [...objectTargets, ...keyTargets].flatMap(({ curves }) => curves);
-
   const warn = (code: BlendWarning["code"], message: string, detail: string) =>
     warnings.push({
       code,
@@ -787,6 +791,16 @@ function buildClip(action: Action, assignments: readonly Assignment[], clipScene
       message: `${message}: ${action.name}`,
       detail,
     });
+  const keysVisibility = assignments.some(
+    ({ slot, target }) => target.kind === "object" && slot.curves.some(keysHideViewport),
+  );
+  if (keysVisibility) {
+    const detail = "Keys on Disable in Viewports are left out; each object stays as the file saves it";
+    warn("deform-approximated", "Visibility changes not shown", detail);
+  }
+  if (objectTargets.length === 0 && keyTargets.length === 0) return null;
+  const animated = [...objectTargets, ...keyTargets].flatMap(({ curves }) => curves);
+
   if (objectTargets.length > 0 && action.slots.some((slot) => slot.curves.some(keysRotationMode))) {
     const detail = "Keys on rotation mode are left out; each object and bone keeps the mode it was saved with";
     warn("deform-approximated", "Rotation mode changes not followed", detail);
@@ -838,6 +852,15 @@ function buildClip(action: Action, assignments: readonly Assignment[], clipScene
   const holds = animated.some((curve) => canJump(curve, start, end));
   const edges = edgeTimes(times, fps, leads, holds);
   const count = frames.length;
+  const rows = edges.reduce(
+    (total, edge) => total + (edge.lead === null ? 0 : 1) + (edge.hold === null ? 0 : 1),
+    count,
+  );
+  if (rows * layout.size > clipScene.maxValues) {
+    const detail = `Sampling it takes ${rows * layout.size} values, more than ${clipScene.maxValues}`;
+    warn("clip-not-sampled", "Clip not sampled", detail);
+    return null;
+  }
   const samples: Samples = { layout, count, frames: new Float64Array(count * layout.size), after: [], before: [] };
   const frameValues = new Float64Array(distinct.length);
   const edgeValues = new Float64Array(distinct.length);
@@ -874,7 +897,13 @@ function buildClip(action: Action, assignments: readonly Assignment[], clipScene
  * clip that animates an armature shows that pose on the bones it does not key, as Blender does with only that action
  * playing.
  */
-export function buildClips(scene: BuiltScene, actions: readonly Action[], warnings: BlendWarning[]): ParsedClip[] {
+/** The clips of the actions the scene's objects play; a clip whose samples would pass `maxValues` is left out. */
+export function buildClips(
+  scene: BuiltScene,
+  actions: readonly Action[],
+  warnings: BlendWarning[],
+  maxValues = MAX_SAMPLED_VALUES,
+): ParsedClip[] {
   const targets = assignTargets(actions, scene);
   const restTrs = scene.nodes.map((node) => decompose(toSceneAxes(node.rest, scene.unitScale)));
   const saved = new Map<ObjectRecord, SavedPose>();
@@ -886,7 +915,7 @@ export function buildClips(scene: BuiltScene, actions: readonly Action[], warnin
   const clips: ParsedClip[] = [];
   for (const action of actions) {
     const assignments = targets.get(action);
-    const clip = assignments ? buildClip(action, assignments, { scene, restTrs, saved, warnings }) : null;
+    const clip = assignments ? buildClip(action, assignments, { scene, restTrs, saved, warnings, maxValues }) : null;
     if (clip) clips.push(clip);
   }
   return clips;

@@ -7,7 +7,10 @@ import { matrixError, morphWeights, worldMatrices } from "../../test/geometry";
 import { decompressBlend } from "../blend/decompress";
 import { readBlendFile } from "../blend/file";
 import { datablocks, idName } from "../blend/ids";
-import { readActions } from "./actions";
+import type { BlendWarning } from "../scene/build";
+import { buildScene } from "../scene/build";
+import { animatedPaths, readActions } from "./actions";
+import { buildClips } from "./clips";
 import { evaluateFCurve } from "./fcurve";
 
 interface ClipsReference {
@@ -258,5 +261,46 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
     expect(layered.clips.find((candidate) => candidate.name === "MixedSteps")?.tracks).toEqual(
       clip("MixedSteps").tracks,
     );
+  });
+
+  it("warns that keys on Disable in Viewports are left out", async () => {
+    const bytes = await decompressBlend(readFixture("clips", version));
+    const file = readBlendFile(bytes);
+    const curves = file
+      .blocksWithCode("DATA")
+      .filter((block) => block.struct?.type === "FCurve")
+      .flatMap((block) => file.elements(block));
+    const hand = curves.find((curve) => curve.text("rna_path") === 'pose.bones["Hand"].rotation_euler');
+    const path = hand?.target("rna_path");
+    if (!path) throw new Error("No HingeSteps curve on Hand");
+    bytes.set(new TextEncoder().encode("hide_viewport\0"), path.offset);
+    const hidden = await importBytes("hidden.blend", bytes);
+    const warnings = hidden.source.warnings.filter((warning) => warning.subject.name === "HingeSteps");
+    expect(warnings.map((warning) => [warning.code, warning.message, warning.detail])).toEqual([
+      [
+        "deform-approximated",
+        "Visibility changes not shown: HingeSteps",
+        "Keys on Disable in Viewports are left out; each object stays as the file saves it",
+      ],
+    ]);
+    expect(hidden.clips.map((candidate) => candidate.name)).toContain("HingeSteps");
+  });
+
+  it("leaves out a clip whose samples would pass the limit, and warns", async () => {
+    const file = readBlendFile(await decompressBlend(readFixture("clips", version)));
+    const actions = readActions(file);
+    const built = buildScene(file, animatedPaths(file, actions));
+    const sampled = (limit?: number) => {
+      const warnings: BlendWarning[] = [];
+      return { clips: buildClips(built, actions, warnings, limit).map((parsed) => parsed.name), warnings };
+    };
+    const all = sampled().clips;
+    const limited = sampled(500);
+    const left = all.filter((name) => !limited.clips.includes(name));
+    expect(left.length).toBeGreaterThan(0);
+    expect(limited.clips.length).toBeGreaterThan(0);
+    const unsampled = limited.warnings.filter((warning) => warning.code === "clip-not-sampled");
+    expect(unsampled.map((warning) => warning.subject.name)).toEqual(left);
+    expect(unsampled[0]?.detail).toMatch(/^Sampling it takes \d+ values, more than 500$/);
   });
 });

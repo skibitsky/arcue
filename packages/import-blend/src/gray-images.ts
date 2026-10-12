@@ -19,6 +19,8 @@ const ADAM7 = [
 ] as const;
 /** The longest row the check reads, that of a 16-bit RGBA image 8 million pixels wide. */
 const MAX_ROW_BYTES = 2 ** 26;
+/** The most pixel bytes the check reads, those of an 8-bit RGBA image 16384 pixels square. */
+const MAX_IMAGE_BYTES = 2 ** 30;
 const LAST_FILTER = 4;
 /** The JPEG markers that start a frame, which gives its number of components: 0xc0 to 0xcf but 0xc4, 0xc8 and 0xcc. */
 const JPEG_FRAMES = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
@@ -144,7 +146,7 @@ function isGrayPalette(palette: Uint8Array): boolean {
   return true;
 }
 
-async function isGrayPng(bytes: Uint8Array): Promise<boolean> {
+async function isGrayPng(bytes: Uint8Array, maxBytes: number): Promise<boolean> {
   const chunks = pngChunks(bytes);
   const header = chunks[0]?.type === "IHDR" ? chunks[0].data : null;
   if (!header || header.byteLength < 13) return false;
@@ -169,6 +171,7 @@ async function isGrayPng(bytes: Uint8Array): Promise<boolean> {
     across > 0 && down > 0 ? [{ rows: down, bytes: across * pixel }] : [],
   );
   if (passes.length === 0 || passes.some((pass) => pass.bytes > MAX_ROW_BYTES)) return false;
+  if (passes.reduce((total, pass) => total + pass.rows * pass.bytes, 0) > maxBytes) return false;
   const rows = new GrayRows(passes, pixel, sample);
   await inflate(
     chunks.filter((chunk) => chunk.type === "IDAT").map((chunk) => chunk.data),
@@ -194,11 +197,11 @@ function jpegComponents(bytes: Uint8Array): number | null {
 
 /**
  * Whether every pixel of an image is gray, so that each of its color channels and its brightness equal its color. A
- * PNG is read to its last pixel unless it stores gray or a gray palette; a JPEG counts only where it stores one
- * component, and other formats never do.
+ * PNG is read to its last pixel unless it stores gray or a gray palette, and counts as color where its pixels take
+ * more than `maxBytes`; a JPEG counts only where it stores one component, and other formats never do.
  */
-export async function isGrayImage(bytes: Uint8Array): Promise<boolean> {
+export async function isGrayImage(bytes: Uint8Array, maxBytes = MAX_IMAGE_BYTES): Promise<boolean> {
   const type = imageMimeType(bytes, "");
-  if (type === "image/png") return isGrayPng(bytes);
+  if (type === "image/png") return isGrayPng(bytes, maxBytes);
   return type === "image/jpeg" && jpegComponents(bytes) === 1;
 }

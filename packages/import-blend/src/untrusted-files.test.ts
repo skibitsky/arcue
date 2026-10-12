@@ -85,6 +85,22 @@ describe("a damaged or crafted file", () => {
     await expectBodyLeftOut(bytes, `Mesh BodyMesh counts 100000000 ${what} but holds 1`);
   });
 
+  it("is refused as unreadable when its SDNA lays a struct's members past the struct's size", async () => {
+    const bytes = readFixture("rig", VERSIONS[1]);
+    const file = readBlendFile(bytes);
+    const dna = file.blocksWithCode("DNA1")[0];
+    const float = file.sdna.struct("Object")?.field("loc")?.typeIndex;
+    if (!dna || float === undefined) throw new Error("The rig fixture has no SDNA float.");
+    const lengths = Buffer.from(bytes.subarray(dna.offset, dna.offset + dna.size)).indexOf("TLEN") + 4;
+    file.view.setUint16(dna.offset + lengths + 2 * float, 8, file.little);
+    await expect(importBytes("widened.blend", bytes)).rejects.toMatchObject({
+      code: "invalid-input",
+      message: expect.stringMatching(
+        /^widened\.blend is not a readable Blender file: its SDNA struct \w+ has members past its \d+ bytes$/,
+      ),
+    });
+  });
+
   it("is refused as unreadable when its compressed data holds a Blender header and then zeros", async () => {
     const header = new TextEncoder().encode("BLENDER-v405");
     const zeroBlock = 128 * 1024;

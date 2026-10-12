@@ -170,6 +170,10 @@ export function parseSdna(bytes: Uint8Array, little: boolean, pointerSize: numbe
       });
       offset += elementSize * elements;
     }
+    const declared = lengths[typeIndex];
+    if (declared !== undefined && offset > declared) {
+      throw new BlendParseError(`its SDNA struct ${type} has members past its ${declared} bytes`);
+    }
     const byName = new Map<string, SdnaField>();
     for (const field of fields) if (!byName.has(field.name)) byName.set(field.name, field);
     structs.push({
