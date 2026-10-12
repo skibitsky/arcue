@@ -457,6 +457,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["material-approximated", "Smart"],
         ["material-approximated", "Smoke"],
         ["material-approximated", "SrgbRough"],
+        ["material-approximated", "TangentDetail"],
         ["material-approximated", "Textured"],
         ["material-approximated", "Tinted"],
         ["texture-not-found", "absolute.png"],
@@ -493,6 +494,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["Frosted", "Transmission comes from Noise Texture, which the preview leaves out"],
         ["Dialed", "Transmission is 0.25, which the preview leaves out"],
         ["Masked", "Transmission comes from checker.png, which the preview leaves out"],
+        ["TangentDetail", "Its normal map takes tangents from UV map Detail, shown with those of UVMap"],
       ]);
       expect(approximated.every((warning) => warning.subject.kind === "material")).toBe(true);
       expect(material("Muted").baseColorTexture).not.toBeNull();

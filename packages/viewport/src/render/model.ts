@@ -20,7 +20,15 @@ import type { TriangleAdjacency } from "../math/regions";
 import { triangleAdjacency } from "../math/regions";
 import type { MeshPose, PosedMesh } from "../math/skinning";
 import { jointMatrices, meshSkinMatrices, PosedVertexCache, representativeVertices } from "../math/skinning";
-import { clayMaterial, idMaterial, litMaterial, wireFillMaterial, wireLineMaterial, withRegionTint } from "./materials";
+import {
+  clayMaterial,
+  idMaterial,
+  litMaterial,
+  mapGivesOpacity,
+  wireFillMaterial,
+  wireLineMaterial,
+  withRegionTint,
+} from "./materials";
 import type { Palette } from "./palette";
 import { RegionTint } from "./region-tint";
 import type { DecodedImage } from "./textures";
@@ -143,10 +151,11 @@ export class Model {
       if (!slots.has(group.material)) slots.set(group.material, slots.size);
       geometry.addGroup(group.start * 3, group.triangleCount * 3, slots.get(group.material) ?? 0);
     }
-    const lit = [...slots.keys()].map((material) =>
+    const used = [...slots.keys()].map((material) => this.scene.materials[material]);
+    const lit = used.map((material) =>
       withRegionTint(
         litMaterial({
-          material: this.scene.materials[material],
+          material,
           images: this.images,
           uvSetCount: mesh.uvs.length,
           vertexColors: geometry.hasAttribute("color"),
@@ -162,7 +171,7 @@ export class Model {
     const wireLines = wireLineMaterial(palette);
     const pickSolid = idMaterial(index, side);
     const pickGroups = lit.some((material) => material.alphaTest > 0 || material.side !== side)
-      ? lit.map((material) => idMaterial(index, material.side, material))
+      ? lit.map((material, slot) => idMaterial(index, material.side, material, mapGivesOpacity(used[slot])))
       : null;
     this.materials.push(...lit, clay, wireFill, wireLines, pickSolid, ...(pickGroups ?? []));
 

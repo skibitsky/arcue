@@ -405,6 +405,14 @@ class MaterialTable {
       if (use.uvMap === null || uvMaps.names.includes(use.uvMap)) continue;
       note(`${uvMaps.mesh} has no UV map ${use.uvMap}, shown with its first`);
     }
+    if (draft?.normalImage) {
+      const tangents = uvSetFor(uvMaps, draft.normalTangentUv);
+      const sampled = uvSetFor(uvMaps, draft.normalImage.uvMap);
+      const [from, shown] = [uvMaps.names[tangents], uvMaps.names[sampled]];
+      if (tangents !== sampled && from && shown) {
+        note(`Its normal map takes tangents from UV map ${from}, shown with those of ${shown}`);
+      }
+    }
     const shown = (input: string, attribute: string | null): AttributeShown => {
       if (attribute === null) return null;
       const name = attribute || meshColors.defaultName;

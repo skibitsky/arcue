@@ -1,8 +1,8 @@
 import type { Material, TextureRef } from "@arcue/scene";
 import type { WebGLProgramParametersWithUniforms, WebGLRenderer } from "three";
-import { DataTexture, ShaderChunk, Texture } from "three";
+import { DataTexture, FrontSide, ShaderChunk, Texture } from "three";
 import { describe, expect, it } from "vitest";
-import { litMaterial, withRegionTint } from "./materials";
+import { idMaterial, litMaterial, mapGivesOpacity, withRegionTint } from "./materials";
 import type { DecodedImage } from "./textures";
 
 const image: DecodedImage = { base: new Texture(), close: () => {} };
@@ -85,7 +85,7 @@ describe("litMaterial", () => {
     expect([result.roughness, result.metalness]).toEqual([0.6, 0.2]);
   });
 
-  it("premultiplies or leaves out the alpha of maps as the texture says, keeping a cutout's alpha", () => {
+  it("premultiplies or leaves out the alpha of maps as the texture says, and does not cut out by such an alpha", () => {
     const premultiplied = compiled(lit(material({ baseColorTexture: { ...ref(0), alpha: "premultiply" } })));
     const ignored = compiled(lit(material({ baseColorTexture: { ...ref(0), alpha: "none" }, alphaMode: "blend" })));
     const cutout = compiled(
@@ -97,15 +97,14 @@ describe("litMaterial", () => {
       "diffuseColor.rgb *= sampledDiffuseColor.rgb * sampledDiffuseColor.a;",
     );
     expect(lines(ignored.fragment)).toContain("diffuseColor.rgb *= sampledDiffuseColor.rgb;");
-    expect(lines(cutout.fragment)).toContain(
-      "diffuseColor.rgb *= sampledDiffuseColor.rgb * sampledDiffuseColor.a; diffuseColor.a *= sampledDiffuseColor.a;",
-    );
+    expect(lines(cutout.fragment)).toContain("diffuseColor.rgb *= sampledDiffuseColor.rgb * sampledDiffuseColor.a;");
+    expect(cutout.fragment).not.toContain("diffuseColor.a *= sampledDiffuseColor.a");
     expect(lines(glowing.fragment)).toContain("totalEmissiveRadiance *= emissiveColor.rgb * emissiveColor.a;");
     for (const patched of [premultiplied, ignored, cutout, glowing]) {
       expect(patched.fragment).toContain("regionTintWidth");
       expect(patched.key).not.toBe(plain.key);
     }
-    expect(new Set([premultiplied.key, ignored.key, cutout.key, glowing.key]).size).toBe(4);
+    expect(new Set([premultiplied.key, ignored.key, glowing.key]).size).toBe(3);
     expect(plain.fragment).toContain("#include <map_fragment>");
     expect(plain.fragment).toContain("#include <emissivemap_fragment>");
     expect(ShaderChunk.map_fragment).toContain("diffuseColor *= sampledDiffuseColor;");
@@ -128,5 +127,18 @@ describe("litMaterial", () => {
 
     expect(lit(material({ vertexColors: { baseColor: true, emissive: true } }), false).vertexColors).toBe(false);
     expect(lit(material({}), true).vertexColors).toBe(false);
+  });
+});
+
+describe("idMaterial", () => {
+  it("cuts out by a cutout's base color map only where the map's alpha is the opacity", () => {
+    const cutout = lit(material({ baseColorTexture: ref(0), alphaMode: "mask" }));
+    expect(idMaterial(0, FrontSide, cutout).map).toBe(cutout.map);
+    const unrelated = idMaterial(0, FrontSide, cutout, false);
+    expect(unrelated.map).toBeNull();
+    expect(unrelated.alphaTest).toBe(cutout.alphaTest);
+    expect(mapGivesOpacity(material({ baseColorTexture: ref(0) }))).toBe(true);
+    expect(mapGivesOpacity(material({ baseColorTexture: { ...ref(0), alpha: "premultiply" } }))).toBe(false);
+    expect(mapGivesOpacity(undefined)).toBe(true);
   });
 });

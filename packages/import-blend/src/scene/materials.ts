@@ -72,6 +72,8 @@ export interface MaterialDraft {
   metalnessImage: ImageUse | null;
   normalImage: ImageUse | null;
   normalScale: number;
+  /** The UV map the Normal Map node takes its tangents from, or null for the mesh's default. */
+  normalTangentUv: string | null;
   /** The emission color times its strength, which multiplies an emission image. */
   emissive: Vec3;
   emissiveImage: ImageUse | null;
@@ -168,6 +170,7 @@ export function defaultMaterial(name = "Default"): MaterialDraft {
     metalnessImage: null,
     normalImage: null,
     normalScale: 1,
+    normalTangentUv: null,
     emissive: [0, 0, 0],
     emissiveImage: null,
     emissiveAttribute: null,
@@ -880,6 +883,7 @@ function readPrincipled(graph: ShaderGraph, node: BlendStruct, draft: MaterialDr
     const strength = inputSocket(normal.node, "Strength");
     if (draft.normalImage) {
       draft.normalScale = scalarOf(graph, strength, 1);
+      draft.normalTangentUv = normal.node.deref("storage")?.string("uv_map") || null;
       noteNodeInput(graph, draft, "Normal map strength", strength, null);
     }
     noteNodeInput(graph, draft, "Normal map color", colorSocket, image);

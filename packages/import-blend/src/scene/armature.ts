@@ -44,7 +44,9 @@ export interface Bone {
 export function readBones(armature: BlendStruct): Bone[] {
   const bones: Bone[] = [];
   const visited = new Set<number>();
-  const visit = (bone: BlendStruct, parent: number) => {
+  const pending = [...armature.list("bonebase")].reverse().map((bone) => ({ bone, parent: -1 }));
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    const { bone, parent } = next;
     if (visited.has(bone.offset)) {
       throw new BlendParseError(`its armature ${idName(armature)} lists bone ${bone.string("name")} twice`);
     }
@@ -68,9 +70,8 @@ export function readBones(armature: BlendStruct): Bone[] {
       deform: (flag & BoneFlag.noDeform) === 0,
       segments: bone.number("segments"),
     });
-    for (const child of bone.list("childbase")) visit(child, index);
-  };
-  for (const root of armature.list("bonebase")) visit(root, -1);
+    for (const child of [...bone.list("childbase")].reverse()) pending.push({ bone: child, parent: index });
+  }
   return bones;
 }
 

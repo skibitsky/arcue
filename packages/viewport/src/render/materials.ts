@@ -98,13 +98,15 @@ function replaceLine(
   });
 }
 
-/**
- * The base color map's line where its alpha is not the opacity. A cutout still cuts by the map's alpha, as the ID pass
- * does.
- */
-function mapLine(alpha: Exclude<TextureAlpha, "opacity">, cutout: boolean): string {
+/** The base color map's line where its alpha is not the opacity, so that a cutout does not cut by it either. */
+function mapLine(alpha: Exclude<TextureAlpha, "opacity">): string {
   const color = alpha === "premultiply" ? "sampledDiffuseColor.rgb * sampledDiffuseColor.a" : "sampledDiffuseColor.rgb";
-  return `diffuseColor.rgb *= ${color};${cutout ? " diffuseColor.a *= sampledDiffuseColor.a;" : ""}`;
+  return `diffuseColor.rgb *= ${color};`;
+}
+
+/** Whether a material's base color map gives its opacity, and so cuts out its texels in a cutout. */
+export function mapGivesOpacity(material: SceneMaterial | undefined): boolean {
+  return (material?.baseColorTexture?.alpha ?? "opacity") === "opacity";
 }
 
 export function sideOf(doubleSided: boolean): Side {
@@ -197,7 +199,7 @@ export function litMaterial({
   if (metalness) result.metalness = 1;
   const mapAlpha = material.baseColorTexture?.alpha ?? "opacity";
   if (result.map && mapAlpha !== "opacity") {
-    replaceLine(result, "map_fragment", MAP_LINE, mapLine(mapAlpha, material.alphaMode === "mask"));
+    replaceLine(result, "map_fragment", MAP_LINE, mapLine(mapAlpha));
   }
   if (result.emissiveMap && material.emissiveTexture?.alpha === "premultiply") {
     replaceLine(
@@ -258,16 +260,18 @@ varying float vIdDepth;`;
  * The ID pass material: each pixel stores the mesh number plus one, the triangle number and the distance along the
  * view direction. It is a basic material with its output replaced, so it runs the same skinning and morph chunks as
  * the display materials and matches the pose on screen exactly. Given a lit material with an alpha cutout, it takes
- * that material's base color map, opacity and cutoff, so clicks and strokes pass through the cut-out texels.
+ * that material's opacity and cutoff, and its base color map where `cutsByMap` says the map's alpha is the opacity, so
+ * clicks and strokes pass through the cut-out texels.
  */
 export function idMaterial(
   meshIndex: number,
   side: Side,
   cutout: MeshStandardMaterial | null = null,
+  cutsByMap = true,
 ): MeshBasicMaterial {
   const material = new MeshBasicMaterial({ side });
   if (cutout && cutout.alphaTest > 0) {
-    material.map = cutout.map;
+    material.map = cutsByMap ? cutout.map : null;
     material.opacity = cutout.opacity;
     material.alphaTest = cutout.alphaTest;
   }

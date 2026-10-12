@@ -1726,7 +1726,17 @@ def build_materials():
     noise = tree.nodes.new("ShaderNodeTexNoise")
     tree.links.new(noise.outputs["Fac"], bsdf.inputs["Transmission Weight"])
     bsdf.inputs["Metallic"].default_value = 1.0
-    materials += [tilted, pulsing, smart, clear, frosted, dialed, masked, chrome]
+
+    tangent_detail = bpy.data.materials.new("TangentDetail")
+    bsdf = principled(tangent_detail)
+    tree = tangent_detail.node_tree
+    image = tree.nodes.new("ShaderNodeTexImage")
+    image.image = packed
+    normal_map = tree.nodes.new("ShaderNodeNormalMap")
+    normal_map.uv_map = "Detail"
+    tree.links.new(image.outputs["Color"], normal_map.inputs["Color"])
+    tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+    materials += [tilted, pulsing, smart, clear, frosted, dialed, masked, chrome, tangent_detail]
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
