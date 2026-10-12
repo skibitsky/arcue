@@ -1,5 +1,20 @@
-import type { Material as SceneMaterial, TextureAlpha, TextureRef, VertexColorUse, WrapMode } from "@arcue/scene";
-import type { DataTexture, Material, Side, Texture, WebGLProgramParametersWithUniforms, Wrapping } from "three";
+import type {
+  Material as SceneMaterial,
+  TextureAlpha,
+  TextureColorSpace,
+  TextureRef,
+  VertexColorUse,
+  WrapMode,
+} from "@arcue/scene";
+import type {
+  ColorSpace,
+  DataTexture,
+  Material,
+  Side,
+  Texture,
+  WebGLProgramParametersWithUniforms,
+  Wrapping,
+} from "three";
 import {
   ClampToEdgeWrapping,
   Color,
@@ -119,18 +134,27 @@ const WRAPPING: Record<WrapMode, Wrapping> = {
   mirror: MirroredRepeatWrapping,
 };
 
+const COLOR_SPACES: Record<TextureColorSpace, ColorSpace> = {
+  srgb: SRGBColorSpace,
+  linear: NoColorSpace,
+};
+
+/**
+ * A texture for one use of a decoded image, decoded in its ref's color space or else the slot's. Uses of one image in
+ * different color spaces share its pixels, and three.js uploads each color space once.
+ */
 function mapTexture(
   ref: TextureRef | null,
   images: readonly (DecodedImage | null)[],
   uvSetCount: number,
-  color: boolean,
+  slotColorSpace: TextureColorSpace,
   anisotropy: number,
 ): Texture | null {
   if (!ref) return null;
   const image = images[ref.texture];
   if (!image) return null;
   const texture = textureFrom(image);
-  texture.colorSpace = color ? SRGBColorSpace : NoColorSpace;
+  texture.colorSpace = COLOR_SPACES[ref.colorSpace ?? slotColorSpace];
   texture.wrapS = WRAPPING[ref.wrapU];
   texture.wrapT = WRAPPING[ref.wrapV];
   texture.channel = ref.uvSet < uvSetCount && ref.uvSet < 4 ? ref.uvSet : 0;
@@ -184,15 +208,16 @@ export function litMaterial({
   result.emissive.setRGB(...material.emissive);
   result.side = sideOf(material.doubleSided);
   if (vertexColors && material.vertexColors) multiplyVertexColors(result, material.vertexColors);
-  const texture = (ref: TextureRef | null, color: boolean) => mapTexture(ref, images, uvSetCount, color, anisotropy);
-  result.map = texture(material.baseColorTexture, true);
-  result.emissiveMap = texture(material.emissiveTexture, true);
-  result.normalMap = texture(material.normalTexture, false);
+  const texture = (ref: TextureRef | null, slotColorSpace: TextureColorSpace) =>
+    mapTexture(ref, images, uvSetCount, slotColorSpace, anisotropy);
+  result.map = texture(material.baseColorTexture, "srgb");
+  result.emissiveMap = texture(material.emissiveTexture, "srgb");
+  result.normalMap = texture(material.normalTexture, "linear");
   result.normalScale.set(material.normalScale, material.normalScale);
-  result.aoMap = texture(material.occlusionTexture, false);
-  const metallicRoughness = texture(material.metallicRoughnessTexture, false);
-  const roughness = texture(material.roughnessTexture, false);
-  const metalness = texture(material.metalnessTexture, false);
+  result.aoMap = texture(material.occlusionTexture, "linear");
+  const metallicRoughness = texture(material.metallicRoughnessTexture, "linear");
+  const roughness = texture(material.roughnessTexture, "linear");
+  const metalness = texture(material.metalnessTexture, "linear");
   result.roughnessMap = roughness ?? metallicRoughness;
   result.metalnessMap = metalness ?? metallicRoughness;
   if (roughness) result.roughness = 1;
@@ -209,14 +234,43 @@ export function litMaterial({
       "totalEmissiveRadiance *= emissiveColor.rgb * emissiveColor.a;",
     );
   }
-  if (material.alphaMode === "blend") {
-    result.transparent = true;
-    result.opacity = alpha;
-  } else if (material.alphaMode === "mask") {
-    result.alphaTest = material.alphaCutoff > 0 ? material.alphaCutoff : 0.5;
-    result.opacity = alpha;
-  }
+  applyAlphaMode(result, material, alpha);
   return result;
+}
+
+/**
+ * Hashing draws a share of a surface's pixels equal to its alpha. The shadow and ID passes cut it out where that share
+ * is below this, since three.js's shadow pass cuts out only by `alphaTest`, and a click should not land at random.
+ */
+export const HASHED_CUTOFF = 0.5;
+
+/**
+ * Blended materials draw sorted over what is behind them without writing depth, as three.js's glTF loader does, so
+ * their transparent texels never hide what is drawn after them. Hashed materials write depth and need no sorting; their
+ * `alphaTest` serves only the shadow and ID passes.
+ */
+function applyAlphaMode(result: MeshStandardMaterial, material: SceneMaterial, opacity: number): void {
+  switch (material.alphaMode) {
+    case "opaque":
+      return;
+    case "mask":
+      result.alphaTest = material.alphaCutoff > 0 ? material.alphaCutoff : 0.5;
+      result.opacity = opacity;
+      return;
+    case "hash":
+      result.alphaHash = true;
+      result.alphaTest = HASHED_CUTOFF;
+      result.opacity = opacity;
+      patchShaders(result, "arcue-alpha-hash", (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace("#include <alphatest_fragment>", "");
+      });
+      return;
+    case "blend":
+      result.transparent = true;
+      result.depthWrite = false;
+      result.opacity = opacity;
+      return;
+  }
 }
 
 export function clayMaterial(palette: Palette, side: Side): MeshStandardMaterial {
@@ -259,9 +313,9 @@ varying float vIdDepth;`;
 /**
  * The ID pass material: each pixel stores the mesh number plus one, the triangle number and the distance along the
  * view direction. It is a basic material with its output replaced, so it runs the same skinning and morph chunks as
- * the display materials and matches the pose on screen exactly. Given a lit material with an alpha cutout, it takes
- * that material's opacity and cutoff, and its base color map where `cutsByMap` says the map's alpha is the opacity, so
- * clicks and strokes pass through the cut-out texels.
+ * the display materials and matches the pose on screen exactly. Given a lit material that cuts out by alpha, masked or
+ * hashed, it takes that material's opacity and cutoff, and its base color map where `cutsByMap` says the map's alpha is
+ * the opacity, so clicks and strokes pass through the cut-out texels.
  */
 export function idMaterial(
   meshIndex: number,

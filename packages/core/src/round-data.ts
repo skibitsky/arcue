@@ -108,11 +108,25 @@ function roundComment(comment: Comment, number: number, scene: SceneDescription,
 function roundTime(comment: Comment, scene: SceneDescription): RoundComment["time"] {
   const time = comment.time;
   if (time.kind === "none") return null;
-  const fps = findClip(scene, time.clip)?.fps ?? scene.source.fps;
+  const found = findClip(scene, time.clip);
+  const fps = found?.fps ?? scene.source.fps;
   const seconds = (frame: number) => Math.round((frame / fps) * 1000) / 1000;
+  const start = found?.sourceStartFrame;
   const clip = { clip: time.clip, clipDisplayName: time.clipDisplayName };
-  if (time.kind === "frame") return { ...clip, frame: time.frame, seconds: seconds(time.frame) };
-  return { ...clip, frames: [time.start, time.end], seconds: [seconds(time.start), seconds(time.end)] };
+  if (time.kind === "frame") {
+    return {
+      ...clip,
+      frame: time.frame,
+      seconds: seconds(time.frame),
+      ...(start === undefined ? {} : { sourceFrame: start + time.frame }),
+    };
+  }
+  return {
+    ...clip,
+    frames: [time.start, time.end],
+    seconds: [seconds(time.start), seconds(time.end)],
+    ...(start === undefined ? {} : { sourceFrames: [start + time.start, start + time.end] }),
+  };
 }
 
 function mean(points: readonly Vec3[]): Vec3 {

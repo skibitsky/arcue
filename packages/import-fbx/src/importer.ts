@@ -9,6 +9,7 @@ import type {
   SceneNode,
   TextureRef,
   TextureResolver,
+  TextureSampling,
   TextureSlot,
 } from "@arcue/scene";
 import {
@@ -60,20 +61,24 @@ async function buildMaterials(
   const result: Material[] = [];
   for (const [index, material] of materials.entries()) {
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
+    const missingTextureSampling: Partial<Record<TextureSlot, TextureSampling>> = {};
     const ref = async (wire: WireTextureRef | null | undefined, slot?: TextureSlot): Promise<TextureRef | null> => {
       if (!wire) return null;
-      const texture = await textures.resolve(wire.file, material.name, slot);
-      if (texture === null) {
-        if (slot) missingTextures[slot] = textures.storedPath(wire.file);
-        return null;
-      }
-      return {
-        texture,
+      const sampling: TextureSampling = {
         uvSet: uvSetIndex(meshes, index, wire.uvSet),
         wrapU: wire.wrapU,
         wrapV: wire.wrapV,
         transform: wire.transform,
       };
+      const texture = await textures.resolve(wire.file, material.name, slot);
+      if (texture === null) {
+        if (slot) {
+          missingTextures[slot] = textures.storedPath(wire.file);
+          missingTextureSampling[slot] = sampling;
+        }
+        return null;
+      }
+      return { texture, ...sampling };
     };
     const built: Material = {
       name: material.name,
@@ -93,7 +98,10 @@ async function buildMaterials(
       alphaCutoff: 0.5,
       doubleSided: material.doubleSided,
     };
-    if (Object.keys(missingTextures).length > 0) built.missingTextures = missingTextures;
+    if (Object.keys(missingTextures).length > 0) {
+      built.missingTextures = missingTextures;
+      built.missingTextureSampling = missingTextureSampling;
+    }
     result.push(built);
   }
   return result;

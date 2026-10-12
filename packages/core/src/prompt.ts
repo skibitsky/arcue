@@ -85,8 +85,14 @@ function renderWarningComment(comment: RoundComment, warning: NonNullable<RoundC
 
 function timeLabel({ time }: RoundComment): string {
   if (time === null) return "Rest pose";
-  if ("frame" in time) return `Clip "${time.clipDisplayName}", frame ${time.frame}`;
-  return `Clip "${time.clipDisplayName}", frames ${time.frames[0]}–${time.frames[1]}`;
+  if ("frame" in time) {
+    const source = time.sourceFrame === undefined ? "" : ` (file frame ${formatNumber(time.sourceFrame)})`;
+    return `Clip "${time.clipDisplayName}", frame ${time.frame}${source}`;
+  }
+  const [first, last] = time.sourceFrames ?? [];
+  const source =
+    first === undefined || last === undefined ? "" : ` (file frames ${formatNumber(first)}–${formatNumber(last)})`;
+  return `Clip "${time.clipDisplayName}", frames ${time.frames[0]}–${time.frames[1]}${source}`;
 }
 
 function targetLabel({ target }: RoundComment): string {

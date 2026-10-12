@@ -47,7 +47,7 @@ export interface MeshRuntime {
   triangleCount: number;
   display: DrawMesh;
   pick: DrawMesh;
-  /** The ID pass material under lit display: it cuts out the alpha-mask texels the lit materials cut out. */
+  /** The ID pass material under lit display: it cuts out the texels the masked and hashed lit materials cut out. */
   pickLit: Material | Material[];
   /** The ID pass material under clay and wireframe display, which draw every triangle solid. */
   pickSolid: Material;

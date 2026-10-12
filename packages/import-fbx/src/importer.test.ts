@@ -594,11 +594,14 @@ describe("export checks", () => {
     ]);
   });
 
-  it("reports a texture that is not found as an error", async () => {
+  it("reports a texture that is not found as an error, and keeps how the material would have sampled it", async () => {
     const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX);
     expect(scene.materials[0]?.baseColorTexture).toBeNull();
     expect(scene.materials[0]?.missingTextures).toEqual({
       baseColor: "/tmp/export-staging/StoneStriker-BaseColor.png",
+    });
+    expect(scene.materials[0]?.missingTextureSampling).toEqual({
+      baseColor: { uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null },
     });
     expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
       ["texture-path-absolute", "warning", "Absolute texture path: StoneStriker-BaseColor.png"],

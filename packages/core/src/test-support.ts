@@ -57,7 +57,7 @@ export interface FakeAssetSpec {
   bones?: FakeBone[];
   materials?: string[];
   /** Each clip turns the bones it names, by name. */
-  clips?: { name: string; frames: number; fps?: number; bones?: string[] }[];
+  clips?: { name: string; frames: number; fps?: number; bones?: string[]; sourceStartFrame?: number }[];
   fps?: number;
   exporter?: { name: string; version: string | null } | null;
   /** Makes the import fail with this message. */
@@ -162,6 +162,7 @@ export function fakeScene(spec: FakeAssetSpec): SceneDescription {
       })),
       keyTimes: new Float32Array(),
       keyedEveryFrame: false,
+      ...(clip.sourceStartFrame === undefined ? {} : { sourceStartFrame: clip.sourceStartFrame }),
     };
   });
   const parts = describeParts(nodes);

@@ -1,6 +1,6 @@
 import type { Clip, Track } from "./clip";
-import type { Material, Texture, TextureRef, TextureSlot } from "./material";
-import { TEXTURE_SLOTS } from "./material";
+import type { Material, Texture, TextureRef, TextureSampling, TextureSlot } from "./material";
+import { TEXTURE_REF_KEYS, TEXTURE_SLOT_KEYS, TEXTURE_SLOTS } from "./material";
 import type { Mesh } from "./mesh";
 import type { SceneNode } from "./node";
 import type { ScenePart } from "./parts";
@@ -296,19 +296,14 @@ class SceneBuilder {
     const { materials, textures } = state.member.scene;
     const textureOffset = this.#textures.length;
     this.#textures.push(...textures);
-    const moved = (ref: TextureRef | null) => (ref ? { ...ref, texture: ref.texture + textureOffset } : null);
     state.materialOffset = this.#materials.length;
     for (const material of materials) {
-      this.#materials.push({
-        ...material,
-        baseColorTexture: moved(material.baseColorTexture),
-        metallicRoughnessTexture: moved(material.metallicRoughnessTexture),
-        roughnessTexture: moved(material.roughnessTexture),
-        metalnessTexture: moved(material.metalnessTexture),
-        normalTexture: moved(material.normalTexture),
-        occlusionTexture: moved(material.occlusionTexture),
-        emissiveTexture: moved(material.emissiveTexture),
-      });
+      const moved = { ...material };
+      for (const key of TEXTURE_REF_KEYS) {
+        const ref = material[key];
+        moved[key] = ref && { ...ref, texture: ref.texture + textureOffset };
+      }
+      this.#materials.push(moved);
     }
     return state.materialOffset;
   }
@@ -458,7 +453,10 @@ class SceneBuilder {
     }
   }
 
-  /** Puts each slot's texture on the materials of its name. A texture several slots share is added once. */
+  /**
+   * Puts each slot's texture on the materials of its name. A texture several slots share is added once. It samples as
+   * the slot's own texture did, or would have where the file's image was not found.
+   */
   overrideTextures(materials: Composition["materials"]): void {
     const added = new Map<Texture, number>();
     const indexOf = (texture: Texture): number => {
@@ -480,15 +478,13 @@ class SceneBuilder {
       for (const slot of TEXTURE_SLOTS) {
         const entry = slots[slot];
         if (!entry) continue;
-        const ref: TextureRef | null = entry.texture
-          ? { texture: indexOf(entry.texture), uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null }
-          : null;
+        const texture = entry.texture ? indexOf(entry.texture) : null;
         for (const target of targets) {
           const material = this.#materials[target];
           if (!material) continue;
-          const overrides = { ...material.textureOverrides, [slot]: { path: entry.path, found: ref !== null } };
+          const overrides = { ...material.textureOverrides, [slot]: { path: entry.path, found: texture !== null } };
           this.#materials[target] = {
-            ...(ref ? withTexture(material, slot, ref) : material),
+            ...(texture === null ? material : withTexture(material, slot, { ...samplingOf(material, slot), texture })),
             textureOverrides: overrides,
           };
         }
@@ -545,6 +541,18 @@ function subtree(nodes: readonly SceneNode[], roots: readonly number[]): boolean
     if (node.parent >= 0 && included[node.parent]) included[index] = true;
   });
   return included;
+}
+
+const PLAIN_SAMPLING: TextureSampling = { uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null };
+
+/** How a slot samples its texture: as its own texture does, else as its missing image would have, else plainly. */
+function samplingOf(material: Material, slot: TextureSlot): TextureSampling {
+  const own = material[TEXTURE_SLOT_KEYS[slot]];
+  if (own) {
+    const { texture: _, ...sampling } = own;
+    return sampling;
+  }
+  return material.missingTextureSampling?.[slot] ?? PLAIN_SAMPLING;
 }
 
 /** The material with a texture in a slot. Its color factor turns white, so the texture shows as it is. */

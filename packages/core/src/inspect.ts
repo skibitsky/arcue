@@ -1,21 +1,10 @@
 import type { AssetInspection, InspectedMaterial, InspectedMember, InspectedTexture } from "@arcue/protocol";
-import type { Material, SceneDescription, TextureRef } from "@arcue/scene";
+import type { Material, SceneDescription } from "@arcue/scene";
+import { TEXTURE_REF_KEYS, TEXTURE_REF_NAMES } from "@arcue/scene";
 import type { AssetFiles } from "./composition-load";
 import { round5 } from "./coordinates";
 import { basename } from "./paths";
 import { meshesOf, partsOf } from "./scene-lookup";
-
-type TextureKey = { [Key in keyof Material]-?: Material[Key] extends TextureRef | null ? Key : never }[keyof Material];
-
-const TEXTURE_KEY_SLOTS: Record<TextureKey, string> = {
-  baseColorTexture: "baseColor",
-  metallicRoughnessTexture: "metallicRoughness",
-  roughnessTexture: "roughness",
-  metalnessTexture: "metalness",
-  normalTexture: "normal",
-  occlusionTexture: "occlusion",
-  emissiveTexture: "emissive",
-};
 
 export function exporterName(scene: SceneDescription): string | null {
   const exporter = scene.source.exporter;
@@ -91,10 +80,10 @@ function inspectMaterials(scene: SceneDescription): InspectedMaterial[] {
 
 function inspectMaterial(scene: SceneDescription, material: Material): InspectedMaterial {
   const textures: InspectedMaterial["textures"] = [];
-  for (const [key, slot] of Object.entries(TEXTURE_KEY_SLOTS) as [TextureKey, string][]) {
+  for (const key of TEXTURE_REF_KEYS) {
     const ref = material[key];
     const texture = ref ? scene.textures[ref.texture] : undefined;
-    if (texture) textures.push({ slot, texture: texture.name });
+    if (texture) textures.push({ slot: TEXTURE_REF_NAMES[key], texture: texture.name });
   }
   return { name: material.name, textures };
 }

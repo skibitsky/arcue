@@ -1,8 +1,8 @@
 import type { Material, TextureRef } from "@arcue/scene";
 import type { WebGLProgramParametersWithUniforms, WebGLRenderer } from "three";
-import { DataTexture, FrontSide, ShaderChunk, Texture } from "three";
+import { DataTexture, FrontSide, NoColorSpace, ShaderChunk, ShaderLib, SRGBColorSpace, Texture } from "three";
 import { describe, expect, it } from "vitest";
-import { idMaterial, litMaterial, mapGivesOpacity, withRegionTint } from "./materials";
+import { HASHED_CUTOFF, idMaterial, litMaterial, mapGivesOpacity, withRegionTint } from "./materials";
 import type { DecodedImage } from "./textures";
 
 const image: DecodedImage = { base: new Texture(), close: () => {} };
@@ -52,8 +52,8 @@ function compiled(result: ReturnType<typeof lit>) {
     uniforms: {},
     vertexShader: "#include <common>\n#include <begin_vertex>",
     fragmentShader:
-      "#include <common>\n#include <map_fragment>\n#include <color_fragment>\n#include <emissivemap_fragment>\n" +
-      "#include <colorspace_fragment>",
+      "#include <common>\n#include <map_fragment>\n#include <color_fragment>\n#include <alphatest_fragment>\n" +
+      "#include <alphahash_fragment>\n#include <emissivemap_fragment>\n#include <colorspace_fragment>",
   } as unknown as WebGLProgramParametersWithUniforms;
   tinted.onBeforeCompile(shader, {} as WebGLRenderer);
   return { fragment: shader.fragmentShader, key: tinted.customProgramCacheKey() };
@@ -127,6 +127,62 @@ describe("litMaterial", () => {
 
     expect(lit(material({ vertexColors: { baseColor: true, emissive: true } }), false).vertexColors).toBe(false);
     expect(lit(material({}), true).vertexColors).toBe(false);
+  });
+});
+
+describe("litMaterial alpha modes", () => {
+  it("hashes without sorting and with depth, and cuts out only the shadow and ID passes at the hashed cutoff", () => {
+    const hashed = lit(material({ baseColorTexture: ref(0), baseColor: [1, 1, 1, 0.8], alphaMode: "hash" }));
+    expect([hashed.alphaHash, hashed.transparent, hashed.depthWrite, hashed.opacity]).toEqual([true, false, true, 0.8]);
+    expect(hashed.alphaTest).toBe(HASHED_CUTOFF);
+    const { fragment, key } = compiled(hashed);
+    expect(fragment).not.toContain("#include <alphatest_fragment>");
+    expect(fragment).toContain("#include <alphahash_fragment>");
+    expect(key).not.toBe(compiled(lit(material({ baseColorTexture: ref(0), alphaMode: "mask" }))).key);
+    expect(ShaderLib.standard.fragmentShader).toContain("#include <alphatest_fragment>");
+    const pick = idMaterial(0, FrontSide, hashed);
+    expect([pick.alphaTest, pick.opacity, pick.map]).toEqual([HASHED_CUTOFF, 0.8, hashed.map]);
+  });
+
+  it("blends sorted without writing depth, while masked and opaque materials write depth", () => {
+    const blended = lit(material({ baseColor: [1, 1, 1, 0.4], alphaMode: "blend" }));
+    expect([blended.transparent, blended.depthWrite, blended.opacity, blended.alphaHash]).toEqual([
+      true,
+      false,
+      0.4,
+      false,
+    ]);
+    const masked = lit(material({ alphaMode: "mask", alphaCutoff: 0.3 }));
+    expect([masked.transparent, masked.depthWrite, masked.alphaTest, masked.alphaHash]).toEqual([
+      false,
+      true,
+      0.3,
+      false,
+    ]);
+    const opaque = lit(material({ baseColor: [1, 1, 1, 0.4] }));
+    expect([opaque.transparent, opaque.depthWrite, opaque.alphaTest, opaque.opacity]).toEqual([false, true, 0, 1]);
+  });
+});
+
+describe("litMaterial color spaces", () => {
+  it("decodes each texture in its ref's color space, else its slot's, also where two uses share one image", () => {
+    const result = lit(
+      material({
+        baseColorTexture: { ...ref(0), colorSpace: "linear" },
+        roughnessTexture: { ...ref(0), colorSpace: "srgb" },
+        metalnessTexture: ref(0),
+        emissiveTexture: ref(1),
+        normalTexture: { ...ref(1), colorSpace: "linear" },
+      }),
+    );
+    expect(
+      [result.map, result.roughnessMap, result.metalnessMap, result.emissiveMap, result.normalMap].map(
+        (texture) => texture?.colorSpace,
+      ),
+    ).toEqual([NoColorSpace, SRGBColorSpace, NoColorSpace, SRGBColorSpace, NoColorSpace]);
+    expect(result.map?.source).toBe(image.base.source);
+    expect(result.roughnessMap?.source).toBe(image.base.source);
+    expect(result.map).not.toBe(result.roughnessMap);
   });
 });
 

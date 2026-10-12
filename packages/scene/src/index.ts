@@ -15,14 +15,17 @@ export type {
   Material,
   Texture,
   TextureAlpha,
+  TextureColorSpace,
   TextureOverride,
   TextureRef,
+  TextureRefKey,
+  TextureSampling,
   TextureSlot,
   UvTransform,
   VertexColorUse,
   WrapMode,
 } from "./material";
-export { TEXTURE_SLOTS } from "./material";
+export { TEXTURE_REF_KEYS, TEXTURE_REF_NAMES, TEXTURE_SLOT_KEYS, TEXTURE_SLOTS } from "./material";
 export type { MaterialSlot, MaterialSlots, SlotState } from "./material-slots";
 export { materialSlots, missingSlots } from "./material-slots";
 export type { Bounds, Quat, Vec3, Vec4 } from "./math";

@@ -1,5 +1,6 @@
 import { warningId } from "@arcue/protocol";
 import type { ImportWarning, Material, Texture, TextureRef } from "@arcue/scene";
+import { TEXTURE_REF_KEYS } from "@arcue/scene";
 
 /** A stored path with "/" separators and its "." and ".." segments resolved, so that spellings of one path match. */
 export function normalizedPath(path: string): string {
@@ -12,16 +13,6 @@ export function normalizedPath(path: string): string {
   }
   return segments.join("/");
 }
-
-const TEXTURE_SLOTS = [
-  "baseColorTexture",
-  "metallicRoughnessTexture",
-  "roughnessTexture",
-  "metalnessTexture",
-  "normalTexture",
-  "occlusionTexture",
-  "emissiveTexture",
-] as const satisfies readonly (keyof Material)[];
 
 /**
  * Keeps one texture for each image file found, however many stored paths lead to it, as a relative and an absolute
@@ -47,7 +38,7 @@ export function shareFoundTextures(
     textures: kept,
     materials: materials.map((material) => {
       const shared = { ...material };
-      for (const slot of TEXTURE_SLOTS) shared[slot] = remap(material[slot]);
+      for (const key of TEXTURE_REF_KEYS) shared[key] = remap(material[key]);
       return shared;
     }),
   };

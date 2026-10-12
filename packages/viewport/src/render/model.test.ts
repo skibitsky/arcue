@@ -5,6 +5,7 @@ import { PerspectiveCamera, Raycaster, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
 import { stripScene } from "../math/test-fixture";
 import { facesCamera, resolveAnchor } from "./anchor-points";
+import { HASHED_CUTOFF } from "./materials";
 import { Model, PICK_LAYER } from "./model";
 import { DEFAULT_PALETTE } from "./palette";
 
@@ -96,6 +97,22 @@ describe("Model pick materials", () => {
     expect(alphaTests(runtime.pick.material)).toEqual([0]);
     model.setDisplayMode("lit");
     expect(alphaTests(runtime.pick.material)).toEqual([0.4]);
+    model.dispose();
+  });
+});
+
+describe("Model hashed materials", () => {
+  it("cut out their texels below the hashed cutoff in the ID pass while lit, and draw solid otherwise", async () => {
+    const hashed: SceneMaterial = { ...cutout, alphaMode: "hash", baseColor: [1, 1, 1, 0.75] };
+    const model = await Model.build({ ...stripScene(), materials: [hashed] }, DEFAULT_PALETTE, 1);
+    const runtime = model.meshes[0];
+    if (!runtime) throw new Error("the strip has a mesh");
+    const pick = (Array.isArray(runtime.pick.material) ? runtime.pick.material : [runtime.pick.material])[0];
+    expect([pick?.alphaTest, pick?.opacity]).toEqual([HASHED_CUTOFF, 0.75]);
+    const lit = runtime.lit[0];
+    expect([lit?.alphaHash, lit?.transparent, lit?.depthWrite]).toEqual([true, false, true]);
+    model.setDisplayMode("clay");
+    expect(alphaTests(runtime.pick.material)).toEqual([0]);
     model.dispose();
   });
 });

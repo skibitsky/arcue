@@ -1,6 +1,10 @@
 import type { Vec3, Vec4 } from "./math";
 
-export type AlphaMode = "opaque" | "mask" | "blend";
+/**
+ * How a material's alpha shows: not at all, cut out at `alphaCutoff`, as stochastic transparency that needs no sorting
+ * (Blender's Dithered or Hashed render method), or blended over what is behind in sorted order.
+ */
+export type AlphaMode = "opaque" | "mask" | "hash" | "blend";
 
 export type WrapMode = "repeat" | "clamp" | "mirror";
 
@@ -18,6 +22,9 @@ export interface UvTransform {
  */
 export type TextureAlpha = "opacity" | "premultiply" | "none";
 
+/** How a texture's values decode: from sRGB, or as they are stored. */
+export type TextureColorSpace = "srgb" | "linear";
+
 export interface TextureRef {
   /** Index into `SceneDescription.textures`. */
   texture: number;
@@ -29,7 +36,12 @@ export interface TextureRef {
   transform: UvTransform | null;
   /** Unset is "opacity" for a base color texture and "none" for the others. */
   alpha?: TextureAlpha;
+  /** Unset is "srgb" for base color and emissive textures and "linear" for the others. */
+  colorSpace?: TextureColorSpace;
 }
+
+/** How a material samples a texture: everything a TextureRef says but which image. */
+export type TextureSampling = Omit<TextureRef, "texture">;
 
 /** The material slots a composition file can give a texture. */
 export type TextureSlot = "baseColor" | "normal" | "roughness" | "metalness" | "emissive";
@@ -78,9 +90,45 @@ export interface Material {
   vertexColors?: VertexColorUse;
   /** Images the file names for a slot that were not found, by the path the file stores. Their slots are empty. */
   missingTextures?: Partial<Record<TextureSlot, string>>;
+  /**
+   * How the material would have sampled each of `missingTextures`, where the importer knows it. A composition file's
+   * texture for such a slot samples the same way.
+   */
+  missingTextureSampling?: Partial<Record<TextureSlot, TextureSampling>>;
   /** Slots whose texture a composition file sets in place of the file's own. */
   textureOverrides?: Partial<Record<TextureSlot, TextureOverride>>;
 }
+
+/** The keys of Material that hold a TextureRef. */
+export type TextureRefKey = {
+  [Key in keyof Material]-?: NonNullable<Material[Key]> extends TextureRef ? Key : never;
+}[keyof Material];
+
+/**
+ * Each of Material's texture references with the name of the property it feeds, as `asset.inspect` reports it. Its
+ * type requires every key, so a texture reference added to Material without an entry here does not compile.
+ */
+export const TEXTURE_REF_NAMES: Readonly<Record<TextureRefKey, string>> = {
+  baseColorTexture: "baseColor",
+  metallicRoughnessTexture: "metallicRoughness",
+  roughnessTexture: "roughness",
+  metalnessTexture: "metalness",
+  normalTexture: "normal",
+  occlusionTexture: "occlusion",
+  emissiveTexture: "emissive",
+};
+
+/** Every key of Material that holds a TextureRef. */
+export const TEXTURE_REF_KEYS = Object.keys(TEXTURE_REF_NAMES) as readonly TextureRefKey[];
+
+/** The key of Material that holds each slot's texture. */
+export const TEXTURE_SLOT_KEYS: Readonly<Record<TextureSlot, TextureRefKey>> = {
+  baseColor: "baseColorTexture",
+  normal: "normalTexture",
+  roughness: "roughnessTexture",
+  metalness: "metalnessTexture",
+  emissive: "emissiveTexture",
+};
 
 export interface Texture {
   name: string;
