@@ -141,6 +141,10 @@ function randomKey(): number {
 }
 
 /** Slots for an open-addressed table of `count` entries, a power of two at most two thirds full. */
+/** Past this many blocks a file must average `MIN_BLOCK_BYTES` a block, as Blender's own files average hundreds. */
+const MANY_BLOCKS = 2 ** 20;
+const MIN_BLOCK_BYTES = 64;
+
 function tableSlots(count: number): Int32Array {
   let size = 8;
   while (size < count * 1.5) size *= 2;
@@ -192,6 +196,9 @@ export class BlendFile {
       count++;
     });
     if (!found.sdna) throw new BlendParseError("it has no SDNA block");
+    if (count > MANY_BLOCKS && count * MIN_BLOCK_BYTES > bytes.byteLength) {
+      throw new BlendParseError(`it has ${count} blocks in ${bytes.byteLength} bytes, far more than Blender writes`);
+    }
     this.sdna = parseSdna(found.sdna, this.little, this.pointerSize);
 
     this.blockCount = count;

@@ -130,6 +130,8 @@ const DATA_SPACES = new Set(["Non-Color", "Raw", "Generic Data"]);
 const WRAPS: readonly WrapMode[] = ["repeat", "clamp", "clamp", "mirror"];
 const EXTENSION_CLIP = 2;
 const PROJECTIONS: Readonly<Record<number, string>> = { 1: "Box", 2: "Sphere", 3: "Tube" };
+/** The most nodes the preview follows up an image's vector input. */
+const MAX_VECTOR_NODES = 16;
 const INTERPOLATIONS: Readonly<Record<number, string>> = { 1: "Closest", 2: "Cubic", 3: "Smart" };
 const SIMPLE_SHADERS = new Set([
   "ShaderNodeEmission",
@@ -355,7 +357,8 @@ function imageUse(graph: ShaderGraph, draft: MaterialDraft, node: BlendStruct): 
   let mappings = 0;
   let followed = true;
   let source = linkedOutput(graph, inputSocket(node, "Vector"));
-  for (let depth = 0; source && depth < 16; depth++) {
+  let depth = 0;
+  for (; source && depth < MAX_VECTOR_NODES; depth++) {
     const type = nodeType(source.node);
     if (type === "ShaderNodeUVMap") {
       uvMap = source.node.deref("storage")?.string("uv_map") || null;
@@ -376,6 +379,12 @@ function imageUse(graph: ShaderGraph, draft: MaterialDraft, node: BlendStruct): 
     if (type !== "ShaderNodeTexCoord") coordinates = nodeLabel(source.node);
     else if (source.name !== "UV") coordinates = source.name;
     break;
+  }
+  if (source && depth === MAX_VECTOR_NODES) {
+    draft.approximations.push(
+      `${name}'s vector passes ${MAX_VECTOR_NODES} Mapping nodes or more, shown with the UV map`,
+    );
+    followed = false;
   }
   let transform: UvTransform | null = null;
   if (mappings > 0 && followed) {

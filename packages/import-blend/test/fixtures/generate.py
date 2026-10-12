@@ -2335,6 +2335,18 @@ def build_shading():
     tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
     materials.append(mat)
 
+    mat, tree, bsdf = shading_material("MappingLong")
+    image = image_node(tree, checker)
+    vector = tree.nodes.new("ShaderNodeUVMap").outputs["UV"]
+    for _ in range(17):
+        mapping = tree.nodes.new("ShaderNodeMapping")
+        mapping.inputs["Location"].default_value = (0.01, 0, 0)
+        tree.links.new(vector, mapping.inputs["Vector"])
+        vector = mapping.outputs["Vector"]
+    tree.links.new(vector, image.inputs["Vector"])
+    tree.links.new(image.outputs["Color"], bsdf.inputs["Base Color"])
+    materials.append(mat)
+
     mat, tree, _ = shading_material("GlossyRoughDriven")
     glossy = tree.nodes.new("ShaderNodeBsdfAnisotropic")
     tree.links.new(tree.nodes.new("ShaderNodeTexNoise").outputs["Fac"], glossy.inputs["Roughness"])

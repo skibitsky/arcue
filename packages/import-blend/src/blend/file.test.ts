@@ -295,6 +295,22 @@ describe("readBlendFile", () => {
     );
   });
 
+  it("refuses a file of far more blocks than its size holds in Blender's files", () => {
+    const base = sample("old", 8, true);
+    const end = base.length - 24;
+    const empty = 2 ** 20 + 1;
+    const bytes = new Uint8Array(base.length + empty * 24);
+    bytes.set(base.subarray(0, end));
+    const view = new DataView(bytes.buffer);
+    for (let block = 0; block < empty; block++) {
+      const at = end + block * 24;
+      bytes.set([0x44, 0x41, 0x54, 0x41], at);
+      view.setBigUint64(at + 8, BigInt(0x10000 + block * 8), true);
+    }
+    bytes.set(base.subarray(end), end + empty * 24);
+    expect(() => readBlendFile(bytes)).toThrow(/blocks in \d+ bytes, far more than Blender writes/);
+  });
+
   it("refuses an SDNA name far longer than Blender writes", () => {
     const named = {
       type: "Thing",

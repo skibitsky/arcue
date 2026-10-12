@@ -180,11 +180,16 @@ export function usedActions(id: BlendStruct): { action: BlendStruct; slot: numbe
   };
   add(adt.deref("action"), handle(adt, "slot_handle"), !nla || (!tweaking && overNla));
   add(adt.deref("tmpact"), handle(adt, "tmp_slot_handle"), tweaking && overNla);
-  const visitStrips = (strips: BlendStruct[], played: boolean) => {
-    for (const strip of strips) {
-      const plays = played && (strip.number("flag") & NLASTRIP_MUTED) === 0;
+  const visitStrips = (top: BlendStruct, played: boolean) => {
+    const pending = [{ strip: top, played }];
+    const seen = new Set<number>();
+    for (let next = pending.pop(); next; next = pending.pop()) {
+      const { strip } = next;
+      if (seen.has(strip.offset)) continue;
+      seen.add(strip.offset);
+      const plays = next.played && (strip.number("flag") & NLASTRIP_MUTED) === 0;
       add(strip.deref("act"), handle(strip, "action_slot_handle"), plays);
-      visitStrips(strip.list("strips"), plays);
+      pending.push(...[...strip.list("strips")].reverse().map((inner) => ({ strip: inner, played: plays })));
     }
   };
   const tweakedTrack = tweaking ? adt.deref("act_track")?.offset : undefined;
@@ -193,7 +198,7 @@ export function usedActions(id: BlendStruct): { action: BlendStruct; slot: numbe
     const tweaked = track.offset === tweakedTrack;
     const plays = nla && trackPlays(flag, track, tweaked);
     for (const strip of track.list("strips")) {
-      visitStrips([strip], plays && (!tweaked || strip.offset === tweakedStrip));
+      visitStrips(strip, plays && (!tweaked || strip.offset === tweakedStrip));
     }
   }
   return uses;

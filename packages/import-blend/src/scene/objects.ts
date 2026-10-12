@@ -396,16 +396,19 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
   if (master) visit(master, viewLayer?.list("layer_collections")[0] ?? null, false, new Set());
 
   const needed = new Map<number, BlendStruct>();
-  const need = (object: BlendStruct | null) => {
-    if (!object || shown.has(object.offset) || needed.has(object.offset)) return;
-    if (isLinked(object)) {
-      linked.add(idName(object));
-      return;
+  const need = (first: BlendStruct | null) => {
+    const pending = [first];
+    for (let object = pending.pop(); object !== undefined; object = pending.pop()) {
+      if (!object || shown.has(object.offset) || needed.has(object.offset)) continue;
+      if (isLinked(object)) {
+        linked.add(idName(object));
+        continue;
+      }
+      if (usesLinkedData(object)) linked.add(idName(object));
+      needed.set(object.offset, object);
+      const targets = deformingArmatures(object).map(({ target }) => target);
+      pending.push(...targets.reverse(), object.deref("parent"));
     }
-    if (usesLinkedData(object)) linked.add(idName(object));
-    needed.set(object.offset, object);
-    need(object.deref("parent"));
-    for (const { target } of deformingArmatures(object)) need(target);
   };
   for (const object of ordered) {
     need(object.deref("parent"));
@@ -437,11 +440,14 @@ function parentsFirst(objects: readonly SceneObject[]): SceneObject[] {
   }
   const result: SceneObject[] = [];
   const placed = new Set<number>();
-  const place = (object: SceneObject) => {
-    if (placed.has(object.struct.offset)) return;
-    placed.add(object.struct.offset);
-    result.push(object);
-    for (const child of children.get(object.struct.offset) ?? []) place(child);
+  const place = (first: SceneObject) => {
+    const pending = [first];
+    for (let object = pending.pop(); object; object = pending.pop()) {
+      if (placed.has(object.struct.offset)) continue;
+      placed.add(object.struct.offset);
+      result.push(object);
+      pending.push(...[...(children.get(object.struct.offset) ?? [])].reverse());
+    }
   };
   for (const root of roots) place(root);
   for (const object of objects) place(object);
