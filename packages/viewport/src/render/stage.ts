@@ -21,6 +21,14 @@ import {
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import type { Palette } from "./palette";
 
+/** The gap between the floor's layers, which stack just under the model's lowest point, as a fraction of its size. */
+const FLOOR_GAP = 0.0005;
+/**
+ * Draws the floor as if farther away, so a model face lying on it covers it where the gap is below the depth buffer's
+ * precision, and behind the wireframe fill, which has an offset of its own.
+ */
+const BEHIND_COPLANAR = { polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 } as const;
+
 /** Light colors are physical white light, not UI colors; the studio stays neutral so materials read true. */
 const LIGHT = { key: 3.4, rim: 1.2, hemisphere: 0.1, environment: 0.07, exposure: 1.05 };
 
@@ -79,13 +87,19 @@ export class Stage {
     this.key.shadow.bias = -0.0004;
     this.scene.add(hemisphere, this.key, this.key.target, this.rim, this.rim.target);
 
-    this.ground = new Mesh(new PlaneGeometry(1, 1), new ShadowMaterial({ opacity: 0.34 }));
+    this.ground = new Mesh(new PlaneGeometry(1, 1), new ShadowMaterial({ opacity: 0.34, ...BEHIND_COPLANAR }));
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.receiveShadow = true;
 
     this.contact = new Mesh(
       new PlaneGeometry(1, 1),
-      new MeshBasicMaterial({ map: contactTexture(), transparent: true, depthWrite: false, toneMapped: false }),
+      new MeshBasicMaterial({
+        map: contactTexture(),
+        transparent: true,
+        depthWrite: false,
+        toneMapped: false,
+        ...BEHIND_COPLANAR,
+      }),
     );
     this.contact.rotation.x = -Math.PI / 2;
     this.contact.renderOrder = -1;
@@ -125,14 +139,14 @@ export class Stage {
 
     const floorSize = Math.max(size * 16, 12);
     this.ground.scale.set(floorSize, floorSize, 1);
-    this.ground.position.set(center.x, floor, center.z);
+    this.ground.position.set(center.x, floor - size * FLOOR_GAP * 3, center.z);
     this.grid.scale.set(floorSize, floorSize, 1);
-    this.grid.position.set(center.x, floor + size * 0.0005, center.z);
+    this.grid.position.set(center.x, floor - size * FLOOR_GAP * 2, center.z);
     this.gridUniforms.fade.value = Math.max(size * 3, 4);
     this.gridUniforms.center.value.set(center.x, floor, center.z);
     const contact = Math.max(footprint * 2, size * 0.3);
     this.contact.scale.set(contact, contact, 1);
-    this.contact.position.set(center.x, floor + size * 0.001, center.z);
+    this.contact.position.set(center.x, floor - size * FLOOR_GAP, center.z);
   }
 
   /** Renders the environment map again, as after a lost graphics context, which takes everything rendered on the GPU. */
@@ -192,6 +206,7 @@ function gridMaterial(uniforms: GridUniforms): ShaderMaterial {
     transparent: true,
     depthWrite: false,
     toneMapped: false,
+    ...BEHIND_COPLANAR,
     uniforms,
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
