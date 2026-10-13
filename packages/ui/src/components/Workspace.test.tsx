@@ -371,7 +371,7 @@ describe("Workspace", () => {
         await flush();
       });
     await drop();
-    expect(store.state.get().dropPrompt?.models).toEqual([{ path: "/work/Crate.fbx", role: null }]);
+    expect(store.state.get().dropPrompt?.models).toEqual([{ path: "/work/Crate.fbx", role: null, roles: [] }]);
     const user = userEvent.setup();
     await user.click(screen.getByRole("menuitem", { name: "Add to view" }));
     await act(() => flush());
@@ -383,6 +383,71 @@ describe("Workspace", () => {
     await act(() => flush());
     expect(store.state.get().dropPrompt).toBeNull();
     expect(discarded).toEqual([["Crate.fbx"]]);
+  });
+});
+
+describe("choosing how a model joins the view", () => {
+  const files: FileHost = {
+    pick: async () => ["/work/Jacket.blend"],
+    place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
+    open: () => {},
+  };
+  const roles = (path: string) =>
+    path.endsWith("Jacket.blend")
+      ? { role: "set" as const, roles: ["set" as const, "animation" as const] }
+      : { role: "set" as const, roles: ["set" as const] };
+  const added = (client: { calls: readonly { name: string; input: unknown }[] }) =>
+    client.calls.filter((call) => call.name === "composition.addFile").map((call) => call.input);
+
+  it("offers a dropped model whose clips key the model's bones as an animation file", async () => {
+    const { client } = await renderStone({ files, roles });
+    const view = screen.getByRole("region", { name: "3D view" });
+    const drop = (name: string) =>
+      act(async () => {
+        fireEvent.drop(view, { dataTransfer: { files: [new File(["x"], name)], types: ["Files"] } });
+        await flush();
+      });
+    await drop("Crate.fbx");
+    const menu = screen.getByRole("menu", { name: "Dropped file" });
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["New tab", "Add to view"]);
+    const user = userEvent.setup();
+    await user.keyboard("{Escape}");
+    await act(() => flush());
+
+    await drop("Jacket.blend");
+    const offer = screen.getByRole("menu", { name: "Dropped file" });
+    expect(
+      within(offer)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["New tab", "Add to view", "Add as animation"]);
+    await user.click(within(offer).getByRole("menuitem", { name: "Add as animation" }));
+    await act(() => flush());
+    expect(added(client)).toEqual([expect.objectContaining({ file: "/work/Jacket.blend", role: "animation" })]);
+  });
+
+  it("asks at the view's center how a picked model joins when it can join as an animation file", async () => {
+    const { client } = await renderStone({ files, roles });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Asset info" }));
+    await user.click(screen.getByRole("button", { name: "Add file" }));
+    await act(() => flush());
+    const menu = screen.getByRole("menu", { name: "Picked file" });
+    const anchor = document.querySelector<HTMLElement>(".drop-anchor");
+    expect([anchor?.style.left, anchor?.style.top]).toEqual(["50%", "50%"]);
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Add to view", "Add as animation"]);
+    expect(added(client)).toEqual([]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Add to view" }));
+    await act(() => flush());
+    expect(added(client)).toEqual([expect.objectContaining({ file: "/work/Jacket.blend", role: "set" })]);
   });
 });
 

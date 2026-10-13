@@ -221,6 +221,29 @@ Vertex numbers follow the file's vertex order, which is Blender's order for Blen
     `);
   });
 
+  it("gives a clip frame as the file numbers it only where the file's number differs", () => {
+    const at = (time: RoundComment["time"], number: number) =>
+      comment({ id: `c${number}`, number, text: "Check this.", time, camera: { ...frontCamera, label: "" } });
+    const data: RoundData = {
+      ...specRound,
+      comments: [
+        at({ clip: "Idle", clipDisplayName: "Idle", frame: 12, seconds: 0.2, sourceFrame: 12 }, 1),
+        at({ clip: "Idle", clipDisplayName: "Idle", frame: 12, seconds: 0.2, sourceFrame: 13 }, 2),
+        at({ clip: "Run", clipDisplayName: "Run", frames: [3, 9], seconds: [0.05, 0.15], sourceFrames: [3, 9] }, 3),
+        at({ clip: "Run", clipDisplayName: "Run", frames: [3, 9], seconds: [0.05, 0.15], sourceFrames: [3, 10] }, 4),
+      ],
+    };
+    const labels = renderPrompt({ data, assetPath: "/work/Hero.blend", roundFolder: "/r", exportedAt: "09:00" })
+      .split("\n")
+      .filter((line) => line.includes("Clip "));
+    expect(labels).toEqual([
+      '1. Clip "Idle", frame 12 · no surface target',
+      '2. Clip "Idle", frame 12 (file frame 13) · no surface target',
+      '3. Clip "Run", frames 3–9 · no surface target',
+      '4. Clip "Run", frames 3–9 (file frames 3–10) · no surface target',
+    ]);
+  });
+
   it("lists at most three hidden or shown parts and names parts it was not given by their last node", () => {
     const data: RoundData = {
       ...specRound,

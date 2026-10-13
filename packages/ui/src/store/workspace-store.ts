@@ -6,19 +6,27 @@ import type {
   ConnectionState,
   CoordinateConvention,
   CoreClient,
+  FileRole,
   IncomingRequest,
-  MemberRole,
   Settings,
   ViewState,
 } from "@arcue/protocol";
-import { ArcueError, commands, isCommandName, memberRoleFor, withTransfer } from "@arcue/protocol";
+import { ArcueError, commands, isCommandName, withTransfer } from "@arcue/protocol";
 import type { TextureSlot } from "@arcue/scene";
 import { fileNameOf, materialSlots, missingSlots } from "@arcue/scene";
 import type { SessionHost, ToastInput } from "./asset-session";
 import { AssetSession, messageOf, NEW_COMMENT_OVERLAY } from "./asset-session";
 import { Store } from "./observable";
 import type { DropChoice, DropPrompt, DroppedModel, FileHost } from "./view-files";
-import { besideModel, isImageFile, isModelFile, slotLabel, sortDropped } from "./view-files";
+import {
+  besideModel,
+  isImageFile,
+  isModelFile,
+  offersAnimation,
+  onlyAnimation,
+  slotLabel,
+  sortDropped,
+} from "./view-files";
 
 export type TabEntry = { kind: "asset"; id: string } | { kind: "empty"; id: string };
 
@@ -448,16 +456,26 @@ export class WorkspaceStore {
     return this.#files !== null;
   }
 
-  /** Opens the host's dialog for model files and adds each picked one to the asset's view. */
+  /**
+   * Opens the host's dialog for model files and adds each picked one to the asset's view in the role the core gives it.
+   * When one of them can also join as an animation file, it asks "Add to view" or "Add as animation" first.
+   */
   async addFileToView(assetId: string): Promise<void> {
     const host = this.#files;
     if (!host) return;
     try {
       const picked = await host.pick("model", this.#assetPath(assetId));
-      const models = picked.filter(isModelFile);
-      if (picked.length > 0 && models.length === 0)
+      const paths = picked.filter(isModelFile);
+      if (picked.length > 0 && paths.length === 0)
         throw new ArcueError("invalid-input", "Choose an FBX or Blender file.");
-      for (const model of models) await this.#addFile(assetId, model);
+      const models = await this.#rolesOf(assetId, paths);
+      if (!this.#sessions.has(assetId)) return;
+      if (offersAnimation(models)) {
+        this.dismissDrop();
+        this.state.patch({ dropPrompt: { assetId, at: null, files: [], models } });
+        return;
+      }
+      for (const model of models) await this.#addFile(assetId, model.path);
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
     }
@@ -524,7 +542,8 @@ export class WorkspaceStore {
 
   /**
    * Files dropped on an asset's 3D view at a point. Animation-only models join the view at once; other models ask
-   * "New tab" or "Add to view" there. An image goes to the only slot whose texture is missing.
+   * "New tab" or "Add to view" there, and "Add as animation" when one of them can also join as an animation file. An
+   * image goes to the only slot whose texture is missing.
    */
   dropOnView(assetId: string, files: readonly File[], at: { x: number; y: number }): Promise<void> {
     this.#dropWork = this.#dropWork.then(() => this.#placeDrop(assetId, files, at));
@@ -541,17 +560,16 @@ export class WorkspaceStore {
       if (models.length > 0) {
         const session = this.#sessions.get(assetId);
         const placed = (await host.place(files, this.#assetPath(assetId))).filter(isModelFile);
-        const roles = await this.#rolesOf(placed);
+        const models = await this.#rolesOf(assetId, placed);
         if (!session || this.#sessions.get(assetId) !== session) {
           await host.discard?.(files);
           return;
         }
-        if (placed.length > 0 && roles.every((role) => role === "animation")) {
-          for (const model of placed) await this.#addFile(assetId, model, "animation");
+        if (models.length > 0 && models.every(onlyAnimation)) {
+          for (const model of models) await this.#addFile(assetId, model.path, "animation");
           return;
         }
-        const models = placed.map((path, index) => ({ path, role: roles[index] ?? null }));
-        this.state.patch({ dropPrompt: { assetId, x: at.x, y: at.y, files: [...files], models } });
+        this.state.patch({ dropPrompt: { assetId, at, files: [...files], models } });
         return;
       }
       const [image] = images;
@@ -562,7 +580,10 @@ export class WorkspaceStore {
     }
   }
 
-  /** Answers the drop prompt: opens the dropped files in new tabs, or adds the models to the view. */
+  /**
+   * Answers the drop prompt: opens the dropped files in new tabs, or adds the models to the view, each in its own role
+   * or, for "animation", as an animation file wherever the core allows it.
+   */
   async answerDrop(choice: DropChoice): Promise<void> {
     const prompt = this.state.get().dropPrompt;
     if (!prompt) return;
@@ -572,8 +593,9 @@ export class WorkspaceStore {
       return;
     }
     for (const model of prompt.models) {
+      const role = choice === "animation" && model.roles.includes("animation") ? "animation" : model.role;
       try {
-        await this.#addFile(prompt.assetId, model.path, model.role ?? undefined);
+        await this.#addFile(prompt.assetId, model.path, role ?? undefined);
       } catch (error) {
         this.notify({ message: messageOf(error), kind: "alert" });
       }
@@ -585,6 +607,7 @@ export class WorkspaceStore {
     const prompt = this.state.get().dropPrompt;
     if (!prompt) return;
     this.state.patch({ dropPrompt: null });
+    if (prompt.files.length === 0) return;
     try {
       this.#dropCleanup = Promise.resolve(this.#files?.discard?.(prompt.files)).catch((error: unknown) => {
         this.notify({ message: messageOf(error), kind: "alert" });
@@ -600,7 +623,7 @@ export class WorkspaceStore {
     return path;
   }
 
-  async #addFile(assetId: string, file: string, role?: MemberRole): Promise<void> {
+  async #addFile(assetId: string, file: string, role?: FileRole): Promise<void> {
     await this.client.execute("composition.addFile", { assetId, file, ...(role ? { role } : {}) });
     this.notify({ message: `Added ${fileNameOf(file)}`, kind: "info" });
   }
@@ -611,16 +634,16 @@ export class WorkspaceStore {
   }
 
   /**
-   * The role each model takes in a view, read once here so adding it does not parse it again: "animation" for clips and
-   * no meshes, "set" for meshes, and null when the file cannot be inspected or holds neither.
+   * How each model would join the asset's view, as the core tells, with no roles where it cannot. The core keeps the
+   * last model it parsed here, so adding a single model does not parse it again.
    */
-  async #rolesOf(models: readonly string[]): Promise<DroppedModel["role"][]> {
-    const roles: DroppedModel["role"][] = [];
+  async #rolesOf(assetId: string, models: readonly string[]): Promise<DroppedModel[]> {
+    const answers: DroppedModel[] = [];
     for (const path of models) {
-      const inspection = await this.client.query("asset.inspect", { path }).catch(() => null);
-      roles.push(inspection && memberRoleFor({ meshes: inspection.meshes.length, clips: inspection.clips.length }));
+      const answer = await this.client.query("composition.fileRoles", { assetId, file: path }).catch(() => null);
+      answers.push({ path, role: answer?.role ?? null, roles: answer?.roles ?? [] });
     }
-    return roles;
+    return answers;
   }
 
   async #imageOnView(assetId: string, image: File): Promise<void> {

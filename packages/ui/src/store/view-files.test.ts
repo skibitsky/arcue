@@ -1,11 +1,11 @@
-import type { AssetInspection } from "@arcue/protocol";
+import type { FileRole, QueryOutput } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { Clip, Material, SceneDescription } from "@arcue/scene";
 import { describe, expect, it, vi } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import { flush, openStone } from "../test-helpers";
 import type { FileHost, FileKind } from "./view-files";
-import { besideModel, clipGroups, sortDropped } from "./view-files";
+import { besideModel, clipGroups, offersAnimation, sortDropped } from "./view-files";
 
 const FOLDER = STONE_RESONATOR_PATH.slice(0, STONE_RESONATOR_PATH.lastIndexOf("/"));
 
@@ -45,38 +45,9 @@ function material(name: string, fields: Partial<Material> = {}): Material {
   };
 }
 
-function inspection(meshes: number, clips: number): AssetInspection {
-  return {
-    file: { path: "/x.fbx", name: "x.fbx", bytes: 1 },
-    format: "fbx",
-    exporter: null,
-    fps: 30,
-    upAxis: "+Y",
-    unitMeters: 1,
-    height: 0,
-    meshes: Array.from({ length: meshes }, (_, index) => ({
-      name: `M${index}`,
-      path: `M${index}`,
-      triangles: 1,
-      vertices: 3,
-      skinned: false,
-    })),
-    parts: [],
-    triangles: meshes,
-    bones: [],
-    materials: [],
-    textures: [],
-    clips: Array.from({ length: clips }, (_, index) => ({
-      name: `C${index}`,
-      displayName: `C${index}`,
-      frames: 2,
-      fps: 30,
-      duration: 1 / 30,
-    })),
-    composition: null,
-    members: [],
-    warnings: [],
-  };
+/** What the core tells about a file: the role it takes without one, then the others it can take. */
+function answer(role: FileRole, ...others: FileRole[]): QueryOutput<"composition.fileRoles"> {
+  return { role, roles: [role, ...others] };
 }
 
 /** A host whose dialog answers with `picked` and that places dropped files beside the model by name. */
@@ -148,6 +119,46 @@ describe("adding files to a view", () => {
     expect(store.state.get().toast).toMatchObject({ message: "Added Turn.fbx", kind: "info" });
   });
 
+  it("asks before adding a picked file that can also join as an animation file, and adds it as the answer says", async () => {
+    const { host, discarded } = fakeHost({ model: [`${FOLDER}/Jacket.blend`, `${FOLDER}/Shells.fbx`] });
+    const { client, store, session } = await openStone({
+      files: host,
+      roles: (path) => (path.endsWith("Jacket.blend") ? answer("set", "animation") : answer("set")),
+    });
+    await store.addFileToView(session.assetId);
+    expect(store.state.get().dropPrompt).toMatchObject({ assetId: session.assetId, at: null, files: [] });
+    expect(callsOf(client, "composition.addFile")).toEqual([]);
+    await store.answerDrop("animation");
+    expect(callsOf(client, "composition.addFile")).toEqual([
+      { assetId: session.assetId, file: `${FOLDER}/Jacket.blend`, role: "animation" },
+      { assetId: session.assetId, file: `${FOLDER}/Shells.fbx`, role: "set" },
+    ]);
+
+    await store.addFileToView(session.assetId);
+    store.dismissDrop();
+    expect(store.state.get().dropPrompt).toBeNull();
+    expect(discarded).toEqual([]);
+    expect(callsOf(client, "composition.addFile")).toHaveLength(2);
+  });
+
+  it("neither asks nor adds when the tab closes while the core reads a picked file", async () => {
+    const { host } = fakeHost({ model: [`${FOLDER}/Jacket.blend`] });
+    const reading = Promise.withResolvers<void>();
+    const { client, store, session } = await openStone({ files: host, roles: () => answer("set", "animation") });
+    const query = client.query.bind(client);
+    vi.spyOn(client, "query").mockImplementation(async (name, input) => {
+      if (name === "composition.fileRoles") await reading.promise;
+      return query(name, input);
+    });
+    const adding = store.addFileToView(session.assetId);
+    await flush();
+    await store.closeTab(session.assetId);
+    reading.resolve();
+    await adding;
+    expect(store.state.get().dropPrompt).toBeNull();
+    expect(callsOf(client, "composition.addFile")).toEqual([]);
+  });
+
   it("does nothing when the dialog is cancelled, and says so when no model was picked", async () => {
     const { client, store, session } = await openStone({ files: fakeHost().host });
     await store.addFileToView(session.assetId);
@@ -192,7 +203,7 @@ describe("adding files to a view", () => {
 describe("dropping files on a model's view", () => {
   it("adds animation-only files at once, as animation files", async () => {
     const { host } = fakeHost();
-    const { client, store, session } = await openStone({ files: host, inspect: () => inspection(0, 2) });
+    const { client, store, session } = await openStone({ files: host, roles: () => answer("animation") });
     await store.dropOnView(session.assetId, [file("Turn.fbx"), file("Wave.fbx")], { x: 10, y: 20 });
     expect(store.state.get().dropPrompt).toBeNull();
     expect(callsOf(client, "composition.addFile")).toEqual([
@@ -205,14 +216,13 @@ describe("dropping files on a model's view", () => {
     const { host, opened, discarded } = fakeHost();
     const { client, store, session } = await openStone({
       files: host,
-      inspect: (path) => (path.endsWith("Turn.fbx") ? inspection(0, 1) : inspection(1, 0)),
+      roles: (file) => (file.endsWith("Turn.fbx") ? answer("animation") : answer("set")),
     });
     const dropped = [file("Shells.fbx"), file("Turn.fbx"), file("Shell.png")];
     await store.dropOnView(session.assetId, dropped, { x: 10, y: 20 });
     expect(store.state.get().dropPrompt).toMatchObject({
       assetId: session.assetId,
-      x: 10,
-      y: 20,
+      at: { x: 10, y: 20 },
       models: [
         { path: `${FOLDER}/Shells.fbx`, role: "set" },
         { path: `${FOLDER}/Turn.fbx`, role: "animation" },
@@ -244,7 +254,7 @@ describe("dropping files on a model's view", () => {
 
   it("discards an unanswered drop's files when another drop replaces its prompt", async () => {
     const { host, discarded } = fakeHost();
-    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    const { store, session } = await openStone({ files: host, roles: () => answer("set") });
     await store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
     await store.dropOnView(session.assetId, [file("Crate.fbx")], { x: 0, y: 0 });
     expect(discarded).toEqual([["Shells.fbx"]]);
@@ -253,7 +263,7 @@ describe("dropping files on a model's view", () => {
 
   it("discards the dropped files when their tab closes while the prompt is open", async () => {
     const { host, discarded } = fakeHost();
-    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    const { store, session } = await openStone({ files: host, roles: () => answer("set") });
     await store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
     await store.closeTab(session.assetId);
     expect(store.state.get().dropPrompt).toBeNull();
@@ -268,7 +278,7 @@ describe("dropping files on a model's view", () => {
       await placement.promise;
       return place(...args);
     };
-    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    const { store, session } = await openStone({ files: host, roles: () => answer("set") });
     const dropped = store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
     await flush();
     await store.closeTab(session.assetId);
@@ -286,7 +296,7 @@ describe("dropping files on a model's view", () => {
       if (files[0]?.name === "Shells.fbx") await placement.promise;
       return place(files, path);
     };
-    const { store, session } = await openStone({ files: host, inspect: () => inspection(1, 0) });
+    const { store, session } = await openStone({ files: host, roles: () => answer("set") });
     const earlier = store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });
     await flush();
     const latest = store.dropOnView(session.assetId, [file("Crate.fbx")], { x: 1, y: 1 });
@@ -297,10 +307,45 @@ describe("dropping files on a model's view", () => {
     expect(discarded).toEqual([["Shells.fbx"]]);
   });
 
-  it("asks when a dropped model cannot be inspected, and then lets the core pick its role", async () => {
+  it("asks about a dropped animation file that keeps a copy of the model, and adds it in the role the core gives", async () => {
+    const { client, store, session } = await openStone({
+      files: fakeHost().host,
+      roles: () => answer("animation", "set"),
+    });
+    await store.dropOnView(session.assetId, [file("StoneAnims.blend")], { x: 0, y: 0 });
+    expect(store.state.get().dropPrompt?.models).toEqual([
+      { path: `${FOLDER}/StoneAnims.blend`, role: "animation", roles: ["animation", "set"] },
+    ]);
+    expect(offersAnimation(store.state.get().dropPrompt?.models ?? [])).toBe(false);
+    await store.answerDrop("view");
+    expect(callsOf(client, "composition.addFile")).toEqual([
+      { assetId: session.assetId, file: `${FOLDER}/StoneAnims.blend`, role: "animation" },
+    ]);
+  });
+
+  it("offers to add a dropped file whose clips key the model's bones as an animation file", async () => {
+    const { client, store, session } = await openStone({
+      files: fakeHost().host,
+      roles: (path) => (path.endsWith("Jacket.blend") ? answer("set", "animation") : answer("set")),
+    });
+    const dropped = [file("Jacket.blend"), file("Crate.fbx")];
+    await store.dropOnView(session.assetId, dropped, { x: 0, y: 0 });
+    expect(offersAnimation(store.state.get().dropPrompt?.models ?? [])).toBe(true);
+    await store.answerDrop("animation");
+    await store.dropOnView(session.assetId, dropped, { x: 0, y: 0 });
+    await store.answerDrop("view");
+    expect(callsOf(client, "composition.addFile")).toEqual([
+      { assetId: session.assetId, file: `${FOLDER}/Jacket.blend`, role: "animation" },
+      { assetId: session.assetId, file: `${FOLDER}/Crate.fbx`, role: "set" },
+      { assetId: session.assetId, file: `${FOLDER}/Jacket.blend`, role: "set" },
+      { assetId: session.assetId, file: `${FOLDER}/Crate.fbx`, role: "set" },
+    ]);
+  });
+
+  it("asks when the core cannot tell how a dropped model joins, and then lets it pick the role", async () => {
     const { client, store, session } = await openStone({ files: fakeHost().host });
     await store.dropOnView(session.assetId, [file("Odd.fbx")], { x: 0, y: 0 });
-    expect(store.state.get().dropPrompt?.models).toEqual([{ path: `${FOLDER}/Odd.fbx`, role: null }]);
+    expect(store.state.get().dropPrompt?.models).toEqual([{ path: `${FOLDER}/Odd.fbx`, role: null, roles: [] }]);
     await store.answerDrop("view");
     expect(callsOf(client, "composition.addFile")).toEqual([{ assetId: session.assetId, file: `${FOLDER}/Odd.fbx` }]);
   });
@@ -314,7 +359,7 @@ describe("dropping files on a model's view", () => {
     const { host, discarded } = fakeHost();
     const { store, session } = await openStone({
       files: host,
-      inspect: () => inspection(1, 0),
+      roles: () => answer("set"),
       scene: withMissing([{ normal: "Stone_N.png" }]),
     });
     await store.dropOnView(session.assetId, [file("Shells.fbx")], { x: 0, y: 0 });

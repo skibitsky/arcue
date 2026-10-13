@@ -42,6 +42,8 @@ export interface FakeMesh {
   skin?: string[];
   /** Index into the spec's materials. */
   material?: number;
+  /** Hides the mesh's part until someone shows it, as Blender's eye does. */
+  hidden?: boolean;
 }
 
 /** A bone under the root or another bone, by name. */
@@ -165,7 +167,12 @@ export function fakeScene(spec: FakeAssetSpec): SceneDescription {
       ...(clip.sourceStartFrame === undefined ? {} : { sourceStartFrame: clip.sourceStartFrame }),
     };
   });
-  const parts = describeParts(nodes);
+  const hiddenMeshes = new Set(spec.meshes.flatMap((mesh, index) => (mesh.hidden ? [index] : [])));
+  const parts = describeParts(nodes).map((part) =>
+    part.levels.some((level) => level.meshes.some((mesh) => hiddenMeshes.has(mesh)))
+      ? { ...part, hiddenByDefault: true }
+      : part,
+  );
   return {
     source: {
       format: "fbx",

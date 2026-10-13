@@ -177,7 +177,7 @@ export async function rebaseComposition(
 }
 
 /**
- * The old model's "<stem>@<clip>.fbx" files that the review names and that would no longer join the model by name.
+ * The old model's "<stem>@<clip>" model files that the review names and that would no longer join the model by name.
  * Each maps to the new model's file of the same clip when there is one beside it. Otherwise, while it still exists, it
  * joins as an animation file written from the new model's folder, labelled as that path, as any member file is.
  */

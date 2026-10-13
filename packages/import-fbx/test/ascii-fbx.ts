@@ -451,9 +451,66 @@ ${TRIANGLE_MODEL}
 	C: "OO",1000,2000`,
 );
 
-/** The triangle with a texture whose only stored path is absolute, from the exporting machine. */
+/** The triangle with a second UV map, "Detail". */
+const DETAIL_UV_TRIANGLE_GEOMETRY = `	Geometry: 1000, "Geometry::Tri", "Mesh" {
+		Vertices: *9 {
+			a: 0,0,0,1,0,0,0,1,0
+		}
+		PolygonVertexIndex: *3 {
+			a: 0,1,-3
+		}
+		LayerElementUV: 0 {
+			Version: 101
+			Name: "UVMap"
+			MappingInformationType: "ByPolygonVertex"
+			ReferenceInformationType: "Direct"
+			UV: *6 {
+				a: 0,0,1,0,0,1
+			}
+		}
+		LayerElementUV: 1 {
+			Version: 101
+			Name: "Detail"
+			MappingInformationType: "ByPolygonVertex"
+			ReferenceInformationType: "Direct"
+			UV: *6 {
+				a: 1,1,0,1,1,0
+			}
+		}
+		LayerElementMaterial: 0 {
+			Version: 101
+			MappingInformationType: "AllSame"
+			ReferenceInformationType: "IndexToDirect"
+			Materials: *1 {
+				a: 0
+			}
+		}
+		Layer: 0 {
+			Version: 100
+			LayerElement:  {
+				Type: "LayerElementUV"
+				TypedIndex: 0
+			}
+			LayerElement:  {
+				Type: "LayerElementMaterial"
+				TypedIndex: 0
+			}
+		}
+		Layer: 1 {
+			Version: 100
+			LayerElement:  {
+				Type: "LayerElementUV"
+				TypedIndex: 1
+			}
+		}
+	}`;
+
+/**
+ * The triangle with a texture whose only stored path is absolute, from the exporting machine. The texture samples the
+ * second UV map, clamps across U and repeats across V, and is offset and scaled.
+ */
 export const ABSOLUTE_TEXTURE_FBX = asciiFbx(
-  `${TRIANGLE_GEOMETRY}
+  `${DETAIL_UV_TRIANGLE_GEOMETRY}
 ${TRIANGLE_MODEL}
 	Material: 3000, "Material::Stone", "" {
 		Version: 102
@@ -463,6 +520,12 @@ ${TRIANGLE_MODEL}
 		Type: "TextureVideoClip"
 		Version: 202
 		TextureName: "Texture::Stone"
+		Properties70:  {
+			P: "UVSet", "KString", "", "", "Detail"
+			P: "WrapModeU", "enum", "", "",1
+			P: "Translation", "Vector", "", "A",0.25,0.5,0
+			P: "Scaling", "Vector", "", "A",2,4,1
+		}
 		FileName: "/tmp/export-staging/StoneStriker-BaseColor.png"
 		RelativeFilename: ""
 	}`,

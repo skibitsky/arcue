@@ -13,6 +13,7 @@ import {
   composeScene,
   describeTextureUses,
   fileNameOf,
+  findNode,
   imageMimeType,
   importWarning,
   splitMemberPath,
@@ -85,7 +86,7 @@ export interface ReadAssetOptions {
 const encoder = new TextEncoder();
 
 /**
- * Reads the model, its composition file and every file the composition names, plus the "<stem>@<clip>.fbx" files
+ * Reads the model, its composition file and every file the composition names, plus the "<stem>@<clip>" model files
  * beside the model. The composition's paths are relative to the model's folder. Member files must be model files
  * inside `readRoot` reached without symbolic links. Textures are searched for like an importer's stale paths, starting
  * from the path the composition writes, and each image is read once however many slots use it. A missing model
@@ -262,13 +263,56 @@ function versionFile(file: ReadFile, id: string): VersionFile {
 export const MEMBER_IMPORTS_AT_ONCE = 4;
 
 /**
- * The warnings of an animation file's own parser that matter for its clips, besides every warning about a clip; the
- * rest are about meshes and rest poses.
+ * The warnings of an animation file's own parser that matter for its clips, besides every warning about a clip: why
+ * clips are missing or differ from the file. The rest are about meshes and rest poses.
  */
-const CLIP_WARNINGS: ReadonlySet<ImportWarningCode> = new Set(["clip-not-sampled", "invalid-data", "left-handed-axes"]);
+const CLIP_WARNINGS: ReadonlySet<ImportWarningCode> = new Set([
+  "clip-not-sampled",
+  "invalid-data",
+  "left-handed-axes",
+  "library-not-loaded",
+]);
 
-function mattersForClips(warning: ImportWarning): boolean {
-  return warning.subject.kind === "clip" || CLIP_WARNINGS.has(warning.code);
+/**
+ * The warnings about an object that constraints or drivers move beyond its keys, which matter only where the object
+ * reaches the model.
+ */
+const MOTION_WARNINGS: ReadonlySet<ImportWarningCode> = new Set(["constraint-not-evaluated", "driver-not-evaluated"]);
+
+function mattersForClips(warning: ImportWarning, member: SceneDescription, model: SceneDescription): boolean {
+  if (warning.subject.kind === "clip" || CLIP_WARNINGS.has(warning.code)) return true;
+  if (!MOTION_WARNINGS.has(warning.code) || warning.subject.kind !== "node") return false;
+  return reachesModel(member, warning.subject.name, model);
+}
+
+/**
+ * Whether an animation file's object moves something of the model, whose nodes the file's clips bind to by name: it is
+ * an armature with a bone the model has, or the model has an object of its name. A mesh with shape keys counts only
+ * when the model's mesh of its name has shape keys too, as its warnings may be about drivers of those shape keys.
+ */
+function reachesModel(member: SceneDescription, name: string, model: SceneDescription): boolean {
+  const index = findNode(member.nodes, name, false);
+  if (index === null) return false;
+  const modelBones = new Set(model.nodes.flatMap((node) => (node.kind === "bone" ? [node.name] : [])));
+  if (bonesUnder(member.nodes, index).some((bone) => modelBones.has(bone))) return true;
+  const match = findNode(model.nodes, member.nodes[index]?.name ?? name, false);
+  return match !== null && (!hasShapeKeys(member, index) || hasShapeKeys(model, match));
+}
+
+function bonesUnder(nodes: SceneDescription["nodes"], root: number): string[] {
+  const under = new Set([root]);
+  const bones: string[] = [];
+  nodes.forEach((node, index) => {
+    if (index <= root || !under.has(node.parent)) return;
+    under.add(index);
+    if (node.kind === "bone") bones.push(node.name);
+  });
+  return bones;
+}
+
+function hasShapeKeys(scene: SceneDescription, node: number): boolean {
+  const mesh = scene.meshes[scene.nodes[node]?.mesh ?? -1];
+  return (mesh?.morphTargets.length ?? 0) > 0;
 }
 
 export interface BuildSceneOptions {
@@ -319,7 +363,7 @@ export async function buildAssetScene(
       scenes.set(file.path, { file: file.label, scene });
       const animationOnly = !attached.has(file.path);
       for (const warning of scene.source.warnings) {
-        if (!animationOnly || mattersForClips(warning)) warnings.push({ ...warning, file: file.label });
+        if (!animationOnly || mattersForClips(warning, scene, model)) warnings.push({ ...warning, file: file.label });
       }
       continue;
     }

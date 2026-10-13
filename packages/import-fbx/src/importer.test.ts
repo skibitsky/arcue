@@ -565,6 +565,13 @@ describe("export checks", () => {
     expect((await importText("blender.fbx", Y_UP_ROOT_ROTATION_FBX)).source.warnings).toEqual([]);
   });
 
+  const stoneSampling = {
+    uvSet: 1,
+    wrapU: "clamp",
+    wrapV: "repeat",
+    transform: { offset: [-0.125, -0.125], scale: [0.5, 0.25], rotation: 0 },
+  };
+
   it("warns about a texture stored only with an absolute path, even when it is found by name", async () => {
     const found: string[] = [];
     const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX, (storedPath) => {
@@ -572,6 +579,7 @@ describe("export checks", () => {
       return Promise.resolve({ path: "../Textures/StoneStriker-BaseColor.png", bytes: PNG_SIGNATURE });
     });
     expect(found).toEqual(["/tmp/export-staging/StoneStriker-BaseColor.png"]);
+    expect(scene.materials[0]?.baseColorTexture).toEqual({ texture: 0, ...stoneSampling });
     expect(scene.textures).toEqual([
       {
         name: "StoneStriker-BaseColor",
@@ -600,9 +608,7 @@ describe("export checks", () => {
     expect(scene.materials[0]?.missingTextures).toEqual({
       baseColor: "/tmp/export-staging/StoneStriker-BaseColor.png",
     });
-    expect(scene.materials[0]?.missingTextureSampling).toEqual({
-      baseColor: { uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null },
-    });
+    expect(scene.materials[0]?.missingTextureSampling).toEqual({ baseColor: stoneSampling });
     expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
       ["texture-path-absolute", "warning", "Absolute texture path: StoneStriker-BaseColor.png"],
       ["texture-not-found", "error", "Texture not found: StoneStriker-BaseColor.png"],

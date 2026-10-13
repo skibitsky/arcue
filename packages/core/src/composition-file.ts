@@ -18,7 +18,10 @@ export function hasExtension(path: string, extensions: readonly string[]): boole
   return extensions.some((extension) => lower.endsWith(extension));
 }
 
-/** Files named "<model stem>@<anything>.fbx" join the model as animation files, as in Unity. */
+/**
+ * Model files named "<model stem>@<anything>", such as "Hero@Walk.fbx" or "Hero@Walk.blend", join the model as
+ * animation files, as in Unity.
+ */
 export function isConventionAnimation(modelPath: string, name: string): boolean {
   return joinsByName(basename(modelPath), name);
 }

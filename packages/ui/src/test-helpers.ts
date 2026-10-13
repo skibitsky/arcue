@@ -1,4 +1,4 @@
-import type { AssetInspection, ComputedContext, TimeSelection } from "@arcue/protocol";
+import type { ComputedContext, QueryOutput, TimeSelection } from "@arcue/protocol";
 import type {
   CameraAnchor,
   Material,
@@ -302,8 +302,8 @@ interface SetupOptions {
   scene?: SceneChange;
   /** The host's open dialog and dropped files. */
   files?: FileHost;
-  /** What `asset.inspect` reports for a path. */
-  inspect?: (path: string) => AssetInspection | null;
+  /** What `composition.fileRoles` reports for a file. */
+  roles?: (file: string) => QueryOutput<"composition.fileRoles"> | null;
 }
 
 export function setup(options: SetupOptions = {}) {
@@ -311,7 +311,7 @@ export function setup(options: SetupOptions = {}) {
   const client = new FakeCoreClient({
     catalog: (path) => stoneCatalog(path, options.scene),
     now: () => NOW,
-    ...(options.inspect ? { inspect: options.inspect } : {}),
+    ...(options.roles ? { roles: options.roles } : {}),
   });
   const copied: string[] = [];
   const store = createWorkspaceStore({

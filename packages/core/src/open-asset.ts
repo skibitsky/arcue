@@ -52,6 +52,10 @@ export class OpenAsset {
   readonly compositionWatchers = new Map<string, () => void>();
   /** Parsed files by path with the id of the bytes they came from, so a reload parses only what changed. */
   readonly imported = new Map<string, { id: string; scene: SceneDescription; files: ImportFiles }>();
+  /** The model and the files of its composition, by path, as the version on screen loaded them. */
+  loadedFiles: ReadonlySet<string> = new Set();
+  /** The file `composition.fileRoles` read last, whose parse stays until the next question so adding it reads it once. */
+  asked: string | null = null;
   /** Serializes edits of the composition file. */
   readonly compositionEdits = new Serial();
   cancelStabilityCheck: () => void = () => undefined;

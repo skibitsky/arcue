@@ -1,7 +1,7 @@
 import type { SceneDescription } from "@arcue/scene";
 import { z } from "zod";
 import { assetIdSchema, assetSummarySchema, bytesSchema, commentIdSchema } from "./assets";
-import { textureSlotSchema } from "./composition";
+import { fileRoleSchema, textureSlotSchema } from "./composition";
 import type { QueryDefinition } from "./definitions";
 import { query } from "./definitions";
 import { assetWarningSchema } from "./import-warning";
@@ -93,6 +93,12 @@ export const queries = {
       "Get a prompt that asks a coding agent to fix the asset's import warnings that are not dismissed: one instruction line, then one numbered entry per warning.",
     input: z.object(assetRef),
     output: z.object({ prompt: z.string() }),
+  }),
+  "composition.fileRoles": query({
+    description:
+      'Tell how a file would join the asset\'s view: the role composition.addFile gives it without one, then every other role it can take. A file with meshes can be a "set" file. A file with clips can be an "animation" file when it has no meshes, or when most bones they key are the model\'s bones by name.',
+    input: z.object({ ...assetRef, file: z.string().min(1) }),
+    output: z.object({ role: fileRoleSchema, roles: z.array(fileRoleSchema).min(1) }),
   }),
   "asset.inspect": query({
     description:

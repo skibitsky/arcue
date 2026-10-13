@@ -1,4 +1,4 @@
-import type { MemberRole } from "@arcue/protocol";
+import type { FileRole } from "@arcue/protocol";
 import { IMAGE_FILE_EXTENSIONS, joinsByName, MODEL_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { Clip, TextureSlot } from "@arcue/scene";
 import { fileNameOf } from "@arcue/scene";
@@ -21,23 +21,39 @@ export interface FileHost {
   discard?(files: readonly File[]): void | Promise<void>;
 }
 
-/** A model dropped on a tab that shows a model, waiting for "New tab" or "Add to view". */
+/**
+ * Models waiting for "New tab", "Add to view" or "Add as animation": dropped on a tab that shows a model, or picked in
+ * the open dialog when one of them can join the view in another role than its own.
+ */
 export interface DropPrompt {
   assetId: string;
-  /** The drop point, in pixels from the 3D view's top left corner. */
-  x: number;
-  y: number;
+  /** The drop point, in pixels from the 3D view's top left corner, or null for picked models. */
+  at: { x: number; y: number } | null;
+  /** The dropped files, which "New tab" opens; none for picked models. */
   files: readonly File[];
   models: readonly DroppedModel[];
 }
 
-/** A dropped model as a path the core can read, with the role it takes in a view, when its inspection gave one. */
+/** A dropped or picked model as a path the core can read, with how it joins a view when the core could tell. */
 export interface DroppedModel {
   path: string;
-  role: Exclude<MemberRole, "attach"> | null;
+  /** The role it takes in a view when nobody names one, or null when the core could not tell. */
+  role: FileRole | null;
+  /** Every role the core lets it take, its own first; none when the core could not tell. */
+  roles: readonly FileRole[];
 }
 
-export type DropChoice = "tab" | "view";
+export type DropChoice = "tab" | "view" | "animation";
+
+/** Whether "Add as animation" would add some model as an animation file that "Add to view" adds otherwise. */
+export function offersAnimation(models: readonly DroppedModel[]): boolean {
+  return models.some((model) => model.role !== "animation" && model.roles.includes("animation"));
+}
+
+/** Whether a model can only join a view as an animation file, as one with clips and no meshes does. */
+export function onlyAnimation(model: DroppedModel): boolean {
+  return model.roles.length > 0 && model.roles.every((role) => role === "animation");
+}
 
 function hasExtension(name: string, extensions: readonly string[]): boolean {
   const lower = name.toLowerCase();
@@ -94,8 +110,9 @@ export interface ClipGroup {
 }
 
 /**
- * Whether removing an added file takes it out of the view. Files named "<model stem>@<clip>.fbx" beside the model join
- * by their name and are not in the composition file, so they cannot be removed. `file` is relative to the model.
+ * Whether removing an added file takes it out of the view. Model files named "<model stem>@<clip>" beside the model,
+ * such as "Hero@Walk.blend", join by their name and are not in the composition file, so they cannot be removed. `file`
+ * is relative to the model.
  */
 export function removableFromView(file: string, modelName: string): boolean {
   return !(file === fileNameOf(file) && joinsByName(modelName, file));

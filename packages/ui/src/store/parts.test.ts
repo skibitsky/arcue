@@ -71,6 +71,36 @@ describe("parts", () => {
     expect(viewport.parts).toEqual({ ...defaultView, lod: 1 });
   });
 
+  it("shows the part that holds a comment's target when a new export hides it by default", async () => {
+    const { client, session, viewport, timers, assetId } = await openStone();
+    const scene = session.state.get().scene;
+    const body = scene?.parts[0];
+    const node = scene?.nodes.find((entry) => entry.mesh === 0);
+    if (!scene || !body || !node) throw new Error("The stone has a part.");
+    viewport.emit("pinPlaced", { anchor: { ...POINT, mesh: node.path } });
+    session.setBoxText("Crack here.");
+    await session.submitBox();
+    await flush();
+    const created = session.state.get().review?.comments.at(-1);
+    if (!created) throw new Error("The comment was created.");
+    expect(created.parts).toBeUndefined();
+
+    const hidden = { ...scene, parts: scene.parts.map((part) => ({ ...part, hiddenByDefault: true })) };
+    await client.simulateExport(assetId, { scene: hidden });
+    await flush(10);
+    await client.execute("view.selectComment", { assetId, commentId: created.id });
+    expect(viewport.parts).toEqual({ ...defaultView, shown: [body.id] });
+    timers.advance(400);
+    await flush();
+    const reported = client.calls.filter((call) => call.name === "view.reportState").at(-1);
+    expect(reported?.input).toMatchObject({ state: { parts: { ...defaultView, shown: [body.id] } } });
+
+    session.deselect();
+    session.setPartVisible(body.id, false);
+    session.selectComment(created.id);
+    expect(session.state.get().parts).toEqual({ ...defaultView, shown: [body.id] });
+  });
+
   it("keeps what is on screen when a part is shown or hidden during an isolation, and Escape ends one", async () => {
     const { client, session, viewport, assetId } = await openStone({ scene: withParts });
     await client.execute("view.isolatePart", { assetId, part: "Boulder2" });

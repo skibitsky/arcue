@@ -9,10 +9,13 @@ import type {
   Comment,
   CompositionFile,
   CoreClient,
+  FileRole,
   ListenerErrorHandler,
   MeshTopology,
   MessageEndpoint,
   Peer,
+  QueryArgs,
+  QueryOutput,
   ReviewCandidate,
   ReviewFile,
   RoundSummary,
@@ -20,10 +23,12 @@ import type {
 } from "@arcue/protocol";
 import {
   ArcueError,
+  animatesModel,
   COMPOSITION_VERSION,
   commands,
   isCommandName,
-  memberRoleFor,
+  keysModelBones,
+  memberRoles,
   reportListenerError,
   viewStateSchema,
   withTransfer,
@@ -296,6 +301,7 @@ export class ArcueCore {
         return { prompt: warningPrompt(asset.path, this.#warnings(asset)) };
       }),
       registry.handleQuery("asset.inspect", (args) => this.#track(this.#inspect(args.path))),
+      registry.handleQuery("composition.fileRoles", (args) => this.#compositionFileRoles(args)),
       registry.handleQuery("comment.screenshot", async (args) => {
         const asset = this.#asset(args.assetId);
         await checkReviewPath(this.#platform, asset.location, asset.location.folder);
@@ -903,6 +909,7 @@ export class ArcueCore {
             asset.error = null;
             const kept = new Set([asset.path, ...files.members.keys()]);
             for (const path of asset.imported.keys()) if (!kept.has(path)) asset.imported.delete(path);
+            asset.loadedFiles = kept;
           },
         };
       });
@@ -1102,7 +1109,7 @@ export class ArcueCore {
       if (bone !== undefined && model && !model.nodes.some((node) => node.name === bone || node.path === bone)) {
         throw new ArcueError("invalid-input", `${asset.name} has no bone "${bone}".`);
       }
-      const role = args.role ?? (await this.#roleOf(asset, path));
+      const role = args.role ?? (await this.#rolesOf(asset, path)).role;
       const result = await this.#editComposition(asset, (composition, same) =>
         withMember(composition, { file: written, role, node: args.node, bone }, same(path)),
       );
@@ -1110,8 +1117,24 @@ export class ArcueCore {
     });
   }
 
-  /** How a file joins the view when the caller names no role, from what the file holds. */
-  async #roleOf(asset: OpenAsset, path: string): Promise<"animation" | "set"> {
+  #compositionFileRoles(args: QueryArgs<"composition.fileRoles">): Promise<QueryOutput<"composition.fileRoles">> {
+    const asset = this.#asset(args.assetId);
+    return this.#inCompositionLine(asset, async () => {
+      const { path } = await this.#newCompositionFile(asset, args.file, MODEL_EXTENSIONS);
+      if (path === asset.path) throw new ArcueError("invalid-input", `${asset.name} is the model itself.`);
+      const earlier = asset.asked;
+      if (earlier !== null && earlier !== path && earlier !== asset.path) {
+        await asset.loads.run(async () => {
+          if (!asset.loadedFiles.has(earlier)) asset.imported.delete(earlier);
+        });
+      }
+      asset.asked = path;
+      return this.#rolesOf(asset, path);
+    });
+  }
+
+  /** How a file joins the view when the caller names no role, and the roles a caller may name for it. */
+  async #rolesOf(asset: OpenAsset, path: string): Promise<{ role: FileRole; roles: FileRole[] }> {
     const bytes = await this.#platform.readFile(path);
     const scene = await this.#importFile(asset, {
       path,
@@ -1120,9 +1143,15 @@ export class ArcueCore {
       id: versionIdOf(bytes),
       problem: null,
     });
-    const role = memberRoleFor({ meshes: scene.meshes.length, clips: scene.clips.length });
-    if (role === null) throw new ArcueError("invalid-input", `${basename(path)} has no meshes or clips.`);
-    return role;
+    const model = asset.imported.get(asset.path)?.scene ?? asset.scene ?? { nodes: [], meshes: [], parts: [] };
+    const roles = memberRoles({
+      meshes: scene.meshes.length,
+      clips: scene.clips.length,
+      keysModelBones: keysModelBones(scene, model),
+      animatesModel: animatesModel(scene, model),
+    });
+    if (roles === null) throw new ArcueError("invalid-input", `${basename(path)} has no meshes or clips.`);
+    return roles;
   }
 
   #removeCompositionFile(args: CommandArgs<"composition.removeFile">): Promise<{ path: string }> {

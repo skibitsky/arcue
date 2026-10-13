@@ -93,7 +93,7 @@ export interface OpenPlan<Item> {
 
 /**
  * What to open from files picked or dropped together. Each model opens with the textures of the drop beside it, unless
- * it joins another model in the drop by its name, "<model stem>@<clip>.fbx", as the core joins such files.
+ * it joins another model in the drop by its name, "<model stem>@<clip>" as a model file, as the core joins such files.
  */
 export function planOpen<Item extends { name: string }>(files: readonly Item[]): OpenPlan<Item>[] {
   const { models, textures } = partitionFiles(files);
