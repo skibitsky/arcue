@@ -70,7 +70,11 @@ const TINT_FRAGMENT = /* glsl */ `
  * Adds a change to the material's shaders after the changes it already has. The cache key names every change, so
  * three.js compiles each combination once.
  */
-function patchShaders(material: Material, key: string, patch: (shader: WebGLProgramParametersWithUniforms) => void) {
+export function patchShaders(
+  material: Material,
+  key: string,
+  patch: (shader: WebGLProgramParametersWithUniforms) => void,
+): void {
   const before = material.onBeforeCompile.bind(material);
   const keyBefore = material.customProgramCacheKey();
   material.onBeforeCompile = (shader, renderer) => {
@@ -117,11 +121,6 @@ function replaceLine(
 function mapLine(alpha: Exclude<TextureAlpha, "opacity">): string {
   const color = alpha === "premultiply" ? "sampledDiffuseColor.rgb * sampledDiffuseColor.a" : "sampledDiffuseColor.rgb";
   return `diffuseColor.rgb *= ${color};`;
-}
-
-/** Whether a material's base color map gives its opacity, and so cuts out its texels in a cutout. */
-export function mapGivesOpacity(material: SceneMaterial | undefined): boolean {
-  return (material?.baseColorTexture?.alpha ?? "opacity") === "opacity";
 }
 
 export function sideOf(doubleSided: boolean): Side {
@@ -234,43 +233,100 @@ export function litMaterial({
       "totalEmissiveRadiance *= emissiveColor.rgb * emissiveColor.a;",
     );
   }
-  applyAlphaMode(result, material, alpha);
+  applyAlphaMode(result, material, alpha, result.map !== null && mapAlpha === "opacity");
   return result;
 }
 
 /**
- * Hashing draws a share of a surface's pixels equal to its alpha. The shadow and ID passes cut it out where that share
- * is below this, since three.js's shadow pass cuts out only by `alphaTest`, and a click should not land at random.
+ * The opacity at which the shadow pass keeps a texel of a hashed or blended material, which the display shows in part,
+ * since three.js's shadow pass cuts out only by `alphaTest`. A texel's opacity is the constant alpha times the base
+ * color map's alpha where that alpha is the opacity, and the constant alpha alone elsewhere. The ID pass compares the
+ * map's alpha alone with it, so a click passes only through texels the map cuts away, and never through a surface
+ * whose opacity is uniform, such as glass.
  */
-export const HASHED_CUTOFF = 0.5;
+export const SEE_THROUGH_CUTOFF = 0.5;
+
+/** An alpha test that cuts out every texel, since no alpha exceeds 1. */
+const CUTS_EVERY_TEXEL = 2;
+
+/** The ID pass's alpha test for each hashed or blended material, which three.js's shadow pass does not use. */
+const pickAlphaTests = new WeakMap<Material, number>();
+
+/** The alpha test by which the ID pass cuts out a lit material's texels, on its base color map's alpha. */
+export function pickAlphaTest(lit: Material): number {
+  return pickAlphaTests.get(lit) ?? lit.alphaTest;
+}
 
 /**
- * Blended materials draw sorted over what is behind them without writing depth, as three.js's glTF loader does, so
- * their transparent texels never hide what is drawn after them. Hashed materials write depth and need no sorting; their
- * `alphaTest` serves only the shadow and ID passes.
+ * The alpha test on the base color map's alpha alone that keeps the texels whose opacity reaches `cutoff`. three.js's
+ * shadow pass compares only the map's alpha, so a map that gives the opacity has the constant opacity folded into the
+ * test. Without such a map every texel has the constant opacity, and the test keeps all of them or none.
  */
-function applyAlphaMode(result: MeshStandardMaterial, material: SceneMaterial, opacity: number): void {
+function alphaTestFor(cutoff: number, opacity: number, cutsByMap: boolean): number {
+  if (opacity < cutoff) return CUTS_EVERY_TEXEL;
+  return cutsByMap ? cutoff / opacity : 0;
+}
+
+/**
+ * Masked materials cut out by their alpha test in every pass. Blended materials draw sorted over what is behind them
+ * without writing depth, as three.js's glTF loader does, so their transparent texels never hide what is drawn after
+ * them. Hashed materials whose base color map gives the opacity, such as hair cards and foliage, write depth and need
+ * no sorting. three.js hashes without accumulating frames, so a hashed material whose opacity is uniform, such as
+ * glass, would show as a stipple; it draws blended instead, or opaque at full opacity. A hashed or blended material
+ * with no opacity at all draws nothing, so the ID pass leaves it out too.
+ */
+function applyAlphaMode(
+  result: MeshStandardMaterial,
+  material: SceneMaterial,
+  opacity: number,
+  cutsByMap: boolean,
+): void {
   switch (material.alphaMode) {
     case "opaque":
       return;
-    case "mask":
-      result.alphaTest = material.alphaCutoff > 0 ? material.alphaCutoff : 0.5;
-      result.opacity = opacity;
+    case "mask": {
+      const alphaTest = alphaTestFor(material.alphaCutoff > 0 ? material.alphaCutoff : 0.5, opacity, cutsByMap);
+      result.visible = alphaTest < CUTS_EVERY_TEXEL;
+      result.alphaTest = result.visible ? alphaTest : 0;
       return;
+    }
     case "hash":
-      result.alphaHash = true;
-      result.alphaTest = HASHED_CUTOFF;
-      result.opacity = opacity;
-      patchShaders(result, "arcue-alpha-hash", (shader) => {
-        shader.fragmentShader = shader.fragmentShader.replace("#include <alphatest_fragment>", "");
-      });
+      if (opacity <= 0) {
+        result.visible = false;
+      } else if (cutsByMap) {
+        result.alphaHash = true;
+        result.opacity = opacity;
+        cutOutsideDisplay(result, opacity, cutsByMap);
+      } else if (opacity < 1) {
+        blend(result, opacity, cutsByMap);
+      }
       return;
     case "blend":
-      result.transparent = true;
-      result.depthWrite = false;
-      result.opacity = opacity;
+      if (opacity <= 0) result.visible = false;
+      else blend(result, opacity, cutsByMap);
       return;
   }
+}
+
+function blend(result: MeshStandardMaterial, opacity: number, cutsByMap: boolean): void {
+  result.transparent = true;
+  result.depthWrite = false;
+  result.opacity = opacity;
+  cutOutsideDisplay(result, opacity, cutsByMap);
+}
+
+/**
+ * Gives a see-through material the shadow pass's alpha test, which the display leaves out, and the ID pass's: the
+ * cutoff on the base color map's alpha where that alpha is the opacity, and none where the opacity is uniform.
+ */
+function cutOutsideDisplay(result: MeshStandardMaterial, opacity: number, cutsByMap: boolean): void {
+  pickAlphaTests.set(result, cutsByMap ? SEE_THROUGH_CUTOFF : 0);
+  const alphaTest = alphaTestFor(SEE_THROUGH_CUTOFF, opacity, cutsByMap);
+  if (alphaTest === 0) return;
+  result.alphaTest = alphaTest;
+  patchShaders(result, "arcue-cut-outside-display", (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace("#include <alphatest_fragment>", "");
+  });
 }
 
 export function clayMaterial(palette: Palette, side: Side): MeshStandardMaterial {
@@ -313,21 +369,23 @@ varying float vIdDepth;`;
 /**
  * The ID pass material: each pixel stores the mesh number plus one, the triangle number and the distance along the
  * view direction. It is a basic material with its output replaced, so it runs the same skinning and morph chunks as
- * the display materials and matches the pose on screen exactly. Given a lit material that cuts out by alpha, masked or
- * hashed, it takes that material's opacity and cutoff, and its base color map where `cutsByMap` says the map's alpha is
- * the opacity, so clicks and strokes pass through the cut-out texels.
+ * the display materials and matches the pose on screen exactly. Given a lit material, it cuts out the texels that
+ * `pickAlphaTest` cuts out of it, so clicks and strokes pass through them, and draws nothing where the lit material
+ * draws nothing.
  */
 export function idMaterial(
   meshIndex: number,
   side: Side,
   cutout: MeshStandardMaterial | null = null,
-  cutsByMap = true,
 ): MeshBasicMaterial {
   const material = new MeshBasicMaterial({ side });
-  if (cutout && cutout.alphaTest > 0) {
-    material.map = cutsByMap ? cutout.map : null;
-    material.opacity = cutout.opacity;
-    material.alphaTest = cutout.alphaTest;
+  if (cutout) {
+    const alphaTest = pickAlphaTest(cutout);
+    material.visible = cutout.visible;
+    if (material.visible && alphaTest > 0) {
+      material.map = cutout.map;
+      material.alphaTest = alphaTest;
+    }
   }
   const meshId = { value: meshIndex + 1 };
   material.onBeforeCompile = (shader) => {

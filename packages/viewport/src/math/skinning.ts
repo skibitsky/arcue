@@ -41,7 +41,8 @@ export interface MeshPose {
 
 /**
  * Where a rendered vertex is in scene space: morph offsets first, then the four render influences, the same sum the GPU
- * computes. A vertex of a skinned mesh whose weights are all zero keeps its bind position.
+ * computes. A morph weight that is not finite counts as 0, as on the GPU. A vertex of a skinned mesh whose weights are
+ * all zero keeps its bind position.
  */
 export function posedVertex(
   mesh: PosedMesh,
@@ -57,7 +58,7 @@ export function posedVertex(
   for (let target = 0; target < weights.length; target++) {
     const weight = weights[target] ?? 0;
     const offsets = mesh.morphTargets[target]?.positions;
-    if (weight === 0 || !offsets) continue;
+    if (weight === 0 || !Number.isFinite(weight) || !offsets) continue;
     x += weight * (offsets[vertex * 3] ?? 0);
     y += weight * (offsets[vertex * 3 + 1] ?? 0);
     z += weight * (offsets[vertex * 3 + 2] ?? 0);
