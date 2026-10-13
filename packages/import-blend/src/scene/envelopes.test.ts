@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { identity } from "../math";
-import type { Envelope } from "./envelopes";
+import type { Envelope } from "./armature";
 import { envelopeFactor, envelopeUse } from "./envelopes";
 
 const BONE: Envelope = { head: [0, 0, 0], tail: [0, 2, 0], headRadius: 0.5, tailRadius: 0.25, falloff: 0.5, weight: 1 };
@@ -28,13 +28,9 @@ describe("envelopeFactor", () => {
 describe("envelopeUse", () => {
   const groupsAndEnvelopes = { flags: (1 << 0) | (1 << 1), maskGroup: "" };
   const bones = [
-    { name: "A", flag: 1 << 11, deform: true },
-    { name: "B", flag: 0, deform: true },
+    { name: "A", flag: 1 << 11, deform: true, envelope: BONE },
+    { name: "B", flag: 0, deform: true, envelope: { ...BONE, head: [5, 0, 0], tail: [5, 2, 0] } },
   ];
-  const envelopes = new Map([
-    ["A", BONE],
-    ["B", { ...BONE, head: [5, 0, 0], tail: [5, 2, 0] }],
-  ]);
   /** A mesh whose vertex `v` lies at `points[v]` with the bone weights `groups[v]`, by vertex group index. */
   const mesh = (points: number[][], groups: [group: number, weight: number][][]) => {
     const offsets = new Uint32Array(points.length + 1);
@@ -69,11 +65,11 @@ describe("envelopeUse", () => {
         [[1, 1]],
       ],
     );
-    expect(envelopeUse(data, groupsAndEnvelopes, bones, envelopes, identity())).toEqual({
+    expect(envelopeUse(data, groupsAndEnvelopes, bones, identity())).toEqual({
       enveloped: true,
       multiplying: ["A"],
     });
-    expect(envelopeUse(data, { ...groupsAndEnvelopes, flags: 1 << 0 }, bones, envelopes, identity())).toEqual({
+    expect(envelopeUse(data, { ...groupsAndEnvelopes, flags: 1 << 0 }, bones, identity())).toEqual({
       enveloped: false,
       multiplying: ["A"],
     });
@@ -81,8 +77,8 @@ describe("envelopeUse", () => {
 
   it("reaches an ungrouped vertex through an envelope's falloff alone", () => {
     const beyondRadius = mesh([[0.625, 1, 0]], [[]]);
-    expect(envelopeUse(beyondRadius, groupsAndEnvelopes, bones, envelopes, identity()).enveloped).toBe(true);
+    expect(envelopeUse(beyondRadius, groupsAndEnvelopes, bones, identity()).enveloped).toBe(true);
     const beyondFalloff = mesh([[0.9, 1, 0]], [[]]);
-    expect(envelopeUse(beyondFalloff, groupsAndEnvelopes, bones, envelopes, identity()).enveloped).toBe(false);
+    expect(envelopeUse(beyondFalloff, groupsAndEnvelopes, bones, identity()).enveloped).toBe(false);
   });
 });

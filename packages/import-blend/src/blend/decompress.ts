@@ -10,6 +10,8 @@ const ZSTD_MAX_WINDOW = 2 ** 27 + 1;
 /** The blocks the header check decodes at most, for a header split over short or empty blocks and frames. */
 const HEADER_BLOCKS = 8;
 const GZIP_MAGIC = [0x1f, 0x8b];
+/** Deflate codes at most 258 bytes in 2 bits, so data expands at most this many times. */
+const DEFLATE_MAX_RATIO = 1032;
 
 /**
  * The most a compressed file may expand to: as much memory as the FBX importer lets its parser use. Data that declares
@@ -77,6 +79,18 @@ function littleEndian(bytes: Uint8Array, start: number, length: number): number 
   let value = 0;
   for (let index = length - 1; index >= 0; index--) value = value * 256 + (bytes[start + index] ?? 0);
   return value;
+}
+
+/**
+ * The buffer with room for `needed` bytes and its first `length` bytes kept: itself when it has the room, or else a new
+ * one of the `expected` bytes where they are enough, or of twice its size, at most `limit` bytes.
+ */
+function withRoom(buffer: Uint8Array, length: number, needed: number, expected: number, limit: number): Uint8Array {
+  if (needed <= buffer.byteLength) return buffer;
+  const size = needed <= expected ? expected : Math.max(needed, buffer.byteLength * 2);
+  const grown = new Uint8Array(Math.min(limit, size));
+  grown.set(buffer.subarray(0, length));
+  return grown;
 }
 
 interface ZstdFrame {
@@ -168,12 +182,7 @@ function unzstd(bytes: Uint8Array, declared: number, end: number, limit: number)
       length = part.byteLength;
       return;
     }
-    if (length + part.byteLength > output.byteLength) {
-      const size = Math.max(length + part.byteLength, declared, output.byteLength * 2);
-      const grown = new Uint8Array(Math.min(limit, size));
-      grown.set(output.subarray(0, length));
-      output = grown;
-    }
+    output = withRoom(output, length, length + part.byteLength, declared, limit);
     output.set(part, length);
     length += part.byteLength;
   };
@@ -193,31 +202,47 @@ function unzstd(bytes: Uint8Array, declared: number, end: number, limit: number)
   return output.subarray(0, length);
 }
 
+/**
+ * The size gzip data says it expands to, from the trailer of its last member, or 0 where that is past `limit` or more
+ * than the data could expand to. The trailer holds the size modulo 4 GiB, and a file of several members holds only the
+ * last one's.
+ */
+function gzipSize(bytes: Uint8Array, limit: number): number {
+  const size = bytes.byteLength >= 4 ? littleEndian(bytes, bytes.byteLength - 4, 4) : 0;
+  return size <= Math.min(limit, bytes.byteLength * DEFLATE_MAX_RATIO) ? size : 0;
+}
+
+/**
+ * Expands gzip data into one buffer of the size it says it expands to, allocated once its first bytes are a Blender file
+ * header, and grows the buffer for data that expands to more, refusing data that expands past `limit` bytes.
+ */
 async function gunzip(bytes: Uint8Array, limit: number): Promise<Uint8Array> {
   const stream = decompressor("gzip");
   if (!stream) throw new BlendParseError("this runtime cannot read gzip-compressed files");
   const written = writeInSlices(stream.writable.getWriter(), [bytes]);
   written.catch(() => undefined);
   const reader = stream.readable.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
+  const expected = gzipSize(bytes, limit);
+  let output: Uint8Array = new Uint8Array(0);
+  let length = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     if (!value) continue;
-    const before = total;
-    total += value.byteLength;
-    chunks.push(value);
     try {
-      if (total > limit) throw tooLarge(limit);
-      if (before < HEADER_MAGIC.length && total >= HEADER_MAGIC.length) checkHeaderMagic(concat(chunks));
+      if (length + value.byteLength > limit) throw tooLarge(limit);
+      const checked = length >= HEADER_MAGIC.length;
+      output = withRoom(output, length, length + value.byteLength, checked ? expected : 0, limit);
+      output.set(value, length);
+      length += value.byteLength;
+      if (!checked && length >= HEADER_MAGIC.length) checkHeaderMagic(output.subarray(0, length));
     } catch (error) {
       await reader.cancel();
       throw error;
     }
   }
   await written;
-  return concat(chunks);
+  return output.subarray(0, length);
 }
 
 /**

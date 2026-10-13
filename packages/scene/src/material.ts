@@ -2,7 +2,9 @@ import type { Vec3, Vec4 } from "./math";
 
 /**
  * How a material's alpha shows: not at all, cut out at `alphaCutoff`, as stochastic transparency that needs no sorting
- * (Blender's Dithered or Hashed render method), or blended over what is behind in sorted order.
+ * (Blender's Dithered or Hashed render method), or blended over what is behind in sorted order. A viewport may draw a
+ * "hash" material blended where its opacity is uniform, with no base color texture giving it, since a single frame of
+ * hashing shows such transparency as a stipple that Blender's viewport smooths over many frames.
  */
 export type AlphaMode = "opaque" | "mask" | "hash" | "blend";
 

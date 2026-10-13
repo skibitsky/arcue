@@ -22,7 +22,7 @@ const PREVIEW_NEUTRAL: ReadonlySet<number> = new Set([ModifierType.collision, Mo
 const MODE_REALTIME = 1 << 0;
 
 /** The `ModifierData` header every modifier struct starts with. */
-export function modifierHeader(modifier: BlendStruct): BlendStruct | null {
+function modifierHeader(modifier: BlendStruct): BlendStruct | null {
   return modifier.typeName === "ModifierData" ? modifier : modifier.struct("modifier");
 }
 

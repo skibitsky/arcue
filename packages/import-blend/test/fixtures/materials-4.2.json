@@ -1,1 +1,1 @@
-{"fps":24.0,"unitScale":1.0,"blender":"4.2.0","fixture":"materials-4.2.blend"}
+{"fps":24.0,"unitScale":1.0,"nodeless":{"diffuse":[0.0,1.0,0.0,1.0],"useNodes":false},"blender":"4.2.0","fixture":"materials-4.2.blend"}

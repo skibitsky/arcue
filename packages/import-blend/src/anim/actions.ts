@@ -32,11 +32,11 @@ export interface Action {
 export const ADT_NLA_SOLO_TRACK = 1 << 0;
 export const ADT_NLA_EVAL_OFF = 1 << 1;
 export const ADT_NLA_EDIT_ON = 1 << 2;
-const ADT_NLA_EVAL_UPPER_TRACKS = 1 << 5;
+export const ADT_NLA_EVAL_UPPER_TRACKS = 1 << 5;
 export const NLATRACK_MUTED = 1 << 2;
 const NLATRACK_SOLO = 1 << 3;
-const NLATRACK_DISABLED = 1 << 10;
-const NLASTRIP_MUTED = 1 << 12;
+export const NLATRACK_DISABLED = 1 << 10;
+export const NLASTRIP_MUTED = 1 << 12;
 const ACTION_FRAME_RANGE = 1 << 12;
 const KEYFRAME_STRIP = 0;
 
@@ -148,11 +148,25 @@ export function animationUses(id: BlendStruct): AnimatedId {
  * Blender's `is_nlatrack_evaluatable`: whether an NLA track plays. The soloed track plays while one is, any unmuted
  * track otherwise, and in tweak mode no track that it disables but the tweaked one.
  */
-function trackPlays(flag: number, track: BlendStruct, tweaked: boolean): boolean {
+export function trackPlays(flag: number, track: BlendStruct, tweaked: boolean): boolean {
   const trackFlag = track.number("flag");
   if ((trackFlag & NLATRACK_DISABLED) !== 0 && !tweaked) return false;
   if ((flag & ADT_NLA_SOLO_TRACK) !== 0) return (trackFlag & NLATRACK_SOLO) !== 0;
   return (trackFlag & NLATRACK_MUTED) === 0;
+}
+
+/** The slot handle an animation data or NLA strip stores in `field`, or -1 where the file has none. */
+export function slotHandle(owner: BlendStruct, field: string): number {
+  return owner.has(field) ? owner.number(field) : -1;
+}
+
+/** A use of an action by an ID's animation data. */
+export interface ActionUse {
+  action: BlendStruct;
+  slot: number;
+  played: boolean;
+  /** The NLA strip that plays the action and the track the strip sits on, or null for the active or stashed action. */
+  strip: { strip: BlendStruct; track: BlendStruct } | null;
 }
 
 /**
@@ -164,9 +178,9 @@ function trackPlays(flag: number, track: BlendStruct, tweaked: boolean): boolean
  * unless it or its track is muted, a soloed track or tweak mode leaves its track out, or it shares the tweaked track
  * with the tweaked strip.
  */
-export function usedActions(id: BlendStruct): { action: BlendStruct; slot: number; played: boolean }[] {
+export function usedActions(id: BlendStruct): ActionUse[] {
   const adt = id.deref("adt");
-  const uses: { action: BlendStruct; slot: number; played: boolean }[] = [];
+  const uses: ActionUse[] = [];
   if (!adt) return uses;
   const flag = adt.number("flag");
   const tracks = adt.list("nla_tracks");
@@ -174,13 +188,12 @@ export function usedActions(id: BlendStruct): { action: BlendStruct; slot: numbe
   const tweaking = (flag & ADT_NLA_EDIT_ON) !== 0;
   const upper = !tweaking || (flag & ADT_NLA_EVAL_UPPER_TRACKS) !== 0;
   const overNla = nla && (flag & ADT_NLA_SOLO_TRACK) === 0 && upper;
-  const handle = (owner: BlendStruct, field: string) => (owner.has(field) ? owner.number(field) : -1);
-  const add = (action: BlendStruct | null, slot: number, played: boolean) => {
-    if (action) uses.push({ action, slot, played });
+  const add = (action: BlendStruct | null, slot: number, played: boolean, strip: ActionUse["strip"]) => {
+    if (action) uses.push({ action, slot, played, strip });
   };
-  add(adt.deref("action"), handle(adt, "slot_handle"), !nla || (!tweaking && overNla));
-  add(adt.deref("tmpact"), handle(adt, "tmp_slot_handle"), tweaking && overNla);
-  const visitStrips = (top: BlendStruct, played: boolean) => {
+  add(adt.deref("action"), slotHandle(adt, "slot_handle"), !nla || (!tweaking && overNla), null);
+  add(adt.deref("tmpact"), slotHandle(adt, "tmp_slot_handle"), tweaking && overNla, null);
+  const visitStrips = (top: BlendStruct, track: BlendStruct, played: boolean) => {
     const pending = [{ strip: top, played }];
     const seen = new Set<number>();
     for (let next = pending.pop(); next; next = pending.pop()) {
@@ -188,7 +201,7 @@ export function usedActions(id: BlendStruct): { action: BlendStruct; slot: numbe
       if (seen.has(strip.offset)) continue;
       seen.add(strip.offset);
       const plays = next.played && (strip.number("flag") & NLASTRIP_MUTED) === 0;
-      add(strip.deref("act"), handle(strip, "action_slot_handle"), plays);
+      add(strip.deref("act"), slotHandle(strip, "action_slot_handle"), plays, { strip, track });
       pending.push(...[...strip.list("strips")].reverse().map((inner) => ({ strip: inner, played: plays })));
     }
   };
@@ -198,7 +211,7 @@ export function usedActions(id: BlendStruct): { action: BlendStruct; slot: numbe
     const tweaked = track.offset === tweakedTrack;
     const plays = nla && trackPlays(flag, track, tweaked);
     for (const strip of track.list("strips")) {
-      visitStrips(strip, plays && (!tweaked || strip.offset === tweakedStrip));
+      visitStrips(strip, track, plays && (!tweaked || strip.offset === tweakedStrip));
     }
   }
   return uses;

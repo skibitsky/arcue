@@ -252,6 +252,24 @@ describe("readBlendFile", () => {
     expect(owner?.list("things").map((thing) => thing.string("name"))).toEqual(["A", "B"]);
   });
 
+  it("reads members whose type has the name of an object's built-in property as no number", () => {
+    const named = writeBlend({
+      header: "old",
+      pointerSize: 8,
+      little: true,
+      structs: [
+        { type: "constructor", fields: [["int", "inner"]] },
+        { type: "Holder", fields: [["constructor", "value"]] },
+      ],
+      blocks: [{ code: "HO", struct: "Holder", address: 0x100n, data: [{ value: { inner: 7 } }] }],
+    });
+    const file = readBlendFile(named);
+    const holder = file.first(file.blocksWithCode("HO")[0] ?? null);
+    expect(holder?.struct("value")?.number("inner")).toBe(7);
+    expect(holder?.number("value")).toBe(0);
+    expect(holder?.numbers("value")).toEqual([]);
+  });
+
   it("refuses a block without a code, as a header followed by zeros has", () => {
     const zeros = new Uint8Array(12 + 24 * 1000);
     zeros.set(new TextEncoder().encode("BLENDER-v405"));
@@ -287,12 +305,10 @@ describe("readBlendFile", () => {
     expect(fastestRead(collidingBytes)).toBeLessThan(fastestRead(sequentialBytes) * 5 + 50);
   });
 
-  it("refuses an SDNA member with more elements than its struct has bytes, though its elements take none", () => {
+  it("refuses an SDNA member whose elements take no bytes, however many it has", () => {
     const empty = { type: "Thing", fields: [["void", "pad[1000000000]"]] } satisfies FileDefinition["structs"][number];
     const bytes = writeBlend({ header: "old", pointerSize: 8, little: true, structs: [empty], blocks: [] });
-    expect(() => readBlendFile(bytes)).toThrow(
-      new BlendParseError("its SDNA struct Thing has members past its 0 bytes"),
-    );
+    expect(() => readBlendFile(bytes)).toThrow(new BlendParseError("its SDNA struct Thing has a member of no size"));
   });
 
   it("refuses a file of far more blocks than its size holds in Blender's files", () => {

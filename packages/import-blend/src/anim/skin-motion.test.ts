@@ -29,7 +29,13 @@ describe("skinMotionWarnings on the relations fixture", async () => {
       values: Float32Array.from(offsets.flatMap((offset) => [x + offset, y, z])),
     };
   };
-  const clip = (name: string, tracks: Track[]): ParsedClip => ({ name, duration: 1, curveTimes: [], tracks });
+  const clip = (name: string, tracks: Track[]): ParsedClip => ({
+    name,
+    duration: 1,
+    curveTimes: [],
+    tracks,
+    fileFrames: { start: 1, step: 1 },
+  });
   const details = (clips: ParsedClip[], built = scene) =>
     Object.fromEntries(skinMotionWarnings(built, clips).map((warning) => [warning.subject.name, warning.detail]));
 

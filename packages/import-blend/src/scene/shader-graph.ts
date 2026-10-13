@@ -200,10 +200,23 @@ function convertValue(values: readonly number[], from: number, to: number): numb
 }
 
 const CONSTANT_NODES = new Set(["ShaderNodeRGB", "ShaderNodeValue"]);
+/** The first version whose EEVEE gives an Image Texture node without an image an alpha of 1, as Cycles does, not 0. */
+const OPAQUE_EMPTY_IMAGES = 502;
+
+/** Whether a node is an Image Texture node without an image, which EEVEE shows as black. */
+export function isEmptyImageNode(node: BlendStruct): boolean {
+  return nodeType(node) === "ShaderNodeTexImage" && node.deref("id") === null;
+}
+
+/** What an output of an Image Texture node without an image gives, as EEVEE renders it. */
+function emptyImageOutput(node: BlendStruct, output: string): number[] {
+  if (output !== "Alpha") return [0, 0, 0, 0];
+  return [node.file.version >= OPAQUE_EMPTY_IMAGES ? 1 : 0];
+}
 
 /**
- * The value an input takes when it is constant: its own value, or an RGB or Value node's, converted to the input's
- * type or to `type`. Null when other nodes drive it.
+ * The value an input takes when it is constant: its own value, an RGB or Value node's, or what an Image Texture node
+ * without an image gives, converted to the input's type or to `type`. Null when other nodes drive it.
  */
 export function constantOf(
   graph: ShaderGraph,
@@ -212,6 +225,9 @@ export function constantOf(
 ): number[] | null {
   if (!socket) return null;
   const source = sourceOf(graph, socket);
+  if (source.kind === "output" && isEmptyImageNode(source.node)) {
+    return convertValue(emptyImageOutput(source.node, source.name), socketType(source.socket), type);
+  }
   if (source.kind === "output" && !CONSTANT_NODES.has(nodeType(source.node))) return null;
   const values = socketValue(source.socket);
   if (values.length === 0) return null;
@@ -239,23 +255,61 @@ export function readOutputs(graph: ShaderGraph, output: BlendStruct): Set<number
   return read;
 }
 
-/**
- * The first node of `type` that drives the input, searching upstream through every input. `seen` holds the nodes
- * already searched, so that a node many inputs share is searched once.
- */
-export function upstreamNode(
-  graph: ShaderGraph,
-  socket: BlendStruct,
-  type: string,
-  seen = new Set<number>(),
-): BlendStruct | null {
-  const source = linkedOutput(graph, socket);
-  if (!source || seen.has(source.node.offset)) return null;
-  seen.add(source.node.offset);
-  if (nodeType(source.node) === type) return source.node;
-  for (const input of source.node.list("inputs")) {
-    const found = upstreamNode(graph, input, type, seen);
-    if (found) return found;
+/** For each graph and node type, the first node of the type that drives each node searched, by the node's offset. */
+const upstreamFound = new WeakMap<ShaderGraph, Map<string, Map<number, BlendStruct | null>>>();
+
+function upstreamMemo(graph: ShaderGraph, type: string): Map<number, BlendStruct | null> {
+  let byType = upstreamFound.get(graph);
+  if (!byType) {
+    byType = new Map();
+    upstreamFound.set(graph, byType);
   }
-  return null;
+  let found = byType.get(type);
+  if (!found) {
+    found = new Map();
+    byType.set(type, found);
+  }
+  return found;
+}
+
+/**
+ * The first node of `type` that drives the input, searching upstream through every input in order, depth first. Each
+ * node of a graph is searched once, however many inputs and searches share it.
+ */
+export function upstreamNode(graph: ShaderGraph, socket: BlendStruct, type: string): BlendStruct | null {
+  const start = linkedOutput(graph, socket)?.node;
+  if (!start) return null;
+  const found = upstreamMemo(graph, type);
+  const open = new Set<number>();
+  const stack: { node: BlendStruct; inputs: BlendStruct[]; next: number }[] = [];
+  const enter = (node: BlendStruct) => {
+    if (nodeType(node) === type) {
+      found.set(node.offset, node);
+      return;
+    }
+    open.add(node.offset);
+    stack.push({ node, inputs: node.list("inputs"), next: 0 });
+  };
+  const finish = (node: BlendStruct, result: BlendStruct | null) => {
+    found.set(node.offset, result);
+    open.delete(node.offset);
+    stack.pop();
+  };
+  if (!found.has(start.offset)) enter(start);
+  for (let top = stack.at(-1); top; top = stack.at(-1)) {
+    const input = top.inputs[top.next];
+    if (!input) {
+      finish(top.node, null);
+      continue;
+    }
+    const source = linkedOutput(graph, input)?.node;
+    if (source && !open.has(source.offset) && !found.has(source.offset)) {
+      enter(source);
+      continue;
+    }
+    const result = source ? (found.get(source.offset) ?? null) : null;
+    if (result) finish(top.node, result);
+    else top.next++;
+  }
+  return found.get(start.offset) ?? null;
 }

@@ -18,18 +18,8 @@ export function mat4From(values: readonly number[]): Mat4 {
   return values.length === 16 && values.every(Number.isFinite) ? Float64Array.from(values) : identity();
 }
 
-/** A 4×4 matrix from Blender's column-major `float[3][3]`. */
-export function mat4FromMat3(values: readonly number[]): Mat4 {
-  const m = identity();
-  if (values.length !== 9) return m;
-  for (let column = 0; column < 3; column++) {
-    for (let row = 0; row < 3; row++) m[column * 4 + row] = values[column * 3 + row] ?? 0;
-  }
-  return m;
-}
-
-export function multiply(a: Mat4, b: Mat4): Mat4 {
-  const out = new Float64Array(16);
+/** `a × b`, written into `out`, which must not be `a` or `b`. */
+export function multiply(a: Mat4, b: Mat4, out: Mat4 = new Float64Array(16)): Mat4 {
   for (let column = 0; column < 4; column++) {
     for (let row = 0; row < 4; row++) {
       let sum = 0;
@@ -101,16 +91,6 @@ export function transformDirection(m: Mat4, x: number, y: number, z: number): Ve
   return [at(0) * x + at(4) * y + at(8) * z, at(1) * x + at(5) * y + at(9) * z, at(2) * x + at(6) * y + at(10) * z];
 }
 
-/** The matrix that carries normals through `m`: its inverse transpose, without translation. */
-export function normalMatrix(m: Mat4): Mat4 {
-  const inverse = invert(m);
-  const out = identity();
-  for (let column = 0; column < 3; column++) {
-    for (let row = 0; row < 3; row++) out[column * 4 + row] = inverse[row * 4 + column] ?? 0;
-  }
-  return out;
-}
-
 /** Scale of each axis column. */
 export function axisLengths(m: Mat4): Vec3 {
   const at = (index: number) => m[index] ?? 0;
@@ -129,13 +109,13 @@ export function quatMultiply(a: Quat, b: Quat): Quat {
 }
 
 /** A unit quaternion; a zero one becomes the identity, as Blender normalizes it. */
-export function quatNormalize(q: Quat): Quat {
+function quatNormalize(q: Quat): Quat {
   const length = Math.hypot(q[0], q[1], q[2], q[3]);
   if (!(length > 1e-12) || !Number.isFinite(length)) return [0, 0, 0, 1];
   return [q[0] / length, q[1] / length, q[2] / length, q[3] / length];
 }
 
-export function quatFromAxisAngle(axis: Vec3, angle: number): Quat {
+function quatFromAxisAngle(axis: Vec3, angle: number): Quat {
   const length = Math.hypot(axis[0], axis[1], axis[2]);
   if (!(length > 1e-12) || !Number.isFinite(length)) return [0, 0, 0, 1];
   const s = Math.sin(angle / 2) / length;
@@ -187,7 +167,8 @@ export function rotationQuat(mode: RotationMode, values: RotationValues): Quat {
   return quatFromEuler(values.euler, mode);
 }
 
-export function compose({ translation: t, rotation, scale }: Trs): Mat4 {
+/** The matrix of a translation, rotation and scale, written into `out`. */
+export function compose({ translation: t, rotation, scale }: Trs, out: Mat4 = new Float64Array(16)): Mat4 {
   const [x, y, z, w] = rotation;
   const [sx, sy, sz] = scale;
   const x2 = x + x;
@@ -202,28 +183,30 @@ export function compose({ translation: t, rotation, scale }: Trs): Mat4 {
   const wx = w * x2;
   const wy = w * y2;
   const wz = w * z2;
-  return Float64Array.of(
-    (1 - (yy + zz)) * sx,
-    (xy + wz) * sx,
-    (xz - wy) * sx,
-    0,
-    (xy - wz) * sy,
-    (1 - (xx + zz)) * sy,
-    (yz + wx) * sy,
-    0,
-    (xz + wy) * sz,
-    (yz - wx) * sz,
-    (1 - (xx + yy)) * sz,
-    0,
-    t[0],
-    t[1],
-    t[2],
-    1,
-  );
+  out[0] = (1 - (yy + zz)) * sx;
+  out[1] = (xy + wz) * sx;
+  out[2] = (xz - wy) * sx;
+  out[3] = 0;
+  out[4] = (xy - wz) * sy;
+  out[5] = (1 - (xx + zz)) * sy;
+  out[6] = (yz + wx) * sy;
+  out[7] = 0;
+  out[8] = (xz + wy) * sz;
+  out[9] = (yz - wx) * sz;
+  out[10] = (1 - (xx + yy)) * sz;
+  out[11] = 0;
+  out[12] = t[0];
+  out[13] = t[1];
+  out[14] = t[2];
+  out[15] = 1;
+  return out;
 }
 
+/** Scratch for `decompose`, which writes and reads only its upper 3×3. */
+const DECOMPOSED_ROTATION = identity();
+
 /** The rotation of a matrix whose axes are orthonormal. */
-export function quatFromRotationMatrix(m: Mat4): Quat {
+function quatFromRotationMatrix(m: Mat4): Quat {
   const at = (index: number) => m[index] ?? 0;
   const [m00, m10, m20, m01, m11, m21, m02, m12, m22] = [
     at(0),
@@ -254,7 +237,6 @@ export function quatFromRotationMatrix(m: Mat4): Quat {
   return quatNormalize(q);
 }
 
-/** Splits an affine matrix into translation, rotation and scale. Shear is lost; a mirror flips the x scale. */
 /** The shear below which a matrix counts as a plain translation, rotation and scale. */
 export const SHEAR_TOLERANCE = 1e-4;
 
@@ -272,6 +254,7 @@ export function shearOf(m: Mat4): number {
   return Math.max(cosine(x, y), cosine(y, z), cosine(x, z));
 }
 
+/** Splits an affine matrix into translation, rotation and scale. Shear is lost; a mirror flips the x scale. */
 export function decompose(m: Mat4): Trs {
   const at = (index: number) => m[index] ?? 0;
   let [sx, sy, sz] = axisLengths(m);
@@ -279,7 +262,7 @@ export function decompose(m: Mat4): Trs {
   const ix = sx === 0 ? 0 : 1 / sx;
   const iy = sy === 0 ? 0 : 1 / sy;
   const iz = sz === 0 ? 0 : 1 / sz;
-  const rotation = identity();
+  const rotation = DECOMPOSED_ROTATION;
   for (let row = 0; row < 3; row++) {
     rotation[row] = at(row) * ix;
     rotation[4 + row] = at(4 + row) * iy;
@@ -297,15 +280,15 @@ const AXIS_SIGN: readonly number[] = [1, 1, -1];
 
 /**
  * `C × m × C⁻¹` for C, the conversion from Blender's Z-up axes to Y-up ones scaled by `unitScale`, which takes
- * (x, y, z) to (x, z, −y): the same transform, written in the scene's axes and units.
+ * (x, y, z) to (x, z, −y): the same transform, written in the scene's axes and units, into `out`, which must not be `m`.
  */
-export function toSceneAxes(m: Mat4, unitScale: number): Mat4 {
-  const out = new Float64Array(16);
+export function toSceneAxes(m: Mat4, unitScale: number, out: Mat4 = new Float64Array(16)): Mat4 {
   for (let column = 0; column < 3; column++) {
     for (let row = 0; row < 3; row++) {
       const sign = (AXIS_SIGN[row] ?? 1) * (AXIS_SIGN[column] ?? 1);
       out[column * 4 + row] = sign * (m[(AXIS_SOURCE[column] ?? 0) * 4 + (AXIS_SOURCE[row] ?? 0)] ?? 0);
     }
+    out[column * 4 + 3] = 0;
     out[12 + column] = unitScale * (AXIS_SIGN[column] ?? 1) * (m[12 + (AXIS_SOURCE[column] ?? 0)] ?? 0);
   }
   out[15] = 1;

@@ -1,4 +1,5 @@
-import type { BlendBlock, BlendFile, BlendStruct } from "../blend/file";
+import type { BlendBlock, BlendFile } from "../blend/file";
+import { BlendStruct, numberReader } from "../blend/file";
 import { idName } from "../blend/ids";
 
 export type AttributeType =
@@ -35,23 +36,6 @@ const STORAGE_TYPES: readonly AttributeType[] = [
   "string",
 ];
 
-/** Generic CustomData layer types of Blender 4 and earlier. */
-const CUSTOM_DATA_TYPES: ReadonlyMap<number, AttributeType> = new Map([
-  [10, "float"],
-  [11, "int32"],
-  [17, "byteColor"],
-  [20, "float4x4"],
-  [45, "int8"],
-  [46, "int32_2d"],
-  [47, "floatColor"],
-  [48, "float3"],
-  [49, "float2"],
-  [50, "bool"],
-  [52, "quaternion"],
-]);
-
-const DOMAINS: readonly Domain[] = ["point", "edge", "face", "corner"];
-
 export const CustomDataType = {
   vertex: 0,
   deformVertex: 2,
@@ -63,7 +47,25 @@ export const CustomDataType = {
   shapeKeyIndex: 27,
   customLoopNormal: 41,
   floatColor: 47,
+  float2: 49,
 } as const;
+
+/** Generic CustomData layer types of Blender 4 and earlier. */
+const CUSTOM_DATA_TYPES: ReadonlyMap<number, AttributeType> = new Map([
+  [10, "float"],
+  [11, "int32"],
+  [CustomDataType.byteColor, "byteColor"],
+  [20, "float4x4"],
+  [45, "int8"],
+  [46, "int32_2d"],
+  [CustomDataType.floatColor, "floatColor"],
+  [48, "float3"],
+  [CustomDataType.float2, "float2"],
+  [50, "bool"],
+  [52, "quaternion"],
+]);
+
+const DOMAINS: readonly Domain[] = ["point", "edge", "face", "corner"];
 
 const COMPONENTS: Readonly<Record<AttributeType, number>> = {
   bool: 1,
@@ -181,36 +183,58 @@ export class MeshReadError extends Error {
   override readonly name = "MeshReadError";
 }
 
+/** The first `wanted` structs of a block, or as many as it holds, without making the others. */
+function structsOf(file: BlendFile, block: BlendBlock | null, wanted: number): BlendStruct[] {
+  const type = block?.struct;
+  if (!block || !type || type.size === 0) return [];
+  const count = Math.max(0, Math.min(wanted, block.count, Math.floor(block.size / type.size)));
+  return Array.from({ length: count }, (_, index) => new BlendStruct(file, type, block, index * type.size));
+}
+
 function storageAttributes(mesh: BlendStruct): MeshAttribute[] {
   const storage = mesh.struct("attribute_storage");
   if (!storage) return [];
   const count = storage.number("dna_attributes_num");
-  return storage
-    .derefAll("dna_attributes")
-    .slice(0, count)
-    .flatMap((attribute) => {
-      const type = STORAGE_TYPES[attribute.number("data_type")];
-      const domain = DOMAINS[attribute.number("domain")];
-      if (!type || !domain) return [];
-      const holder = attribute.deref("data");
-      const single = attribute.number("storage_type") === 1;
-      return [{ name: attribute.text("name"), type, domain, block: holder?.target("data") ?? null, single }];
-    });
+  return structsOf(mesh.file, storage.target("dna_attributes"), count).flatMap((attribute) => {
+    const type = STORAGE_TYPES[attribute.number("data_type")];
+    const domain = DOMAINS[attribute.number("domain")];
+    if (!type || !domain) return [];
+    const holder = attribute.deref("data");
+    const single = attribute.number("storage_type") === 1;
+    return [{ name: attribute.text("name"), type, domain, block: holder?.target("data") ?? null, single }];
+  });
 }
 
-function customDataAttributes(mesh: BlendStruct): MeshAttribute[] {
+type LayerField = "vdata" | "edata" | "pdata" | "ldata";
+
+/** The layers of each of a mesh's CustomData, read once: Blender 4 and earlier keep most mesh data in them. */
+type CustomDataLayers = Readonly<Record<LayerField, readonly BlendStruct[]>>;
+
+const LAYER_DOMAINS: readonly [LayerField, Domain][] = [
+  ["vdata", "point"],
+  ["edata", "edge"],
+  ["pdata", "face"],
+  ["ldata", "corner"],
+];
+
+function layersOf(mesh: BlendStruct, field: LayerField): BlendStruct[] {
+  const data = mesh.struct(field);
+  return data ? structsOf(mesh.file, data.target("layers"), data.number("totlayer")) : [];
+}
+
+function readLayers(mesh: BlendStruct): CustomDataLayers {
+  return {
+    vdata: layersOf(mesh, "vdata"),
+    edata: layersOf(mesh, "edata"),
+    pdata: layersOf(mesh, "pdata"),
+    ldata: layersOf(mesh, "ldata"),
+  };
+}
+
+function customDataAttributes(layers: CustomDataLayers): MeshAttribute[] {
   const result: MeshAttribute[] = [];
-  const fields: [string, Domain][] = [
-    ["vdata", "point"],
-    ["edata", "edge"],
-    ["pdata", "face"],
-    ["ldata", "corner"],
-  ];
-  for (const [field, domain] of fields) {
-    const data = mesh.struct(field);
-    if (!data) continue;
-    const layers = data.derefAll("layers").slice(0, data.number("totlayer"));
-    for (const layer of layers) {
+  for (const [field, domain] of LAYER_DOMAINS) {
+    for (const layer of layers[field]) {
       const type = CUSTOM_DATA_TYPES.get(layer.number("type"));
       if (!type) continue;
       result.push({ name: layer.string("name"), type, domain, block: layer.target("data"), single: false });
@@ -219,19 +243,13 @@ function customDataAttributes(mesh: BlendStruct): MeshAttribute[] {
   return result;
 }
 
-function customDataLayers(mesh: BlendStruct, field: string, type: number): BlendStruct[] {
-  const data = mesh.struct(field);
-  if (!data) return [];
-  return data
-    .derefAll("layers")
-    .slice(0, data.number("totlayer"))
-    .filter((layer) => layer.number("type") === type);
+function ofType(layers: readonly BlendStruct[], type: number): BlendStruct[] {
+  return layers.filter((layer) => layer.number("type") === type);
 }
 
-function isActiveLayer(mesh: BlendStruct, field: string, type: number, layer: BlendStruct, member: string): boolean {
-  const layers = customDataLayers(mesh, field, type);
-  const active = layers[0]?.number(member) ?? 0;
-  return layers[active]?.offset === layer.offset;
+/** The layer that `member`, such as "active_rnd", picks among layers of one type: every one holds the same index. */
+function pickedLayer(sameType: readonly BlendStruct[], member: string): BlendStruct | undefined {
+  return sameType[sameType[0]?.number(member) ?? 0];
 }
 
 interface Sizes {
@@ -346,17 +364,14 @@ const LEGACY_COLOR_RENDER = 1 << 6;
  */
 export function defaultColorAttribute(mesh: BlendStruct): string {
   if (mesh.has("default_color_attribute")) return mesh.text("default_color_attribute");
-  const fields = ["vdata", "ldata"];
-  for (const field of fields) {
-    const data = mesh.struct(field);
-    const layers = data?.derefAll("layers").slice(0, data.number("totlayer")) ?? [];
+  const fields = [layersOf(mesh, "vdata"), layersOf(mesh, "ldata")];
+  for (const layers of fields) {
     const flagged = layers.find((layer) => layer.has("flag") && (layer.number("flag") & LEGACY_COLOR_RENDER) !== 0);
     if (flagged) return flagged.string("name");
   }
-  for (const field of fields) {
+  for (const layers of fields) {
     for (const type of [CustomDataType.floatColor, CustomDataType.byteColor]) {
-      const layers = customDataLayers(mesh, field, type);
-      const render = layers.find((layer) => isActiveLayer(mesh, field, type, layer, "active_rnd"));
+      const render = pickedLayer(ofType(layers, type), "active_rnd");
       if (render) return render.string("name");
     }
   }
@@ -390,51 +405,107 @@ function usedFirst(wanted: readonly (readonly string[])[], materialIndices: Int3
   return [...wanted.filter((_, slot) => used.has(slot)), ...wanted.filter((_, slot) => !used.has(slot))].flat();
 }
 
-function legacyStructs(mesh: BlendStruct, field: string, type: number): BlendStruct[] {
-  const layer = customDataLayers(mesh, field, type)[0];
-  return layer?.derefAll("data") ?? [];
+/**
+ * An array of structs read member by member at the offsets its SDNA gives, without an object per element, as meshes
+ * before Blender 4.0 store their vertices, edges, faces, corners and UV maps.
+ */
+class StructArray {
+  readonly #file: BlendFile;
+  readonly #block: BlendBlock | null;
+  readonly #stride: number;
+  /** How many elements the block holds. */
+  readonly length: number;
+
+  constructor(file: BlendFile, block: BlendBlock | null) {
+    this.#file = file;
+    this.#block = block;
+    const type = block?.struct;
+    this.#stride = type?.size ?? 0;
+    this.length = block && type && type.size > 0 ? Math.min(block.count, Math.floor(block.size / type.size)) : 0;
+  }
+
+  /**
+   * Reads one number member of every element: `read(element, index)` is element's value at array index `index`. A
+   * member the struct lacks, or holds in a type this reader does not take, reads as 0, as `BlendStruct.number` does.
+   */
+  member(name: string): (element: number, index?: number) => number {
+    const field = this.#block?.struct?.field(name);
+    const reader = field && field.pointerDepth === 0 ? numberReader(field.type) : undefined;
+    if (!this.#block || !field || !reader) return () => 0;
+    const { view, little } = this.#file;
+    const base = this.#block.offset + field.offset;
+    const stride = this.#stride;
+    const elementSize = field.size / field.count;
+    const count = field.count;
+    return (element, index = 0) =>
+      index < count ? reader(view, base + element * stride + index * elementSize, little) : 0;
+  }
+
+  /** The offset of a pointer member of every element, or -1 when the struct has none. */
+  pointer(name: string): (element: number) => number {
+    const field = this.#block?.struct?.field(name);
+    if (!this.#block || !field || field.pointerDepth === 0) return () => -1;
+    const base = this.#block.offset + field.offset;
+    const stride = this.#stride;
+    return (element) => base + element * stride;
+  }
+
+  get owner(): number {
+    return this.#block?.owner ?? -1;
+  }
+}
+
+function legacyArray(file: BlendFile, layers: readonly BlendStruct[], type: number): StructArray {
+  return new StructArray(file, ofType(layers, type)[0]?.target("data") ?? null);
 }
 
 const LEGACY_FACE_SMOOTH = 1 << 0;
 const LEGACY_EDGE_SHARP = 1 << 9;
 const LEGACY_AUTO_SMOOTH = 1 << 5;
 
-function readTopology(file: BlendFile, mesh: BlendStruct, reader: AttributeReader, sizes: Sizes) {
+function readTopology(
+  file: BlendFile,
+  mesh: BlendStruct,
+  reader: AttributeReader,
+  layers: CustomDataLayers,
+  sizes: Sizes,
+) {
   const position = reader.find("position", ["float3"], "point");
   let positions: Float32Array;
   if (position) positions = reader.float32(position);
   else {
-    const vertices = legacyStructs(mesh, "vdata", CustomDataType.vertex);
+    const vertices = legacyArray(file, layers.vdata, CustomDataType.vertex);
+    const co = vertices.member("co");
     positions = new Float32Array(sizes.point * 3);
-    vertices.slice(0, sizes.point).forEach((vertex, index) => {
-      positions.set(vertex.numbers("co").slice(0, 3), index * 3);
-    });
+    for (let v = 0; v < Math.min(sizes.point, vertices.length); v++) {
+      for (let k = 0; k < 3; k++) positions[v * 3 + k] = co(v, k);
+    }
   }
 
   const edgeVerts = reader.find(".edge_verts", ["int32_2d"], "edge");
   let edges: Int32Array;
-  let legacyEdges: BlendStruct[] = [];
+  let legacyEdges: StructArray | null = null;
   if (edgeVerts) edges = reader.int32(edgeVerts);
   else {
-    legacyEdges = legacyStructs(mesh, "edata", CustomDataType.edge);
+    legacyEdges = legacyArray(file, layers.edata, CustomDataType.edge);
+    const [v1, v2] = [legacyEdges.member("v1"), legacyEdges.member("v2")];
     edges = new Int32Array(sizes.edge * 2);
-    legacyEdges.slice(0, sizes.edge).forEach((edge, index) => {
-      edges[index * 2] = edge.number("v1");
-      edges[index * 2 + 1] = edge.number("v2");
-    });
+    for (let e = 0; e < Math.min(sizes.edge, legacyEdges.length); e++) {
+      edges[e * 2] = v1(e);
+      edges[e * 2 + 1] = v2(e);
+    }
   }
 
   let faceOffsets: Int32Array;
-  let legacyFaces: BlendStruct[] = [];
+  let legacyFaces: StructArray | null = null;
   const offsetsBlock = mesh.target("poly_offset_indices");
   if (offsetsBlock) {
     faceOffsets = padded(file.int32(offsetsBlock, sizes.face + 1), sizes.face + 1);
   } else {
-    legacyFaces = legacyStructs(mesh, "pdata", CustomDataType.face);
+    legacyFaces = legacyArray(file, layers.pdata, CustomDataType.face);
+    const loopStart = legacyFaces.member("loopstart");
     faceOffsets = new Int32Array(sizes.face + 1);
-    legacyFaces.slice(0, sizes.face).forEach((face, index) => {
-      faceOffsets[index] = face.number("loopstart");
-    });
+    for (let f = 0; f < Math.min(sizes.face, legacyFaces.length); f++) faceOffsets[f] = loopStart(f);
     faceOffsets[sizes.face] = sizes.corner;
   }
   if (sizes.face === 0) faceOffsets = Int32Array.of(0);
@@ -447,75 +518,80 @@ function readTopology(file: BlendFile, mesh: BlendStruct, reader: AttributeReade
     cornerVerts = reader.int32(cornerVert);
     cornerEdges = cornerEdge ? reader.int32(cornerEdge) : new Int32Array(sizes.corner).fill(-1);
   } else {
-    const loops = legacyStructs(mesh, "ldata", CustomDataType.loop);
+    const loops = legacyArray(file, layers.ldata, CustomDataType.loop);
+    const [vertex, edge] = [loops.member("v"), loops.member("e")];
     cornerVerts = new Int32Array(sizes.corner);
     cornerEdges = new Int32Array(sizes.corner);
-    loops.slice(0, sizes.corner).forEach((loop, index) => {
-      cornerVerts[index] = loop.number("v");
-      cornerEdges[index] = loop.number("e");
-    });
+    for (let c = 0; c < Math.min(sizes.corner, loops.length); c++) {
+      cornerVerts[c] = vertex(c);
+      cornerEdges[c] = edge(c);
+    }
   }
 
+  const faceCount = Math.min(sizes.face, legacyFaces?.length ?? 0);
   let materialIndices: Int32Array | null = null;
   const material = reader.find("material_index", ["int32"], "face");
   if (material) materialIndices = reader.int32(material);
-  else if (legacyFaces.length > 0) {
-    materialIndices = Int32Array.from(legacyFaces.slice(0, sizes.face), (face) => face.number("mat_nr"));
+  else if (legacyFaces && legacyFaces.length > 0) {
+    const slot = legacyFaces.member("mat_nr");
+    materialIndices = Int32Array.from({ length: faceCount }, (_, f) => slot(f));
   }
 
   let sharpFaces: Uint8Array | null = null;
   const sharpFace = reader.find("sharp_face", ["bool"], "face");
   if (sharpFace) sharpFaces = reader.bytes(sharpFace);
-  else if (legacyFaces.length > 0) {
-    sharpFaces = Uint8Array.from(legacyFaces.slice(0, sizes.face), (face) =>
-      (face.number("flag") & LEGACY_FACE_SMOOTH) === 0 ? 1 : 0,
-    );
+  else if (legacyFaces && legacyFaces.length > 0) {
+    const flag = legacyFaces.member("flag");
+    sharpFaces = Uint8Array.from({ length: faceCount }, (_, f) => ((flag(f) & LEGACY_FACE_SMOOTH) === 0 ? 1 : 0));
   }
 
   let sharpEdges: Uint8Array | null = null;
   const sharpEdge = reader.find("sharp_edge", ["bool"], "edge");
+  const edgeCount = Math.min(sizes.edge, legacyEdges?.length ?? 0);
   if (sharpEdge) sharpEdges = reader.bytes(sharpEdge);
-  else if (legacyEdges.length > 0) {
-    sharpEdges = Uint8Array.from(legacyEdges.slice(0, sizes.edge), (edge) =>
-      (edge.number("flag") & LEGACY_EDGE_SHARP) !== 0 ? 1 : 0,
-    );
+  else if (legacyEdges && legacyEdges.length > 0) {
+    const flag = legacyEdges.member("flag");
+    sharpEdges = Uint8Array.from({ length: edgeCount }, (_, e) => ((flag(e) & LEGACY_EDGE_SHARP) !== 0 ? 1 : 0));
   }
 
   return { positions, edges, faceOffsets, cornerVerts, cornerEdges, materialIndices, sharpFaces, sharpEdges };
 }
 
-function readUvMaps(mesh: BlendStruct, reader: AttributeReader, sizes: Sizes): { maps: UvMap[]; default: number } {
+/**
+ * The UV maps: the float vector corner attributes, then the MLoopUV layers of files from before Blender 4.0, as Blender
+ * converts those after the attributes. The default is the render layer of the MLoopUV layers when there are any.
+ */
+function readUvMaps(
+  file: BlendFile,
+  mesh: BlendStruct,
+  reader: AttributeReader,
+  layers: CustomDataLayers,
+  sizes: Sizes,
+): { maps: UvMap[]; default: number } {
   const maps: UvMap[] = [];
   for (const attribute of reader.attributes) {
     if (attribute.type !== "float2" || attribute.domain !== "corner" || attribute.name.startsWith(".")) continue;
     maps.push({ name: attribute.name, values: reader.float32(attribute) });
   }
-  let renderLayer: string | null = null;
-  if (maps.length === 0) {
-    const layers = customDataLayers(mesh, "ldata", CustomDataType.loopUv);
-    for (const layer of layers) {
-      const values = new Float32Array(sizes.corner * 2);
-      layer
-        .derefAll("data")
-        .slice(0, sizes.corner)
-        .forEach((uv, index) => {
-          values.set(uv.numbers("uv").slice(0, 2), index * 2);
-        });
-      maps.push({ name: layer.string("name"), values });
-      if (isActiveLayer(mesh, "ldata", CustomDataType.loopUv, layer, "active_rnd")) renderLayer = layer.string("name");
+  const legacy = ofType(layers.ldata, CustomDataType.loopUv);
+  for (const layer of legacy) {
+    const corners = new StructArray(file, layer.target("data"));
+    const uv = corners.member("uv");
+    const values = new Float32Array(sizes.corner * 2);
+    for (let c = 0; c < Math.min(sizes.corner, corners.length); c++) {
+      values[c * 2] = uv(c, 0);
+      values[c * 2 + 1] = uv(c, 1);
     }
-  } else {
-    const float2Layers = customDataLayers(mesh, "ldata", 49);
-    for (const layer of float2Layers) {
-      if (isActiveLayer(mesh, "ldata", 49, layer, "active_rnd")) renderLayer = layer.string("name");
-    }
+    maps.push({ name: layer.string("name"), values });
   }
-  const wanted = mesh.text("default_uv_map_attribute") || renderLayer || mesh.text("active_uv_map_attribute");
+  const render = pickedLayer(legacy.length > 0 ? legacy : ofType(layers.ldata, CustomDataType.float2), "active_rnd");
+  const wanted =
+    mesh.text("default_uv_map_attribute") || render?.string("name") || mesh.text("active_uv_map_attribute");
   const index = maps.findIndex((map) => map.name === wanted);
   return { maps, default: Math.max(index, 0) };
 }
 
-function readCustomNormals(mesh: BlendStruct, reader: AttributeReader, file: BlendFile, sizes: Sizes) {
+function readCustomNormals(reader: AttributeReader, file: BlendFile, layers: CustomDataLayers, sizes: Sizes) {
   const named = reader.find("custom_normal");
   if (named?.type === "int16_2d" && named.domain === "corner") {
     return { kind: "encoded", values: reader.int16(named) } satisfies CustomNormals;
@@ -523,8 +599,7 @@ function readCustomNormals(mesh: BlendStruct, reader: AttributeReader, file: Ble
   if (named?.type === "float3" && file.version >= FREE_NORMALS_VERSION) {
     return { kind: "free", domain: named.domain, values: reader.float32(named) } satisfies CustomNormals;
   }
-  const layer = customDataLayers(mesh, "ldata", CustomDataType.customLoopNormal)[0];
-  const block = layer?.target("data");
+  const block = ofType(layers.ldata, CustomDataType.customLoopNormal)[0]?.target("data");
   if (block) {
     return {
       kind: "encoded",
@@ -534,26 +609,58 @@ function readCustomNormals(mesh: BlendStruct, reader: AttributeReader, file: Ble
   return null;
 }
 
-function readDeformWeights(mesh: BlendStruct, sizes: Sizes): DeformWeights | null {
-  const layer = customDataLayers(mesh, "vdata", CustomDataType.deformVertex)[0];
-  const vertices = layer?.derefAll("data") ?? mesh.derefAll("dvert");
+/**
+ * Reads each vertex's MDeformWeight array straight from its block, in two passes that size typed arrays first. Blender
+ * writes one block per vertex, so the pointers resolve to block indices without making a block object for each.
+ */
+function readDeformWeights(
+  file: BlendFile,
+  mesh: BlendStruct,
+  layers: CustomDataLayers,
+  sizes: Sizes,
+): DeformWeights | null {
+  const layer = ofType(layers.vdata, CustomDataType.deformVertex)[0];
+  const vertices = new StructArray(file, layer ? layer.target("data") : mesh.target("dvert"));
   if (vertices.length === 0) return null;
+  const count = Math.min(sizes.point, vertices.length);
+  const pointerAt = vertices.pointer("dw");
+  const totalOf = vertices.member("totweight");
+  const weightType = file.sdna.struct("MDeformWeight");
+  const groupField = weightType?.field("def_nr");
+  const weightField = weightType?.field("weight");
+  const readGroup = groupField?.pointerDepth === 0 ? numberReader(groupField.type) : undefined;
+  const readWeight = weightField?.pointerDepth === 0 ? numberReader(weightField.type) : undefined;
+  const stride = weightType?.size ?? 0;
+
   const offsets = new Uint32Array(sizes.point + 1);
-  const groups: number[] = [];
-  const weights: number[] = [];
-  for (let v = 0; v < sizes.point; v++) {
-    offsets[v] = groups.length;
-    const vertex = vertices[v];
-    if (!vertex) continue;
-    const total = vertex.number("totweight");
-    const entries = vertex.derefAll("dw").slice(0, Math.max(total, 0));
-    for (const entry of entries) {
-      groups.push(entry.number("def_nr"));
-      weights.push(entry.number("weight"));
+  const blocks = new Int32Array(count).fill(-1);
+  let total = 0;
+  for (let v = 0; v < count; v++) {
+    offsets[v] = total;
+    const at = pointerAt(v);
+    const wanted = totalOf(v);
+    if (at < 0 || wanted <= 0 || stride === 0) continue;
+    const block = file.pointedBlock(at, vertices.owner);
+    if (block < 0) continue;
+    blocks[v] = block;
+    total += Math.min(wanted, Math.floor(file.blockSize(block) / stride));
+  }
+  offsets.fill(total, count);
+
+  const groups = new Int32Array(total);
+  const weights = new Float32Array(total);
+  const { view, little } = file;
+  for (let v = 0; v < count; v++) {
+    const block = blocks[v] ?? -1;
+    if (block < 0) continue;
+    const start = file.blockOffset(block);
+    for (let i = offsets[v] ?? 0, element = 0; i < (offsets[v + 1] ?? 0); i++, element++) {
+      const base = start + element * stride;
+      if (groupField && readGroup) groups[i] = readGroup(view, base + groupField.offset, little);
+      if (weightField && readWeight) weights[i] = readWeight(view, base + weightField.offset, little);
     }
   }
-  offsets[sizes.point] = groups.length;
-  return { offsets, groups: Int32Array.from(groups), weights: Float32Array.from(weights) };
+  return { offsets, groups, weights };
 }
 
 const KEY_BLOCK_MUTE = 1 << 0;
@@ -606,12 +713,6 @@ function heldElements(attribute: MeshAttribute): number {
   return attribute.single ? 1 : Math.floor(attribute.block.size / BYTES[attribute.type]);
 }
 
-function legacyElements(mesh: BlendStruct, field: string, type: number): number {
-  const block = customDataLayers(mesh, field, type)[0]?.target("data");
-  const size = block?.struct?.size ?? 0;
-  return block && size > 0 ? Math.min(block.count, Math.floor(block.size / size)) : 0;
-}
-
 const DOMAIN_NAMES: Readonly<Record<keyof Sizes, string>> = {
   point: "vertices",
   edge: "edges",
@@ -620,16 +721,17 @@ const DOMAIN_NAMES: Readonly<Record<keyof Sizes, string>> = {
 };
 
 /** Refuses a mesh that counts more elements than the data that defines them holds, as a damaged file can. */
-function checkCounts(mesh: BlendStruct, reader: AttributeReader, sizes: Sizes): void {
+function checkCounts(mesh: BlendStruct, reader: AttributeReader, layers: CustomDataLayers, sizes: Sizes): void {
   const position = reader.find("position", ["float3"], "point");
   const edgeVerts = reader.find(".edge_verts", ["int32_2d"], "edge");
   const cornerVert = reader.find(".corner_vert", ["int32"], "corner");
   const offsets = mesh.target("poly_offset_indices");
+  const legacy = (field: LayerField, type: number) => legacyArray(mesh.file, layers[field], type).length;
   const held: Sizes = {
-    point: position ? heldElements(position) : legacyElements(mesh, "vdata", CustomDataType.vertex),
-    edge: edgeVerts ? heldElements(edgeVerts) : legacyElements(mesh, "edata", CustomDataType.edge),
-    face: offsets ? Math.max(Math.floor(offsets.size / 4) - 1, 0) : legacyElements(mesh, "pdata", CustomDataType.face),
-    corner: cornerVert ? heldElements(cornerVert) : legacyElements(mesh, "ldata", CustomDataType.loop),
+    point: position ? heldElements(position) : legacy("vdata", CustomDataType.vertex),
+    edge: edgeVerts ? heldElements(edgeVerts) : legacy("edata", CustomDataType.edge),
+    face: offsets ? Math.max(Math.floor(offsets.size / 4) - 1, 0) : legacy("pdata", CustomDataType.face),
+    corner: cornerVert ? heldElements(cornerVert) : legacy("ldata", CustomDataType.loop),
   };
   for (const domain of ["point", "edge", "face", "corner"] as const) {
     if (sizes[domain] <= held[domain]) continue;
@@ -654,12 +756,13 @@ export function readMeshData(
     face: Math.max(mesh.number("totpoly"), 0),
     corner: Math.max(mesh.number("totloop"), 0),
   };
-  const attributes = [...storageAttributes(mesh), ...customDataAttributes(mesh)];
+  const layers = readLayers(mesh);
+  const attributes = [...storageAttributes(mesh), ...customDataAttributes(layers)];
   const reader = new AttributeReader(file, attributes, sizes);
-  checkCounts(mesh, reader, sizes);
-  const topology = readTopology(file, mesh, reader, sizes);
+  checkCounts(mesh, reader, layers, sizes);
+  const topology = readTopology(file, mesh, reader, layers, sizes);
   validateTopology(topology, sizes, idName(mesh));
-  const uvs = readUvMaps(mesh, reader, sizes);
+  const uvs = readUvMaps(file, mesh, reader, layers, sizes);
   const groupNames = mesh.has("vertex_group_names")
     ? mesh.list("vertex_group_names").map((group) => group.string("name"))
     : [...objectGroups];
@@ -679,8 +782,8 @@ export function readMeshData(
     defaultUv: uvs.default,
     colors: readColors(reader, mesh, usedFirst(wantedColors, topology.materialIndices)),
     attributeNames: reader.attributes.map((attribute) => attribute.name).filter((name) => !name.startsWith(".")),
-    customNormals: readCustomNormals(mesh, reader, file, sizes),
-    deformWeights: readDeformWeights(mesh, sizes),
+    customNormals: readCustomNormals(reader, file, layers, sizes),
+    deformWeights: readDeformWeights(file, mesh, layers, sizes),
     vertexGroupNames: groupNames,
     shapeKeys: shapeKeys.keys,
     referenceKey: shapeKeys.reference,

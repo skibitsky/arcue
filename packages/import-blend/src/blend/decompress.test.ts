@@ -136,6 +136,43 @@ function recordGzip(): { writes: number[]; read: number } {
   return record;
 }
 
+/**
+ * Puts a gzip decompressor in place that ignores what is written to it and gives `pieces`, each through one buffer that
+ * it overwrites with the next, as a decompressor may reuse its output buffer.
+ */
+function emitGzip(pieces: readonly Uint8Array[]): void {
+  vi.stubGlobal(
+    "DecompressionStream",
+    class {
+      readonly writable = new WritableStream<Uint8Array>();
+      readonly readable: ReadableStream<Uint8Array>;
+      constructor() {
+        const shared = new Uint8Array(Math.max(...pieces.map((piece) => piece.byteLength)));
+        let next = 0;
+        this.readable = new ReadableStream(
+          {
+            pull: (controller) => {
+              const piece = pieces[next++];
+              if (!piece) return controller.close();
+              shared.set(piece);
+              controller.enqueue(shared.subarray(0, piece.byteLength));
+            },
+          },
+          { highWaterMark: 0 },
+        );
+      }
+    },
+  );
+}
+
+/** Bytes that start as gzip data does and end with a trailer giving `size` as the expanded size. */
+function gzipWithSize(length: number, size: number): Uint8Array {
+  const bytes = new Uint8Array(length);
+  bytes.set([0x1f, 0x8b]);
+  bytes.set(littleEndian(size, 4), length - 4);
+  return bytes;
+}
+
 /** What decompressing rejects with, or null when it succeeds, so that a test never prints the expanded bytes. */
 function refusal(bytes: Uint8Array): Promise<unknown> {
   return decompressBlend(bytes).then(
@@ -324,6 +361,39 @@ describe("decompressBlend", () => {
     const zipped = gzipSync(blendBytes(4 * MIB));
     await expect(decompressBlend(zipped, MIB)).rejects.toThrow("it expands to more than 1048576 bytes");
     expect((await decompressBlend(zipped, 4 * MIB)).length).toBe(4 * MIB);
+  });
+
+  it("expands gzip data into one buffer of the size its trailer gives", async () => {
+    const original = new Uint8Array(randomBytes(3 * MIB));
+    original.set(HEADER);
+    const expanded = await decompressBlend(gzipSync(original));
+    expect(Buffer.from(expanded).equals(Buffer.from(original))).toBe(true);
+    expect(expanded.buffer.byteLength).toBe(original.length);
+  });
+
+  it("copies each piece the gzip decompressor gives as it arrives, so that no piece is held", async () => {
+    const pieces = [joined(HEADER, Uint8Array.of(1, 2)), Uint8Array.of(3, 4, 5), Uint8Array.of(6)];
+    emitGzip(pieces);
+    const expanded = await decompressBlend(gzipWithSize(64, 18));
+    expect(expanded).toEqual(joined(...pieces));
+    expect(expanded.buffer.byteLength).toBe(18);
+  });
+
+  it("grows the buffer for gzip data that expands past the size its trailer gives", async () => {
+    const pieces = [HEADER, new Uint8Array(100).fill(7), new Uint8Array(1000).fill(9)];
+    emitGzip(pieces);
+    expect(await decompressBlend(gzipWithSize(64, 50))).toEqual(joined(...pieces));
+  });
+
+  it("ignores a gzip trailer that gives more than the data could expand to or the limit allows", async () => {
+    const pieces = [HEADER, new Uint8Array(100).fill(7)];
+    emitGzip(pieces);
+    const unlikely = await decompressBlend(gzipWithSize(64, 64 * 1033));
+    expect(unlikely).toEqual(joined(...pieces));
+    expect(unlikely.buffer.byteLength).toBeLessThan(MIB);
+    emitGzip(pieces);
+    const pastLimit = await decompressBlend(gzipWithSize(MIB, 2 * MIB), MIB);
+    expect(pastLimit.buffer.byteLength).toBeLessThan(MIB);
   });
 
   it("gives the gzip decompressor at most 16 KiB at a time, since a browser expands each piece whole", async () => {

@@ -1,8 +1,7 @@
-import { BlendParseError } from "../blend/errors";
 import type { BlendStruct } from "../blend/file";
 import { idName } from "../blend/ids";
 import type { Mat4 } from "../math";
-import { axisLengths, identity, invert, mat4From, multiply, transformPoint } from "../math";
+import { axisLengths, determinant3, identity, invert, mat4From, multiply, transformPoint } from "../math";
 import type { TransformValues } from "./transforms";
 import { channelMatrix } from "./transforms";
 
@@ -24,6 +23,17 @@ export const InheritScale = {
   aligned: 5,
 } as const;
 
+/** A bone's envelope at rest in armature space: its ends, their radii, and how far beyond them its influence fades. */
+export interface Envelope {
+  head: readonly number[];
+  tail: readonly number[];
+  headRadius: number;
+  tailRadius: number;
+  falloff: number;
+  /** How strongly the envelope deforms a vertex it holds that is in no vertex group of a deform bone. */
+  weight: number;
+}
+
 export interface Bone {
   name: string;
   /** Index of the parent bone, or -1. Parents come first. */
@@ -38,9 +48,18 @@ export interface Bone {
   deform: boolean;
   /** B-Bone segments; more than one bends the bone's deformation along a curve. */
   segments: number;
+  envelope: Envelope;
 }
 
-/** The armature's bones, each parent before its children, in the order Blender lists them. */
+/** The armature's bone lists are damaged; the scene reads the rest of the file without its bones. */
+export class ArmatureReadError extends Error {
+  override readonly name = "ArmatureReadError";
+}
+
+/**
+ * The armature's bones, each parent before its children, in the order Blender lists them. Throws `ArmatureReadError`
+ * when the lists reach a bone twice.
+ */
 export function readBones(armature: BlendStruct): Bone[] {
   const bones: Bone[] = [];
   const visited = new Set<number>();
@@ -48,7 +67,7 @@ export function readBones(armature: BlendStruct): Bone[] {
   for (let next = pending.pop(); next; next = pending.pop()) {
     const { bone, parent } = next;
     if (visited.has(bone.offset)) {
-      throw new BlendParseError(`its armature ${idName(armature)} lists bone ${bone.string("name")} twice`);
+      throw new ArmatureReadError(`Armature ${idName(armature)} lists bone ${bone.string("name")} twice`);
     }
     visited.add(bone.offset);
     const flag = bone.number("flag");
@@ -69,6 +88,14 @@ export function readBones(armature: BlendStruct): Bone[] {
           : InheritScale.full,
       deform: (flag & BoneFlag.noDeform) === 0,
       segments: bone.number("segments"),
+      envelope: {
+        head: bone.numbers("arm_head"),
+        tail: bone.numbers("arm_tail"),
+        headRadius: bone.number("rad_head"),
+        tailRadius: bone.number("rad_tail"),
+        falloff: bone.number("dist"),
+        weight: bone.number("weight"),
+      },
     });
     for (const child of [...bone.list("childbase")].reverse()) pending.push({ bone: child, parent: index });
   }
@@ -181,21 +208,12 @@ function rescaled(m: Mat4, scale: readonly number[]): Mat4 {
   return out;
 }
 
-function volumeScale(m: Mat4): number {
-  const at = (index: number) => m[index] ?? 0;
-  return (
-    at(0) * (at(5) * at(10) - at(6) * at(9)) -
-    at(4) * (at(1) * at(10) - at(2) * at(9)) +
-    at(8) * (at(1) * at(6) - at(2) * at(5))
-  );
-}
-
 /** Blender's `mat4_to_size_fix_shear`: axis scales corrected so their product is the matrix's volume scale. */
 function sizeFixShear(m: Mat4): number[] {
   const size = axisLengths(m);
   const volume = size[0] * size[1] * size[2];
   if (volume === 0) return size;
-  const factor = Math.cbrt(Math.abs(volumeScale(m) / volume));
+  const factor = Math.cbrt(Math.abs(determinant3(m) / volume));
   return size.map((value) => value * factor);
 }
 
@@ -231,7 +249,7 @@ function poseMatrix(bone: Bone, offset: Mat4, parentRest: Mat4 | null, parentPos
         else if (mode === InheritScale.aligned) postScale = sizeFixShear(parentPose);
       }
       if (mode === InheritScale.average) {
-        const factor = Math.cbrt(Math.abs(volumeScale(parentPose)));
+        const factor = Math.cbrt(Math.abs(determinant3(parentPose)));
         parent = rescaled(parent, [factor, factor, factor]);
       }
       rotscale = multiply(parent, offset);

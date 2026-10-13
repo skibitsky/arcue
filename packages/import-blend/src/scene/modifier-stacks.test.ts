@@ -1,8 +1,8 @@
 import type { Clip, SceneDescription } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import type { Reference } from "../../test/fixtures";
-import { importFixture, readFixture, reference, VERSIONS } from "../../test/fixtures";
-import { placedSourceVertices, pointsError, worldMatrices } from "../../test/geometry";
+import { fixtureFaces, importFixture, readFixture, reference, VERSIONS } from "../../test/fixtures";
+import { cornerMismatches, placedSourceVertices, pointsError, worldMatrices } from "../../test/geometry";
 import { decompressBlend } from "../blend/decompress";
 import { readBlendFile } from "../blend/file";
 import { datablocks, idName } from "../blend/ids";
@@ -60,25 +60,22 @@ describe.each(VERSIONS)("modifier stacks from Blender %s", async (version) => {
     }
   });
 
-  it("shades every face corner as Blender does, with Smooth by Angle after an Armature modifier", () => {
+  it("draws Blender's loop triangles, each corner shaded as Blender shades its face corner, with Smooth by Angle after an Armature modifier", async () => {
+    const faces = await fixtureFaces("stacks", version);
     for (const [name, mesh] of Object.entries(expected.meshes)) {
       const built = scene.meshes[meshIndex(scene, name)];
-      if (!built) throw new Error(name);
-      for (let rendered = 0; rendered < built.sourceVertex.length; rendered++) {
-        const vertex = built.sourceVertex[rendered];
-        const normal = Array.from(built.normals.subarray(rendered * 3, rendered * 3 + 3));
-        const known = mesh.corners.some(
-          (corner) => corner[0] === vertex && pointsError(corner.slice(1), normal) < 1e-3,
-        );
-        expect(known, `${name} vertex ${vertex}`).toBe(true);
-      }
-      for (const [vertex, ...normal] of mesh.corners) {
-        const shown = built.sourceVertex.some(
-          (source, rendered) =>
-            source === vertex && pointsError(built.normals.subarray(rendered * 3, rendered * 3 + 3), normal) < 1e-3,
-        );
-        expect(shown, `${name} vertex ${vertex}`).toBe(true);
-      }
+      const meshFaces = faces.get(name);
+      if (!built || !meshFaces) throw new Error(name);
+      const loopVertices = mesh.corners.map(([vertex]) => vertex);
+      expect(Array.from(meshFaces.cornerVerts), name).toEqual(loopVertices);
+      const drawn = {
+        loopTriangles: mesh.triangleLoops,
+        loopVertices,
+        normals: mesh.corners.map((corner) => corner.slice(1)),
+        uvs: mesh.uvs,
+      };
+      expect(cornerMismatches(built, drawn), name).toEqual([]);
+      expect(new Set(drawn.loopTriangles.flat()).size, name).toBe(loopVertices.length);
     }
   });
 

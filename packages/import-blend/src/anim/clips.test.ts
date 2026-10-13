@@ -1,15 +1,17 @@
 import { readFileSync } from "node:fs";
-import type { Clip, Track } from "@arcue/scene";
+import type { Clip, SceneDescription, Track } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import type { Version } from "../../test/fixtures";
 import { fixturesDir, importBytes, importFixture, readFixture, VERSIONS } from "../../test/fixtures";
-import { matrixError, morphWeights, worldMatrices } from "../../test/geometry";
+import { matrixError, morphWeights, sampleTrack, worldMatrices } from "../../test/geometry";
 import { decompressBlend } from "../blend/decompress";
 import { readBlendFile } from "../blend/file";
 import { datablocks, idName } from "../blend/ids";
-import type { BlendWarning } from "../scene/build";
+import type { BlendWarning, BuiltScene } from "../scene/build";
 import { buildScene } from "../scene/build";
-import { animatedPaths, readActions } from "./actions";
+import type { Action } from "./actions";
+import { animatedPaths, IdCode, readActions, slotFor, usedActions } from "./actions";
+import type { ClipLimits } from "./clips";
 import { buildClips } from "./clips";
 import { evaluateFCurve } from "./fcurve";
 
@@ -28,6 +30,37 @@ interface ClipsReference {
 
 function clipsReference(version: Version): ClipsReference {
   return JSON.parse(readFileSync(`${fixturesDir}clips-${version}.json`, "utf8"));
+}
+
+/** Blender's world matrix of each object in a fixture at frames, some between whole frames. */
+type WorldSamples = { frame: number; worlds: Record<string, number[]> }[];
+
+function worldSamples(name: string, version: Version): WorldSamples {
+  return JSON.parse(readFileSync(`${fixturesDir}${name}-${version}.json`, "utf8")).samples;
+}
+
+function clipNamed(scene: SceneDescription, name: string): Clip {
+  const found = scene.clips.find((candidate) => candidate.name === name);
+  if (!found) throw new RangeError(`No clip ${name}.`);
+  return found;
+}
+
+/** How far the clip's world matrix of each named object at `time` is from Blender's in the sample. */
+function worldErrors(
+  scene: SceneDescription,
+  clip: Clip,
+  sample: WorldSamples[number],
+  time: number,
+  names: readonly string[] = Object.keys(sample.worlds),
+): Map<string, number> {
+  const worlds = worldMatrices(scene, clip, time);
+  const errors = new Map<string, number>();
+  for (const name of names) {
+    const index = scene.nodes.findIndex((node) => node.name === name && node.kind !== "bone");
+    if (index < 0) throw new RangeError(`No node ${name}.`);
+    errors.set(name, matrixError(worlds[index] ?? [], sample.worlds[name] ?? []));
+  }
+  return errors;
 }
 
 describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => {
@@ -169,7 +202,7 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
     expect(past.warnings).toEqual(["Jumps between frames not shown: CycConst"]);
   });
 
-  it("poses only the armatures a clip animates, from the pose Blender shows when it opens the file", () => {
+  it("poses only the armatures a clip animates, from the pose Blender shows at the scene's start frame", () => {
     expect(new Set(clip("MixedSteps").tracks.map((track) => scene.nodes[track.node]?.name))).toEqual(
       new Set(["Mixed"]),
     );
@@ -189,7 +222,7 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
     expect(resting.map((warning) => warning.message)).toEqual(["Rest position not followed: RestRig"]);
   });
 
-  it("follows Blender's Bezier handles that reach past the other key", async () => {
+  it("follows Blender's Bezier handles that reach past the other key, and constant keys a Cycles modifier mirrors", async () => {
     const actions = readActions(readBlendFile(await decompressBlend(readFixture("clips", version))));
     for (const [name, samples] of Object.entries(expected.curves)) {
       const curve = actions.find((action) => action.name === name)?.slots[0]?.curves[0];
@@ -198,6 +231,323 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
         expect(Math.abs(evaluateFCurve(curve, frame) - value), `${name} at ${frame}`).toBeLessThan(2e-5);
       }
     }
+  });
+
+  it("warns that keys on Disable in Viewports are left out", async () => {
+    const bytes = await decompressBlend(readFixture("clips", version));
+    const file = readBlendFile(bytes);
+    const curves = file
+      .blocksWithCode("DATA")
+      .filter((block) => block.struct?.type === "FCurve")
+      .flatMap((block) => file.elements(block));
+    const hand = curves.find((curve) => curve.text("rna_path") === 'pose.bones["Hand"].rotation_euler');
+    const path = hand?.target("rna_path");
+    if (!path) throw new Error("No HingeSteps curve on Hand");
+    bytes.set(new TextEncoder().encode("hide_viewport\0"), path.offset);
+    const hidden = await importBytes("hidden.blend", bytes);
+    const warnings = hidden.source.warnings.filter((warning) => warning.subject.name === "HingeSteps");
+    expect(warnings.map((warning) => [warning.code, warning.message, warning.detail])).toEqual([
+      [
+        "deform-approximated",
+        "Visibility changes not shown: HingeSteps",
+        "Keys on Disable in Viewports are left out; each object stays as the file saves it",
+      ],
+    ]);
+    expect(hidden.clips.map((candidate) => candidate.name)).toContain("HingeSteps");
+  });
+
+  /** The fixture's scene built without its clips, with the actions it holds. */
+  const built = async () => {
+    const file = readBlendFile(await decompressBlend(readFixture("clips", version)));
+    const actions = readActions(file);
+    return { file, actions, scene: buildScene(file, animatedPaths(file, actions)) };
+  };
+  const sampled = (scene: BuiltScene, actions: readonly Action[], limits?: Partial<ClipLimits>) => {
+    const warnings: BlendWarning[] = [];
+    return { clips: buildClips(scene, actions, warnings, limits), warnings };
+  };
+  const sizeOf = (arrays: readonly Float32Array[]) => arrays.reduce((total, array) => total + array.length, 0);
+  const actionNamed = (actions: readonly Action[], name: string): Action => {
+    const found = actions.find((action) => action.name === name);
+    if (!found) throw new RangeError(`No action ${name}.`);
+    return found;
+  };
+
+  it("leaves out a clip whose samples would pass the limit, and warns", async () => {
+    const { scene: builtScene, actions } = await built();
+    const unlimited = sampled(builtScene, actions);
+    const all = unlimited.clips.map((parsed) => parsed.name);
+    const notSampled = (warnings: readonly BlendWarning[]) =>
+      warnings.filter((warning) => warning.code === "clip-not-sampled");
+    const lost = new Set(notSampled(unlimited.warnings).map((warning) => warning.subject.name));
+    const limited = sampled(builtScene, actions, { clip: 500 });
+    const names = limited.clips.map((parsed) => parsed.name);
+    const left = all.filter((name) => !names.includes(name));
+    expect(left.length).toBeGreaterThan(0);
+    expect(names.length).toBeGreaterThan(0);
+    const unsampled = notSampled(limited.warnings).filter((warning) => !lost.has(warning.subject.name));
+    expect(unsampled.map((warning) => warning.subject.name)).toEqual(left);
+    for (const warning of unsampled) expect(warning.detail).toMatch(/^Sampling it takes \d+ values, more than 500$/);
+  });
+
+  it("shares one budget of sampled values among all of a file's clips", async () => {
+    const { scene: builtScene, actions } = await built();
+    const mixed = actionNamed(actions, "MixedSteps");
+    const needed = Number(
+      /takes (\d+) values/.exec(sampled(builtScene, [mixed], { sampled: 0 }).warnings[0]?.detail ?? "")?.[1],
+    );
+    expect(needed).toBeGreaterThan(0);
+    const budget = Math.floor(3.5 * needed);
+    const many = sampled(
+      builtScene,
+      Array.from({ length: 40 }, () => mixed),
+      { sampled: budget },
+    );
+    expect(many.clips).toHaveLength(3);
+    const refused = many.warnings.filter((warning) => warning.code === "clip-not-sampled");
+    expect(refused).toHaveLength(37);
+    expect(new Set(refused.map((warning) => warning.detail))).toEqual(
+      new Set([`Sampling it takes ${needed} values, more than the ${budget - 3 * needed} left for this file's clips`]),
+    );
+  });
+
+  it("keeps the clips whose tracks and key times fit what the file's clips may keep, however much they sample", async () => {
+    const { scene: builtScene, actions } = await built();
+    const mixed = actionNamed(actions, "MixedSteps");
+    const copies = Array.from({ length: 40 }, () => mixed);
+    const [alone] = sampled(builtScene, [mixed]).clips;
+    if (!alone) throw new Error("No MixedSteps clip");
+    const times = new Set([...alone.tracks.map((track) => track.times), ...alone.curveTimes]);
+    const kept = alone.tracks.reduce((total, track) => total + track.values.length, 0) + sizeOf([...times]);
+    const needed = Number(
+      /takes (\d+) values/.exec(sampled(builtScene, [mixed], { sampled: 0 }).warnings[0]?.detail ?? "")?.[1],
+    );
+    expect(needed).toBeGreaterThan(kept);
+    const roomy = sampled(builtScene, copies, { sampled: 40 * needed, kept: 40 * kept });
+    expect([roomy.clips.length, roomy.warnings]).toEqual([40, []]);
+    const budget = Math.floor(3.5 * kept);
+    const tight = sampled(builtScene, copies, { kept: budget });
+    expect(tight.clips).toHaveLength(3);
+    const refused = tight.warnings.filter((warning) => warning.code === "clip-not-sampled");
+    expect(refused).toHaveLength(37);
+    expect(new Set(refused.map((warning) => warning.detail))).toEqual(
+      new Set([`It keeps more than the ${budget - 3 * kept} values left for this file's clips`]),
+    );
+  });
+
+  it("gives every track keyed only at the clip's sample times the clip's one array of them", () => {
+    const together = clip("Scene");
+    const moving = together.tracks.filter((track) => track.times.length > 1);
+    const fewest = Math.min(...moving.map((track) => track.times.length));
+    const plain = moving.filter((track) => track.times.length === fewest);
+    expect(plain.length).toBeGreaterThan(2);
+    expect(new Set(plain.map((track) => track.times)).size).toBe(1);
+    const still = together.tracks.filter((track) => track.times.length === 1);
+    expect(new Set(still.map((track) => track.times)).size).toBe(1);
+  });
+
+  it("plays the actions the scene plays together over its frame range, as Blender does at each frame", async () => {
+    const together = clip("Scene");
+    expect([together.frameCount, together.sourceStartFrame]).toEqual([250, 1]);
+    const { file, actions } = await built();
+    const byOffset = new Map(actions.map((action) => [action.struct.offset, action]));
+    const played = new Set<string>();
+    for (const id of [...datablocks(file, "OB"), ...datablocks(file, "KE")]) {
+      for (const use of usedActions(id)) {
+        const action = byOffset.get(use.action.offset);
+        if (use.played && action && slotFor(action, use.slot)) played.add(action.name);
+      }
+    }
+    const compared: string[] = [];
+    for (const [name, samples] of Object.entries(expected.clips)) {
+      if (!played.has(name)) continue;
+      const nodes = new Set(clip(name).tracks.flatMap((track) => (track.held ? [] : [track.node])));
+      for (const sample of samples) {
+        if (sample.frame < 1) continue;
+        const worlds = worldMatrices(scene, together, (sample.frame - 1) / together.fps);
+        for (const node of nodes) {
+          const { name: nodeName, kind } = scene.nodes[node] ?? { name: "", kind: "empty" };
+          const world = kind === "bone" ? sample.bones[nodeName] : sample.objects[nodeName]?.world;
+          if (!world) continue;
+          expect(matrixError(worlds[node] ?? [], world), `${name} ${nodeName} at ${sample.frame}`).toBeLessThan(1e-4);
+        }
+      }
+      compared.push(name);
+    }
+    expect(compared.length).toBeGreaterThan(10);
+  });
+
+  it("makes no clip of the scene where it plays one action", async () => {
+    const stacks = await importFixture("stacks", version);
+    expect(stacks.clips.map((candidate) => [candidate.name, candidate.sourceStartFrame])).toEqual([["Bend", 1]]);
+  });
+
+  it("gives each clip the file's frame at its first frame: the action's first, or the scene's first", () => {
+    expect(clip("CycBefore").sourceStartFrame).toBe(0);
+    expect(clip("MixedSteps").sourceStartFrame).toBe(1);
+    expect(clip("Scene").sourceStartFrame).toBe(1);
+  });
+
+  it("plays clips at the speed the scene's time remapping gives them, and leaves out their file frames", async () => {
+    const bytes = await decompressBlend(readFixture("clips", version));
+    const file = readBlendFile(bytes);
+    const render = datablocks(file, "SC")
+      .find((candidate) => idName(candidate) === "Scene")
+      ?.struct("r");
+    const field = render?.field("framelen");
+    if (!render || !field) throw new Error("No framelen");
+    new DataView(bytes.buffer, bytes.byteOffset).setFloat32(render.offset + field.offset, 0.5, file.little);
+    const stretched = await importBytes("stretched.blend", bytes);
+    const slow = stretched.clips.find((candidate) => candidate.name === "MixedSteps");
+    const plain = clip("MixedSteps");
+    if (!slow) throw new Error("No MixedSteps");
+    expect([slow.frameCount, slow.sourceStartFrame]).toEqual([2 * plain.frameCount - 1, undefined]);
+    expect(Array.from(slow.keyTimes)).toEqual(Array.from(plain.keyTimes, (time) => Math.fround(2 * time)));
+    const mixed = scene.nodes.findIndex((node) => node.name === "Mixed");
+    for (const frame of [0, 3, 7, 8]) {
+      const want = worldMatrices(scene, plain, frame / plain.fps)[mixed] ?? [];
+      expect(matrixError(worldMatrices(stretched, slow, (2 * frame) / slow.fps)[mixed] ?? [], want)).toBeLessThan(1e-5);
+    }
+    const together = stretched.clips.find((candidate) => candidate.name === "Scene");
+    expect([together?.frameCount, together?.sourceStartFrame]).toEqual([250, 1]);
+    for (const frame of [2, 6, 9, 16]) {
+      const want = worldMatrices(scene, plain, (frame / 2 - 1) / plain.fps)[mixed] ?? [];
+      const got = together ? worldMatrices(stretched, together, (frame - 1) / together.fps)[mixed] : [];
+      expect(matrixError(got ?? [], want), `scene frame ${frame}`).toBeLessThan(1e-5);
+    }
+  });
+
+  it("plays an unused action that keys only object transforms on the one object whose actions key them", async () => {
+    const { file, actions, scene: builtScene } = await built();
+    const mixed = actionNamed(actions, "MixedSteps");
+    const curves = mixed.slots.flatMap((slot) => slot.curves);
+    const unused = datablocks(file, "SC")[0];
+    if (!unused) throw new Error("No scene");
+    const copy = (name: string, identifier: string, idType: number, index?: number): Action => ({
+      ...mixed,
+      struct: unused,
+      name,
+      slots: [
+        {
+          handle: -1,
+          identifier,
+          idType,
+          curves: curves.map((curve) => (index === undefined ? curve : { ...curve, index })),
+        },
+      ],
+    });
+    const { clips, warnings } = sampled(builtScene, [
+      ...actions,
+      copy("Legacy", "", 0),
+      copy("Gone", "OBGone", IdCode.object),
+      copy("Nowhere", "", 0, 2),
+    ]);
+    const moved = (name: string) =>
+      new Set(clips.find((parsed) => parsed.name === name)?.tracks.map((track) => builtScene.nodes[track.node]?.name));
+    expect([moved("Legacy"), moved("Gone")]).toEqual([new Set(["Mixed"]), new Set(["Mixed"])]);
+    expect(clips.map((parsed) => parsed.name)).not.toContain("Nowhere");
+    expect(warnings.filter((warning) => warning.subject.name === "Nowhere")).toEqual([
+      {
+        code: "clip-not-sampled",
+        subject: { kind: "clip", name: "Nowhere" },
+        message: "Clip not shown: Nowhere",
+        detail: "Nothing in the scene plays this action, and its curves do not say which object they move",
+      },
+    ]);
+  });
+
+  it("leaves an unused action alone when its slot names an object outside the scene, or an object there plays it", async () => {
+    const { actions, scene: builtScene } = await built();
+    const inside = { ...builtScene, objects: builtScene.objects.filter((record) => record.object.name !== "Mixed") };
+    const mixed = actionNamed(actions, "MixedSteps");
+    const unused = datablocks(mixed.struct.file, "SC")[0];
+    if (!unused) throw new Error("No scene");
+    const slots = mixed.slots.map((slot) => ({ ...slot, identifier: "OBMixed", idType: IdCode.object }));
+    const { clips, warnings } = sampled(inside, [mixed, { ...mixed, struct: unused, name: "Named", slots }]);
+    expect([clips, warnings]).toEqual([[], []]);
+  });
+
+  it("plays an unused action on no object when no object's actions key what it keys", async () => {
+    const { actions, scene: builtScene } = await built();
+    const alone = { ...builtScene, objects: builtScene.objects.filter((record) => record.object.name === "Mixed") };
+    const mixed = actionNamed(actions, "MixedSteps");
+    const turning = mixed.slots.flatMap((slot) => slot.curves).map((curve) => ({ ...curve, path: "rotation_euler" }));
+    const unused = datablocks(mixed.struct.file, "SC")[0];
+    if (!unused) throw new Error("No scene");
+    const turn: Action = {
+      ...mixed,
+      struct: unused,
+      name: "Turn",
+      slots: [{ handle: -1, identifier: "", idType: 0, curves: turning }],
+    };
+    const { clips, warnings } = sampled(alone, [mixed, turn]);
+    expect(clips.map((parsed) => parsed.name)).toEqual(["MixedSteps"]);
+    expect(warnings.map((warning) => [warning.code, warning.message])).toEqual([
+      ["clip-not-sampled", "Clip not shown: Turn"],
+    ]);
+  });
+
+  it("leaves out unused actions no object in the scene can play, and warns where nothing in the file plays them", () => {
+    const names = scene.clips.map((candidate) => candidate.name);
+    for (const name of ["Stray", "Drift", "SphereAction", "GhostAction"]) expect(names, name).not.toContain(name);
+    const named = (name: string) =>
+      scene.source.warnings
+        .filter((warning) => warning.subject.name === name)
+        .map((warning) => [warning.code, warning.message, warning.detail]);
+    for (const name of ["Stray", "Drift"]) {
+      expect(named(name)).toEqual([
+        [
+          "clip-not-sampled",
+          `Clip not shown: ${name}`,
+          "Nothing in the scene plays this action, and its curves do not say which object they move",
+        ],
+      ]);
+    }
+    expect([named("SphereAction"), named("GhostAction")]).toEqual([[], []]);
+  });
+
+  it("starts the clip of an action keyed from frame 10 at its first key", () => {
+    const late = clip("LateKeysAct");
+    expect([late.frameCount, late.sourceStartFrame, late.keyTimes[0]]).toEqual([11, 10, 0]);
+    expect(late.duration).toBeCloseTo(10 / 24, 6);
+  });
+
+  it("jumps where a Cycles modifier mirrors constant keys, after them and before them, as Blender does", () => {
+    const curve = (name: string) => new Map(expected.curves[name] ?? []);
+    const mirrorAfter = curve("MirrorConstAct");
+    expect([9, 9.125, 13, 13.125, 17].map((frame) => mirrorAfter.get(frame))).toEqual([2, 1, 1, 0, 0]);
+    const mirrorBefore = curve("MirrorConstBeforeAct");
+    expect([1, 1.125, 5, 5.125].map((frame) => mirrorBefore.get(frame))).toEqual([2, 1, 1, 0]);
+    for (const [name, node] of [
+      ["MirrorConstAct", "MirrorConst"],
+      ["MirrorConstBeforeAct", "MirrorConstBefore"],
+    ] as const) {
+      const [track] = tracksOf(name, node, "translation");
+      if (!track) throw new Error(`No translation track for ${node}`);
+      const samples = expected.curves[name] ?? [];
+      expect(samples).toHaveLength(8 * 16 + 1);
+      for (const [frame, value] of samples) {
+        const x = sampleTrack(track, (frame - 1) / clip(name).fps)[0] ?? Number.NaN;
+        expect(Math.abs(x - value), `${node} at ${frame}`).toBeLessThan(1e-5);
+      }
+    }
+  });
+
+  it("warns about an object whose rotation shears under the scale it was parented with", async () => {
+    const { actions, scene: builtScene } = await built();
+    const flat = builtScene.objects.find((record) => record.object.name === "Flat");
+    if (!flat) throw new Error("No Flat");
+    const scale = actionNamed(actions, "FlatScale");
+    expect(sampled(builtScene, [scale]).warnings).toEqual([]);
+    flat.parentInverse = Float64Array.of(1, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+    expect(sampled(builtScene, [scale]).warnings).toEqual([
+      {
+        code: "deform-approximated",
+        subject: { kind: "clip", name: "FlatScale" },
+        message: "Shear not shown: FlatScale",
+        detail: "These objects shear under the scale they were parented with, which the preview drops: Flat",
+      },
+    ]);
   });
 
   if (version === "4.2") return;
@@ -262,45 +612,135 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
       clip("MixedSteps").tracks,
     );
   });
+});
 
-  it("warns that keys on Disable in Viewports are left out", async () => {
-    const bytes = await decompressBlend(readFixture("clips", version));
-    const file = readBlendFile(bytes);
-    const curves = file
-      .blocksWithCode("DATA")
-      .filter((block) => block.struct?.type === "FCurve")
-      .flatMap((block) => file.elements(block));
-    const hand = curves.find((curve) => curve.text("rna_path") === 'pose.bones["Hand"].rotation_euler');
-    const path = hand?.target("rna_path");
-    if (!path) throw new Error("No HingeSteps curve on Hand");
-    bytes.set(new TextEncoder().encode("hide_viewport\0"), path.offset);
-    const hidden = await importBytes("hidden.blend", bytes);
-    const warnings = hidden.source.warnings.filter((warning) => warning.subject.name === "HingeSteps");
-    expect(warnings.map((warning) => [warning.code, warning.message, warning.detail])).toEqual([
-      [
-        "deform-approximated",
-        "Visibility changes not shown: HingeSteps",
-        "Keys on Disable in Viewports are left out; each object stays as the file saves it",
-      ],
+describe.each(VERSIONS)("the timeline fixture from Blender %s", async (version) => {
+  const scene = await importFixture("timeline", version);
+  const together = clipNamed(scene, "Scene");
+
+  it("plays the actions and NLA strips of the scene together over its frame range", () => {
+    expect([together.frameCount, together.sourceStartFrame]).toEqual([80, 1]);
+    const blending = scene.source.warnings.filter((warning) => warning.message.startsWith("NLA blending not followed"));
+    expect(blending).toEqual([]);
+  });
+
+  it("plays them as Blender does at each frame and between frames", () => {
+    for (const sample of worldSamples("timeline", version)) {
+      for (const [name, error] of worldErrors(scene, together, sample, (sample.frame - 1) / together.fps)) {
+        expect(error, `${name} at ${sample.frame}`).toBeLessThan(1e-4);
+      }
+    }
+  });
+
+  it("keys the frames where a strip plays its keys, and not the keys of a strip that one above it covers", () => {
+    const frames = new Set(Array.from(together.keyTimes, (time) => Math.round(time * together.fps) + 1));
+    expect([20, 30].filter((frame) => frames.has(frame))).toEqual([20, 30]);
+    expect([22, 24, 26, 28].filter((frame) => frames.has(frame))).toEqual([]);
+  });
+
+  it("starts each action's own clip at its first key", () => {
+    const starts = ["BaseAction", "ArmAction", "HandAction"].map((name) => {
+      const own = clipNamed(scene, name);
+      return [name, own.sourceStartFrame, own.frameCount];
+    });
+    expect(starts).toEqual([
+      ["BaseAction", 1, 60],
+      ["ArmAction", 1, 60],
+      ["HandAction", 10, 31],
     ]);
-    expect(hidden.clips.map((candidate) => candidate.name)).toContain("HingeSteps");
+  });
+});
+
+describe.each(VERSIONS)("the stretch fixture from Blender %s", async (version) => {
+  const scene = await importFixture("stretch", version);
+  const samples = worldSamples("stretch", version);
+
+  it("plays each action at the speed the scene's time remapping gives it, without its file frames", () => {
+    for (const [name, node] of [
+      ["SlowAct", "Slow"],
+      ["OtherAct", "Other"],
+    ] as const) {
+      const own = clipNamed(scene, name);
+      expect([own.frameCount, own.sourceStartFrame]).toEqual([21, undefined]);
+      const played = samples.filter((sample) => sample.frame >= 2 && sample.frame <= 22);
+      expect(played.length).toBeGreaterThan(3);
+      for (const sample of played) {
+        const error = worldErrors(scene, own, sample, (sample.frame - 2) / own.fps, [node]).get(node);
+        expect(error, `${node} at ${sample.frame}`).toBeLessThan(1e-4);
+      }
+    }
   });
 
-  it("leaves out a clip whose samples would pass the limit, and warns", async () => {
-    const file = readBlendFile(await decompressBlend(readFixture("clips", version)));
-    const actions = readActions(file);
-    const built = buildScene(file, animatedPaths(file, actions));
-    const sampled = (limit?: number) => {
-      const warnings: BlendWarning[] = [];
-      return { clips: buildClips(built, actions, warnings, limit).map((parsed) => parsed.name), warnings };
-    };
-    const all = sampled().clips;
-    const limited = sampled(500);
-    const left = all.filter((name) => !limited.clips.includes(name));
-    expect(left.length).toBeGreaterThan(0);
-    expect(limited.clips.length).toBeGreaterThan(0);
-    const unsampled = limited.warnings.filter((warning) => warning.code === "clip-not-sampled");
-    expect(unsampled.map((warning) => warning.subject.name)).toEqual(left);
-    expect(unsampled[0]?.detail).toMatch(/^Sampling it takes \d+ values, more than 500$/);
+  it("plays the scene's actions together over its frame range as Blender does", () => {
+    const together = clipNamed(scene, "Scene");
+    expect([together.frameCount, together.sourceStartFrame]).toEqual([30, 1]);
+    for (const sample of samples) {
+      for (const [name, error] of worldErrors(scene, together, sample, (sample.frame - 1) / together.fps)) {
+        expect(error, `${name} at ${sample.frame}`).toBeLessThan(1e-4);
+      }
+    }
   });
+});
+
+describe.each(VERSIONS)("the tweak fixture from Blender %s", async (version) => {
+  const scene = await importFixture("tweak", version);
+
+  const together = clipNamed(scene, "Scene");
+
+  it("plays each strip in NLA tweak mode alone on its track, synced to its action or at the scene's frame", () => {
+    expect([together.frameCount, together.sourceStartFrame]).toEqual([40, 1]);
+    for (const sample of worldSamples("tweak", version)) {
+      for (const [name, error] of worldErrors(scene, together, sample, (sample.frame - 1) / together.fps)) {
+        expect(error, `${name} at ${sample.frame}`).toBeLessThan(1e-4);
+      }
+    }
+  });
+
+  it("does not warn that a tweaked strip timed by a curve is retimed, since it plays at the scene's frame", () => {
+    expect(scene.source.warnings.filter((warning) => warning.subject.name === "Scene")).toEqual([]);
+  });
+});
+
+describe.each(VERSIONS)("the nla-stress fixture from Blender %s", (version) => {
+  it("plays a thousand strips on one track and a hundred stacked strips that repeat a thousand times", async () => {
+    const scene = await importFixture("nla-stress", version);
+    const together = clipNamed(scene, "Scene");
+    expect([together.frameCount, together.sourceStartFrame]).toEqual([4001, 1]);
+    expect(scene.source.warnings.filter((warning) => warning.subject.name === "Scene")).toEqual([]);
+    expect(together.keyTimes.length).toBeLessThanOrEqual(4001);
+    for (const sample of worldSamples("nla-stress", version)) {
+      for (const [name, error] of worldErrors(scene, together, sample, (sample.frame - 1) / together.fps)) {
+        expect(error, `${name} at ${sample.frame}`).toBeLessThan(1e-4);
+      }
+    }
+  });
+});
+
+describe.each(VERSIONS)("the shear fixture from Blender %s", async (version) => {
+  const scene = await importFixture("shear", version);
+  const samples = worldSamples("shear", version);
+
+  for (const [name, child] of [
+    ["Spin", "Wheel"],
+    ["Turn", "Prop"],
+  ] as const) {
+    it(`warns that ${child} shears in ${name} under the scale it was parented with`, () => {
+      expect(scene.source.warnings.map((warning) => [warning.code, warning.message, warning.detail])).toContainEqual([
+        "deform-approximated",
+        `Shear not shown: ${name}`,
+        `These objects shear under the scale they were parented with, which the preview drops: ${child}`,
+      ]);
+    });
+
+    it(`plays ${name} as Blender does where nothing shears`, () => {
+      const played = clipNamed(scene, name);
+      for (const sample of samples) {
+        const time = (sample.frame - 1) / played.fps;
+        const names = sample.frame === 1 ? ["Body", "Rig", child] : ["Body", "Rig"];
+        for (const [node, error] of worldErrors(scene, played, sample, time, names)) {
+          expect(error, `${node} at ${sample.frame}`).toBeLessThan(1e-4);
+        }
+      }
+    });
+  }
 });

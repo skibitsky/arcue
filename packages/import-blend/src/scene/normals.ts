@@ -302,7 +302,10 @@ function startsCyclicFan(
 export interface NormalOptions {
   sharpFaces: Uint8Array | null;
   sharpEdges: Uint8Array | null;
-  /** Blender 4.0 and earlier: edges sharper than this angle split normals. */
+  /**
+   * Blender 4.0 and earlier: edges sharper than this angle split normals, unless the mesh has custom normals, whose
+   * smooth fans Blender builds without the angle.
+   */
   autoSmoothAngle: number | null;
   /** Short pairs in Blender's corner space encoding, two per corner. */
   customNormals: Int16Array | null;
@@ -321,9 +324,9 @@ export function cornerNormals(mesh: Topology & Pick<MeshData, "vertexCount">, op
   const anySharpFace = options.sharpFaces?.some((value) => value !== 0) ?? false;
   const allSharpFaces = mesh.faceCount > 0 && (options.sharpFaces?.every((value) => value !== 0) ?? false);
   const anySharpEdge = options.sharpEdges?.some((value) => value !== 0) ?? false;
-  const legacy = options.autoSmoothAngle !== null;
+  const splitAngle = options.customNormals ? null : options.autoSmoothAngle;
 
-  if (!options.customNormals && !legacy && !anySharpEdge && !anySharpFace) {
+  if (!options.customNormals && splitAngle === null && !anySharpEdge && !anySharpFace) {
     for (let c = 0; c < mesh.cornerCount; c++) store(result, c, read(verts, at(mesh.cornerVerts, c)));
     return result;
   }
@@ -332,10 +335,10 @@ export function cornerNormals(mesh: Topology & Pick<MeshData, "vertexCount">, op
     return result;
   }
 
-  const splitCosine = options.autoSmoothAngle === null ? -1 : Math.cos(options.autoSmoothAngle);
+  const splitCosine = splitAngle === null ? -1 : Math.cos(splitAngle);
   const map = edgeToCorners(mesh, faceOf, sharpFace, (edge, firstCorner, face) => {
     if (options.sharpEdges && at(options.sharpEdges, edge) !== 0) return true;
-    if (options.autoSmoothAngle === null) return false;
+    if (splitAngle === null) return false;
     return dot(read(faces, at(faceOf, firstCorner)), read(faces, face)) < splitCosine;
   });
 

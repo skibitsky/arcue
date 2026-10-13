@@ -184,7 +184,7 @@ describe("isGrayImage", () => {
   it("does not read a PNG whose rows are too long to hold", async () => {
     const inflated = countInflated();
     const header = chunk("IHDR", [...bigEndian(2 ** 31 - 1, 4), ...bigEndian(1, 4), 16, 6, 0, 0, 0]);
-    expect(await isGrayImage(Uint8Array.from([...SIGNATURE, ...header, ...chunk("IEND", [])]))).toBe(false);
+    expect(await isGrayImage(Uint8Array.from([...SIGNATURE, ...header, ...chunk("IEND", [])]))).toBeNull();
     expect(inflated.streams).toBe(0);
   });
 
@@ -192,7 +192,7 @@ describe("isGrayImage", () => {
     const inflated = countInflated();
     const pixel = (x: number, y: number) => [grayAt(x, y), grayAt(x, y), grayAt(x, y)];
     const image = png({ width: 8, height: 8, colorType: 2, pixel });
-    expect(await isGrayImage(image, { bytes: 8 * 8 * 3 - 1 })).toBe(false);
+    expect(await isGrayImage(image, { bytes: 8 * 8 * 3 - 1 })).toBeNull();
     expect(inflated.streams).toBe(0);
     expect(await isGrayImage(image, { bytes: 8 * 8 * 3 })).toBe(true);
   });
@@ -204,29 +204,47 @@ describe("isGrayImage", () => {
     const budget = { bytes: 8 * 8 * 3 * 2 };
     expect(await isGrayImage(image, budget)).toBe(true);
     expect(await isGrayImage(image, budget)).toBe(true);
-    expect(await isGrayImage(image, budget)).toBe(false);
+    expect(await isGrayImage(image, budget)).toBeNull();
     expect(inflated.streams).toBe(2);
   });
 
-  it("reads a palette PNG by its palette", async () => {
-    const image = { width: 2, height: 2, colorType: 3, pixel: () => [0] };
-    expect(await isGrayImage(png({ ...image, palette: [0, 0, 0, 128, 128, 128, 255, 255, 255] }))).toBe(true);
-    expect(await isGrayImage(png({ ...image, palette: [0, 0, 0, 128, 0, 128] }))).toBe(false);
+  it("reads only the whole rows within a limit, which tell that a pixel is not gray but not that every pixel is", async () => {
+    const inflated = countInflated();
+    const pixel = (x: number, y: number) => [grayAt(x, y), grayAt(x, y), grayAt(x, y)];
+    const row = 128 * 3;
+    const image = { width: 128, height: 1024, colorType: 2, pixel, filter: (y: number) => y % 5 };
+    const budget = { bytes: 2 ** 30 };
+    expect(await isGrayImage(png(image), budget, row * 8 + row - 1)).toBeNull();
+    expect(budget.bytes).toBe(2 ** 30 - (row * 8 + row - 1));
+    expect(inflated.bytes).toBeLessThan((row * 1024) / 2);
+    const early = (x: number, y: number) => (y === 7 ? [9, 0, 9] : pixel(x, y));
+    expect(await isGrayImage(png({ ...image, pixel: early }), budget, row * 8)).toBe(false);
+    const late = (x: number, y: number) => (y === 8 ? [9, 0, 9] : pixel(x, y));
+    expect(await isGrayImage(png({ ...image, pixel: late }), budget, row * 8)).toBeNull();
+    expect(await isGrayImage(png({ ...image, pixel: late }), budget)).toBe(false);
+    expect(await isGrayImage(png({ ...image, height: 8 }), budget, row * 8)).toBe(true);
+    expect(await isGrayImage(png({ ...image, pixel: early }), budget, row - 1)).toBeNull();
   });
 
-  it("does not count a PNG it cannot read to the end", async () => {
+  it("reads a palette PNG by its palette, which cannot tell whether a pixel uses a color entry", async () => {
+    const image = { width: 2, height: 2, colorType: 3, pixel: () => [0] };
+    expect(await isGrayImage(png({ ...image, palette: [0, 0, 0, 128, 128, 128, 255, 255, 255] }))).toBe(true);
+    expect(await isGrayImage(png({ ...image, palette: [0, 0, 0, 128, 0, 128] }))).toBeNull();
+  });
+
+  it("cannot tell for a PNG it cannot read to the end", async () => {
     const pixel = (x: number, y: number) => [grayAt(x, y), grayAt(x, y), grayAt(x, y)];
     const whole = png({ width: 4, height: 4, colorType: 2, pixel });
     const short = png({ width: 4, height: 3, colorType: 2, pixel });
     const header = chunk("IHDR", [...bigEndian(4, 4), ...bigEndian(4, 4), 8, 2, 0, 0, 0]);
-    expect(await isGrayImage(Uint8Array.from([...SIGNATURE, ...header, ...short.subarray(33)]))).toBe(false);
+    expect(await isGrayImage(Uint8Array.from([...SIGNATURE, ...header, ...short.subarray(33)]))).toBeNull();
     const damaged = Uint8Array.from([...SIGNATURE, ...header, ...chunk("IDAT", [1, 2, 3, 4, 5]), ...chunk("IEND", [])]);
-    expect(await isGrayImage(damaged)).toBe(false);
-    expect(await isGrayImage(png({ width: 4, height: 4, colorType: 2, pixel, filter: () => 5 }))).toBe(false);
+    expect(await isGrayImage(damaged)).toBeNull();
+    expect(await isGrayImage(png({ width: 4, height: 4, colorType: 2, pixel, filter: () => 5 }))).toBeNull();
     expect(await isGrayImage(whole)).toBe(true);
   });
 
-  it("reads a JPEG as gray only where its frame has one component", async () => {
+  it("reads a JPEG as gray where its frame has one component, and cannot tell for others", async () => {
     const jpeg = (components: number) =>
       Uint8Array.from([
         0xff,
@@ -237,12 +255,12 @@ describe("isGrayImage", () => {
         ...[0xff, 0xda, 0x00, 0x02, 0xff, 0xd9],
       ]);
     expect(await isGrayImage(jpeg(1))).toBe(true);
-    expect(await isGrayImage(jpeg(3))).toBe(false);
-    expect(await isGrayImage(Uint8Array.from([0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9]))).toBe(false);
+    expect(await isGrayImage(jpeg(3))).toBeNull();
+    expect(await isGrayImage(Uint8Array.from([0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9]))).toBeNull();
   });
 
-  it("does not count other formats", async () => {
-    expect(await isGrayImage(Uint8Array.from([0x42, 0x4d, 0, 0, 0, 0]))).toBe(false);
-    expect(await isGrayImage(new Uint8Array())).toBe(false);
+  it("cannot tell for other formats", async () => {
+    expect(await isGrayImage(Uint8Array.from([0x42, 0x4d, 0, 0, 0, 0]))).toBeNull();
+    expect(await isGrayImage(new Uint8Array())).toBeNull();
   });
 });

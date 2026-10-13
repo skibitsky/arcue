@@ -88,17 +88,17 @@ describe.each(VERSIONS)("the relations fixture from Blender %s", async (version)
       ["RestBend", "Resting"],
     ]);
     expect(warning("deform-approximated", "Beside")?.detail).toBe(
-      "The preview keeps its rest offset from MotionRig in RigTravels",
+      "The preview keeps its rest offset from MotionRig in RigTravels, Scene",
     );
     expect(warning("deform-approximated", "Carried")?.detail).toBe(
-      "The preview keeps its rest offset from StillRig in CarrierSlides",
+      "The preview keeps its rest offset from StillRig in CarrierSlides, Scene",
     );
     expect(warning("deform-approximated", "Stub")?.message).toBe("Envelopes not used: Stub");
     expect(warning("deform-approximated", "Multiplied")?.detail).toBe(
       "Bones that multiply vertex group weights by their envelopes: Upper",
     );
     expect(warning("deform-approximated", "RestRig")?.detail).toBe(
-      "Blender shows this armature in its rest position; the preview poses it in RestBend",
+      "Blender shows this armature in its rest position; the preview poses it in RestBend, Scene",
     );
     expect(warning("unweighted-vertices", "OutsideEnvelopes")).toBeDefined();
     const quiet = ["Riding", "CarriedAlong", "Column", "Resting", "Quiet", "QuietRig", "MultipliedInside"];

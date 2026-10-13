@@ -1,7 +1,10 @@
-import type { ImportWarningCode, ImportWarningSubject, Mesh, NodeKind, Skeleton } from "@arcue/scene";
-import { usedActions } from "../anim/actions";
-import type { OpeningPose } from "../anim/opening";
-import { currentFrame, openingPose, openingWeights } from "../anim/opening";
+import type { ImportWarningCode, ImportWarningSubject, Mesh, MorphTarget, NodeKind, Skeleton } from "@arcue/scene";
+import type { Action } from "../anim/actions";
+import { readActions, usedActions } from "../anim/actions";
+import type { StartPose, StartPoses } from "../anim/opening";
+import { startFrame, startPoses } from "../anim/opening";
+import type { SceneTimeline } from "../anim/timeline";
+import { sceneTimeline } from "../anim/timeline";
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { idName, isLinked } from "../blend/ids";
 import type { Mat4 } from "../math";
@@ -17,26 +20,40 @@ import {
   translation,
 } from "../math";
 import type { Bone } from "./armature";
-import { BoneFlag, readBones } from "./armature";
-import { envelopeUse, readEnvelopes } from "./envelopes";
-import type { GrayCheck, MaterialDraft } from "./materials";
+import { ArmatureReadError, readBones } from "./armature";
+import { envelopeUse } from "./envelopes";
+import type { GrayCheck, GrayRead, MaterialDraft } from "./materials";
 import { defaultMaterial, imageUses, readMaterial } from "./materials";
-import type { BuiltMesh, SkinBone } from "./mesh-build";
+import type { BuildOptions, BuiltMesh, SkinBone } from "./mesh-build";
 import { buildMesh, MAX_UV_SETS } from "./mesh-build";
 import type { MeshData } from "./mesh-data";
 import { defaultColorAttribute, MeshReadError, meshMaterials, readMeshData } from "./mesh-data";
 import { changesPreview, ModifierType, modifierName, modifierType, viewportModifiers } from "./modifiers";
-import type { SceneContents, SceneObject } from "./objects";
+import type { LinkedName, SceneContents, SceneObject } from "./objects";
 import {
-  ARMATURE_DEFORM_VERTEX_GROUPS,
+  ArmatureDeformFlag,
   childInstancing,
   collectSceneObjects,
   deformingArmatures,
   instancedCollection,
+  LINKED_KINDS,
+  linkedName,
   ObjectType,
   ParentType,
   UNSHOWN_GEOMETRY,
 } from "./objects";
+import type { ParentVertices, ShownVertices } from "./parents";
+import {
+  headTailFactor,
+  isVertexParented,
+  parentPoints,
+  readsNoParentPoints,
+  relativeParent,
+  vertexParentPart,
+  WorldMatrices,
+} from "./parents";
+import type { PinnedShape, ShapeSource } from "./shape-keys";
+import { lockedShapeKey, pinnedShape, shapedVertex, shapeTargets, shapeWeights } from "./shape-keys";
 import type { SmoothByAngle } from "./smooth-by-angle";
 import { smoothByAngle } from "./smooth-by-angle";
 import type { ObjectValues, TransformValues } from "./transforms";
@@ -73,7 +90,7 @@ export interface ArmatureRecord {
   bones: Bone[];
   /** Node index of each bone. */
   nodes: number[];
-  /** Each bone's pose channel as Blender shows it when it opens the file; an action changes only the values it keys. */
+  /** Each bone's pose channel at the scene's start frame; an action changes only the values it keys. */
   pose: TransformValues[];
 }
 
@@ -85,7 +102,9 @@ export interface MeshRecord {
   /** Default weight of each morph target. */
   morphDefaults: number[];
   /** The range Blender clamps each morph target's weight to. */
-  morphRanges: [number, number][];
+  morphRanges: (readonly [number, number])[];
+  /** Whether the object pins its active shape key with Shape Key Lock, so key values and their animation change nothing. */
+  shapeKeyLock: boolean;
 }
 
 /** The UV maps of a mesh that uses a material, by name, with the one rendering uses by default. */
@@ -118,7 +137,7 @@ export interface MaterialColors {
 
 export interface BuiltScene {
   nodes: NodeDraft[];
-  meshes: Omit<Mesh, "topology">[];
+  meshes: Mesh[];
   skeletons: Skeleton[];
   materials: MaterialDraft[];
   /** For each material, the UV maps of the meshes it is drawn on, which all resolve its textures' UV maps alike. */
@@ -131,6 +150,7 @@ export interface BuiltScene {
   conversion: Mat4;
   fps: number;
   unitScale: number;
+  timeline: SceneTimeline;
   warnings: BlendWarning[];
 }
 
@@ -138,9 +158,8 @@ type Warn = (code: ImportWarningCode, name: string, message: string, detail?: st
 
 const CONSTRAINT_DISABLE = 1 << 2;
 const CONSTRAINT_OFF = 1 << 9;
-const ARMATURE_DEFORM_QUATERNION = 1 << 2;
 
-export function sceneSettings(scene: BlendStruct | null): { fps: number; unitScale: number } {
+function sceneSettings(scene: BlendStruct | null): { fps: number; unitScale: number } {
   const render = scene?.struct("r");
   const base = render?.number("frs_sec_base") || 1;
   const fps = (render?.number("frs_sec") ?? 0) / base;
@@ -152,7 +171,7 @@ export function sceneSettings(scene: BlendStruct | null): { fps: number; unitSca
 }
 
 /** Blender's Z-up axes into the scene's Y-up axes: (x, y, z) becomes (x, z, −y), times the unit scale. */
-export function conversionMatrix(unitScale: number): Mat4 {
+function conversionMatrix(unitScale: number): Mat4 {
   const s = unitScale;
   return Float64Array.of(s, 0, 0, 0, 0, 0, -s, 0, 0, s, 0, 0, 0, 0, 0, 1);
 }
@@ -161,11 +180,7 @@ export function conversionMatrix(unitScale: number): Mat4 {
  * The constraints Blender evaluates: on, valid, and with some influence now or an animated influence. `path` is the
  * owner's path to its constraints, such as `pose.bones["Arm"].` for a bone or empty for an object.
  */
-export function activeConstraints(
-  owner: BlendStruct,
-  path = "",
-  animated: ReadonlySet<string> = new Set(),
-): BlendStruct[] {
+function activeConstraints(owner: BlendStruct, path = "", animated: ReadonlySet<string> = new Set()): BlendStruct[] {
   return owner.list("constraints").filter((constraint) => {
     const flag = constraint.number("flag");
     if ((flag & CONSTRAINT_OFF) !== 0 || (flag & CONSTRAINT_DISABLE) !== 0) return false;
@@ -179,52 +194,30 @@ function quoted(name: string): string {
   return name.replace(/["\\]/g, "\\$&");
 }
 
-function headTailFactor(object: BlendStruct): number {
-  return object.has("parent_bone_head_tail_factor") ? object.number("parent_bone_head_tail_factor") : 1;
-}
+/** Rest world matrices of nodes in Blender's space, each worked out once. */
+class NodeWorlds {
+  readonly #nodes: readonly NodeDraft[];
+  readonly #worlds: Mat4[] = [];
 
-/** Whether a child of the bone follows only its channel transform, which is identity at rest, as Blender's option. */
-function relativeParent(bone: Bone): boolean {
-  return (bone.flag & BoneFlag.relativeParenting) !== 0;
-}
-
-/** The rest matrix of the bone an object is parented to, moved to the bone's tail, in armature space. */
-function boneParentMatrix(object: BlendStruct, armature: BlendStruct): Mat4 {
-  const data = armature.deref("data");
-  const name = object.string("parsubstr");
-  const bone = data ? readBones(data).find((candidate) => candidate.name === name) : undefined;
-  if (!bone || relativeParent(bone)) return identity();
-  return multiply(bone.rest, translation(0, bone.length * headTailFactor(object), 0));
-}
-
-/** Rest world matrices in Blender's space of any object, shown or not, with every bone at rest. */
-class WorldMatrices {
-  readonly #cache = new Map<number, Mat4>();
-  readonly #visiting = new Set<number>();
-
-  of(object: BlendStruct): Mat4 {
-    const cached = this.#cache.get(object.offset);
-    if (cached) return cached;
-    if (this.#visiting.has(object.offset)) return identity();
-    this.#visiting.add(object.offset);
-    const world = multiplyAll(
-      this.parentOf(object),
-      mat4From(object.numbers("parentinv")),
-      objectBasis(objectValues(object)),
-    );
-    this.#visiting.delete(object.offset);
-    this.#cache.set(object.offset, world);
-    return world;
+  constructor(nodes: readonly NodeDraft[]) {
+    this.#nodes = nodes;
   }
 
-  /** The world matrix of what the object is parented to, a bone's tail for a bone parent. */
-  parentOf(object: BlendStruct): Mat4 {
-    const parent = object.deref("parent");
-    if (!parent || isLinked(parent)) return identity();
-    const world = this.of(parent);
-    return (object.number("partype") & 15) === ParentType.bone
-      ? multiply(world, boneParentMatrix(object, parent))
-      : world;
+  /** The world matrix of a node whose ancestors, which come before it, keep their rest matrices from now on. */
+  of(index: number): Mat4 {
+    const chain: number[] = [];
+    for (let at = index; at >= 0 && this.#worlds[at] === undefined; ) {
+      chain.push(at);
+      const parent = this.#nodes[at]?.parent ?? -1;
+      at = parent < at ? parent : -1;
+    }
+    for (const at of chain.reverse()) {
+      const node = this.#nodes[at];
+      if (!node) continue;
+      const parent = node.parent >= 0 && node.parent < at ? this.#worlds[node.parent] : undefined;
+      this.#worlds[at] = parent ? multiply(parent, node.rest) : node.rest;
+    }
+    return this.#worlds[index] ?? identity();
   }
 }
 
@@ -234,10 +227,17 @@ function addArmature(
   nodes: NodeDraft[],
   animated: ReadonlySet<string>,
   warn: Warn,
-  opening: OpeningPose,
+  startPose: StartPose,
 ): void {
   const { object, node } = record;
-  const bones = readBones(data);
+  let bones: Bone[];
+  try {
+    bones = readBones(data);
+  } catch (error) {
+    if (!(error instanceof ArmatureReadError)) throw error;
+    warn("invalid-data", object.name, `Armature not read: ${object.name}`, error.message);
+    return;
+  }
   const channels = new Map<string, BlendStruct>();
   for (const channel of object.struct.deref("pose")?.list("chanbase") ?? [])
     channels.set(channel.string("name"), channel);
@@ -252,7 +252,7 @@ function addArmature(
       rest: bone.offset,
       mesh: null,
     });
-    return opening.channel(bone.name, channel ? channelValues(channel) : restChannel());
+    return startPose.channel(bone.name, channel ? channelValues(channel) : restChannel());
   });
   record.armature = { bones, nodes: boneNodes, pose };
   if (bones.some((bone) => bone.deform && bone.segments > 1)) {
@@ -293,9 +293,16 @@ function geometryAncestors(objects: readonly SceneObject[]): Set<number> {
 }
 
 /** A node for every object, each armature's bones under it, and an object parented to a bone under that bone. */
-function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, warn: Warn) {
-  const worlds = new WorldMatrices();
+function objectNodes(
+  contents: SceneContents,
+  animated: ReadonlySet<string>,
+  poses: StartPoses,
+  warn: Warn,
+  vertices: ParentVertices,
+) {
+  const worlds = new WorldMatrices(vertices);
   const nodes: NodeDraft[] = [];
+  const nodeWorlds = new NodeWorlds(nodes);
   const objects: ObjectRecord[] = [];
   const byOffset = new Map<number, ObjectRecord>();
   const ancestors = geometryAncestors(contents.objects);
@@ -303,6 +310,10 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
     const parentRecord = object.parent ? byOffset.get(object.parent.offset) : undefined;
     let parentNode = parentRecord?.node ?? -1;
     let parentPart: Mat4 = parentRecord ? identity() : worlds.parentOf(object.struct);
+    const parentInverse = mat4From(object.struct.numbers("parentinv"));
+    const startPose = poses.of(object.struct);
+    const values = startPose.object(objectValues(object.struct));
+    const below = multiply(parentInverse, objectBasis(values));
     const parentBones = parentRecord?.armature;
     if (parentBones && object.parentType === ParentType.bone) {
       const index = parentBones.bones.findIndex((bone) => bone.name === object.parentBone);
@@ -315,18 +326,18 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
         parentPart = translation(0, bone.length * headTailFactor(object.struct), 0);
       }
     }
-    const parentInverse = mat4From(object.struct.numbers("parentinv"));
-    const opening = openingPose(object.struct, contents.scene);
-    const values = opening.object(objectValues(object.struct));
+    if (parentRecord && isVertexParented(object.struct)) {
+      ({ node: parentNode, parentPart } = vertexParentPlace(object, parentRecord, below, nodeWorlds, vertices));
+    }
     const record: ObjectRecord = { object, node: nodes.length, parentPart, parentInverse, values, armature: null };
-    const rest = multiplyAll(parentPart, parentInverse, objectBasis(values));
+    const rest = multiply(parentPart, below);
     nodes.push({ name: object.name, parent: parentNode, kind: "empty", rest, mesh: null });
     if (shearOf(rest) > SHEAR_TOLERANCE) {
       const detail = "Its parent's scale shears it, which the preview drops";
       warn("deform-approximated", object.name, `Shear not shown: ${object.name}`, detail);
     }
     if (object.type === ObjectType.armature && object.data) {
-      addArmature(record, object.data, nodes, animated, warn, opening);
+      addArmature(record, object.data, nodes, animated, warn, startPose);
     }
     if (activeConstraints(object.struct, "", animated).length > 0) {
       warn("constraint-not-evaluated", object.name, `Constraints not evaluated: ${object.name}`);
@@ -347,13 +358,49 @@ function objectNodes(contents: SceneContents, animated: ReadonlySet<string>, war
       const detail = `Arcue shows its children once instead of at each ${instancing}`;
       warn("object-not-shown", object.name, `${kind} instances not shown: ${object.name}`, detail);
     }
-    if (object.parentType === ParentType.vertex || object.parentType === ParentType.vertices) {
-      warn("invalid-data", object.name, `Vertex parent not followed: ${object.name}`);
+    if (object.parent && isVertexParented(object.struct)) {
+      vertexParentWarning(object, object.parent, parentNode >= 0 && parentNode === parentRecord?.node, warn);
     }
     objects.push(record);
     byOffset.set(object.struct.offset, record);
   }
-  return { nodes, objects, byOffset };
+  return { nodes, nodeWorlds, objects, byOffset };
+}
+
+/**
+ * The node a vertex-parented object hangs from, and the matrix between that node and the object's parent inverse: its
+ * parent's node, or the scene's root where the parent node's scale would shear it. Blender's vertex parent leaves out
+ * the parent's scale, so the object itself has none of that shear. `below` is the object's matrix under its parent
+ * inverse.
+ */
+function vertexParentPlace(
+  object: SceneObject,
+  parent: ObjectRecord,
+  below: Mat4,
+  nodeWorlds: NodeWorlds,
+  vertices: ParentVertices,
+): { node: number; parentPart: Mat4 } {
+  const parentWorld = nodeWorlds.of(parent.node);
+  const points = parentPoints(object.struct, parent.object.struct, vertices);
+  const parentPart = vertexParentPart(object.struct, points, parentWorld);
+  const placed = multiply(parentWorld, parentPart);
+  const shears = (above: Mat4) => shearOf(multiply(above, below)) > SHEAR_TOLERANCE;
+  return shears(parentPart) && !shears(placed) ? { node: -1, parentPart: placed } : { node: parent.node, parentPart };
+}
+
+/** What the preview leaves out of a vertex parent, which places the object at its parent's vertices only at rest. */
+function vertexParentWarning(object: SceneObject, parent: BlendStruct, underParent: boolean, warn: Warn): void {
+  const name = idName(parent);
+  let detail: string;
+  if (readsNoParentPoints(parent)) {
+    const follows = underParent ? "follows it as a whole" : "does not follow it";
+    detail = `Arcue does not read the points of ${name}, so it is placed by the origin of ${name} and ${follows}`;
+  } else {
+    detail = underParent
+      ? `It keeps its rest offset from ${name} instead of following its vertices`
+      : `It stays where it is at rest instead of following the vertices of ${name}`;
+  }
+  warn("deform-approximated", object.name, `Vertex parent not followed: ${object.name}`, detail);
 }
 
 /**
@@ -365,8 +412,8 @@ class MaterialTable {
   readonly drafts: MaterialDraft[] = [];
   readonly uvMaps: MaterialUvMaps[] = [];
   readonly colors: MaterialColors[] = [];
-  /** Names of materials linked from other files, which show as the default material. */
-  readonly linked = new Set<string>();
+  /** Materials linked from other files, which show as the default material. */
+  readonly linked: LinkedName[] = [];
   readonly #read = new Map<number, MaterialDraft>();
   readonly #index = new Map<string, number>();
   readonly #version: number;
@@ -396,7 +443,7 @@ class MaterialTable {
   }
 
   indexOf(material: BlendStruct | null, uvMaps: MaterialUvMaps, meshColors: MeshColors): number {
-    if (material && isLinked(material)) this.linked.add(idName(material));
+    if (material && isLinked(material)) this.linked.push(linkedName("materials", idName(material), material));
     const draft = this.#draftOf(material);
     const note = (text: string) => {
       if (!draft?.approximations.includes(text)) draft?.approximations.push(text);
@@ -453,26 +500,46 @@ function slotMaterials(
   };
 }
 
-/**
- * The images that the materials in the slots of the scene's shown meshes ask `buildScene`'s `isGray` about, so that
- * the caller can find which are gray before building the scene. It reads only the materials, not the meshes.
- */
-export function grayCandidates(file: BlendFile): BlendStruct[] {
-  const asked = new Map<number, BlendStruct>();
-  const ask: GrayCheck = (image) => {
-    asked.set(image.offset, image);
-    return false;
-  };
-  const read = new Set<number>();
-  const contents = collectSceneObjects(file);
-  const frame = imageFrame(contents.scene);
+/** A shown mesh object, its mesh, and the material in each of its slots. */
+export interface ShownMesh {
+  object: SceneObject;
+  mesh: BlendStruct;
+  slots: (BlendStruct | null)[];
+}
+
+/** The scene's shown mesh objects with the materials in their slots, which both the gray check and the build read. */
+export function* shownMeshSlots(file: BlendFile, contents: SceneContents): Generator<ShownMesh> {
   for (const object of contents.objects) {
     if (object.type !== ObjectType.mesh || !object.data || !object.shown) continue;
     const meshSlots = meshMaterials(file, object.data);
     const slotMaterial = slotMaterials(file, object.struct, meshSlots);
-    const slots = Math.max(object.struct.number("totcol"), meshSlots.length);
-    for (let slot = 0; slot < slots; slot++) {
-      const material = slotMaterial(slot);
+    const count = Math.max(object.struct.number("totcol"), meshSlots.length);
+    yield { object, mesh: object.data, slots: Array.from({ length: count }, (_, slot) => slotMaterial(slot)) };
+  }
+}
+
+/** An image a material asks the gray check about, and how much of it the check reads. */
+export interface GrayCandidate {
+  image: BlendStruct;
+  read: GrayRead;
+}
+
+/**
+ * The images that the materials in the slots of the scene's shown meshes ask `buildScene`'s `isGray` about, so that
+ * the caller can find which are gray before building the scene, each read whole where any material asks so. It reads
+ * only the materials, not the meshes.
+ */
+export function grayCandidates(file: BlendFile, contents: SceneContents): GrayCandidate[] {
+  const asked = new Map<number, GrayCandidate>();
+  const ask: GrayCheck = (image, read) => {
+    const whole = read === "whole" || asked.get(image.offset)?.read === "whole";
+    asked.set(image.offset, { image, read: whole ? "whole" : "sample" });
+    return null;
+  };
+  const read = new Set<number>();
+  const frame = imageFrame(contents.scene);
+  for (const { slots } of shownMeshSlots(file, contents)) {
+    for (const material of slots) {
       if (!material || isLinked(material) || read.has(material.offset)) continue;
       read.add(material.offset);
       readMaterial(material, file.version, ask, frame);
@@ -481,9 +548,9 @@ export function grayCandidates(file: BlendFile): BlendStruct[] {
   return [...asked.values()];
 }
 
-/** The scene frame at which Blender picks the frame an image sequence shows: the current one, whole. */
+/** The scene frame at which an image sequence shows its frame: the start frame, whole, as for poses and shape keys. */
 function imageFrame(scene: BlendStruct | null): number {
-  return Math.trunc(currentFrame(scene));
+  return Math.trunc(startFrame(scene));
 }
 
 /** The deform bones that skin the object, from its first Armature modifier, with warnings about what is left out. */
@@ -495,14 +562,14 @@ function skinBones(object: SceneObject, byOffset: Map<number, ObjectRecord>, war
   if (deforms.length > 1) {
     warn("extra-skins", object.name, `Several skins: ${object.name}`, "Only the first Armature modifier deforms it");
   }
-  if ((first.flags & ARMATURE_DEFORM_QUATERNION) !== 0) {
+  if ((first.flags & ArmatureDeformFlag.preserveVolume) !== 0) {
     warn("deform-approximated", object.name, `Preserve volume shown as linear skinning: ${object.name}`);
   }
   if (first.maskGroup !== "") {
     const detail = `Vertex group ${first.maskGroup} limits the Armature modifier; the preview deforms vertices fully`;
     warn("deform-approximated", object.name, `Armature mask not applied: ${object.name}`, detail);
   }
-  if ((first.flags & ARMATURE_DEFORM_VERTEX_GROUPS) === 0) return null;
+  if ((first.flags & ArmatureDeformFlag.vertexGroups) === 0) return null;
   return armature.bones.flatMap((bone, index) =>
     bone.deform ? [{ name: bone.name, node: armature.nodes[index] ?? -1 }] : [],
   );
@@ -521,8 +588,7 @@ function envelopeWarnings(
   const target = first ? byOffset.get(first.target.offset) : undefined;
   if (!first || !target?.armature) return;
   const toArmature = multiply(invert(restWorld[target.node] ?? identity()), restWorld[node] ?? identity());
-  const armature = first.target.deref("data");
-  const use = envelopeUse(data, first, target.armature.bones, armature && readEnvelopes(armature), toArmature);
+  const use = envelopeUse(data, first, target.armature.bones, toArmature);
   if (use.enveloped) {
     warn("deform-approximated", object.name, `Envelopes not used: ${object.name}`, "Only vertex groups deform it");
   }
@@ -583,80 +649,218 @@ function sameValues(a: Float32Array, b: Float32Array): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+/** Mesh data read with the vertex groups and color attributes an object asks for. */
+interface ReadMesh {
+  mesh: number;
+  key: string;
+  data: MeshData;
+}
+
+/** What one mesh was read and built into, by the settings of the objects that use it. */
+interface MeshEntries {
+  read: Map<string, ReadMesh | MeshReadError>;
+  built: Map<string, BuiltMesh>;
+}
+
 /**
- * Reads the active scene of a .blend file into nodes, meshes, skeletons and material drafts. `isGray` says which images
- * are gray, where materials show one value of an image as a color.
+ * Mesh data and built meshes, read and built once for all the shown objects that share a mesh with the same settings.
+ * A mesh's entries go once its last shown object is built.
  */
-export function buildScene(
-  file: BlendFile,
-  animated: ReadonlySet<string> = new Set(),
-  isGray: GrayCheck = () => false,
-): BuiltScene {
-  const warnings: BlendWarning[] = [];
-  const warn: Warn = (code, name, message, detail) => {
-    const subject: ImportWarningSubject = { kind: "node", name };
-    warnings.push(detail === undefined ? { code, subject, message } : { code, subject, message, detail });
-  };
-  const contents = collectSceneObjects(file);
-  const { fps, unitScale } = sceneSettings(contents.scene);
-  const conversion = conversionMatrix(unitScale);
-  const toScene = invert(conversion);
-  const { nodes, objects, byOffset } = objectNodes(contents, animated, warn);
+class MeshCache {
+  readonly #file: BlendFile;
+  readonly #users = new Map<number, number>();
+  readonly #entries = new Map<number, MeshEntries>();
+  readonly #vertices = new Map<number, ShownVertices | null>();
+  readonly #shapes = new Map<string, ShapeSource | null>();
 
-  const restWorld: Mat4[] = [];
-  for (const node of nodes) {
-    restWorld.push(node.parent >= 0 ? multiply(restWorld[node.parent] ?? identity(), node.rest) : node.rest);
+  constructor(file: BlendFile, shown: Iterable<ShownMesh>) {
+    this.#file = file;
+    for (const { mesh } of shown) this.#users.set(mesh.offset, (this.#users.get(mesh.offset) ?? 0) + 1);
   }
-  const sceneWorld = (node: number) => multiplyAll(conversion, restWorld[node] ?? identity(), toScene);
 
-  const materials = new MaterialTable(file.version, isGray, imageFrame(contents.scene));
-  const meshes: Omit<Mesh, "topology">[] = [];
-  const skeletons: Skeleton[] = [];
-  const meshRecords: MeshRecord[] = [];
-  const skeletonIndex = (joints: number[], inverseBind: Float32Array): number => {
-    const found = skeletons.findIndex(
-      (skeleton) =>
-        skeleton.joints.length === joints.length &&
-        skeleton.joints.every((joint, index) => joint === joints[index]) &&
-        sameValues(skeleton.inverseBindMatrices, inverseBind),
-    );
-    if (found >= 0) return found;
-    skeletons.push({ joints, inverseBindMatrices: inverseBind });
-    return skeletons.length - 1;
+  /** The mesh's data with an object's vertex group names and the color attributes each of its slots wants. */
+  read(mesh: BlendStruct, groups: readonly string[], colors: readonly (readonly string[])[]): ReadMesh | MeshReadError {
+    const wanted = colors.some((names) => names.length > 0) ? colors : [];
+    const key = JSON.stringify([groups, wanted]);
+    const entries = this.#entriesOf(mesh.offset);
+    let found = entries.read.get(key);
+    if (!found) {
+      try {
+        found = { mesh: mesh.offset, key, data: readMeshData(this.#file, mesh, groups, wanted) };
+      } catch (error) {
+        if (!(error instanceof MeshReadError)) throw error;
+        found = error;
+      }
+      entries.read.set(key, found);
+    }
+    return found;
+  }
+
+  /** The mesh built from read data with an object's options, which name the object's node only for a skinned mesh. */
+  build(read: ReadMesh, options: BuildOptions): BuiltMesh {
+    const smoothing = options.smoothing && [options.smoothing.angle, options.smoothing.ignoreSharpness];
+    const skin = options.skinBones && [options.skinBones, options.meshNode];
+    const key = JSON.stringify([read.key, options.slotCount, smoothing, skin]);
+    const entries = this.#entriesOf(read.mesh);
+    let built = entries.built.get(key);
+    if (!built) {
+      built = buildMesh(read.data, options);
+      entries.built.set(key, built);
+    }
+    return built;
+  }
+
+  /** A mesh object's vertices as Arcue shows them at rest, or null for a mesh Arcue cannot read. */
+  vertices(object: BlendStruct, poses: StartPoses): ShownVertices | null {
+    const known = this.#vertices.get(object.offset);
+    if (known !== undefined) return known;
+    const mesh = object.deref("data");
+    const source = mesh && !isLinked(mesh) ? this.#shapeOf(mesh, vertexGroupNames(object)) : null;
+    let shown: ShownVertices | null = null;
+    if (mesh && source) {
+      const weights = restShapeWeights(object, mesh, source, poses);
+      shown = { count: source.vertexCount, at: (index) => shapedVertex(source, index, weights) };
+    }
+    this.#vertices.set(object.offset, shown);
+    return shown;
+  }
+
+  /** What the mesh's shape keys move its vertices by, keeping only that of a mesh that no shown object builds. */
+  #shapeOf(mesh: BlendStruct, groups: readonly string[]): ShapeSource | null {
+    const key = JSON.stringify([mesh.offset, groups]);
+    let found = this.#shapes.get(key);
+    if (found === undefined) {
+      const read = this.read(mesh, groups, []);
+      if (read instanceof MeshReadError) {
+        found = null;
+      } else {
+        const { vertexCount, positions, shapeKeys, referenceKey, vertexGroupNames, deformWeights } = read.data;
+        found = { vertexCount, positions, shapeKeys, referenceKey, vertexGroupNames, deformWeights };
+      }
+      this.#shapes.set(key, found);
+      if (!this.#users.has(mesh.offset)) this.#entries.delete(mesh.offset);
+    }
+    return found;
+  }
+
+  /** Marks one shown object of the mesh built, which lets the mesh's entries go after the last. */
+  done(mesh: BlendStruct): void {
+    const left = (this.#users.get(mesh.offset) ?? 0) - 1;
+    this.#users.set(mesh.offset, left);
+    if (left <= 0) this.#entries.delete(mesh.offset);
+  }
+
+  #entriesOf(mesh: number): MeshEntries {
+    let entries = this.#entries.get(mesh);
+    if (!entries) {
+      entries = { read: new Map(), built: new Map() };
+      this.#entries.set(mesh, entries);
+    }
+    return entries;
+  }
+}
+
+/** The vertex group names an object stores, which files before Blender 3.0 keep on the object. */
+function vertexGroupNames(object: BlendStruct): string[] {
+  return object.list("defbase").map((group) => group.string("name"));
+}
+
+/** Each shape key's weight by name, as the object shows its mesh at the scene's start frame. */
+function restShapeWeights(
+  object: BlendStruct,
+  mesh: BlendStruct,
+  data: ShapeSource,
+  poses: StartPoses,
+): Map<string, number> {
+  const pinned = pinnedShape(data, lockedShapeKey(object));
+  const key = mesh.deref("key");
+  return shapeWeights(shapeTargets(data), !pinned && key ? poses.weights(key) : new Map(), pinned);
+}
+
+function pinnedDetail(pinned: PinnedShape): string {
+  const unchanged = "key values and their animation change nothing";
+  if (pinned.name === null) return `Shows its basis shape, as Blender does, so ${unchanged}`;
+  if (pinned.rough === null) return `Shows ${pinned.name} alone, as Blender does, so ${unchanged}`;
+  return `Shows ${pinned.name} alone, roughly, since ${pinned.rough}; ${unchanged}`;
+}
+
+/** Each morph target's weight as Blender shows the object at the scene's start frame, and whether Shape Key Lock pins it. */
+function startMorphTargets(
+  object: SceneObject,
+  mesh: BlendStruct,
+  data: MeshData,
+  built: BuiltMesh,
+  poses: StartPoses,
+  warn: Warn,
+): { targets: MorphTarget[]; locked: boolean } {
+  const pinned = pinnedShape(data, lockedShapeKey(object.struct));
+  if (pinned && built.morphTargets.length > 0) {
+    warn("deform-approximated", object.name, `Shape key pinned: ${object.name}`, pinnedDetail(pinned));
+  }
+  const key = mesh.deref("key");
+  const weights = shapeWeights(shapeTargets(data), !pinned && key ? poses.weights(key) : new Map(), pinned);
+  return {
+    targets: built.morphTargets.map((target) => {
+      const weight = weights.get(target.name) ?? target.defaultWeight;
+      return weight === target.defaultWeight ? target : { ...target, defaultWeight: weight };
+    }),
+    locked: pinned !== null,
   };
+}
 
-  for (const record of objects) {
-    const { object } = record;
-    if (object.type !== ObjectType.mesh || !object.data || !object.shown) continue;
-    const meshSlots = meshMaterials(file, object.data);
-    const slotMaterial = slotMaterials(file, object.struct, meshSlots);
-    const defaultColor = defaultColorAttribute(object.data);
-    const slots = Math.max(object.struct.number("totcol"), meshSlots.length);
-    const wantedColors = Array.from({ length: slots }, (_, slot) =>
+/** What the scene's shown meshes need from the rest of the build. */
+interface MeshContext {
+  file: BlendFile;
+  poses: StartPoses;
+  conversion: Mat4;
+  nodes: NodeDraft[];
+  restWorld: readonly Mat4[];
+  byOffset: Map<number, ObjectRecord>;
+  materials: MaterialTable;
+  cache: MeshCache;
+  warn: Warn;
+}
+
+/** The meshes of the scene's shown mesh objects, with their skeletons and what animation needs to move them. */
+class SceneMeshes {
+  readonly meshes: Mesh[] = [];
+  readonly skeletons: Skeleton[] = [];
+  readonly records: MeshRecord[] = [];
+  readonly #context: MeshContext;
+
+  constructor(context: MeshContext) {
+    this.#context = context;
+  }
+
+  add(record: ObjectRecord, shown: ShownMesh): void {
+    try {
+      this.#add(record, shown);
+    } finally {
+      this.#context.cache.done(shown.mesh);
+    }
+  }
+
+  #add(record: ObjectRecord, { object, mesh, slots }: ShownMesh): void {
+    const { file, poses, conversion, nodes, restWorld, byOffset, materials, cache, warn } = this.#context;
+    const defaultColor = defaultColorAttribute(mesh);
+    const wantedColors = slots.map((material) =>
       materials
-        .attributesOf(slotMaterial(slot))
+        .attributesOf(material)
         .map((name) => name || defaultColor)
         .filter((name) => name !== ""),
     );
-    let data: MeshData;
-    try {
-      data = readMeshData(
-        file,
-        object.data,
-        object.struct.list("defbase").map((group) => group.string("name")),
-        wantedColors,
-      );
-    } catch (error) {
-      if (!(error instanceof MeshReadError)) throw error;
-      warn("invalid-data", object.name, `Mesh not read: ${object.name}`, error.message);
-      continue;
+    const read = cache.read(mesh, vertexGroupNames(object.struct), wantedColors);
+    if (read instanceof MeshReadError) {
+      warn("invalid-data", object.name, `Mesh not read: ${object.name}`, read.message);
+      return;
     }
+    const { data } = read;
     const smoothing = smoothByAngle(object.struct);
     modifierWarnings(object, smoothing, warn);
     if (data.faceCount === 0) {
       if (data.edgeCount > 0)
         warn("object-not-shown", object.name, `Not shown: ${object.name}`, "Its mesh has no faces");
-      continue;
+      return;
     }
     if (data.absoluteKeys) {
       warn(
@@ -666,18 +870,18 @@ export function buildScene(
         "Shown in its basis shape",
       );
     }
-    const slotCount = Math.max(object.struct.number("totcol"), data.materials.length);
-    const bones = skinBones(object, byOffset, warn);
-    const built = buildMesh(data, {
+    const built = cache.build(read, {
       conversion,
-      slotCount,
-      skinBones: bones,
+      slotCount: Math.max(object.struct.number("totcol"), data.materials.length),
+      skinBones: skinBones(object, byOffset, warn),
       meshNode: record.node,
       smoothing,
       blenderVersion: file.version,
     });
     meshWarnings(object, built, warn);
 
+    const toScene = invert(conversion);
+    const sceneWorld = (node: number) => multiplyAll(conversion, restWorld[node] ?? identity(), toScene);
     const bind = sceneWorld(record.node);
     let skeleton: number | null = null;
     if (built.skin) {
@@ -685,7 +889,7 @@ export function buildScene(
       built.skin.joints.forEach((joint, index) => {
         inverseBind.set(invert(sceneWorld(joint)), index * 16);
       });
-      skeleton = skeletonIndex(built.skin.joints, inverseBind);
+      skeleton = this.#skeletonIndex(built.skin.joints, inverseBind);
     }
     envelopeWarnings(object, record.node, data, byOffset, restWorld, warn);
     const restPositions = new Float32Array(data.vertexCount * 3);
@@ -706,23 +910,16 @@ export function buildScene(
     };
     const groups = built.groups.map((group) => ({
       ...group,
-      material: materials.indexOf(slotMaterial(group.material), uvMaps, meshColors),
+      material: materials.indexOf(slots[group.material] ?? null, uvMaps, meshColors),
     }));
-
-    const key = object.data.deref("key");
-    const opened = key ? openingWeights(key, contents.scene) : new Map<string, number>();
-    const morphTargets = built.morphTargets.map((target, index) => {
-      const weight = opened.get(target.name);
-      const [min, max] = built.morphRanges[index] ?? [0, 1];
-      return weight === undefined ? target : { ...target, defaultWeight: Math.min(Math.max(weight, min), max) };
-    });
+    const morphs = startMorphTargets(object, mesh, data, built, poses, warn);
 
     const node = nodes[record.node];
     if (node) {
       node.kind = "mesh";
-      node.mesh = meshes.length;
+      node.mesh = this.meshes.length;
     }
-    meshes.push({
+    this.meshes.push({
       name: object.name,
       geometryName: data.name,
       positions: built.positions,
@@ -735,79 +932,148 @@ export function buildScene(
       weights: built.skin?.rendered.weights ?? null,
       indices: built.indices,
       groups,
-      morphTargets,
+      morphTargets: morphs.targets,
       sourceVertex: built.sourceVertex,
       sourceVertexCount: built.sourceVertexCount,
+      topology: built.topology,
       restPositions,
       skinWeights: built.skin?.source ?? null,
     });
-    meshRecords.push({
+    this.records.push({
       node: record.node,
       object,
       morphKeys: built.morphKeys,
-      morphDefaults: morphTargets.map((target) => target.defaultWeight),
+      morphDefaults: morphs.targets.map((target) => target.defaultWeight),
       morphRanges: built.morphRanges,
+      shapeKeyLock: morphs.locked,
     });
   }
 
-  const reported = new Set<MaterialDraft>();
-  for (const draft of materials.drafts) {
-    if (draft.approximations.length === 0 || reported.has(draft)) continue;
-    reported.add(draft);
-    warnings.push({
+  #skeletonIndex(joints: number[], inverseBind: Float32Array): number {
+    const found = this.skeletons.findIndex(
+      (skeleton) =>
+        skeleton.joints.length === joints.length &&
+        skeleton.joints.every((joint, index) => joint === joints[index]) &&
+        sameValues(skeleton.inverseBindMatrices, inverseBind),
+    );
+    if (found >= 0) return found;
+    this.skeletons.push({ joints, inverseBindMatrices: inverseBind });
+    return this.skeletons.length - 1;
+  }
+}
+
+/** One warning for each material the preview approximates. */
+function materialWarnings(drafts: readonly MaterialDraft[]): BlendWarning[] {
+  return [...new Set(drafts)]
+    .filter((draft) => draft.approximations.length > 0)
+    .map((draft) => ({
       code: "material-approximated",
       subject: { kind: "material", name: draft.name },
       message: `Material approximated: ${draft.name}`,
       detail: draft.approximations.join("; "),
-    });
-  }
+    }));
+}
 
+/** Data the scene needs from other files: the scene's own, and the materials, actions and images its objects use. */
+function linkedNames(contents: SceneContents, materials: MaterialTable): LinkedName[] {
   const animationOwners = contents.objects.flatMap((object) => {
     const key = object.type === ObjectType.mesh ? object.data?.deref("key") : null;
     return key ? [object.struct, key] : [object.struct];
   });
-  const linkedActions = [
-    ...new Set(
-      animationOwners.flatMap((id) =>
-        usedActions(id).flatMap(({ action }) => (isLinked(action) ? [idName(action)] : [])),
-      ),
+  const actions = animationOwners.flatMap((id) =>
+    usedActions(id).flatMap(({ action }) => (isLinked(action) ? [linkedName("actions", idName(action), action)] : [])),
+  );
+  const images = materials.drafts.flatMap((draft) =>
+    imageUses(draft).flatMap((use) =>
+      use.image.typeName === "Image" ? [] : [linkedName("images", idName(use.image), use.image)],
     ),
-  ];
-  const linkedImages = [
-    ...new Set(
-      materials.drafts.flatMap((draft) =>
-        imageUses(draft).flatMap((use) => (use.image.typeName === "Image" ? [] : [idName(use.image)])),
-      ),
-    ),
-  ];
-  const linked = [
-    contents.linkedCollections.length > 0 ? `collections ${contents.linkedCollections.join(", ")}` : "",
-    contents.linkedObjects.length > 0 ? `objects ${contents.linkedObjects.join(", ")}` : "",
-    materials.linked.size > 0 ? `materials ${[...materials.linked].join(", ")}` : "",
-    linkedActions.length > 0 ? `actions ${linkedActions.join(", ")}` : "",
-    linkedImages.length > 0 ? `images ${linkedImages.join(", ")}` : "",
-  ].filter((entry) => entry !== "");
-  if (linked.length > 0) {
-    warnings.push({
-      code: "library-not-loaded",
-      subject: { kind: "file", name: "" },
-      message: "Linked data not shown",
-      detail: `From other .blend files: ${linked.join("; ")}`,
-    });
+  );
+  return [...contents.linked, ...materials.linked, ...actions, ...images];
+}
+
+/**
+ * The warning about data that the scene links from other .blend files, which Arcue does not load, or null for none.
+ * Files that Pack Linked Libraries packed into this one are named apart: the data is in the file, unread.
+ */
+export function linkedDataWarning(linked: readonly LinkedName[]): BlendWarning | null {
+  const listed = (packed: boolean) =>
+    LINKED_KINDS.flatMap((kind) => {
+      const names = new Set(
+        linked.flatMap((entry) => (entry.kind === kind && entry.packed === packed ? [entry.name] : [])),
+      );
+      return names.size > 0 ? [`${kind} ${[...names].join(", ")}`] : [];
+    }).join("; ");
+  const external = listed(false);
+  const packed = listed(true);
+  const detail = [
+    external === "" ? "" : `From other .blend files: ${external}`,
+    packed === "" ? "" : `From .blend files packed in this one, which Arcue does not read: ${packed}`,
+  ]
+    .filter((part) => part !== "")
+    .join(". ");
+  if (detail === "") return null;
+  return { code: "library-not-loaded", subject: { kind: "file", name: "" }, message: "Linked data not shown", detail };
+}
+
+/**
+ * Reads the active scene of a .blend file into nodes, meshes, skeletons and material drafts. `isGray` says which images
+ * are gray, where materials show one value of an image as a color. `contents` are the scene's objects and `actions` the
+ * file's actions, when the caller has read them already.
+ */
+export function buildScene(
+  file: BlendFile,
+  animated: ReadonlySet<string> = new Set(),
+  isGray: GrayCheck = () => null,
+  contents: SceneContents = collectSceneObjects(file),
+  actions: readonly Action[] = readActions(file),
+): BuiltScene {
+  const warnings: BlendWarning[] = [];
+  const warn: Warn = (code, name, message, detail) => {
+    const subject: ImportWarningSubject = { kind: "node", name };
+    warnings.push(detail === undefined ? { code, subject, message } : { code, subject, message, detail });
+  };
+  const { fps, unitScale } = sceneSettings(contents.scene);
+  const conversion = conversionMatrix(unitScale);
+  const shown = [...shownMeshSlots(file, contents)];
+  const cache = new MeshCache(file, shown);
+  const poses = startPoses(contents.scene, actions);
+  const { nodes, nodeWorlds, objects, byOffset } = objectNodes(contents, animated, poses, warn, (parent) =>
+    cache.vertices(parent, poses),
+  );
+  const restWorld = nodes.map((_, index) => nodeWorlds.of(index));
+  const materials = new MaterialTable(file.version, isGray, imageFrame(contents.scene));
+  const meshes = new SceneMeshes({
+    file,
+    poses,
+    conversion,
+    nodes,
+    restWorld,
+    byOffset,
+    materials,
+    cache,
+    warn,
+  });
+  for (const mesh of shown) {
+    const record = byOffset.get(mesh.object.struct.offset);
+    if (record) meshes.add(record, mesh);
   }
+  for (const warning of materialWarnings(materials.drafts)) warnings.push(warning);
+  const linked = linkedDataWarning(linkedNames(contents, materials));
+  if (linked) warnings.push(linked);
 
   return {
     nodes,
-    meshes,
-    skeletons,
+    meshes: meshes.meshes,
+    skeletons: meshes.skeletons,
     materials: materials.drafts,
     materialUvs: materials.uvMaps,
     materialColors: materials.colors,
     objects,
-    meshRecords,
+    meshRecords: meshes.records,
     conversion,
     fps,
     unitScale,
+    timeline: sceneTimeline(contents.scene),
     warnings,
   };
 }

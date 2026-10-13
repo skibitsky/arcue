@@ -6,14 +6,16 @@ import type {
   ImportRequest,
   ImportWarning,
   Material,
-  Mesh,
   SceneDescription,
   SceneNode,
   ScenePart,
   TextureAlpha,
+  TextureColorSpace,
   TextureFile,
   TextureRef,
+  TextureRefKey,
   TextureResolver,
+  TextureSampling,
   TextureSlot,
 } from "@arcue/scene";
 import {
@@ -28,7 +30,8 @@ import {
   isKeyedEveryFrame,
   mergeKeyTimes,
   parseStoredPath,
-  topologyFingerprint,
+  TEXTURE_SLOT_KEYS,
+  TEXTURE_SLOTS,
 } from "@arcue/scene";
 import { animatedPaths, readActions } from "./anim/actions";
 import type { ParsedClip } from "./anim/clips";
@@ -40,10 +43,10 @@ import { BlendParseError } from "./blend/errors";
 import type { BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
 import { idName, idOf } from "./blend/ids";
-import { GRAY_CHECK_BYTES, isGrayImage } from "./gray-images";
+import { GRAY_CHECK_BYTES, GRAY_SAMPLE_BYTES, isGrayImage } from "./gray-images";
 import { sequencePath, tilePath } from "./image-paths";
 import { decompose, invert, multiplyAll } from "./math";
-import type { BlendWarning, BuiltScene } from "./scene/build";
+import type { BlendWarning, BuiltScene, GrayCandidate, MaterialUvMaps } from "./scene/build";
 import { buildScene, grayCandidates, uvSetFor } from "./scene/build";
 import type { GrayCheck, ImageUse } from "./scene/materials";
 import {
@@ -53,6 +56,8 @@ import {
   imageSource,
   packedFile,
 } from "./scene/materials";
+import type { SceneContents } from "./scene/objects";
+import { collectSceneObjects } from "./scene/objects";
 import { joinWarningsById, normalizedPath, shareFoundTextures } from "./texture-files";
 
 /** Blender's own rotation for Z-up content in a Y-up scene: −90° about X. */
@@ -109,11 +114,14 @@ function shownFile(image: BlendStruct, path: string, frame: number | null): stri
   return path;
 }
 
+/** The paths an image stores for one file, as a texture file holds them. */
+type StoredPaths = Pick<TextureFile, "relative" | "absolute">;
+
 /**
  * The stored path of the file the preview reads for an image, at `frame` for a sequence, with Blender's "//" relative
  * prefix removed, or the image's name when it has no path.
  */
-function imagePaths(image: BlendStruct, frame: number | null): { relative: string; absolute: string } {
+function imagePaths(image: BlendStruct, frame: number | null): StoredPaths {
   const own = image.string("name") || image.string("filepath");
   const folder = own.startsWith("//") ? `${relativePathFolder(image)}${own.slice(2)}` : own;
   const stored = shownFile(image, folder, frame);
@@ -122,34 +130,42 @@ function imagePaths(image: BlendStruct, frame: number | null): { relative: strin
   return { relative: stored, absolute: stored };
 }
 
-/** The path the texture resolver names for an image use: its relative path when it has one. */
-function storedPathOf(use: ImageUse): string {
-  const paths = imagePaths(use.image, use.frame);
-  return parseStoredPath(paths.relative).relative ?? paths.absolute;
-}
-
+/** The bytes of the file packed into an image, as a view of the file's bytes. */
 function packedBytes(file: BlendFile, image: BlendStruct): Uint8Array | null {
   const packed = packedFile(image);
   if (!packed) return null;
   const block = packed.target("data");
   if (!block) return null;
   const size = Math.min(Math.max(packed.number("size"), 0), block.size);
-  return file.bytes.slice(block.offset, block.offset + size);
+  return file.bytes.subarray(block.offset, block.offset + size);
 }
 
 type FindFile = ImportRequest["findFile"];
+type LocateFile = ImportRequest["locateFile"];
 
-/** `findFile` that looks each stored path up once, as the gray check and the textures both read some images. */
-function findingOnce(findFile: FindFile): FindFile {
-  const found = new Map<string, Promise<FoundFile | null>>();
-  return (storedPath) => {
-    let file = found.get(storedPath);
-    if (!file) {
-      file = findFile(storedPath);
-      found.set(storedPath, file);
-    }
-    return file;
+function cached<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {
+  let value = cache.get(key);
+  if (!value) {
+    value = load();
+    cache.set(key, value);
+  }
+  return value;
+}
+
+/**
+ * `findFile` and `locateFile` that look each stored path up once and read each file found once, however many stored
+ * paths lead to it: the gray check and the textures both read some images, and Image datablocks may store many paths
+ * to one file.
+ */
+function searchingOnce(request: ImportRequest): { findFile: FindFile; locateFile: LocateFile } {
+  const located = new Map<string, Promise<string | null>>();
+  const read = new Map<string, Promise<FoundFile | null>>();
+  const locateFile: LocateFile = (storedPath) => cached(located, storedPath, () => request.locateFile(storedPath));
+  const findFile: FindFile = async (storedPath) => {
+    const path = await locateFile(storedPath);
+    return path === null ? null : cached(read, path, () => request.findFile(storedPath));
   };
+  return { findFile, locateFile };
 }
 
 /**
@@ -169,76 +185,115 @@ async function imageBytes(file: BlendFile, image: BlendStruct, findFile: FindFil
   return null;
 }
 
-/** The offsets of the images whose every pixel is gray. */
-async function grayImages(file: BlendFile, images: Iterable<BlendStruct>, findFile: FindFile): Promise<Set<number>> {
-  const gray = new Set<number>();
+/**
+ * Whether every pixel of each image is gray, by the image's offset, for the images the check can tell. The images read
+ * whole come first, so that samples never take the budget they need.
+ */
+async function grayImages(
+  file: BlendFile,
+  candidates: readonly GrayCandidate[],
+  findFile: FindFile,
+): Promise<Map<number, boolean>> {
+  const gray = new Map<number, boolean>();
   const budget = { bytes: GRAY_CHECK_BYTES };
-  for (const image of images) {
+  const whole = candidates.filter((candidate) => candidate.read === "whole");
+  const sampled = candidates.filter((candidate) => candidate.read === "sample");
+  for (const { image, read } of [...whole, ...sampled]) {
     const bytes = await imageBytes(file, image, findFile);
-    if (bytes && (await isGrayImage(bytes, budget))) gray.add(image.offset);
+    const limit = read === "sample" ? GRAY_SAMPLE_BYTES : undefined;
+    const known = bytes ? await isGrayImage(bytes, budget, limit) : null;
+    if (known !== null) gray.set(image.offset, known);
   }
   return gray;
 }
 
 /**
- * The texture files the materials use: one for each stored path, however many Image datablocks store it and however
- * it is spelled, and one for each packed image. An image linked from another .blend file has none, since this file
- * holds only its name, unless the image was packed with its library.
+ * The texture files the materials use: one for each image file found through a relative path, however many Image
+ * datablocks store a path to it and however they spell it, one for each other stored path, however it is spelled, and
+ * one for each packed image. Absolute paths keep their own texture files, so the textures note each of them. An image
+ * linked from another .blend file has none, since this file holds only its name, unless the image was packed with its
+ * library.
  */
 class ImageFiles {
   readonly files: TextureFile[] = [];
   readonly #index = new Map<string, number>();
   readonly #file: BlendFile;
+  readonly #locateFile: LocateFile;
 
-  constructor(file: BlendFile) {
+  constructor(file: BlendFile, locateFile: LocateFile) {
     this.#file = file;
+    this.#locateFile = locateFile;
   }
 
-  indexOf({ image, frame }: ImageUse): number | null {
+  async indexOf({ image, frame }: ImageUse): Promise<number | null> {
     if (image.typeName !== "Image") return null;
     const packed = packedFile(image);
     if (!packed && !readsFile(image, frame)) return null;
     const paths = imagePaths(image, frame);
-    const key = packed ? `packed ${image.offset}` : `path ${normalizedPath(paths.relative)}`;
+    if (packed) {
+      return this.#add(`packed ${image.offset}`, paths, () => packedBytes(this.#file, image)?.slice() ?? null);
+    }
+    const spelled = `path ${normalizedPath(paths.relative)}`;
+    const known = this.#index.get(spelled);
+    if (known !== undefined) return known;
+    const located = parseStoredPath(paths.relative).relative === null ? null : await this.#locateFile(paths.relative);
+    const index = this.#add(located === null ? spelled : `found ${located}`, paths, () => null);
+    this.#index.set(spelled, index);
+    return index;
+  }
+
+  #add(key: string, paths: StoredPaths, content: () => Uint8Array | null): number {
     const known = this.#index.get(key);
     if (known !== undefined) return known;
-    const index = this.files.length;
-    this.files.push({ ...paths, linked: true, content: packedBytes(this.#file, image) });
-    this.#index.set(key, index);
-    return index;
+    this.files.push({ ...paths, linked: true, content: content() });
+    this.#index.set(key, this.files.length - 1);
+    return this.files.length - 1;
   }
 }
 
-async function buildMaterials(
-  scene: BuiltScene,
-  images: ImageFiles,
-  resolver: () => TextureResolver,
-): Promise<Material[]> {
+/** What a texture reference of a key means when it leaves out its alpha or its color space. */
+function unsetSampling(key: TextureRefKey): { alpha: TextureAlpha; colorSpace: TextureColorSpace } {
+  const color = key === "baseColorTexture" || key === "emissiveTexture";
+  return { alpha: key === "baseColorTexture" ? "opacity" : "none", colorSpace: color ? "srgb" : "linear" };
+}
+
+/** How a material samples an image for a key: its UV set and wrap, with its alpha and color space where not the key's. */
+function samplingOf(use: ImageUse, key: TextureRefKey, uvMaps: MaterialUvMaps | undefined): TextureSampling {
+  const sampling: TextureSampling = {
+    uvSet: uvSetFor(uvMaps, use.uvMap),
+    wrapU: use.wrap,
+    wrapV: use.wrap,
+    transform: use.transform,
+  };
+  const unset = unsetSampling(key);
+  if (use.alpha !== unset.alpha) sampling.alpha = use.alpha;
+  if (use.colorSpace !== null && use.colorSpace !== unset.colorSpace) sampling.colorSpace = use.colorSpace;
+  return sampling;
+}
+
+async function buildMaterials(scene: BuiltScene, images: ImageFiles, textures: TextureResolver): Promise<Material[]> {
   const result: Material[] = [];
   for (const [index, draft] of scene.materials.entries()) {
     const uvMaps = scene.materialUvs[index];
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
-    const ref = async (use: ImageUse | null, slot?: TextureSlot): Promise<TextureRef | null> => {
+    const missingTextureSampling: Partial<Record<TextureSlot, TextureSampling>> = {};
+    const ref = async (use: ImageUse | null, key: TextureRefKey): Promise<TextureRef | null> => {
       if (!use) return null;
-      const file = images.indexOf(use);
+      const file = await images.indexOf(use);
       if (file === null) return null;
-      const textures = resolver();
+      const slot = TEXTURE_SLOTS.find((candidate) => TEXTURE_SLOT_KEYS[candidate] === key);
+      const sampling = samplingOf(use, key, uvMaps);
       const texture = await textures.resolve(file, draft.name, slot);
-      if (texture === null) {
-        if (slot) missingTextures[slot] = storedPathOf(use);
-        return null;
+      if (texture !== null) return { texture, ...sampling };
+      if (slot) {
+        missingTextures[slot] = textures.storedPath(file);
+        missingTextureSampling[slot] = sampling;
       }
-      return {
-        texture,
-        uvSet: uvSetFor(uvMaps, use.uvMap),
-        wrapU: use.wrap,
-        wrapV: use.wrap,
-        transform: use.transform,
-      };
+      return null;
     };
-    const baseColorTexture = withAlpha(await ref(draft.baseColorImage, "baseColor"), draft.baseColorImage, "opacity");
-    const metallicRoughnessTexture = await ref(draft.metallicRoughnessImage);
-    const emissiveTexture = withAlpha(await ref(draft.emissiveImage, "emissive"), draft.emissiveImage, "none");
+    const baseColorTexture = await ref(draft.baseColorImage, "baseColorTexture");
+    const metallicRoughnessTexture = await ref(draft.metallicRoughnessImage, "metallicRoughnessTexture");
+    const emissiveTexture = await ref(draft.emissiveImage, "emissiveTexture");
     const missingPacked = draft.metallicRoughnessImage !== null && !metallicRoughnessTexture;
     const colors = scene.materialColors[index];
     const [red, green, blue, alpha] = draft.baseColor;
@@ -256,9 +311,9 @@ async function buildMaterials(
       metallic: missingPacked ? 0 : draft.metallic,
       roughness: missingPacked ? UNTEXTURED_ROUGHNESS : draft.roughness,
       metallicRoughnessTexture,
-      roughnessTexture: await ref(draft.roughnessImage, "roughness"),
-      metalnessTexture: await ref(draft.metalnessImage, "metalness"),
-      normalTexture: await ref(draft.normalImage, "normal"),
+      roughnessTexture: await ref(draft.roughnessImage, "roughnessTexture"),
+      metalnessTexture: await ref(draft.metalnessImage, "metalnessTexture"),
+      normalTexture: await ref(draft.normalImage, "normalTexture"),
       normalScale: draft.normalScale,
       occlusionTexture: null,
       emissive: (!emissiveTexture && draft.emissiveImage) || colors?.emissive === "black" ? [0, 0, 0] : draft.emissive,
@@ -270,22 +325,22 @@ async function buildMaterials(
     if (colors?.baseColor === "colors" || colors?.emissive === "colors") {
       material.vertexColors = { baseColor: colors.baseColor === "colors", emissive: colors.emissive === "colors" };
     }
-    if (Object.keys(missingTextures).length > 0) material.missingTextures = missingTextures;
+    if (Object.keys(missingTextures).length > 0) {
+      material.missingTextures = missingTextures;
+      material.missingTextureSampling = missingTextureSampling;
+    }
     result.push(material);
   }
   return result;
 }
 
-/** The texture with the alpha its image's use gives it, where that is not the slot's own. */
-function withAlpha(ref: TextureRef | null, use: ImageUse | null, unset: TextureAlpha): TextureRef | null {
-  return ref && use && use.alpha !== unset ? { ...ref, alpha: use.alpha } : ref;
-}
-
+/** The scene's clips, each with the file's frame at its frame 0 where the file's frames step one to a clip frame. */
 function buildClipList(clips: readonly ParsedClip[], fps: number): Clip[] {
   const names = clipNames(clips.map((clip) => clip.name));
   const display = displayNames(names);
   return clips.map((clip, index) => {
     const frameCount = frameCountFor(clip.duration, fps);
+    const { start, step } = clip.fileFrames;
     return {
       name: names[index] ?? clip.name,
       displayName: display[index] ?? clip.name,
@@ -295,6 +350,7 @@ function buildClipList(clips: readonly ParsedClip[], fps: number): Clip[] {
       tracks: clip.tracks,
       keyTimes: mergeKeyTimes(clip.curveTimes),
       keyedEveryFrame: isKeyedEveryFrame(clip.curveTimes, fps, frameCount),
+      ...(step === 1 ? { sourceStartFrame: start } : {}),
     };
   });
 }
@@ -357,10 +413,19 @@ async function parse(request: ImportRequest): Promise<BlendFile> {
   }
 }
 
-/** Whether Blender hides the mesh: with the eye in the view layer, or as an instancer that shows only its instances. */
+/** Blender's object display types that draw no surface: Bounds, a box around the object, and Wire, its edges. */
+const DISPLAY_BOUNDS = 1;
+const DISPLAY_WIRE = 2;
+
+/**
+ * Whether Blender hides the mesh or draws no surface for it: hidden with the eye in the view layer, an instancer that
+ * shows only its instances, or an object displayed as bounds or wire, as cages and cutters often are.
+ */
 function hiddenInBlender(scene: BuiltScene, mesh: number): boolean {
   const object = scene.meshRecords[mesh]?.object;
-  return object !== undefined && (object.hidden || object.instancerHidden);
+  if (object === undefined) return false;
+  const display = object.struct.number("dt");
+  return object.hidden || object.instancerHidden || display === DISPLAY_BOUNDS || display === DISPLAY_WIRE;
 }
 
 /** Parts whose every mesh Blender hides start hidden, so the view matches Blender's. */
@@ -388,9 +453,13 @@ function readingScene<T>(request: ImportRequest, read: () => T): T {
   }
 }
 
-function readScene(file: BlendFile, isGray: GrayCheck): { scene: BuiltScene; clips: ParsedClip[] } {
+function readScene(
+  file: BlendFile,
+  contents: SceneContents,
+  isGray: GrayCheck,
+): { scene: BuiltScene; clips: ParsedClip[] } {
   const actions = readActions(file);
-  const scene = buildScene(file, animatedPaths(file, actions), isGray);
+  const scene = buildScene(file, animatedPaths(file, actions), isGray, contents, actions);
   return { scene, clips: buildClips(scene, actions, scene.warnings) };
 }
 
@@ -403,17 +472,15 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
       `${request.fileName} was saved by Blender ${saved}. Arcue opens files from Blender 2.80 on; save it in a newer Blender.`,
     );
   }
-  const findFile = findingOnce(request.findFile);
-  const candidates = readingScene(request, () => grayCandidates(file));
+  const { findFile, locateFile } = searchingOnce(request);
+  const contents = readingScene(request, () => collectSceneObjects(file));
+  const candidates = readingScene(request, () => grayCandidates(file, contents));
   const gray = await grayImages(file, candidates, findFile);
-  const { scene, clips } = readingScene(request, () => readScene(file, (image) => gray.has(image.offset)));
-  const meshes: Mesh[] = scene.meshes.map((mesh) => ({ ...mesh, topology: topologyFingerprint(mesh) }));
-  const images = new ImageFiles(file);
-  let resolver: TextureResolver | null = null;
-  const textures = () => {
-    resolver ??= createTextureResolver(images.files, findFile, request.locateFile);
-    return resolver;
-  };
+  const { scene, clips } = readingScene(request, () =>
+    readScene(file, contents, (image) => gray.get(image.offset) ?? null),
+  );
+  const images = new ImageFiles(file, locateFile);
+  const textures = createTextureResolver(images.files, findFile, locateFile);
   const materials = await buildMaterials(scene, images, textures);
   const nodes = buildNodes(scene);
   const parts = hideBlenderHiddenParts(describeParts(nodes), scene);
@@ -421,7 +488,7 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const warnings = mergeWarnings([...scene.warnings, ...driverWarnings(scene)]).map((warning) =>
     toImportWarning(warning, request.fileName),
   );
-  const shared = shareFoundTextures(resolver ? (resolver as TextureResolver).textures : [], materials);
+  const shared = shareFoundTextures(textures.textures, materials);
   return {
     source: {
       format: "blend",
@@ -429,16 +496,16 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
       fps: scene.fps,
       originalSpace: { axes: { right: "+X", up: "+Z", front: "-Y" }, unitMeters: scene.unitScale },
       conversion: { scale: scene.unitScale, rotation: MINUS_90_ABOUT_X },
-      warnings: [...warnings, ...(resolver ? joinWarningsById(await (resolver as TextureResolver).warnings()) : [])],
+      warnings: [...warnings, ...joinWarningsById(await textures.warnings())],
     },
     nodes,
-    meshes,
+    meshes: scene.meshes,
     skeletons: scene.skeletons,
     materials: shared.materials,
     textures: shared.textures,
     clips: buildClipList(clips, scene.fps),
     parts,
-    bounds: defaultViewBounds(meshes, parts),
+    bounds: defaultViewBounds(scene.meshes, parts),
   };
 }
 

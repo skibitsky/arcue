@@ -6,8 +6,8 @@ Run from the repository root once with each Blender version the tests cover, 4.2
         --python packages/import-blend/test/fixtures/generate.py
 
 It writes <fixture>-<major>.<minor>.blend for each fixture, and beside it <fixture>-<major>.<minor>.json with what
-Blender evaluates for the file: world matrices, vertex positions, corner normals and posed vertices for each action, and
-what Cycles bakes for the shading fixture's materials.
+Blender evaluates for the file: world matrices, vertex positions, loop triangles, corner normals and UVs, and posed
+vertices for each action, and what Cycles bakes for the shading fixture's materials.
 Positions and matrices are in Arcue's scene space, meters with Y up, which takes Blender's (x, y, z) to (x, z, -y).
 Matrices are column-major. The textures the materials fixture uses are written to textures/.
 """
@@ -256,6 +256,7 @@ def mesh_reference(obj, scene):
     mesh = obj.data
     if any(modifier.type == "NODES" for modifier in obj.modifiers):
         mesh = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
+    mesh.calc_loop_triangles()
     corners = []
     normals = list(mesh.corner_normals) if hasattr(mesh, "corner_normals") else None
     if normals is None:
@@ -280,8 +281,10 @@ def mesh_reference(obj, scene):
         "vertexCount": len(mesh.vertices),
         "triangles": sum(len(polygon.vertices) - 2 for polygon in mesh.polygons),
         "corners": corners,
+        "triangleLoops": [list(triangle.loops) for triangle in mesh.loop_triangles],
         "restPositions": rounded(rest),
         "uvMaps": [layer.name for layer in mesh.uv_layers],
+        "uvs": {layer.name: rounded([value for loop in layer.data for value in loop.uv]) for layer in mesh.uv_layers},
         "renderUv": next((layer.name for layer in mesh.uv_layers if layer.active_render), None),
         "slots": [slot.material.name if slot.material else None for slot in obj.material_slots],
         "colors": colors,
@@ -1163,8 +1166,11 @@ def new_action(id_data, name):
     return action
 
 
-def build_rig():
-    scene = reset_scene(fps=30)
+def build_rig(fixture="rig", unit_scale=1.0):
+    """The rig, saved as `fixture` at Unit Scale `unit_scale`. At any scale but 1 the reference leaves out the F-Curve
+    samples, which do not depend on it."""
+    scene = reset_scene(fps=30, unit_scale=unit_scale)
+    unit = scene.unit_settings.scale_length
     data = bpy.data.armatures.new("RigData")
     rig = link(bpy.data.objects.new("Rig", data))
     rig.location = (0.3, -0.2, 0.1)
@@ -1323,13 +1329,13 @@ def build_rig():
     rest_pose(scene)
     reference = {
         "fps": 30.0,
-        "unitScale": 1.0,
+        "unitScale": unit,
         "objects": world_matrices(scene),
         "meshes": {obj.name: mesh_reference(obj, scene) for obj in scene.objects if obj.type == "MESH"},
     }
     pose_pose(scene)
     saved = {obj.name: (obj.location.copy(), obj.rotation_euler.copy()) for obj in scene.objects}
-    save_blend("rig", compress=False, datablocks=[scene, wave, ease, stretch, spin, swell, pulse, partial])
+    save_blend(fixture, compress=fixture != "rig", datablocks=[scene, wave, ease, stretch, spin, swell, pulse, partial])
 
     clips = {}
     for action, owner, frames in [
@@ -1354,7 +1360,9 @@ def build_rig():
             scene.frame_set(frame)
             depsgraph = bpy.context.evaluated_depsgraph_get()
             evaluated = rig.evaluated_get(depsgraph)
-            bones = {bone.name: scene_matrix(evaluated.matrix_world @ bone.matrix, 1.0) for bone in evaluated.pose.bones}
+            bones = {
+                bone.name: scene_matrix(evaluated.matrix_world @ bone.matrix, unit) for bone in evaluated.pose.bones
+            }
             samples.append({
                 "frame": frame,
                 "bones": bones,
@@ -1363,18 +1371,21 @@ def build_rig():
             })
         clips[action.name] = samples
     reference["clips"] = clips
-    reference["curves"] = {
-        action.name: [
-            {
-                "path": curve.data_path,
-                "index": curve.array_index,
-                "samples": [[frame / 4, round(curve.evaluate(frame / 4), DIGITS)] for frame in range(-12, 4 * 64 + 1)],
-            }
-            for curve in fcurves_of(action)
-        ]
-        for action in (wave, ease)
-    }
-    save_reference("rig", reference)
+    if unit == 1.0:
+        reference["curves"] = {
+            action.name: [
+                {
+                    "path": curve.data_path,
+                    "index": curve.array_index,
+                    "samples": [
+                        [frame / 4, round(curve.evaluate(frame / 4), DIGITS)] for frame in range(-12, 4 * 64 + 1)
+                    ],
+                }
+                for curve in fcurves_of(action)
+            ]
+            for action in (wave, ease)
+        }
+    save_reference(fixture, reference)
 
 
 # ---------------------------------------------------------------- materials
@@ -1737,6 +1748,15 @@ def build_materials():
     tree.links.new(image.outputs["Color"], normal_map.inputs["Color"])
     tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
     materials += [tilted, pulsing, smart, clear, frosted, dialed, masked, chrome, tangent_detail]
+
+    nodeless_reference = {}
+    if bpy.app.version < (5, 0, 0):
+        nodeless = bpy.data.materials.new("Nodeless")
+        principled(nodeless).inputs["Base Color"].default_value = (1.0, 0.0, 0.0, 1.0)
+        nodeless.use_nodes = False
+        nodeless.diffuse_color = (0.0, 1.0, 0.0, 1.0)
+        materials.append(nodeless)
+        nodeless_reference["nodeless"] = {"diffuse": rounded(nodeless.diffuse_color), "useNodes": nodeless.use_nodes}
     for index, mat in enumerate(materials):
         bm = bmesh.new()
         bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=0.5)
@@ -1773,7 +1793,7 @@ def build_materials():
         image.filepath = "//textures/" + image.name
     absolute.filepath = "/nonexistent/arcue/absolute.png"
     save_blend("materials", relative_remap=False)
-    save_reference("materials", {"fps": 24.0, "unitScale": 1.0})
+    save_reference("materials", {"fps": 24.0, "unitScale": 1.0, **nodeless_reference})
 
 
 # ---------------------------------------------------------------- shading
@@ -1963,14 +1983,20 @@ def build_shading():
     channels, also through Math, Color Ramp and Mix nodes and of an image whose every pixel is gray, an image mixed by
     another's alpha, the alpha Blender multiplies into an image's color, premultiplied images, color spaces and
     interpolation, color attributes, light that Add and Mix shaders add, the Specular BSDF, a UDIM image whose tiles
-    are files and image sequences at a frame. The reference holds what Cycles bakes for them: at the first texel each
+    are files, image sequences at a frame, the red channel of two packed images as a base color, one of them gray
+    in every pixel, the color of a packed colored image as roughness and metallic, half alpha under the Blended and the
+    Dithered render methods, an image whose Alpha Mode is None, Image Texture nodes without an image, and gray.png
+    decoded as Non-Color and as Linear Rec.709. The reference holds what Cycles bakes for them: at the first texel each
     material's diffuse color, with specular turned off so that it is the base color times one minus metallic, and its
-    emission; where each Mapping sends the UVs of each texel; and the alpha each clip leaves there. It also holds what
+    emission; the roughness of the materials whose roughness an image gives, and the metallic the colored image gives;
+    where each Mapping sends the UVs of each texel; and the alpha each clip leaves there. It also holds what
     Cycles renders over a transparent film for surfaces a bake cannot show, one that adds light to a Transparent BSDF,
-    one with only a volume and a holdout, what EEVEE renders for an image's color where nodes read its alpha and where
-    none do, the color of the shader EEVEE's output shows, the diffuse color EEVEE renders for the Specular BSDF, which
-    Cycles cannot bake, the color of each tile and frame file, and the color Cycles bakes for an image sequence under
-    each of a few frame settings."""
+    one with only a volume, a holdout and the images whose Alpha Mode is None, what EEVEE renders for an image's color
+    where nodes read its alpha and where none do, and for the Image Texture nodes without an image under a white world,
+    the color of the shader EEVEE's output shows, the diffuse color EEVEE renders for the Specular BSDF, which
+    Cycles cannot bake, the color of each tile and frame file, the color Cycles bakes for an image sequence under
+    each of a few frame settings, and for each packed image its packed size, whether it is gray and whether the bake
+    of its material shows it as a texture."""
     scene = reset_scene()
     checker = save_png("checker.png", 4, 4, checker_pixel)
     orm = save_png("orm.png", 2, 2, orm_pixel)
@@ -2770,6 +2796,88 @@ def build_shading():
         tree.links.new(metal.outputs["BSDF"], tree.nodes["Material Output"].inputs["Surface"])
         materials.append(mat)
 
+    noise = random.Random(45)
+    packed_images = []
+    for image_name, material_name, pixel in (
+        ("PackedNoise", "PackedChannel", lambda: [noise.randrange(256) / 255 for _ in range(3)]),
+        ("PackedGray", "PackedGrayChannel", lambda: [noise.randrange(256) / 255] * 3),
+    ):
+        image = bpy.data.images.new(image_name, 64, 64)
+        image.pixels = [channel for _ in range(64 * 64) for channel in (*pixel(), 1.0)]
+        image.pack()
+        packed_images.append(image)
+        mat, tree, bsdf = shading_material(material_name)
+        separate = tree.nodes.new("ShaderNodeSeparateColor")
+        tree.links.new(image_node(tree, image).outputs["Color"], separate.inputs["Color"])
+        tree.links.new(separate.outputs["Red"], bsdf.inputs["Base Color"])
+        materials.append(mat)
+
+    render_methods = {}
+    for name, method in (("AlphaBlended", "BLENDED"), ("AlphaDithered", None)):
+        mat, tree, bsdf = shading_material(name)
+        bsdf.inputs["Alpha"].default_value = 0.5
+        if method:
+            mat.surface_render_method = method
+        render_methods[name] = mat.surface_render_method
+        materials.append(mat)
+
+    tinted = bpy.data.images.new("tinted.png", 4, 4)
+    tinted.colorspace_settings.name = "Non-Color"
+    tinted.pixels = [0.9, 0.6, 0.2, 1.0] * 16
+    tinted.pack()
+    for name, socket in (("TintedRoughness", "Roughness"), ("TintedMetallic", "Metallic")):
+        mat, tree, bsdf = shading_material(name)
+        tree.links.new(image_node(tree, tinted).outputs["Color"], bsdf.inputs[socket])
+        materials.append(mat)
+    mat, tree, bsdf = shading_material("TintedBwRoughness")
+    brightness = tree.nodes.new("ShaderNodeRGBToBW")
+    tree.links.new(image_node(tree, tinted).outputs["Color"], brightness.inputs[0])
+    tree.links.new(brightness.outputs[0], bsdf.inputs["Roughness"])
+    materials.append(mat)
+    mat, tree, bsdf = shading_material("TintedRedBase")
+    separate = tree.nodes.new("ShaderNodeSeparateColor")
+    tree.links.new(image_node(tree, tinted).outputs["Color"], separate.inputs["Color"])
+    tree.links.new(separate.outputs["Red"], bsdf.inputs["Base Color"])
+    materials.append(mat)
+
+    opaque_cutout = bpy.data.images.load(cutout.filepath_raw, check_existing=False)
+    opaque_cutout.name = "cutout-opaque"
+    opaque_cutout.alpha_mode = "NONE"
+    mat, tree, bsdf = shading_material("AlphaNone")
+    texture = image_node(tree, opaque_cutout)
+    tree.links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
+    tree.links.new(texture.outputs["Alpha"], bsdf.inputs["Alpha"])
+    materials.append(mat)
+    mat, tree, bsdf = shading_material("MixAlphaNone")
+    texture = image_node(tree, opaque_cutout)
+    tree.links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
+    mix = tree.nodes.new("ShaderNodeMixShader")
+    tree.links.new(texture.outputs["Alpha"], mix.inputs["Fac"])
+    tree.links.new(tree.nodes.new("ShaderNodeBsdfTransparent").outputs["BSDF"], mix.inputs[1])
+    tree.links.new(bsdf.outputs["BSDF"], mix.inputs[2])
+    tree.links.new(mix.outputs["Shader"], tree.nodes["Material Output"].inputs["Surface"])
+    materials.append(mat)
+
+    for name, output, socket in (("EmptyImageBase", "Color", "Base Color"), ("EmptyImageAlpha", "Alpha", "Alpha")):
+        mat, tree, bsdf = shading_material(name)
+        bsdf.inputs["Roughness"].default_value = 1.0
+        bsdf.inputs["IOR"].default_value = 1.0
+        imageless = tree.nodes.new("ShaderNodeTexImage")
+        assert imageless.image is None
+        tree.links.new(imageless.outputs[output], bsdf.inputs[socket])
+        materials.append(mat)
+
+    for name, image_name, space, socket in (
+        ("LinearRoughness", "gray-data", "Non-Color", "Roughness"),
+        ("LinearBase", "gray-rec709", "Linear Rec.709", "Base Color"),
+    ):
+        decoded = bpy.data.images.load(gray.filepath_raw, check_existing=False)
+        decoded.name = image_name
+        decoded.colorspace_settings.name = space
+        mat, tree, bsdf = shading_material(name)
+        tree.links.new(image_node(tree, decoded).outputs["Color"], bsdf.inputs[socket])
+        materials.append(mat)
+
     objects = []
     for index, mat in enumerate(materials):
         bm = bmesh.new()
@@ -2808,6 +2916,13 @@ def build_shading():
         eevee_output = bpy.data.materials[name].node_tree.get_output_node("EEVEE")
         eevee_shader = eevee_output.inputs["Surface"].links[0].from_node
         eevee[name] = rounded(eevee_shader.inputs["Base Color"].default_value[0:3])
+    # Before specular is turned off below, since Cycles bakes a Principled BSDF's roughness only while specular is on.
+    rough_planes = [
+        next(obj for obj in objects if obj.name == name + "Plane")
+        for name in ("TintedRoughness", "TintedBwRoughness", "SrgbRoughness", "LinearRoughness")
+    ]
+    roughness = bake(scene, rough_planes, "ROUGHNESS")
+    baked_scalar = {obj.active_material.name: rounded(roughness[obj.name][0:1])[0] for obj in rough_planes}
     shown = [
         obj for obj in objects if obj.active_material.name not in mapping_names and len(obj.material_slots) == 1
     ]
@@ -2821,6 +2936,25 @@ def build_shading():
     for obj in shown:
         name = obj.active_material.name
         baked[name] = {"base": rounded(base[obj.name][0:3]), "emission": rounded(emission[obj.name][0:3])}
+    metallic_plane = next(obj for obj in shown if obj.name == "TintedMetallicPlane")
+    base_color = metallic_plane.active_material.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value[0]
+    baked_scalar["TintedMetallic"] = rounded([1.0 - base[metallic_plane.name][0] / base_color])[0]
+    packed_reference = {}
+    for image in packed_images:
+        pixels = list(image.pixels)
+        plane = next(
+            obj
+            for obj in shown
+            if any(node.bl_idname == "ShaderNodeTexImage" and node.image == image
+                   for node in obj.active_material.node_tree.nodes)
+        )
+        texels = {tuple(rounded(base[plane.name][i:i + 3])) for i in range(0, BAKE_SIZE * BAKE_SIZE * 4, 4)}
+        packed_reference[image.name] = {
+            "material": plane.active_material.name,
+            "packedSize": image.packed_file.size,
+            "gray": all(pixels[i] == pixels[i + 1] == pixels[i + 2] for i in range(0, len(pixels), 4)),
+            "bakedTexture": len(texels) > 1,
+        }
 
     mapping_objects = [obj for obj in objects if obj.active_material.name in mapping_names]
     for obj in mapping_objects:
@@ -2843,7 +2977,7 @@ def build_shading():
 
     rendered = {
         name: rendered_color(scene, next(obj for obj in objects if obj.name == name + "Plane"))
-        for name in ("AddClear", "VolumeOnly", "Holdout")
+        for name in ("AddClear", "VolumeOnly", "Holdout", "AlphaNone", "MixAlphaNone")
     }
     eevee_engine = "BLENDER_EEVEE_NEXT" if bpy.app.version < (5, 0, 0) else "BLENDER_EEVEE"
     rendered_by_eevee = {
@@ -2859,6 +2993,9 @@ def build_shading():
     )
     specular_node.inputs["Specular"].default_value = (0.0, 0.0, 0.0, 1.0)
     white_world = (1.0, 1.0, 1.0)
+    for name in ("EmptyImageBase", "EmptyImageAlpha"):
+        imageless_plane = next(obj for obj in objects if obj.name == name + "Plane")
+        rendered_by_eevee[name] = rendered_color(scene, imageless_plane, eevee_engine, white_world)
     shaded = rendered_color(scene, specular_plane, eevee_engine, white_world)
     specular_node.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
     white = rendered_color(scene, specular_plane, eevee_engine, white_world)
@@ -2924,6 +3061,10 @@ def build_shading():
             "files": files,
             "frame": SHADING_FRAME,
             "sequenceFrames": sequence_frames,
+            "packedImages": packed_reference,
+            "renderMethods": render_methods,
+            "bakedScalar": baked_scalar,
+            "tintedTexel": rounded(list(tinted.pixels)[0:4]),
         },
     )
 
@@ -3655,7 +3796,11 @@ def build_clips():
     with the upper tracks playing, the upper track wins over the tweaked one, and an active action that tweak mode
     stashes plays over both; without them, the stashed action plays nowhere. In every version, also an object that
     plays an action that another object has on a muted track, and a curve that a Cycles modifier repeats before its
-    first key."""
+    first key. Also unused actions: one for a door whose active action keys its rotation about Z, and from 4.4 on one
+    whose slot names its object by the name it had before a rename, which only that object's actions key all of the
+    rotation of; two that key values no object keys; one that an object in an excluded collection plays and, from 4.4
+    on, one whose slot names an object in another scene. And an action keyed only from frame 10 to 20, and constant
+    keys that a Cycles modifier mirrors after them and before them."""
     scene = reset_scene()
     plays = []
     tweaking = []
@@ -3946,6 +4091,84 @@ def build_clips():
             plays.append((stack, [owner], [1, 5, 9]))
             rigs.append(stack_rig)
 
+    door = link(bpy.data.objects.new("Door", None))
+    door.location = (0, -18, 0)
+    panel = mesh_object("DoorPanel", box_bmesh())
+    panel.parent = door
+    panel.location = (1, 0, 0)
+    key_values(door, "rotation_euler", 2, ((1, 0.0), (20, 1.5)))
+    door_open = named_action(door, "DoorOpen")
+    door_open.use_fake_user = True
+    door.animation_data.action = None
+    key_values(door, "rotation_euler", 2, ((1, 1.5), (20, 0.0)))
+    named_action(door, "DoorClose")
+    plays.append((door_open, [(door, door_open.slots[0] if LAYERED_ACTIONS else None)], [1, 10, 20]))
+    if LAYERED_ACTIONS:
+        gate = link(bpy.data.objects.new("Gate", None))
+        gate.location = (0, -21, 0)
+
+        def turn(name, angles):
+            for frame, angle in zip((1, 20), angles):
+                gate.rotation_euler = (0, 0, angle)
+                gate.keyframe_insert("rotation_euler", frame=frame)
+            return named_action(gate, name)
+
+        gate_open = turn("GateOpen", (0.0, 1.5))
+        gate_open.use_fake_user = True
+        gate.animation_data.action = None
+        turn("GateClose", (1.5, 0.0))
+        gate.name = "Portal"
+        plays.append((gate_open, [(gate, gate_open.slots[0])], [1, 10, 20]))
+
+    for name, path, index, keys in (
+        ("Stray", "location", 2, ((1, 0.0), (9, 1.0))),
+        ("Drift", "delta_scale", 0, ((1, 1.0), (9, 2.0))),
+    ):
+        unused = bpy.data.actions.new(name)
+        unused.use_fake_user = True
+        bag = unused
+        if LAYERED_ACTIONS:
+            slot = unused.slots.new(id_type="OBJECT", name=name)
+            bag = unused.layers.new("Layer").strips.new(type="KEYFRAME").channelbag(slot, ensure=True)
+        curve = bag.fcurves.new(path, index=index)
+        for frame, value in keys:
+            curve.keyframe_points.insert(frame, value)
+
+    hidden = bpy.data.collections.new("Hidden")
+    scene.collection.children.link(hidden)
+    sphere = link(bpy.data.objects.new("Sphere", None), hidden)
+    key_values(sphere, "location", 1, ((1, 0.0), (20, -3.0)))
+    named_action(sphere, "SphereAction")
+    bpy.context.view_layer.layer_collection.children["Hidden"].exclude = True
+    if LAYERED_ACTIONS:
+        ghost = link(bpy.data.objects.new("Ghost", None), bpy.data.scenes.new("Other").collection)
+        key_values(ghost, "location", 1, ((1, 0.0), (9, 1.0)))
+        named_action(ghost, "GhostAction").use_fake_user = True
+        ghost.animation_data.action = None
+
+    late_keys = link(bpy.data.objects.new("LateKeys", None))
+    late_keys.location = (0, -24, 0)
+    key_values(late_keys, "location", 0, ((10, 0.0), (15, 2.0), (20, 10.0)))
+    late_keys_act = named_action(late_keys, "LateKeysAct")
+    plays.append((late_keys_act, [(late_keys, own_slot(late_keys))], [10, 15, 20]))
+
+    mirrored = []
+    for k, (name, keys, before, after) in enumerate((
+        ("MirrorConst", ((1, 0.0), (5, 1.0), (9, 2.0)), "NONE", "MIRROR"),
+        ("MirrorConstBefore", ((9, 0.0), (13, 1.0), (17, 2.0)), "MIRROR", "NONE"),
+    )):
+        mirror = link(bpy.data.objects.new(name, None))
+        mirror.location = (0, -27 - 3 * k, 0)
+        key_values(mirror, "location", 0, keys)
+        action = named_action(mirror, name + "Act")
+        set_interpolation(action, lambda curve: "CONSTANT")
+        cycles = fcurves_of(action)[0].modifiers.new("CYCLES")
+        cycles.mode_before, cycles.mode_after = before, after
+        action.use_frame_range = True
+        action.frame_start, action.frame_end = 1, 17
+        plays.append((action, [(mirror, own_slot(mirror))], [1, 5, 6, 9, 10, 13, 14, 17]))
+        mirrored.append(action)
+
     scene.frame_set(1)
     resting.pose.bones["Posed"].rotation_euler = (0.4, 0.0, 0.0)
     bone.rotation_euler[0] = 2.0
@@ -3988,7 +4211,8 @@ def build_clips():
             for armature in rigs:
                 evaluated = armature.evaluated_get(depsgraph)
                 for channel in evaluated.pose.bones:
-                    bones[channel.name] = scene_matrix(evaluated.matrix_world @ channel.matrix, 1.0)
+                    bones[channel.name] = scene_matrix(evaluated.matrix_world @ channel.matrix,
+                                                       scene.unit_settings.scale_length)
             samples.append({
                 "frame": frame,
                 "bones": bones,
@@ -4000,13 +4224,17 @@ def build_clips():
             })
         clips[action.name] = samples
     curve = fcurves_of(long_handles)[0]
+    curves = {
+        long_handles.name: [[frame / 4, round(curve.evaluate(frame / 4), DIGITS)] for frame in range(0, 4 * 12 + 1)],
+    }
+    for action in mirrored:
+        curve = fcurves_of(action)[0]
+        curves[action.name] = [[frame / 8, round(curve.evaluate(frame / 8), DIGITS)] for frame in range(8, 8 * 17 + 1)]
     save_reference("clips", {
         "fps": 24.0,
         "unitScale": 1.0,
         "clips": clips,
-        "curves": {
-            long_handles.name: [[frame / 4, round(curve.evaluate(frame / 4), DIGITS)] for frame in range(0, 4 * 12 + 1)],
-        },
+        "curves": curves,
     })
 
 
@@ -4033,7 +4261,9 @@ def build_opening():
     """Objects and a shape key whose active actions Blender plays again when it opens the file, at frame 12: alone and
     over a muted or empty NLA track or with the NLA off, where it writes over values changed without a key; over NLA
     strips, by its extrapolation before or after its keys; over a soloed track; blended at half influence; in NLA
-    tweak mode; under a driver, a Noise modifier and a mute. Also an unused action that keys another shape key."""
+    tweak mode; under a driver, a Noise modifier and a mute. Also an unused action that keys another shape key, and an
+    armature that its action moves with a child mesh it skins. The reference also holds what Blender shows at the
+    scene's start frame, with the armature at rest."""
     scene = reset_scene()
     tweaked = []
     rows = (
@@ -4111,6 +4341,18 @@ def build_opening():
         action.use_fake_user = True
         set_interpolation(action, lambda curve: "LINEAR")
 
+    mover = small_rig("Mover", (("Root", (0, 0, 0), (0, 0, 1), None),), (0, len(rows) + 1, 0))
+    for frame, location in ((1, (0, 0, 0)), (20, (0, 4, 0))):
+        mover.location = location
+        mover.keyframe_insert("location", frame=frame)
+    set_interpolation(named_action(mover, "MoverAct"), lambda curve: "LINEAR")
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=6, y_subdivisions=6, size=2)
+    carried = bpy.context.active_object
+    carried.name = "Carried"
+    carried.parent = mover
+    carried.vertex_groups.new(name="Root").add(range(len(carried.data.vertices)), 1.0, "REPLACE")
+    carried.modifiers.new("Armature", "ARMATURE").object = mover
+
     scene.frame_set(12)
     for obj in tweaked:
         obj.location[0] = 100.0
@@ -4119,12 +4361,23 @@ def build_opening():
     save_blend("opening")
     bpy.ops.wm.open_mainfile(filepath=os.path.join(HERE, "opening-%s.blend" % VERSION))
     scene = bpy.context.scene
-    weights = {block.name: round(block.value, DIGITS) for block in bpy.data.objects["Face"].data.shape_keys.key_blocks}
+    blocks = bpy.data.objects["Face"].data.shape_keys.key_blocks
+    objects = world_matrices(scene)
+    weights = {block.name: round(block.value, DIGITS) for block in blocks}
+    scene.frame_set(scene.frame_start)
+    rest_pose(scene)
+    start = {
+        "frame": scene.frame_start,
+        "objects": world_matrices(scene),
+        "weights": {"Face": {block.name: round(block.value, DIGITS) for block in blocks}},
+        "meshes": {"Carried": mesh_reference(bpy.data.objects["Carried"], scene)},
+    }
     save_reference("opening", {
         "fps": 24.0,
         "unitScale": 1.0,
-        "objects": world_matrices(scene),
+        "objects": objects,
         "weights": {"Face": weights},
+        "start": start,
     })
 
 
@@ -4731,6 +4984,805 @@ def build_relations():
     save_reference("relations", reference)
 
 
+# ---------------------------------------------------------------- timeline
+
+def keyed_action(obj, path, index, keys, name):
+    """Keys one value of the object through `keys` in a new active action called `name`, linear between them."""
+    key_values(obj, path, index, keys)
+    action = named_action(obj, name)
+    set_interpolation(action, lambda curve: "LINEAR")
+    return action
+
+
+def parented_empty(name, location, parent=None):
+    """An empty at `location`, parented with the inverse of its parent's world matrix, so that it stays there."""
+    obj = link(bpy.data.objects.new(name, None))
+    obj.location = location
+    if parent is not None:
+        obj.parent = parent
+        bpy.context.view_layer.update()
+        obj.matrix_parent_inverse = parent.matrix_world.inverted()
+    return obj
+
+
+def pushed_down(id_data, start, track=None):
+    """Plays the active action from an NLA strip at `start` instead, on `track` or on a new track on top."""
+    data = id_data.animation_data
+    action = data.action
+    track = track or data.nla_tracks.new()
+    strip = track.strips.new(action.name, start, action)
+    data.action = None
+    return track, strip
+
+
+def world_samples(scene, frames):
+    """Each object's world matrix as Blender evaluates it at each of `frames`, which may fall between frames."""
+    samples = []
+    for frame in frames:
+        whole = math.floor(frame)
+        scene.frame_set(whole, subframe=frame - whole)
+        worlds = {name: entry["world"] for name, entry in world_matrices(scene).items()}
+        samples.append({"frame": frame, "worlds": worlds})
+    return samples
+
+
+TIMELINE_FRAMES = (1, 5, 10, 19, 19.5, 20, 22, 24, 24.5, 25, 25.5, 28, 29, 29.5, 30, 30.5, 34, 35, 39, 39.5, 40, 40.5,
+                   41, 44, 44.5, 45, 49.5, 50, 52, 54.5, 55, 55.5, 60, 64, 70, 80)
+
+
+def build_timeline():
+    """Actions that the scene plays together over its 80 frames: a chain of parented empties that each play their own
+    active action, one of them from frame 10, and empties that play an action from an NLA strip at frame 20 that holds,
+    is scaled and repeated, is reversed, does not extrapolate, plays again at frame 50, plays under a strip on an upper
+    track, and plays under an active action. Also an empty whose upper strip plays over every key of the one under
+    it."""
+    scene = reset_scene()
+    scene.frame_end = 80
+    base = parented_empty("Base", (0, 0, 0))
+    arm = parented_empty("Arm", (0, 0, 1), base)
+    hand = parented_empty("Hand", (0, 0, 2), arm)
+    quarter = math.radians(90)
+    keyed_action(base, "rotation_euler", 2, ((1, 0.0), (60, quarter)), "BaseAction")
+    keyed_action(arm, "rotation_euler", 0, ((1, 0.0), (60, quarter)), "ArmAction")
+    keyed_action(hand, "rotation_euler", 1, ((10, 0.0), (40, quarter)), "HandAction")
+
+    def stripped(name, row):
+        obj = link(bpy.data.objects.new(name, None))
+        obj.location = (0, 2 * row, 0)
+        keyed_action(obj, "location", 0, ((1, 0.0), (11, 10.0)), name + "Act")
+        obj.location[0] = 0.0
+        return (obj, *pushed_down(obj, 20))
+
+    _, _, strip = stripped("Offset", 1)
+    strip.extrapolation = "HOLD"
+    _, _, strip = stripped("Scaled", 2)
+    strip.scale = 2.0
+    strip.repeat = 1.5
+    strip.extrapolation = "HOLD_FORWARD"
+    _, _, strip = stripped("Reversed", 3)
+    strip.use_reverse = True
+    strip.repeat = 2.0
+    _, _, strip = stripped("Nothing", 4)
+    strip.extrapolation = "NOTHING"
+    _, track, strip = stripped("Two", 5)
+    strip.extrapolation = "HOLD"
+    track.strips.new("TwoAgain", 50, strip.action).extrapolation = "HOLD_FORWARD"
+    over, _, _ = stripped("Over", 6)
+    keyed_action(over, "location", 0, ((30, 100.0), (40, 200.0)), "OverUpper")
+    pushed_down(over, 30)[1].extrapolation = "NOTHING"
+    active, _, _ = stripped("Active", 7)
+    keyed_action(active, "location", 0, ((45, -5.0), (55, -15.0)), "ActiveTop")
+    active.animation_data.action_extrapolation = "HOLD_FORWARD"
+
+    covered = link(bpy.data.objects.new("Covered", None))
+    covered.location = (0, 16, 0)
+    keyed_action(covered, "location", 0, tuple((frame, float(k % 2)) for k, frame in enumerate(range(1, 12, 2))),
+                 "CoveredLow")
+    pushed_down(covered, 20)[1].extrapolation = "HOLD"
+    keyed_action(covered, "location", 0, ((1, 0.0), (11, 5.0)), "CoveredHigh")
+    pushed_down(covered, 20)[1].extrapolation = "HOLD"
+
+    scene.frame_set(1)
+    save_blend("timeline")
+    save_reference("timeline", {"fps": 24.0, "samples": world_samples(scene, TIMELINE_FRAMES)})
+
+
+def build_stretch():
+    """Two empties that each play their own action in a scene whose time remapping plays actions at half speed."""
+    scene = reset_scene()
+    scene.frame_end = 30
+    scene.render.frame_map_old = 1
+    scene.render.frame_map_new = 2
+    slow = link(bpy.data.objects.new("Slow", None))
+    keyed_action(slow, "location", 0, ((1, 0.0), (11, 10.0)), "SlowAct")
+    other = link(bpy.data.objects.new("Other", None))
+    other.location = (0, 2, 0)
+    keyed_action(other, "location", 2, ((1, 0.0), (11, 5.0)), "OtherAct")
+    scene.frame_set(1)
+    save_blend("stretch")
+    save_reference("stretch", {"fps": 24.0, "samples": world_samples(scene, (1, 2, 3, 10, 12, 20, 22, 30))})
+
+
+def build_nla_stress():
+    """An empty that plays an action from a thousand strips on one track, an empty under a hundred tracks whose strips
+    each repeat an action a thousand times and leave the last frame of the strip under them showing, and an empty whose
+    active action spans the scene's 4001 frames."""
+    scene = reset_scene()
+    scene.frame_end = 4001
+    hopper = link(bpy.data.objects.new("Hopper", None))
+    hop = keyed_action(hopper, "location", 0, ((1, 0.0), (4, 1.0)), "Hop")
+    hopper.animation_data.action = None
+    track = hopper.animation_data.nla_tracks.new()
+    for k in range(1000):
+        track.strips.new("Hop%d" % k, 1 + 4 * k, hop)
+    stacker = link(bpy.data.objects.new("Stacker", None))
+    stacker.location = (2, 0, 0)
+    climb = keyed_action(stacker, "location", 1, ((1, 0.0), (4, 1.0)), "Climb")
+    stacker.animation_data.action = None
+    ends = []
+    for k in range(100):
+        strip = stacker.animation_data.nla_tracks.new().strips.new("Climb%d" % k, 1 + (100 - k), climb)
+        strip.repeat = 1000
+        strip.extrapolation = "NOTHING"
+        ends.append(strip.frame_end)
+    other = link(bpy.data.objects.new("Other", None))
+    other.location = (4, 0, 0)
+    keyed_action(other, "location", 2, ((1, 0.0), (4001, 1.0)), "Rise")
+    scene.frame_set(1)
+    save_blend("nla-stress")
+    frames = sorted({float(frame) for frame in (1, 2.5, 4, 5, 1999.5, 2001, 3001, 3002, 3002.5, 3050, 3101, 3102, 4001,
+                                                *ends)})
+    save_reference("nla-stress", {"fps": 24.0, "samples": world_samples(scene, frames)})
+
+
+def build_shear():
+    """Cubes whose rotation shears under the scale they were parented with: one parented to an unevenly scaled cube,
+    and one parented to the bone of an unevenly scaled armature, each turning in its own action."""
+    scene = reset_scene()
+    scene.frame_end = 11
+    quarter = math.radians(90)
+    body = mesh_object("Body", box_bmesh())
+    body.scale = (2, 4, 1)
+    wheel = mesh_object("Wheel", box_bmesh())
+    wheel.location = (0, 0, 2)
+    bpy.context.view_layer.update()
+    wheel.parent = body
+    wheel.matrix_parent_inverse = body.matrix_world.inverted()
+    keyed_action(wheel, "rotation_euler", 0, ((1, 0.0), (11, quarter)), "Spin")
+    rig = small_rig("Rig", (("B", (0, 0, 0), (0, 0, 1), None),), (6, 0, 0))
+    rig.scale = (1, 2, 0.5)
+    prop = mesh_object("Prop", box_bmesh())
+    prop.location = (6.5, 0, 1.5)
+    prop.parent = rig
+    prop.parent_type = "BONE"
+    prop.parent_bone = "B"
+    bpy.context.view_layer.update()
+    prop.matrix_parent_inverse = (prop.matrix_world @ prop.matrix_basis.inverted()).inverted()
+    keyed_action(prop, "rotation_euler", 0, ((1, 0.0), (11, quarter)), "Turn")
+    scene.frame_set(1)
+    save_blend("shear")
+    save_reference("shear", {"fps": 24.0, "samples": world_samples(scene, range(1, 12))})
+
+
+# ---------------------------------------------------------------- nla
+
+def nla_action(owner, id_data, name, channels, extrapolation="CONSTANT"):
+    """A new active action on `id_data` that keys `owner`'s values linearly, with `channels` of (path, index, keys)."""
+    action = new_action(id_data, name)
+    for path, index, keys in channels:
+        key_values(owner, path, index, keys)
+    for curve in fcurves_of(action):
+        curve.extrapolation = extrapolation
+    set_interpolation(action, lambda curve: "LINEAR")
+    return action
+
+
+def held_action(obj, name, path, index, value):
+    """A new active action that holds one of the object's values at `value`."""
+    return nla_action(obj, obj, name, [(path, index, [(1, value), (2, value)])])
+
+
+def tweaked_strip(obj, track, strip):
+    """Enters NLA tweak mode on `strip` of `track`."""
+    data = obj.animation_data
+    for other in data.nla_tracks:
+        for each in other.strips:
+            each.select = each == strip
+    data.nla_tracks.active = track
+    data.use_tweak_mode = True
+
+
+def keyed_strip_time(strip, keys, cyclic=False):
+    """Times the strip by a curve keyed linearly through `keys`, which with `cyclic` repeats the strip's action."""
+    strip.use_animated_time = True
+    strip.use_animated_time_cyclic = cyclic
+    for frame, value in keys:
+        strip.strip_time = value
+        strip.keyframe_insert("strip_time", frame=frame)
+    for curve in strip.fcurves:
+        for point in curve.keyframe_points:
+            point.interpolation = "LINEAR"
+
+
+def build_nla():
+    """Objects, an armature's bone and shape keys whose NLA strips and active actions Blender plays at the scene's
+    start frame, 5, in a file saved at frame 14: strips pushed down, placed late, held, not extrapolated and with gaps;
+    blended by every mode and by influence, blend in and out and influence curves; scaled, repeated, reversed and timed
+    by curves; on soloed and muted tracks; under an active action that blends or extrapolates; and in tweak mode."""
+    scene = reset_scene()
+    scene.frame_start = 5
+    scene.frame_end = 40
+    z90 = (math.cos(math.pi / 4), 0.0, 0.0, math.sin(math.pi / 4))
+    x90 = (math.cos(math.pi / 4), math.sin(math.pi / 4), 0.0, 0.0)
+
+    def empty(name, rotation_mode="XYZ"):
+        obj = link(bpy.data.objects.new(name, None))
+        obj.rotation_mode = rotation_mode
+        obj.animation_data_create()
+        return obj
+
+    obj = empty("PushDown")
+    nla_action(obj, obj, "PushDownAct", [("location", 1, [(1, 0.0), (20, 4.0)])])
+    pushed_down(obj, 1)
+
+    obj = empty("LateStrip")
+    nla_action(obj, obj, "LateStripAct", [("location", 1, [(1, 2.0), (20, 6.0)])])
+    pushed_down(obj, 10)
+
+    obj = empty("NothingStrip")
+    nla_action(obj, obj, "NothingStripAct", [("location", 1, [(1, 2.0), (20, 6.0)])])
+    pushed_down(obj, 10)[1].extrapolation = "NOTHING"
+    obj.location[0] = 7.0
+
+    obj = empty("HoldForwardGap")
+    held_action(obj, "GapFirst", "location", 1, 1.0)
+    track, _ = pushed_down(obj, 1)
+    held_action(obj, "GapSecond", "location", 1, 3.0)
+    pushed_down(obj, 8, track)
+
+    for name, mode, path, lower, upper, influence in (
+        ("Additive", "ADD", "location", 3.0, 2.0, 0.5),
+        ("Subtract", "SUBTRACT", "location", 3.0, 2.0, 1.0),
+        ("MultiplyScale", "MULTIPLY", "scale", 2.0, 3.0, 1.0),
+        ("CombineLoc", "COMBINE", "location", 3.0, 2.0, 1.0),
+        ("CombineScale", "COMBINE", "scale", 2.0, 3.0, 0.5),
+        ("CombineScaleZero", "COMBINE", "scale", 2.0, 0.0, 1.0),
+    ):
+        obj = empty(name)
+        index = 1 if path == "location" else 0
+        held_action(obj, name + "Base", path, index, lower)
+        pushed_down(obj, 1)
+        held_action(obj, name + "Upper", path, index, upper)
+        _, strip = pushed_down(obj, 1)
+        strip.blend_type = mode
+        strip.extrapolation = "HOLD"
+        strip.influence = influence
+        strip.use_animated_influence = True
+
+    obj = empty("CombineQuat", "QUATERNION")
+    nla_action(obj, obj, "CombineQuatBase", [("rotation_quaternion", i, [(1, z90[i]), (2, z90[i])]) for i in range(4)])
+    pushed_down(obj, 1)
+    nla_action(obj, obj, "CombineQuatUpper", [("rotation_quaternion", i, [(1, x90[i]), (2, x90[i])]) for i in range(4)])
+    _, strip = pushed_down(obj, 1)
+    strip.blend_type = "COMBINE"
+    strip.extrapolation = "HOLD"
+    strip.influence = 0.5
+    strip.use_animated_influence = True
+
+    obj = empty("ReplaceQuatPartial", "QUATERNION")
+    nla_action(obj, obj, "ReplaceQuatPartialAct", [("rotation_quaternion", 0, [(1, 0.7), (2, 0.7)])])
+    pushed_down(obj, 1)
+    obj.rotation_quaternion = (0.5, 0.5, 0.5, 0.5)
+
+    obj = empty("ReplaceHalf")
+    held_action(obj, "ReplaceHalfBase", "location", 1, 3.0)
+    pushed_down(obj, 1)
+    held_action(obj, "ReplaceHalfUpper", "location", 1, 10.0)
+    _, strip = pushed_down(obj, 1)
+    strip.extrapolation = "HOLD"
+    strip.influence = 0.25
+    strip.use_animated_influence = True
+
+    for name, end, blend, frames in (("BlendIn", 20, "blend_in", 8.0), ("BlendOut", 7, "blend_out", 4.0)):
+        obj = empty(name)
+        held_action(obj, name + "Base", "location", 1, 3.0)
+        pushed_down(obj, 1)
+        nla_action(obj, obj, name + "Upper", [("location", 1, [(1, 10.0), (end, 10.0)])])
+        _, strip = pushed_down(obj, 1)
+        strip.use_auto_blend = False
+        setattr(strip, blend, frames)
+
+    obj = empty("AnimatedInfluence")
+    held_action(obj, "AnimatedInfluenceBase", "location", 1, 3.0)
+    pushed_down(obj, 1)
+    nla_action(obj, obj, "AnimatedInfluenceUpper", [("location", 1, [(1, 10.0), (20, 10.0)])])
+    _, strip = pushed_down(obj, 1)
+    strip.use_animated_influence = True
+    for frame, value in ((1, 0.0), (9, 1.0)):
+        strip.influence = value
+        strip.keyframe_insert("influence", frame=frame)
+    for curve in strip.fcurves:
+        for point in curve.keyframe_points:
+            point.interpolation = "LINEAR"
+
+    obj = empty("ScaledRepeat")
+    nla_action(obj, obj, "ScaledRepeatAct", [("location", 1, [(1, 0.0), (11, 10.0)])])
+    _, strip = pushed_down(obj, -3)
+    strip.scale = 0.5
+    strip.repeat = 3.0
+
+    obj = empty("Reversed")
+    nla_action(obj, obj, "ReversedAct", [("location", 1, [(1, 0.0), (11, 10.0)])])
+    pushed_down(obj, 1)[1].use_reverse = True
+
+    obj = empty("AnimatedTime")
+    nla_action(obj, obj, "AnimatedTimeAct", [("location", 1, [(1, 0.0), (11, 10.0)])])
+    keyed_strip_time(pushed_down(obj, 1)[1], ((1, 11.0), (11, 1.0)))
+
+    obj = empty("AnimatedTimeCyclic")
+    nla_action(obj, obj, "AnimatedTimeCyclicAct", [("location", 1, [(1, 0.0), (11, 10.0)])])
+    keyed_strip_time(pushed_down(obj, 1)[1], ((1, 9.0), (9, 17.0)), cyclic=True)
+
+    obj = empty("SoloTrack")
+    held_action(obj, "SoloLower", "location", 1, 3.0)
+    lower, _ = pushed_down(obj, 1)
+    held_action(obj, "SoloUpper", "location", 1, 7.0)
+    pushed_down(obj, 1)
+    nla_action(obj, obj, "SoloAct", [("location", 1, [(1, 100.0), (20, 100.0)])])
+    lower.is_solo = True
+
+    obj = empty("MutedTrackOnly")
+    held_action(obj, "MutedTrackOnlyAct", "location", 1, 3.0)
+    pushed_down(obj, 1)[0].mute = True
+    obj.location[1] = 9.0
+
+    obj = empty("MutedStrip")
+    held_action(obj, "MutedStripAct", "location", 1, 3.0)
+    pushed_down(obj, 1)[1].mute = True
+    obj.location[1] = 9.0
+
+    obj = empty("ActionOverStrips")
+    held_action(obj, "ActionOverStripsBase", "location", 1, 3.0)
+    pushed_down(obj, 1)
+    nla_action(obj, obj, "ActionOverStripsAct", [("location", 1, [(1, 0.0), (20, 19.0)])])
+    obj.animation_data.action_blend_type = "COMBINE"
+    obj.animation_data.action_influence = 0.7
+
+    obj = empty("ActionExtrapolated")
+    held_action(obj, "ActionExtrapolatedBase", "location", 1, 3.0)
+    pushed_down(obj, 1)
+    nla_action(obj, obj, "ActionExtrapolatedAct", [("location", 1, [(8, 10.0), (9, 11.0)])], extrapolation="LINEAR")
+    obj.animation_data.action_extrapolation = "HOLD"
+
+    obj = empty("Tweak")
+    nla_action(obj, obj, "TweakAct", [("location", 1, [(1, 0.0), (10, 18.0)])])
+    tweaked_strip(obj, *pushed_down(obj, 10))
+
+    obj = empty("TweakLower")
+    held_action(obj, "TweakLowerBase", "location", 1, 3.0)
+    lower, lower_strip = pushed_down(obj, 1)
+    nla_action(obj, obj, "TweakLowerUpper", [("location", 1, [(1, 0.0), (20, 19.0)])])
+    pushed_down(obj, 1)
+    nla_action(obj, obj, "TweakLowerAct", [("location", 0, [(1, 0.0), (20, 19.0)])])
+    tweaked_strip(obj, lower, lower_strip)
+
+    obj = empty("TweakSync")
+    action = nla_action(obj, obj, "TweakSyncAct", [("location", 1, [(1, 0.0), (10, 18.0)])])
+    track, strip = pushed_down(obj, 10)
+    strip.scale = 2.0
+    fcurves_of(action)[0].keyframe_points.insert(-1, -4.0)
+    set_interpolation(action, lambda curve: "LINEAR")
+    tweaked_strip(obj, track, strip)
+
+    obj = empty("TweakTimed")
+    nla_action(obj, obj, "TweakTimedAct", [("location", 1, [(1, 0.0), (10, 18.0)])])
+    track, strip = pushed_down(obj, 10)
+    strip.use_animated_time = True
+    strip.strip_time = 2.0
+    strip.keyframe_insert("strip_time", frame=1)
+    tweaked_strip(obj, track, strip)
+
+    rig = small_rig("Rig", (("Bone", (0, 0, 0), (0, 0, 1), None),))
+    bone = rig.pose.bones["Bone"]
+    bone.rotation_mode = "QUATERNION"
+    nla_action(bone, rig, "RigBase", [
+        ("location", 1, [(1, 0.0), (20, 2.0)]),
+        *[("rotation_quaternion", i, [(1, (1, 0, 0, 0)[i]), (20, z90[i])]) for i in range(4)],
+    ])
+    pushed_down(rig, 1)
+    nla_action(bone, rig, "RigUpper", [
+        ("scale", 0, [(1, 2.0), (20, 2.0)]),
+        *[("rotation_quaternion", i, [(1, x90[i]), (20, x90[i])]) for i in range(4)],
+    ])
+    _, strip = pushed_down(rig, 1)
+    strip.blend_type = "COMBINE"
+    strip.extrapolation = "HOLD"
+
+    face = mesh_object("Face", bmesh_from([(0, 0, 0), (1, 0, 0), (1, 1, 0)], [(0, 1, 2)]))
+    face.shape_key_add(name="Basis")
+    for name in ("Smile", "Blink"):
+        face.shape_key_add(name=name, from_mix=False)
+    key = face.data.shape_keys
+    key.animation_data_create()
+    for name, block_name, keys in (
+        ("SmileAct", "Smile", ((1, 0.2), (20, 1.0))),
+        ("BlinkAct", "Blink", ((1, 0.5), (20, 0.5))),
+    ):
+        action = new_action(key, name)
+        block = key.key_blocks[block_name]
+        for frame, value in keys:
+            block.value = value
+            block.keyframe_insert("value", frame=frame)
+        set_interpolation(action, lambda curve: "LINEAR")
+        _, strip = pushed_down(key, 1)
+    strip.blend_type = "ADD"
+    strip.extrapolation = "HOLD"
+
+    scene.frame_set(14)
+    save_blend("nla")
+    bpy.ops.wm.open_mainfile(filepath=os.path.join(HERE, "nla-%s.blend" % VERSION))
+    scene = bpy.context.scene
+    saved = {"frame": scene.frame_current, "objects": world_matrices(scene)}
+    scene.frame_set(scene.frame_start)
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    transforms, bones, weights = {}, {}, {}
+    for obj in scene.objects:
+        evaluated = obj.evaluated_get(depsgraph)
+        transforms[obj.name] = {
+            "rotationMode": obj.rotation_mode,
+            "location": rounded(evaluated.location),
+            "euler": rounded(evaluated.rotation_euler),
+            "quaternion": rounded(evaluated.rotation_quaternion),
+            "scale": rounded(evaluated.scale),
+        }
+        if obj.type == "ARMATURE":
+            bones[obj.name] = {
+                channel.name: {
+                    "location": rounded(channel.location),
+                    "quaternion": rounded(channel.rotation_quaternion),
+                    "scale": rounded(channel.scale),
+                }
+                for channel in evaluated.pose.bones
+            }
+        if obj.type == "MESH" and obj.data.shape_keys:
+            weights[obj.name] = {block.name: round(block.value, DIGITS) for block in obj.data.shape_keys.key_blocks}
+    save_reference("nla", {
+        "fps": 24.0,
+        "unitScale": 1.0,
+        "saved": saved,
+        "start": {
+            "frame": scene.frame_start,
+            "objects": world_matrices(scene),
+            "transforms": transforms,
+            "bones": bones,
+            "weights": weights,
+        },
+    })
+
+
+TWEAK_FRAMES = (1, 3, 5, 6, 6.5, 7, 8, 10, 12, 15, 19, 19.5, 20, 22, 25, 28, 28.5, 30, 35, 40)
+
+
+def build_tweak():
+    """Empties whose NLA strips Blender plays in tweak mode over the scene's 40 frames: a strip that syncs its length to
+    a key added before its action's range, a strip timed by a curve, which then plays its action at the scene's frame,
+    and two tracks of two strips, one tweaking its first strip and one its second, each of which plays alone."""
+    scene = reset_scene()
+    scene.frame_end = 40
+
+    def empty(name, row):
+        obj = link(bpy.data.objects.new(name, None))
+        obj.location = (2 * row, 0, 0)
+        return obj
+
+    synced = empty("Synced", 0)
+    action = keyed_action(synced, "location", 1, ((1, 0.0), (10, 18.0)), "SyncedAct")
+    track, strip = pushed_down(synced, 10)
+    strip.use_sync_length = True
+    strip.scale = 2.0
+    fcurves_of(action)[0].keyframe_points.insert(-1, -4.0)
+    set_interpolation(action, lambda curve: "LINEAR")
+    tweaked_strip(synced, track, strip)
+
+    timed = empty("Timed", 1)
+    keyed_action(timed, "location", 1, ((1, 0.0), (10, 18.0)), "TimedAct")
+    track, strip = pushed_down(timed, 10)
+    keyed_strip_time(strip, ((1, 2.0),))
+    tweaked_strip(timed, track, strip)
+
+    for row, (name, tweaked) in enumerate((("Shared", 0), ("Late", 1)), start=2):
+        obj = empty(name, row)
+        keyed_action(obj, "location", 1, ((1, 0.0), (10, 9.0)), name + "First")
+        track, first = pushed_down(obj, 1)
+        keyed_action(obj, "location", 1, ((1, 100.0), (11, 110.0)), name + "Second")
+        _, second = pushed_down(obj, 20, track)
+        first.extrapolation = "HOLD"
+        second.extrapolation = "HOLD_FORWARD"
+        tweaked_strip(obj, track, (first, second)[tweaked])
+        assert obj.animation_data.action.name == name + ("First", "Second")[tweaked]
+
+    scene.frame_set(1)
+    save_blend("tweak")
+    save_reference("tweak", {"fps": 24.0, "samples": world_samples(scene, TWEAK_FRAMES)})
+
+
+# ---------------------------------------------------------------- linked and packed data
+
+def remove_library_folder(folder):
+    for name in os.listdir(folder):
+        os.remove(os.path.join(folder, name))
+    os.rmdir(folder)
+
+
+def build_packed():
+    """In 5.x, data linked from another file and packed into this one, as Blender packs linked data from 5.0 on: an
+    object with its material and action, and a collection whose object has an action, beside a local object that uses
+    the packed material. Blender 4.2 cannot pack linked data, so it writes no fixture."""
+    if bpy.app.version < (5, 0, 0):
+        return
+    reset_scene()
+    folder = tempfile.mkdtemp()
+    library_path = os.path.join(folder, "packed-library.blend")
+    skin = material("Skin", (0.9, 0.2, 0.1))
+    body = mesh_object("Body", box_bmesh(), (skin,))
+    for frame, height in ((1, 0.0), (10, 2.0)):
+        body.location = (0, 0, height)
+        body.keyframe_insert("location", frame=frame)
+    named_action(body, "BodyMove")
+    char = bpy.data.collections.new("Char")
+    part = mesh_object("CharPart", box_bmesh((0.5, 0.5, 0.5)), collection=char)
+    for frame, location in ((1, (0, -3, 0)), (12, (1, -3, 0.5))):
+        part.location = location
+        part.keyframe_insert("location", frame=frame)
+    named_action(part, "Wave")
+    bpy.data.libraries.write(library_path, {body, skin, char}, path_remap="RELATIVE_ALL")
+
+    scene = reset_scene()
+    with bpy.data.libraries.load(library_path, link=True, pack=True) as (_, target):
+        target.objects = ["Body"]
+        target.materials = ["Skin"]
+        target.collections = ["Char"]
+    body = link(target.objects[0])
+    scene.collection.children.link(target.collections[0])
+    skin = target.materials[0]
+    mesh_object("LocalBox", box_bmesh(), (skin,)).location = (3, 0, 0)
+    assert body.is_linked_packed
+    assert any(library.is_archive for library in bpy.data.libraries)
+    for library in bpy.data.libraries:
+        forget_absolute_path(library, "//packed-library.blend")
+    scene.frame_set(1)
+    save_blend("packed")
+    remove_library_folder(folder)
+
+    reference = {
+        "fps": 24.0,
+        "unitScale": 1.0,
+        "objects": world_matrices(scene),
+        "meshes": {obj.name: mesh_reference(obj, scene) for obj in scene.objects if obj.type == "MESH"},
+        "materials": {"Skin": rounded(skin.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value)},
+    }
+    clips = {}
+    for action, frames in (("BodyMove", (1, 4, 7, 10)), ("Wave", (1, 5, 9, 12))):
+        clips[action] = []
+        for frame in frames:
+            scene.frame_set(frame)
+            clips[action].append({"frame": frame, "objects": world_matrices(scene)})
+    reference["clips"] = clips
+    save_reference("packed", reference)
+
+
+def build_libraries():
+    """Collections linked from two other files: one that Pack Linked Libraries packed into this file, and one that
+    stays in its own file. Blender packs a library only by a relative path, which it reads from the working folder
+    while the file is unsaved, so the libraries' absolute paths never reach the fixture. Linking another file into
+    the unsaved file drops the // of the paths already there, so they are set again once both are linked."""
+    reset_scene()
+    folder = tempfile.mkdtemp()
+    char = bpy.data.collections.new("Char")
+    rig = link(bpy.data.objects.new("CharRig", bpy.data.armatures.new("CharRigData")), char)
+    mesh_object("Body", box_bmesh(), collection=char).parent = rig
+    bpy.data.libraries.write(os.path.join(folder, "charlib.blend"), {char}, path_remap="RELATIVE_ALL")
+    kit = bpy.data.collections.new("Kit")
+    mesh_object("Crate", box_bmesh(), collection=kit)
+    bpy.data.libraries.write(os.path.join(folder, "kitlib.blend"), {kit}, path_remap="RELATIVE_ALL")
+
+    scene = reset_scene()
+    for name, collection, packed in (("charlib.blend", "Char", True), ("kitlib.blend", "Kit", False)):
+        with bpy.data.libraries.load(os.path.join(folder, name), link=True) as (_, target):
+            target.collections = [collection]
+        scene.collection.children.link(target.collections[0])
+        forget_absolute_path(target.collections[0].library, "//" + name)
+        if packed:
+            working = os.getcwd()
+            os.chdir(folder)
+            bpy.ops.file.pack_libraries()
+            os.chdir(working)
+    for library in bpy.data.libraries:
+        forget_absolute_path(library, "//" + library.name)
+    save_blend("libraries", relative_remap=False)
+    remove_library_folder(folder)
+    libraries = [
+        {"name": library.name, "filepath": library.filepath, "packed": library.packed_file is not None}
+        for library in bpy.data.libraries
+    ]
+    save_reference("libraries", {"fps": 24.0, "unitScale": 1.0, "libraries": libraries})
+
+
+# ---------------------------------------------------------------- parents
+
+PLATE_POINTS = ((0, 0, 0), (1, 0, 0), (1, 1, 0.3), (0, 1, 0.5), (0.5, 0.5, 1))
+PLATE_TURN = (0.4, 0.2, 0.9)
+
+
+def vertex_parent(child, parent, vertices):
+    """Parents `child` to the parent's `vertices` with Blender's operator, from a selection of them in edit mode."""
+    activate(parent)
+    child.select_set(True)
+    mesh = parent.data
+    for element in (*mesh.vertices, *mesh.edges, *mesh.polygons):
+        element.select = False
+    for index in vertices:
+        mesh.vertices[index].select = True
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.object.vertex_parent_set()
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def plate_object(name, mesh, location, scale):
+    obj = link(bpy.data.objects.new(name, mesh))
+    obj.location, obj.rotation_euler, obj.scale = location, PLATE_TURN, scale
+    return obj
+
+
+def pin_empty(name, location):
+    obj = link(bpy.data.objects.new(name, None))
+    obj.location, obj.rotation_euler = location, (0.2, 0.5, 0.1)
+    return obj
+
+
+def small_triangle(name, location):
+    mesh = bpy.data.meshes.new(name + "Mesh")
+    mesh.from_pydata([(0, 0, 0), (0.3, 0, 0), (0, 0.3, 0)], [], [(0, 1, 2)])
+    obj = link(bpy.data.objects.new(name, mesh))
+    obj.location, obj.rotation_euler = location, (0.3, 0, 0.1)
+    return obj
+
+
+def build_parents():
+    """Objects parented to one vertex or three of a plate: under an evenly scaled plate whose mesh another object
+    shares, under an unevenly scaled one, which would shear them, and to a vertex that a shape key moves. Also the
+    objects of the scene's background set, and a sheet whose Shape Key Lock shows a key relative to another key alone,
+    while an action keys its value. The reference is taken from the saved file, opened again."""
+    scene = reset_scene()
+    plate_mesh = bpy.data.meshes.new("PlateMesh")
+    plate_mesh.from_pydata(PLATE_POINTS, [], [(0, 1, 2, 3)])
+    plate = plate_object("Plate", plate_mesh, (1, 2, 0), (1.5, 1.5, 1.5))
+    pin = pin_empty("Pin", (3, -1, 2))
+    child = small_triangle("ChildTri", (-1, 0.5, 1))
+    vertex_parent(pin, plate, [3])
+    vertex_parent(child, plate, [0, 1, 2])
+    pin.location = (3.5, -1, 2)
+    link(bpy.data.objects.new("PlateCopy", plate_mesh)).location = (5, 0, 0)
+
+    wide = plate_object("WidePlate", plate_mesh.copy(), (1, -4, 0), (2, 1, 1))
+    wide.data.name = "WidePlateMesh"
+    wide_pin = pin_empty("WidePin", (3, -5, 2))
+    wide_child = small_triangle("WideTri", (-1, -3.5, 1))
+    vertex_parent(wide_pin, wide, [3])
+    vertex_parent(wide_child, wide, [0, 1, 2])
+    wide_pin.location = (3.5, -5, 2)
+
+    lifted = plate_object("LiftPlate", plate_mesh.copy(), (-4, 2, 0), (1.5, 1.5, 1.5))
+    lifted.data.name = "LiftPlateMesh"
+    lifted.shape_key_add(name="Basis")
+    lift = lifted.shape_key_add(name="Lift", from_mix=False)
+    for point in lift.data:
+        point.co.z += 2.0
+    lift.value = 0.5
+    lifted.active_shape_key_index = 0
+    vertex_parent(pin_empty("LiftPin", (-2, 1, 2)), lifted, [3])
+
+    background = bpy.data.scenes.new("Background")
+    mesh_object("BackgroundCube", box_bmesh(), collection=background.collection).location = (0, 3, 0)
+    scene.background_set = background
+
+    steps = [index / 3 - 1 for index in range(7)]
+    sheet = mesh_object("Sheet", bmesh_from(
+        [(x, y, 0) for y in steps for x in steps],
+        [(r * 7 + c, r * 7 + c + 1, r * 7 + c + 8, r * 7 + c + 7) for r in range(6) for c in range(6)],
+    ))
+    sheet.location = (8, 0, 0)
+    sheet.shape_key_add(name="Basis")
+    dome = sheet.shape_key_add(name="Dome", from_mix=False)
+    for point in dome.data:
+        point.co.z += 1 - (point.co.x ** 2 + point.co.y ** 2) / 2
+    dome.value = 0.3
+    tilt = sheet.shape_key_add(name="Tilt", from_mix=False)
+    for point, domed in zip(tilt.data, dome.data):
+        point.co.z = domed.co.z + 0.8 * point.co.x
+    tilt.relative_key = dome
+    for frame, value in ((1, 0.6), (10, 1.0)):
+        tilt.value = value
+        tilt.keyframe_insert("value", frame=frame)
+    named_action(sheet.data.shape_keys, "SheetKeys")
+    tilt.value = 0.6
+    sheet.active_shape_key_index = 2
+    sheet.show_only_shape_key = True
+
+    scene.frame_set(1)
+    save_blend("parents")
+    bpy.ops.wm.open_mainfile(filepath=os.path.join(HERE, "parents-%s.blend" % VERSION))
+    scene = bpy.context.scene
+    unit = scene.unit_settings.scale_length
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    objects = {
+        instance.object.name: {"type": instance.object.type, "world": scene_matrix(instance.matrix_world, unit)}
+        for instance in depsgraph.object_instances
+        if not instance.is_instance
+    }
+    meshed = ("Plate", "PlateCopy", "ChildTri", "WideTri", "LiftPlate", "BackgroundCube", "Sheet")
+    save_reference("parents", {
+        "fps": 24.0,
+        "unitScale": unit,
+        "objects": objects,
+        "meshes": {name: mesh_reference(bpy.data.objects[name], scene) for name in meshed},
+        "shaped": {name: evaluated_positions(bpy.data.objects[name], scene) for name in ("LiftPlate", "Sheet")},
+    })
+
+
+# ---------------------------------------------------------------- helpers
+
+def build_helpers():
+    """Meshes that Blender's viewport draws without a surface, as helpers are: a Mesh Deform cage and a Boolean
+    cutter drawn as wire, and a proxy drawn as its bounds. Beside them, meshes drawn solid, one of them left out of
+    renders, and one drawn textured."""
+    scene = reset_scene()
+    body = mesh_object("Body", sphere_bmesh())
+    cage = mesh_object("Cage", box_bmesh((2.6, 2.6, 2.6)))
+    deform = body.modifiers.new("MeshDeform", "MESH_DEFORM")
+    deform.object = cage
+    activate(body)
+    with bpy.context.temp_override(object=body, active_object=body):
+        bpy.ops.object.meshdeform_bind(modifier=deform.name)
+    assert deform.is_bound
+
+    base = mesh_object("Base", box_bmesh((2, 2, 2)))
+    base.location = (4, 0, 0)
+    cylinder = cylinder_bmesh(radius=0.5, height=3.0)
+    bmesh.ops.translate(cylinder, vec=(0, 0, -1.5), verts=cylinder.verts)
+    cutter = mesh_object("Cutter", cylinder)
+    cutter.location = (4, 0, 0.5)
+    boolean = base.modifiers.new("Boolean", "BOOLEAN")
+    boolean.object = cutter
+    boolean.operation = "DIFFERENCE"
+
+    for name, x, display, renders in (
+        ("Proxy", -4, "BOUNDS", True),
+        ("RenderOff", -6, "SOLID", False),
+        ("Textured", -8, "TEXTURED", True),
+    ):
+        obj = mesh_object(name, box_bmesh())
+        obj.location = (x, 0, 0)
+        obj.display_type = display
+        obj.hide_render = not renders
+    for helper in (cage, cutter):
+        helper.display_type = "WIRE"
+        helper.hide_render = True
+
+    scene.frame_set(1)
+    save_blend("helpers")
+    helpers = {
+        obj.name: {
+            "displayType": obj.display_type,
+            "hideRender": obj.hide_render,
+            "drawsSurface": obj.display_type in ("SOLID", "TEXTURED"),
+            "modifiers": [[modifier.name, modifier.type] for modifier in obj.modifiers],
+        }
+        for obj in scene.objects
+    }
+    save_reference("helpers", {"fps": 24.0, "unitScale": 1.0, "helpers": helpers})
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     only = set(argv[argv.index("--only") + 1].split(",")) if "--only" in argv else None
@@ -4748,6 +5800,17 @@ def main():
         ("clips", build_clips),
         ("opening", build_opening),
         ("relations", build_relations),
+        ("timeline", build_timeline),
+        ("stretch", build_stretch),
+        ("nla-stress", build_nla_stress),
+        ("shear", build_shear),
+        ("nla", build_nla),
+        ("tweak", build_tweak),
+        ("rig-unit-scale", lambda: build_rig("rig-unit-scale", unit_scale=0.01)),
+        ("packed", build_packed),
+        ("libraries", build_libraries),
+        ("parents", build_parents),
+        ("helpers", build_helpers),
     )
     for name, build in builders:
         if only is None or name in only:

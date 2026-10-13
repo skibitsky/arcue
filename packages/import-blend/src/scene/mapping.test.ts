@@ -13,6 +13,7 @@ function applyAffine(affine: Affine, [x, y, z]: [number, number, number]): numbe
   );
 }
 
+/** Applies a UV transform in the order UvTransform gives: scale, then rotate, then offset. */
 function applyTransform(transform: UvTransform | null, u: number, v: number): number[] {
   if (!transform) return [u, v];
   const { offset, scale, rotation } = transform;
@@ -36,7 +37,34 @@ function expectClose(actual: number[], expected: number[]): void {
   for (const [index, value] of actual.entries()) expect(value).toBeCloseTo(expected[index] ?? Number.NaN, 9);
 }
 
+/**
+ * Where Blender's Point Mapping node with location (0.25, 0.1), Z rotation 0.3 and scale (2, 3) sends UVs, as Cycles
+ * bakes them for the shading fixture's MappingPoint material: [u, v, x, y]. The viewport's tests sample with the same.
+ */
+const BLENDER_POINT_MAPPING: readonly [number, number, number, number][] = [
+  [0.12525, 0.1255, 0.378048, 0.533712],
+  [0.37525, 0.1255, 0.855717, 0.681473],
+  [0.87525, 0.1255, 1.811052, 0.976992],
+  [0.12525, 0.3755, 0.156408, 1.250214],
+  [0.37525, 0.3755, 0.634077, 1.397974],
+];
+
 describe("a Mapping node", () => {
+  it("sends UVs where Blender's does, and gives the transform of its own location, rotation and scale", () => {
+    const affine = mappingAffine(MappingType.point, [0.25, 0.1, 0], [0, 0, 0.3], [2, 3, 1]) ?? IDENTITY;
+    for (const [u, v, x, y] of BLENDER_POINT_MAPPING) {
+      const [mappedU = Number.NaN, mappedV = Number.NaN] = applyAffine(affine, [u, v, 0]);
+      expect(mappedU).toBeCloseTo(x, 5);
+      expect(mappedV).toBeCloseTo(y, 5);
+    }
+    const { transform, skewed } = uvTransformOf(affine);
+    expect(skewed).toBe(false);
+    expectClose(
+      [...(transform?.offset ?? []), ...(transform?.scale ?? []), transform?.rotation ?? Number.NaN],
+      [0.25, 0.1, 2, 3, 0.3],
+    );
+  });
+
   it("scales, turns and then moves a point", () => {
     const affine = mappingAffine(MappingType.point, [0.25, 0.1, 0], [0, 0, Math.PI / 2], [2, 3, 1]);
     expectClose(applyAffine(affine ?? IDENTITY, [1, 1, 0]), [-3 + 0.25, 2 + 0.1, 0]);

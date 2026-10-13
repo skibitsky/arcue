@@ -122,7 +122,7 @@ const DNA1 = codeWord("DNA1");
 const EMPTY_SLOT = 0;
 
 /** MurmurHash3's finalizer: each bit of the value flips about half of the result's bits. */
-function mix(value: number): number {
+export function mix(value: number): number {
   let hash = Math.imul(value ^ (value >>> 16), 0x85ebca6b);
   hash = Math.imul(hash ^ (hash >>> 13), 0xc2b2ae35);
   return hash ^ (hash >>> 16);
@@ -136,15 +136,16 @@ function hashAddress(key: number, low: number, high: number, owner: number): num
   return mix(mix(mix(low ^ key) ^ high) ^ owner);
 }
 
-function randomKey(): number {
+/** A random 32-bit key for a hash table, so that a file cannot choose keys that all start at one slot. */
+export function randomKey(): number {
   return new DataView(crypto.getRandomValues(new Uint8Array(4)).buffer).getInt32(0);
 }
 
-/** Slots for an open-addressed table of `count` entries, a power of two at most two thirds full. */
 /** Past this many blocks a file must average `MIN_BLOCK_BYTES` a block, as Blender's own files average hundreds. */
 const MANY_BLOCKS = 2 ** 20;
 const MIN_BLOCK_BYTES = 64;
 
+/** Slots for an open-addressed table of `count` entries, a power of two at most two thirds full. */
 function tableSlots(count: number): Int32Array {
   let size = 8;
   while (size < count * 1.5) size *= 2;
@@ -329,11 +330,41 @@ export class BlendFile {
    */
   block(address: bigint, owner = -1): BlendBlock | null {
     if (address === 0n) return null;
-    const low = Number(address & 0xffffffffn);
-    const high = Number((address >> 32n) & 0xffffffffn);
+    const index = this.#find(Number(address & 0xffffffffn), Number((address >> 32n) & 0xffffffffn), owner);
+    return index < 0 ? null : this.blockAt(index);
+  }
+
+  #find(low: number, high: number, owner: number): number {
+    if (low === 0 && high === 0) return -1;
     const owned = owner >= 0 ? (this.#owned[this.#slot(this.#owned, low, high, owner)] ?? EMPTY_SLOT) : EMPTY_SLOT;
     const entry = owned !== EMPTY_SLOT ? owned : (this.#global[this.#slot(this.#global, low, high, -1)] ?? EMPTY_SLOT);
-    return entry === EMPTY_SLOT ? null : this.blockAt(entry - 1);
+    return entry - 1;
+  }
+
+  /**
+   * The index of the block that the pointer stored at byte `offset` points at, resolved as `block` resolves it, or -1.
+   * Unlike `block`, it makes no block object, for data with one block per element such as each vertex's weights.
+   */
+  pointedBlock(offset: number, owner = -1): number {
+    if (this.pointerSize === 4) return this.#find(this.view.getUint32(offset, this.little), 0, owner);
+    const first = this.view.getUint32(offset, this.little);
+    const second = this.view.getUint32(offset + 4, this.little);
+    return this.little ? this.#find(first, second, owner) : this.#find(second, first, owner);
+  }
+
+  /** Where the data of the block at `index` starts in the bytes. */
+  blockOffset(index: number): number {
+    return (this.#starts[index] ?? 0) + this.#blockHeaderSize;
+  }
+
+  /** The data size of the block at `index`, without making the block's object. */
+  blockSize(index: number): number {
+    const start = this.#starts[index];
+    if (start === undefined) return 0;
+    if (this.#blockHeaderSize !== 32) return this.view.getInt32(start + 4, this.little);
+    const first = this.view.getUint32(start + 16, this.little);
+    const second = this.view.getUint32(start + 20, this.little);
+    return this.little ? second * 2 ** 32 + first : first * 2 ** 32 + second;
   }
 
   /** Every block with `code`, such as all "OB" blocks, in file order. */
@@ -411,27 +442,34 @@ export class BlendFile {
   }
 }
 
-const NUMBER_READERS: Record<string, (view: DataView, offset: number, little: boolean) => number> = {
-  char: (view, offset) => view.getUint8(offset),
-  uchar: (view, offset) => view.getUint8(offset),
-  int8_t: (view, offset) => view.getInt8(offset),
-  uint8_t: (view, offset) => view.getUint8(offset),
-  bool: (view, offset) => view.getUint8(offset),
-  short: (view, offset, little) => view.getInt16(offset, little),
-  ushort: (view, offset, little) => view.getUint16(offset, little),
-  int16_t: (view, offset, little) => view.getInt16(offset, little),
-  uint16_t: (view, offset, little) => view.getUint16(offset, little),
-  int: (view, offset, little) => view.getInt32(offset, little),
-  int32_t: (view, offset, little) => view.getInt32(offset, little),
-  uint: (view, offset, little) => view.getUint32(offset, little),
-  uint32_t: (view, offset, little) => view.getUint32(offset, little),
-  long: (view, offset, little) => view.getInt32(offset, little),
-  ulong: (view, offset, little) => view.getUint32(offset, little),
-  float: (view, offset, little) => view.getFloat32(offset, little),
-  double: (view, offset, little) => view.getFloat64(offset, little),
-  int64_t: (view, offset, little) => Number(view.getBigInt64(offset, little)),
-  uint64_t: (view, offset, little) => Number(view.getBigUint64(offset, little)),
-};
+export type NumberReader = (view: DataView, offset: number, little: boolean) => number;
+
+const NUMBER_READERS: ReadonlyMap<string, NumberReader> = new Map<string, NumberReader>([
+  ["char", (view, offset) => view.getUint8(offset)],
+  ["uchar", (view, offset) => view.getUint8(offset)],
+  ["int8_t", (view, offset) => view.getInt8(offset)],
+  ["uint8_t", (view, offset) => view.getUint8(offset)],
+  ["bool", (view, offset) => view.getUint8(offset)],
+  ["short", (view, offset, little) => view.getInt16(offset, little)],
+  ["ushort", (view, offset, little) => view.getUint16(offset, little)],
+  ["int16_t", (view, offset, little) => view.getInt16(offset, little)],
+  ["uint16_t", (view, offset, little) => view.getUint16(offset, little)],
+  ["int", (view, offset, little) => view.getInt32(offset, little)],
+  ["int32_t", (view, offset, little) => view.getInt32(offset, little)],
+  ["uint", (view, offset, little) => view.getUint32(offset, little)],
+  ["uint32_t", (view, offset, little) => view.getUint32(offset, little)],
+  ["long", (view, offset, little) => view.getInt32(offset, little)],
+  ["ulong", (view, offset, little) => view.getUint32(offset, little)],
+  ["float", (view, offset, little) => view.getFloat32(offset, little)],
+  ["double", (view, offset, little) => view.getFloat64(offset, little)],
+  ["int64_t", (view, offset, little) => Number(view.getBigInt64(offset, little))],
+  ["uint64_t", (view, offset, little) => Number(view.getBigUint64(offset, little))],
+]);
+
+/** How to read a number member of an SDNA type, or undefined for a type that is not a number. */
+export function numberReader(type: string): NumberReader | undefined {
+  return NUMBER_READERS.get(type);
+}
 
 /**
  * One struct in the file, read by member name through the file's SDNA. Members the struct does not have, as in files
@@ -467,7 +505,7 @@ export class BlendStruct {
   number(name: string, index = 0): number {
     const field = this.type.field(name);
     if (!field || field.pointerDepth > 0 || index >= field.count) return 0;
-    const read = NUMBER_READERS[field.type];
+    const read = NUMBER_READERS.get(field.type);
     if (!read) return 0;
     const elementSize = field.size / field.count;
     return read(this.file.view, this.offset + field.offset + index * elementSize, this.file.little);
@@ -476,7 +514,7 @@ export class BlendStruct {
   /** Every element of an array member, or the one value of a single member; empty when there is no such member. */
   numbers(name: string): number[] {
     const field = this.type.field(name);
-    if (!field || field.pointerDepth > 0 || !NUMBER_READERS[field.type]) return [];
+    if (!field || field.pointerDepth > 0 || !NUMBER_READERS.has(field.type)) return [];
     return Array.from({ length: field.count }, (_, index) => this.number(name, index));
   }
 

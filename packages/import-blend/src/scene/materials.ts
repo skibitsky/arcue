@@ -1,4 +1,4 @@
-import type { AlphaMode, TextureAlpha, UvTransform, Vec3, Vec4, WrapMode } from "@arcue/scene";
+import type { AlphaMode, TextureAlpha, TextureColorSpace, UvTransform, Vec3, Vec4, WrapMode } from "@arcue/scene";
 import type { BlendStruct } from "../blend/file";
 import { idName } from "../blend/ids";
 import type { Affine } from "./mapping";
@@ -8,6 +8,7 @@ import {
   constantOf,
   graphOf,
   inputSocket,
+  isEmptyImageNode,
   linkedOutput,
   NODE_DO_OUTPUT,
   nodeLabel,
@@ -54,7 +55,9 @@ export interface ImageUse {
   interpolation: string | null;
   /** What the material does with the image's alpha. */
   alpha: TextureAlpha;
-  /** For an image sequence, the frame Blender reads at the scene's current frame; null for other images. */
+  /** How the preview decodes the image to show it as Blender does, or null for the slot's own way. */
+  colorSpace: TextureColorSpace | null;
+  /** For an image sequence, the frame Blender reads at the scene's start frame; null for other images. */
   frame: number | null;
 }
 
@@ -91,6 +94,10 @@ const OUTPUT_FOR_EEVEE = 1;
 const OUTPUT_FOR_CYCLES = 2;
 const BACKFACE_CULLING = 1 << 2;
 const BLEND_METHOD_CLIP = 3;
+const BLEND_METHOD_HASHED = 4;
+const RENDER_METHOD_DITHERED = 0;
+/** The first version whose EEVEE draws transparency by the material's render method rather than its blend mode. */
+const RENDER_METHOD_VERSION = 402;
 const MIX_MULTIPLY = 2;
 const MATH_SUBTRACT = 1;
 const MATH_MULTIPLY = 2;
@@ -107,31 +114,51 @@ const SEPARATED_CHANNELS: Readonly<Record<number, readonly string[]>> = {
   2: ["Hue", "Saturation", "Lightness"],
 };
 /** The color channel each output of a Separate node reads, from a color or from the vector a color converts to. */
-const CHANNEL_INDEX: Readonly<Record<string, number>> = {
-  Red: 0,
-  R: 0,
-  X: 0,
-  Green: 1,
-  G: 1,
-  Y: 1,
-  Blue: 2,
-  B: 2,
-  Z: 2,
-};
+const CHANNEL_INDEX: ReadonlyMap<string, number> = new Map([
+  ["Red", 0],
+  ["R", 0],
+  ["X", 0],
+  ["Green", 1],
+  ["G", 1],
+  ["Y", 1],
+  ["Blue", 2],
+  ["B", 2],
+  ["Z", 2],
+]);
+const CHANNEL_NAMES = ["red", "green", "blue"] as const;
 /** The channels of a Separate node in HSV or HSL mode that equal a gray color. */
 const GRAY_CHANNELS = new Set(["Value", "Lightness"]);
 const GREEN = 1;
 const BLUE = 2;
 const ALPHA_STRAIGHT = 0;
 const ALPHA_PREMULTIPLIED = 1;
+const ALPHA_IGNORE = 3;
 /** The color spaces Blender reads as data, which it never multiplies by their alpha. */
 const DATA_SPACES = new Set(["Non-Color", "Raw", "Generic Data"]);
+/** The color spaces the preview decodes exactly, as sRGB or as the values they store. */
+const EXACT_DECODINGS: ReadonlyMap<string, TextureColorSpace> = new Map([
+  ["sRGB", "srgb"],
+  ["Non-Color", "linear"],
+  ["Raw", "linear"],
+  ["Generic Data", "linear"],
+  ["Linear", "linear"],
+  ["Linear Rec.709", "linear"],
+  ["scene_linear", "linear"],
+]);
+/** Color spaces with sRGB's curve but other primaries, which the preview decodes as sRGB. */
+const SRGB_CURVES = new Set(["Display P3", "sRGB Encoded AP1", "sRGB Encoded P3-D65"]);
+/** Linear color spaces whose names do not start with "Linear", which the preview decodes as Linear Rec.709. */
+const LINEAR_SPACES = new Set(["ACEScg", "ACES2065-1", "XYZ"]);
 
 const WRAPS: readonly WrapMode[] = ["repeat", "clamp", "clamp", "mirror"];
 const EXTENSION_CLIP = 2;
 const PROJECTIONS: Readonly<Record<number, string>> = { 1: "Box", 2: "Sphere", 3: "Tube" };
 /** The most nodes the preview follows up an image's vector input. */
 const MAX_VECTOR_NODES = 16;
+/** The most nodes the preview looks through from an input to the image that feeds it. */
+const MAX_FEEDING_NODES = 16;
+/** The most mix, add and Shader to RGB nodes the preview looks through from the surface to a shader. */
+const MAX_SURFACE_DEPTH = 16;
 const INTERPOLATIONS: Readonly<Record<number, string>> = { 1: "Closest", 2: "Cubic", 3: "Smart" };
 const SIMPLE_SHADERS = new Set([
   "ShaderNodeEmission",
@@ -140,11 +167,17 @@ const SIMPLE_SHADERS = new Set([
   "ShaderNodeBsdfAnisotropic",
 ]);
 const METAL_SHADERS = new Set(["ShaderNodeBsdfGlossy", "ShaderNodeBsdfAnisotropic", "ShaderNodeBsdfMetallic"]);
-/** The color spaces whose values Blender reads as they are, as the preview reads data images. */
-const RAW_SPACES = new Set(["", "Non-Color", "Raw", "Generic Data", "Linear", "scene_linear"]);
-
-/** Whether every pixel of an image is gray, which decides whether the preview can show one value of it as its color. */
-export type GrayCheck = (image: BlendStruct) => boolean;
+/**
+ * How much of an image a gray check reads: "whole" to tell whether every pixel is gray, or "sample" to tell only whether
+ * one is not, which it looks for among the image's first pixels.
+ */
+export type GrayRead = "whole" | "sample";
+/**
+ * Whether every pixel of an image is gray: true, false where a pixel is known not to be, or null where the check cannot
+ * tell. It decides whether the preview can show one value of the image as its color, or notes where it shows one value
+ * of a colored image whose brightness Blender reads.
+ */
+export type GrayCheck = (image: BlendStruct, read: GrayRead) => boolean | null;
 
 /** The images a material samples. */
 export function imageUses(draft: MaterialDraft): ImageUse[] {
@@ -244,46 +277,76 @@ interface FedImage {
 
 const SCALAR_SOCKETS: ReadonlySet<number> = new Set([SocketType.float, SocketType.int, SocketType.boolean]);
 
+/** What a search upstream from an input finds: the image that feeds it, or none and whether it stopped at the limit. */
+interface Feeding {
+  found: FedImage | null;
+  /** Whether the search stopped at `MAX_FEEDING_NODES` before it ended. */
+  cut: boolean;
+}
+
+const NOT_FED: Feeding = { found: null, cut: false };
+const CUT: Feeding = { found: null, cut: true };
+/** For each graph, the searches from each input, by the input's offset, whether they keep to color and their depth. */
+const feedings = new WeakMap<ShaderGraph, Map<string, Feeding>>();
+
+function feedingMemo(graph: ShaderGraph): Map<string, Feeding> {
+  let memo = feedings.get(graph);
+  if (!memo) {
+    memo = new Map();
+    feedings.set(graph, memo);
+  }
+  return memo;
+}
+
 /**
  * Follows a socket upstream through color adjustments to the Image Texture node that feeds it, with `colorOnly` only
- * along links that carry a color. `seen` holds the nodes already searched, so that a node many inputs share is
- * searched once.
+ * along links that carry a color. Each input of a graph is searched once at each depth, however many inputs and
+ * searches share it.
  */
-function feeding(
-  graph: ShaderGraph,
-  socket: BlendStruct | null,
-  colorOnly: boolean,
-  seen: Set<number>,
-  depth: number,
-): FedImage | null {
-  if (!socket || depth > 16) return null;
+function feeding(graph: ShaderGraph, socket: BlendStruct | null, colorOnly: boolean, depth = 0): Feeding {
   const source = linkedOutput(graph, socket);
-  if (!source || seen.has(source.node.offset)) return null;
+  if (!socket || !source) return NOT_FED;
   const color = !SCALAR_SOCKETS.has(socketType(socket)) && !SCALAR_SOCKETS.has(socketType(source.socket));
-  if (colorOnly && !color) return null;
-  seen.add(source.node.offset);
+  if (colorOnly && !color) return NOT_FED;
   const type = nodeType(source.node);
+  if (type !== "ShaderNodeTexImage" && !PASS_THROUGH.has(type)) return NOT_FED;
+  if (depth > MAX_FEEDING_NODES) return CUT;
   if (type === "ShaderNodeTexImage") {
-    if (source.node.pointer("id") === 0n) return null;
-    return { node: source.node, output: source.name, via: [], changes: [], color };
+    if (isEmptyImageNode(source.node)) return NOT_FED;
+    return { found: { node: source.node, output: source.name, via: [], changes: [], color }, cut: false };
   }
-  if (!PASS_THROUGH.has(type)) return null;
+  const memo = feedingMemo(graph);
+  const key = `${socket.offset} ${colorOnly} ${depth}`;
+  const known = memo.get(key);
+  if (known) return known;
+  let result: Feeding = NOT_FED;
   for (const input of source.node.list("inputs")) {
-    const found = feeding(graph, input, colorOnly, seen, depth + 1);
-    if (!found) continue;
+    const fed = feeding(graph, input, colorOnly, depth + 1);
+    if (!fed.found) {
+      if (fed.cut) result = CUT;
+      continue;
+    }
     const change = KEEPS_VALUES.has(type) ? [] : [nodeLabel(source.node)];
-    return {
-      ...found,
-      via: [{ node: source.node, output: source.name }, ...found.via],
-      changes: [...change, ...found.changes],
-      color: color && found.color,
+    const found: FedImage = {
+      ...fed.found,
+      via: [{ node: source.node, output: source.name }, ...fed.found.via],
+      changes: [...change, ...fed.found.changes],
+      color: color && fed.found.color,
     };
+    result = { found, cut: false };
+    break;
   }
-  return null;
+  memo.set(key, result);
+  return result;
 }
 
 function imageFeeding(graph: ShaderGraph, socket: BlendStruct | null): FedImage | null {
-  return feeding(graph, socket, false, new Set(), 0);
+  return feeding(graph, socket, false).found;
+}
+
+/** Whether the search from an input up to the image that feeds it stops at `MAX_FEEDING_NODES` before it ends. */
+function passesFeedingLimit(graph: ShaderGraph, socket: BlendStruct): boolean {
+  return feeding(graph, socket, false).cut;
 }
 
 /**
@@ -291,7 +354,7 @@ function imageFeeding(graph: ShaderGraph, socket: BlendStruct | null): FedImage 
  * way that carries one value of it.
  */
 function colorFeeding(graph: ShaderGraph, socket: BlendStruct | null): FedImage | null {
-  return feeding(graph, socket, true, new Set(), 0) ?? imageFeeding(graph, socket);
+  return feeding(graph, socket, true).found ?? imageFeeding(graph, socket);
 }
 
 function imageName(found: FedImage): string {
@@ -310,7 +373,10 @@ function noteNodeInput(
   if (found || !socket || constantOf(graph, socket)) return;
   const source = linkedOutput(graph, socket);
   if (!source) return;
-  draft.approximations.push(`${input} comes from ${nodeLabel(source.node)}, shown at the value set on the input`);
+  const through = passesFeedingLimit(graph, socket) ? ` through more than ${MAX_FEEDING_NODES} nodes` : "";
+  draft.approximations.push(
+    `${input} comes from ${nodeLabel(source.node)}${through}, shown at the value set on the input`,
+  );
 }
 
 /** The image an input samples, noting on the draft any nodes between that change its values. */
@@ -406,8 +472,26 @@ function imageUse(graph: ShaderGraph, draft: MaterialDraft, node: BlendStruct): 
     projection,
     interpolation,
     alpha: "none",
+    colorSpace: decodingOf(colorSpaceName(image))?.colorSpace ?? null,
     frame: null,
   };
+}
+
+function colorSpaceName(image: BlendStruct): string {
+  return image.struct("colorspace_settings")?.string("name") ?? "";
+}
+
+/**
+ * How the preview decodes an image of a Blender color space, and whether that shows its colors as Blender does rather
+ * than only its curve; null for a space it cannot decode, and exact for no space, which leaves the slot's own way.
+ */
+function decodingOf(space: string): { colorSpace: TextureColorSpace | null; exact: boolean } | null {
+  if (space === "") return { colorSpace: null, exact: true };
+  const exact = EXACT_DECODINGS.get(space);
+  if (exact) return { colorSpace: exact, exact: true };
+  if (SRGB_CURVES.has(space)) return { colorSpace: "srgb", exact: false };
+  if (LINEAR_SPACES.has(space) || space.startsWith("Linear ")) return { colorSpace: "linear", exact: false };
+  return null;
 }
 
 function isOutput(node: BlendStruct): boolean {
@@ -466,60 +550,189 @@ function isTransparent(graph: ShaderGraph, socket: BlendStruct | null): boolean 
   return source !== null && nodeType(source.node) === "ShaderNodeBsdfTransparent";
 }
 
+type LinkedOutput = NonNullable<ReturnType<typeof linkedOutput>>;
+
+/**
+ * What the surface makes of a node's share: a shader's, a see-through part, a share it passes on, with the image
+ * alpha that mixes in a Transparent BSDF, or nothing past `MAX_SURFACE_DEPTH`.
+ */
+type SurfaceRole =
+  | { kind: "shader"; emitted: BlendStruct | null }
+  | { kind: "clear" }
+  | { kind: "passes"; alpha: ImageAlpha | null }
+  | { kind: "deep" };
+
+/** A node the surface reaches, read once however many ways lead to it. */
+interface SurfaceNode {
+  source: LinkedOutput;
+  /** The fewest mix, add and Shader to RGB nodes between it and the surface. */
+  depth: number;
+  role: SurfaceRole;
+  notes: string[];
+  /** The inputs it passes its share to, with the part of the share each gets. */
+  inputs: [socket: BlendStruct | null, part: number][];
+  /** The nodes those inputs read, by key. */
+  reads: SurfaceRead[];
+}
+
+interface SurfaceRead {
+  key: number;
+  part: number;
+}
+
+/** How the surface reads the node whose output `socket` reads, with the inputs it passes its share to. */
+function surfaceStep(
+  graph: ShaderGraph,
+  socket: BlendStruct,
+  source: LinkedOutput,
+): Pick<SurfaceNode, "role" | "notes" | "inputs"> {
+  const node = source.node;
+  const type = nodeType(node);
+  const [first = null, second = null, third = null] = node.list("inputs");
+  const emitted = socketType(source.socket) !== SocketType.shader;
+  if (emitted || type === "ShaderNodeEmission") {
+    const toon = toonSource(graph, emitted ? socket : inputSocket(node, "Color"));
+    if (!toon) return { role: { kind: "shader", emitted: emitted ? socket : null }, notes: [], inputs: [] };
+    const shader = emitted ? "Its surface" : nodeLabel(node);
+    const note = `${shader} takes its color from ${nodeLabel(toon)}, shown as the shader it reads`;
+    return { role: { kind: "passes", alpha: null }, notes: [note], inputs: [[inputSocket(toon, "Shader"), 1]] };
+  }
+  if (type === "ShaderNodeMixShader") {
+    const mix: AlphaSource = first ? alphaSource(graph, first) : { kind: "constant", value: 0.5 };
+    if (mix.kind === "image" && isTransparent(graph, second)) {
+      return { role: { kind: "passes", alpha: mix }, notes: [], inputs: [[third, 1]] };
+    }
+    const notes = mix.kind === "constant" ? [] : [`${nodeLabel(node)} mixes by nodes, shown half and half`];
+    const factor = mix.kind === "constant" ? mix.value : 0.5;
+    const inputs: SurfaceNode["inputs"] = [
+      [second, 1 - factor],
+      [third, factor],
+    ];
+    return { role: { kind: "passes", alpha: null }, notes, inputs };
+  }
+  if (type === "ShaderNodeAddShader") {
+    const shaders = [first, second];
+    const clear = shaders.filter((shader) => isTransparent(graph, shader));
+    const lit = shaders.filter((shader) => linkedOutput(graph, shader) && !isTransparent(graph, shader));
+    const notes =
+      clear.length > 0 && lit.length > 0
+        ? [`${nodeLabel(node)} adds a Transparent BSDF, which the preview leaves out`]
+        : [];
+    const inputs = (lit.length > 0 ? lit : shaders).map((shader): [BlendStruct | null, number] => [shader, 1]);
+    return { role: { kind: "passes", alpha: null }, notes, inputs };
+  }
+  if (type === "ShaderNodeBsdfTransparent") return { role: { kind: "clear" }, notes: [], inputs: [] };
+  if (type === "ShaderNodeHoldout") {
+    const note = `${nodeLabel(node)} hides what is behind it too, shown see-through`;
+    return { role: { kind: "clear" }, notes: [note], inputs: [] };
+  }
+  return { role: { kind: "shader", emitted: null }, notes: [], inputs: [] };
+}
+
+/**
+ * The nodes the surface reaches through mix and add shaders, by the offset of the output each is read from, and the
+ * key of the surface's own. Each node is read once, at the depth of the shortest way to it, and only along ways that
+ * give it a share.
+ */
+function surfaceNodes(
+  graph: ShaderGraph,
+  surface: BlendStruct | null,
+): { nodes: Map<number, SurfaceNode>; root: number | null } {
+  const nodes = new Map<number, SurfaceNode>();
+  const queue: SurfaceNode[] = [];
+  const reach = (socket: BlendStruct, depth: number): number | null => {
+    const source = linkedOutput(graph, socket);
+    if (!source) return null;
+    const key = source.socket.offset;
+    if (nodes.has(key)) return key;
+    const step =
+      depth > MAX_SURFACE_DEPTH
+        ? { role: { kind: "deep" } as const, notes: [], inputs: [] }
+        : surfaceStep(graph, socket, source);
+    const node: SurfaceNode = { source, depth, ...step, reads: [] };
+    nodes.set(key, node);
+    queue.push(node);
+    return key;
+  };
+  const root = surface ? reach(surface, 0) : null;
+  for (let index = 0; index < queue.length; index++) {
+    const node = queue[index];
+    if (!node) break;
+    for (const [input, part] of node.inputs) {
+      const key = input && part > 0 ? reach(input, node.depth + 1) : null;
+      if (key !== null) node.reads.push({ key, part });
+    }
+  }
+  return { nodes, root };
+}
+
+/**
+ * Each node's share of the surface, passed from the surface down through the nodes in an order where each comes before
+ * those it reads, and the nodes in the order a depth-first walk first reaches them. A read back into a way the walk is
+ * on, which only a damaged file has, passes nothing.
+ */
+function surfaceShares(
+  nodes: ReadonlyMap<number, SurfaceNode>,
+  root: number | null,
+): { shares: Map<number, number>; reached: number[] } {
+  if (root === null) return { shares: new Map(), reached: [] };
+  const reached: number[] = [];
+  const finished: number[] = [];
+  const visited = new Set<number>();
+  const open = new Set<number>();
+  const back = new Set<SurfaceRead>();
+  const stack: { key: number; next: number }[] = [];
+  const enter = (key: number) => {
+    visited.add(key);
+    open.add(key);
+    reached.push(key);
+    stack.push({ key, next: 0 });
+  };
+  enter(root);
+  for (let top = stack.at(-1); top; top = stack.at(-1)) {
+    const read = nodes.get(top.key)?.reads[top.next++];
+    if (!read) {
+      open.delete(top.key);
+      finished.push(top.key);
+      stack.pop();
+    } else if (open.has(read.key)) back.add(read);
+    else if (!visited.has(read.key)) enter(read.key);
+  }
+  const shares = new Map<number, number>([[root, 1]]);
+  for (const key of finished.reverse()) {
+    const share = shares.get(key) ?? 0;
+    for (const read of nodes.get(key)?.reads ?? []) {
+      if (!back.has(read)) shares.set(read.key, (shares.get(read.key) ?? 0) + share * read.part);
+    }
+  }
+  return { shares, reached };
+}
+
 /**
  * The shader the output's surface shows most of, looking through mix and add shaders, which weigh their inputs, and
  * the others, which add their light. A Transparent BSDF in the mix makes the surface see-through rather than becoming
- * the shader.
+ * the shader. A node that several ways reach is read once, with the shares of all of them.
  */
 function surfaceShader(graph: ShaderGraph, output: BlendStruct): SurfaceShader {
   const leaves: Leaf[] = [];
   const notes: string[] = [];
   const alphaImages: ImageAlpha[] = [];
   let transparent = 0;
-  const visit = (socket: BlendStruct | null, weight: number, depth: number) => {
-    const source = linkedOutput(graph, socket);
-    if (!socket || !source || weight <= 0 || depth > 16) return;
-    const node = source.node;
-    const type = nodeType(node);
-    const inputs = node.list("inputs");
-    const [first = null, second = null, third = null] = inputs;
-    const emitted = socketType(source.socket) !== SocketType.shader;
-    if (emitted || type === "ShaderNodeEmission") {
-      const toon = toonSource(graph, emitted ? socket : inputSocket(node, "Color"));
-      if (toon) {
-        const shader = emitted ? "Its surface" : nodeLabel(node);
-        notes.push(`${shader} takes its color from ${nodeLabel(toon)}, shown as the shader it reads`);
-        visit(inputSocket(toon, "Shader"), weight, depth + 1);
-      } else leaves.push({ node, weight, emitted: emitted ? socket : null });
-    } else if (type === "ShaderNodeMixShader") {
-      const mix: AlphaSource = first ? alphaSource(graph, first) : { kind: "constant", value: 0.5 };
-      if (mix.kind === "image" && isTransparent(graph, second)) {
-        alphaImages.push(mix);
-        visit(third, weight, depth + 1);
-        return;
-      }
-      if (mix.kind !== "constant") notes.push(`${nodeLabel(node)} mixes by nodes, shown half and half`);
-      const factor = mix.kind === "constant" ? mix.value : 0.5;
-      visit(second, weight * (1 - factor), depth + 1);
-      visit(third, weight * factor, depth + 1);
-    } else if (type === "ShaderNodeAddShader") {
-      const shaders = [first, second];
-      const clear = shaders.filter((shader) => isTransparent(graph, shader));
-      const lit = shaders.filter((shader) => linkedOutput(graph, shader) && !isTransparent(graph, shader));
-      if (clear.length > 0 && lit.length > 0) {
-        notes.push(`${nodeLabel(node)} adds a Transparent BSDF, which the preview leaves out`);
-      }
-      for (const shader of lit.length > 0 ? lit : shaders) visit(shader, weight, depth + 1);
-    } else if (type === "ShaderNodeBsdfTransparent") {
-      transparent += weight;
-    } else if (type === "ShaderNodeHoldout") {
-      transparent += weight;
-      notes.push(`${nodeLabel(node)} hides what is behind it too, shown see-through`);
-    } else {
-      leaves.push({ node, weight, emitted: null });
-    }
-  };
-  visit(inputSocket(output, "Surface"), 1, 0);
+  let deep = false;
+  const { nodes, root } = surfaceNodes(graph, inputSocket(output, "Surface"));
+  const { shares, reached } = surfaceShares(nodes, root);
+  for (const key of reached) {
+    const node = nodes.get(key);
+    const weight = shares.get(key) ?? 0;
+    if (!node || weight <= 0) continue;
+    notes.push(...node.notes);
+    const role = node.role;
+    if (role.kind === "shader") leaves.push({ node: node.source.node, weight, emitted: role.emitted });
+    else if (role.kind === "clear") transparent += weight;
+    else if (role.kind === "passes" && role.alpha) alphaImages.push(role.alpha);
+    else if (role.kind === "deep") deep = true;
+  }
+  if (deep) notes.push(`Its surface nests shaders more than ${MAX_SURFACE_DEPTH} deep, which the preview leaves out`);
   const alpha = clamp01(1 - transparent);
   const shaders = leaves.filter((leaf) => !onlyLight(leaf));
   const shown = strongest(shaders) ?? strongest(leaves);
@@ -691,7 +904,8 @@ type AlphaSource =
 /**
  * Where an alpha input or a Mix Shader's factor comes from: a constant, or an image's alpha, scaled by a constant and
  * clipped at a cutoff as glTF's importer builds them, or else other nodes. A clip of the alpha times a factor keeps the
- * texels whose alpha reaches the cutoff divided by the factor, and a clip that keeps every texel is a constant.
+ * texels whose alpha reaches the cutoff divided by the factor, and a clip that keeps every texel is a constant, as is
+ * the alpha of an image Blender loads opaque.
  */
 function alphaSource(graph: ShaderGraph, socket: BlendStruct): AlphaSource {
   const constant = constantOf(graph, socket);
@@ -708,11 +922,21 @@ function alphaSource(graph: ShaderGraph, socket: BlendStruct): AlphaSource {
   };
   if (found?.output !== "Alpha") return other;
   const scale = factor?.factor ?? 1;
+  const image = found.node.deref("id");
+  const opaque = image !== null && loadsOpaque(image);
+  if (opaque && found.changes.length > 0) return other;
+  if (!clip && opaque) return { kind: "constant", value: clamp01(scale) };
   if (!clip) return { kind: "image", found, factor: scale, cutoff: null };
   if (found.changes.length > 0) return other;
   const cutoff = clip.cutoff / scale + (clip.strict ? STRICT : 0);
   if (cutoff <= 0) return { kind: "constant", value: 1 };
+  if (opaque) return { kind: "constant", value: cutoff <= 1 ? 1 : 0 };
   return { kind: "image", found, factor: 1, cutoff };
+}
+
+/** Whether Blender loads an image with an alpha of 1: its Alpha Mode is None and it does not hold data. */
+function loadsOpaque(image: BlendStruct): boolean {
+  return alphaMode(image) === ALPHA_IGNORE && !DATA_SPACES.has(colorSpaceName(image));
 }
 
 function samplingOf(use: ImageUse): string {
@@ -809,7 +1033,9 @@ function colorImage(
 ): ImageUse | null {
   if (!found) return null;
   const image = found.node.deref("id");
-  if (found.color || (image && valueOfGray(found) && isGray(image))) return imageInput(graph, draft, input, found);
+  if (found.color || (image && valueOfGray(found) && isGray(image, "whole") === true)) {
+    return imageInput(graph, draft, input, found);
+  }
   const channel = channelOf(found);
   const what = channel ? channelName(channel) : "the brightness";
   const through = found.changes.length > 0 ? ` through ${[...new Set(found.changes)].join(", ")}` : "";
@@ -873,8 +1099,8 @@ function readPrincipled(graph: ShaderGraph, node: BlendStruct, draft: MaterialDr
   const metallicImage = imageFeeding(graph, metallicSocket);
   const roughnessImage = imageFeeding(graph, roughnessSocket);
   if (!readPacked(graph, draft, metallicSocket, roughnessSocket)) {
-    draft.roughnessImage = channelImage(graph, draft, "Roughness", roughnessImage, GREEN);
-    draft.metalnessImage = channelImage(graph, draft, "Metallic", metallicImage, BLUE);
+    draft.roughnessImage = channelImage(graph, draft, "Roughness", roughnessImage, GREEN, isGray);
+    draft.metalnessImage = channelImage(graph, draft, "Metallic", metallicImage, BLUE, isGray);
     noteNodeInput(graph, draft, "Roughness", roughnessSocket, roughnessImage);
     noteNodeInput(graph, draft, "Metallic", metallicSocket, metallicImage);
   }
@@ -952,7 +1178,7 @@ function separatedChannel(separate: Step): { name: string; index: number | null 
       ? separate.node.deref("storage")?.number("mode")
       : SEPARATE_RGB;
   const named = SEPARATED_CHANNELS[mode ?? SEPARATE_RGB];
-  const index = CHANNEL_INDEX[separate.output] ?? null;
+  const index = CHANNEL_INDEX.get(separate.output) ?? null;
   if (named) return { name: named[index ?? -1] ?? separate.output, index: null };
   return { name: separate.output, index };
 }
@@ -980,28 +1206,37 @@ function valueOfGray(found: FedImage): boolean {
 
 /**
  * The image a scalar input samples, unless it picks a channel other than the one the preview reads, green for
- * roughness and blue for metallic, which it notes on the draft instead.
+ * roughness and blue for metallic, which it notes on the draft instead. Where the input takes the image's color, which
+ * Blender turns into its brightness, it notes an image that a sample `isGray` reads shows is not gray.
  */
 function channelImage(
   graph: ShaderGraph,
   draft: MaterialDraft,
   input: string,
   found: FedImage | null,
-  readable: number,
+  readable: typeof GREEN | typeof BLUE,
+  isGray: GrayCheck,
 ): ImageUse | null {
   if (!found) return null;
   const channel = channelOf(found);
-  if (channel === null || channel.index === readable) return imageInput(graph, draft, input, found);
-  const what = channelName(channel);
-  draft.approximations.push(`${input} comes from ${what} of ${imageName(found)}, which the preview leaves out`);
-  return null;
+  if (channel !== null && channel.index !== readable) {
+    const what = channelName(channel);
+    draft.approximations.push(`${input} comes from ${what} of ${imageName(found)}, which the preview leaves out`);
+    return null;
+  }
+  const image = found.node.deref("id");
+  if (channel === null && image && isGray(image, "sample") === false) {
+    draft.approximations.push(
+      `${input} comes from the brightness of ${imageName(found)}, shown as its ${CHANNEL_NAMES[readable]} channel`,
+    );
+  }
+  return imageInput(graph, draft, input, found);
 }
 
 function channelName(channel: { name: string }): string {
   return channel.name === "Alpha" ? "the alpha" : `the ${channel.name} channel`;
 }
 
-/** A shader other than the Principled BSDF, by its color, which the Specular and Metallic BSDFs call Base Color. */
 /** The color of a metal from its complex index of refraction: its reflectance seen head-on. */
 function conductorColor(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft): number[] {
   const iorSocket = inputSocket(node, "IOR");
@@ -1017,6 +1252,7 @@ function conductorColor(graph: ShaderGraph, node: BlendStruct, draft: MaterialDr
   });
 }
 
+/** A shader other than the Principled BSDF, by its color, which the Specular and Metallic BSDFs call Base Color. */
 function readSimpleShader(graph: ShaderGraph, node: BlendStruct, draft: MaterialDraft, isGray: GrayCheck): void {
   const type = nodeType(node);
   const glows = type === "ShaderNodeEmission";
@@ -1135,11 +1371,14 @@ function noteImages(draft: MaterialDraft, sceneFrame: number): void {
     if (use.clipped) draft.approximations.push(`${name} is clipped at its edges, shown extended`);
     if (use.projection) draft.approximations.push(`${name} uses ${use.projection} projection, shown flat`);
     if (use.interpolation) draft.approximations.push(`${name} uses ${use.interpolation} interpolation, shown Linear`);
-    const space = use.image.struct("colorspace_settings")?.string("name") ?? "";
-    if (colorImages.has(use) && space !== "sRGB" && space !== "") {
-      draft.approximations.push(`${name} is ${space}, shown as sRGB`);
-    } else if (!colorImages.has(use) && !RAW_SPACES.has(space) && !space.startsWith("Linear ")) {
-      draft.approximations.push(`${name} is ${space}, shown as Non-Color`);
+    const space = colorSpaceName(use.image);
+    const decoding = decodingOf(space);
+    const color = colorImages.has(use);
+    if (!decoding) {
+      draft.approximations.push(`${name} is ${space}, shown as ${color ? "sRGB" : "Non-Color"}`);
+    } else if (!decoding.exact && color) {
+      const shown = decoding.colorSpace === "srgb" ? "sRGB" : "Linear Rec.709";
+      draft.approximations.push(`${name} is ${space}, shown as ${shown}`);
     }
   }
 }
@@ -1147,7 +1386,8 @@ function noteImages(draft: MaterialDraft, sceneFrame: number): void {
 /**
  * A metallic-roughness approximation of a Blender material from its node tree, with its image sequences as they are at
  * `sceneFrame`. A material without nodes takes its color, metallic and roughness, opaque, as EEVEE renders it.
- * `isGray` is asked only about images that reach a color input as one value.
+ * `isGray` reads the whole of images that reach a color input as one value, and a sample of those whose color reaches
+ * roughness or metallic.
  */
 export function readMaterial(
   material: BlendStruct,
@@ -1206,9 +1446,22 @@ export function readMaterial(
   if (material.number("blend_method") === BLEND_METHOD_CLIP && draft.alphaMode === "blend") {
     draft.alphaMode = "mask";
     draft.alphaCutoff = (material.has("alpha_threshold") ? material.number("alpha_threshold") : 0.5) + STRICT;
+  } else if (draft.alphaMode === "blend" && dithers(material, version)) {
+    draft.alphaMode = "hash";
   }
   draft.approximations = [...new Set(draft.approximations)];
   return draft;
+}
+
+/**
+ * Whether Blender draws the material's transparency dithered, as its Dithered render method or older Hashed blend mode
+ * does, rather than blended in sorted order.
+ */
+function dithers(material: BlendStruct, version: number): boolean {
+  if (version >= RENDER_METHOD_VERSION && material.has("surface_render_method")) {
+    return material.number("surface_render_method") === RENDER_METHOD_DITHERED;
+  }
+  return material.number("blend_method") === BLEND_METHOD_HASHED;
 }
 
 /**
@@ -1217,7 +1470,7 @@ export function readMaterial(
  * packed data or ignored, or it holds data.
  */
 function colorAlpha(use: ImageUse, read: ReadonlySet<number>): TextureAlpha {
-  const space = use.image.struct("colorspace_settings")?.string("name") ?? "";
+  const space = colorSpaceName(use.image);
   const alpha = outputSocket(use.node, "Alpha");
   const straight = alphaMode(use.image) === ALPHA_STRAIGHT && !DATA_SPACES.has(space);
   return straight && !(alpha && read.has(alpha.offset)) ? "premultiply" : "none";
@@ -1232,7 +1485,7 @@ function alphaMode(image: BlendStruct): number {
  * color by the alpha, which the preview leaves out.
  */
 function notePremultiplied(draft: MaterialDraft, use: ImageUse, read: ReadonlySet<number>): void {
-  const space = use.image.struct("colorspace_settings")?.string("name") ?? "";
+  const space = colorSpaceName(use.image);
   const alpha = outputSocket(use.node, "Alpha");
   if (alphaMode(use.image) !== ALPHA_PREMULTIPLIED || DATA_SPACES.has(space) || !(alpha && read.has(alpha.offset))) {
     return;

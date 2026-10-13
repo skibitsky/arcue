@@ -107,6 +107,19 @@ describe("cornerNormals", () => {
     expect(Array.from(normals.subarray(0, 3)).map((value) => value + 0)).toEqual([0, 0, 1]);
   });
 
+  it("ignores the auto smooth angle of a mesh with custom normals, as Blender 4.0 and earlier do", () => {
+    const customNormals = new Int16Array(12);
+    const options = { sharpFaces: null, sharpEdges: null, customNormals };
+    const withAngle = cornerNormals(fold(), { ...options, autoSmoothAngle: Math.PI / 6 });
+    const without = cornerNormals(fold(), { ...options, autoSmoothAngle: null });
+    expect(Array.from(withAngle)).toEqual(Array.from(without));
+    expect(Array.from(withAngle.subarray(0, 3)).map((value) => value + 0)).toEqual([
+      0,
+      Math.fround(Math.SQRT1_2),
+      Math.fround(Math.SQRT1_2),
+    ]);
+  });
+
   it("applies custom normals to a smooth fan whose corners come after a corner on the boundary, as Blender 5.2 does", () => {
     const blender = [
       [-0.310765, 0.093517, 0.945875],

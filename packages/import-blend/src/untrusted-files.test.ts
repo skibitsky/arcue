@@ -30,6 +30,23 @@ function changedBody(version: Version, change: (file: BlendFile, mesh: BlendStru
   return bytes;
 }
 
+/** The rig fixture with the first child list of its root bone leading back to the root. */
+function loopedBones(version: Version): { bytes: Uint8Array; file: BlendFile } {
+  const bytes = readFixture("rig", version);
+  const file = readBlendFile(bytes);
+  const root = datablocks(file, "AR")[0]?.list("bonebase")[0];
+  const children = root?.list("childbase")[0]?.struct("childbase");
+  if (!root || !children) throw new Error("The rig fixture has no bone with a child.");
+  setPointer(file, children, "first", root.block.address);
+  return { bytes, file };
+}
+
+const ARMATURE_NOT_READ = {
+  subject: { kind: "node", name: "Rig" },
+  message: "Armature not read: Rig",
+  detail: "Armature RigData lists bone Root twice",
+};
+
 async function expectBodyLeftOut(bytes: Uint8Array, detail: string): Promise<void> {
   const scene = await importBytes("counted.blend", bytes);
   expect(scene.meshes.map((built) => built.name)).toEqual(["Prop"]);
@@ -45,17 +62,25 @@ const COUNTS = [
 ] as const;
 
 describe("a damaged or crafted file", () => {
-  it("is refused as unreadable when its bones list one another as children", async () => {
-    const bytes = readFixture("rig", "5.2");
-    const file = readBlendFile(bytes);
-    const root = datablocks(file, "AR")[0]?.list("bonebase")[0];
-    const children = root?.list("childbase")[0]?.struct("childbase");
-    if (!root || !children) throw new Error("The rig fixture has no bone with a child.");
-    setPointer(file, children, "first", root.block.address);
-    await expect(importBytes("looped.blend", bytes)).rejects.toMatchObject({
-      code: "invalid-input",
-      message: "looped.blend is not a readable Blender file: its armature RigData lists bone Root twice",
-    });
+  it.each(VERSIONS)("leaves out the bones of a Blender %s armature that lists a bone twice", async (version) => {
+    const scene = await importBytes("looped.blend", loopedBones(version).bytes);
+    expect(scene.nodes.map((node) => node.name)).toEqual(["Rig", "Body", "Prop"]);
+    expect(scene.meshes.map((mesh) => mesh.name)).toEqual(["Body", "Prop"]);
+    expect(scene.skeletons).toEqual([]);
+    expect(scene.source.warnings.filter((warning) => warning.code === "invalid-data")).toMatchObject([
+      ARMATURE_NOT_READ,
+    ]);
+  });
+
+  it("leaves out those bones where a parent loop reaches them through a bone parent", async () => {
+    const { bytes, file } = loopedBones("5.2");
+    const objects = datablocks(file, "OB");
+    const rig = objects.find((object) => idName(object) === "Rig");
+    const prop = objects.find((object) => idName(object) === "Prop");
+    if (!rig || !prop) throw new Error("The rig fixture has no Rig or Prop.");
+    setPointer(file, rig, "parent", prop.block.address);
+    const scene = await importBytes("looped.blend", bytes);
+    expect(scene.source.warnings).toContainEqual(expect.objectContaining(ARMATURE_NOT_READ));
   });
 
   it.each(VERSIONS.flatMap((version) => COUNTS.map(([member, what]) => [version, what, member] as const)))(

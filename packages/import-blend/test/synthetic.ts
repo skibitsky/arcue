@@ -29,7 +29,7 @@ export interface FileDefinition {
   blocks: BlockDefinition[];
 }
 
-const BASIC_SIZES: Readonly<Record<string, number>> = { char: 1, short: 2, int: 4, float: 4, void: 0 };
+const BASIC_SIZES: Readonly<Record<string, number>> = { char: 1, short: 2, int: 4, uint: 4, float: 4, void: 0 };
 
 class Writer {
   readonly #chunks: number[] = [];

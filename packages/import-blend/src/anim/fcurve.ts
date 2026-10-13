@@ -31,11 +31,21 @@ interface ModifierScope {
   influence: number;
 }
 
+/** How a Cycles modifier repeats keys on one side: No Cycles, Repeat Motion, Repeat with Offset, Repeat Mirrored. */
+export type CyclesMode = "none" | "repeat" | "repeat-offset" | "mirror";
+
 export type CurveModifier = ModifierScope &
   (
-    | { type: "cycles"; before: number; after: number; beforeCycles: number; afterCycles: number }
+    | { type: "cycles"; before: CyclesMode; after: CyclesMode; beforeCycles: number; afterCycles: number }
     | { type: "stepped"; step: number; offset: number; start: number; end: number; noBefore: boolean; noAfter: boolean }
-    | { type: "limits"; rect: [number, number, number, number]; flag: number }
+    | {
+        type: "limits";
+        /** The bounds the modifier keeps time and value within; null where it leaves that side open. */
+        minFrame: number | null;
+        maxFrame: number | null;
+        minValue: number | null;
+        maxValue: number | null;
+      }
   );
 
 export interface FCurve {
@@ -90,6 +100,15 @@ const FMODIFIER_BUILT_IN_FUNCTION = 2;
 const FMODIFIER_CYCLES = 4;
 const FMODIFIER_LIMITS = 8;
 const FMODIFIER_STEPPED = 9;
+const CYCLES_NONE = 0;
+const CYCLES_REPEAT_OFFSET = 2;
+const CYCLES_MIRROR = 3;
+const STEPPED_NO_BEFORE = 1 << 0;
+const STEPPED_NO_AFTER = 1 << 1;
+const LIMIT_MIN_FRAME = 1 << 0;
+const LIMIT_MAX_FRAME = 1 << 1;
+const LIMIT_MIN_VALUE = 1 << 2;
+const LIMIT_MAX_VALUE = 1 << 3;
 /** The modifiers that give a curve without keys a value, muted or not, as Blender's `BKE_fcurve_is_empty` counts them. */
 const VALUE_MODIFIERS: ReadonlySet<number> = new Set([
   FMODIFIER_GENERATOR,
@@ -122,6 +141,13 @@ function emptyKeys(count: number): Keys {
   };
 }
 
+/** A Cycles mode as Blender's `fcm_cycles_time` plays it, which repeats the keys for a mode it does not know. */
+function cyclesMode(mode: number): CyclesMode {
+  if (mode === CYCLES_NONE) return "none";
+  if (mode === CYCLES_REPEAT_OFFSET) return "repeat-offset";
+  return mode === CYCLES_MIRROR ? "mirror" : "repeat";
+}
+
 function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupported: string[] } {
   const modifiers: CurveModifier[] = [];
   const unsupported: string[] = [];
@@ -146,8 +172,8 @@ function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupp
       modifiers.push({
         ...scope,
         type: "cycles",
-        before: data.number("before_mode"),
-        after: data.number("after_mode"),
+        before: cyclesMode(data.number("before_mode")),
+        after: cyclesMode(data.number("after_mode")),
         beforeCycles: data.number("before_cycles"),
         afterCycles: data.number("after_cycles"),
       });
@@ -160,27 +186,33 @@ function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupp
         offset: data.number("offset"),
         start: data.number("start_frame"),
         end: data.number("end_frame"),
-        noBefore: (steppedFlag & 1) !== 0,
-        noAfter: (steppedFlag & 2) !== 0,
+        noBefore: (steppedFlag & STEPPED_NO_BEFORE) !== 0,
+        noAfter: (steppedFlag & STEPPED_NO_AFTER) !== 0,
       });
     } else if (type === FMODIFIER_LIMITS && data) {
       const rect = data.struct("rect");
+      const limitsFlag = data.number("flag");
+      const bound = (bit: number, member: string) => ((limitsFlag & bit) !== 0 ? (rect?.number(member) ?? 0) : null);
       modifiers.push({
         ...scope,
         type: "limits",
-        rect: [
-          rect?.number("xmin") ?? 0,
-          rect?.number("xmax") ?? 0,
-          rect?.number("ymin") ?? 0,
-          rect?.number("ymax") ?? 0,
-        ],
-        flag: data.number("flag"),
+        minFrame: bound(LIMIT_MIN_FRAME, "xmin"),
+        maxFrame: bound(LIMIT_MAX_FRAME, "xmax"),
+        minValue: bound(LIMIT_MIN_VALUE, "ymin"),
+        maxValue: bound(LIMIT_MAX_VALUE, "ymax"),
       });
     } else {
       unsupported.push(MODIFIER_NAMES[type] ?? modifier.string("name"));
     }
   }
   return { modifiers, unsupported };
+}
+
+/** Whether a curve or an NLA strip has a modifier that is neither muted nor disabled. */
+export function hasActiveModifiers(owner: BlendStruct): boolean {
+  return owner
+    .list("modifiers")
+    .some((modifier) => (modifier.number("flag") & (FMODIFIER_MUTED | FMODIFIER_DISABLED)) === 0);
 }
 
 /** Where a struct holds `count` of `type` under `name`, or -1 where its member is missing or laid out otherwise. */
@@ -653,36 +685,36 @@ function cyclesTime(curve: FCurve, modifier: Extract<CurveModifier, { type: "cyc
   if (!range) return { frame, offset: 0 };
   const [startFrame, endFrame] = range;
   let side = 0;
-  let mode = 0;
+  let mode: CyclesMode = "none";
   let cycles = 0;
   let origin = 0;
-  if (frame < startFrame && modifier.before) {
+  if (frame < startFrame && modifier.before !== "none") {
     side = -1;
     mode = modifier.before;
     cycles = modifier.beforeCycles;
     origin = startFrame;
-  } else if (frame > endFrame && modifier.after) {
+  } else if (frame > endFrame && modifier.after !== "none") {
     side = 1;
     mode = modifier.after;
     cycles = modifier.afterCycles;
     origin = endFrame;
   }
-  if (side === 0 || mode === 0) return { frame, offset: 0 };
+  if (side === 0 || mode === "none") return { frame, offset: 0 };
   const period = endFrame - startFrame;
   if (period === 0) return { frame, offset: 0 };
   const cycle = (side * (frame - origin)) / period;
   const within = (frame - origin) % period;
   if (cycles !== 0 && cycle > cycles) return { frame, offset: 0 };
   let offset = 0;
-  if (mode === 2) {
+  if (mode === "repeat-offset") {
     const count = side < 0 ? Math.floor((frame - origin) / period) : Math.ceil((frame - origin) / period);
     offset = count * (rawValue(curve, endFrame) - rawValue(curve, startFrame));
   }
   let time: number;
   if (within === 0) {
     time = side === 1 ? endFrame : startFrame;
-    if (mode === 3 && Math.trunc(cycle) % 2) time = side === 1 ? startFrame : endFrame;
-  } else if (mode === 3 && Math.trunc(cycle + 1) % 2) {
+    if (mode === "mirror" && Math.trunc(cycle) % 2) time = side === 1 ? startFrame : endFrame;
+  } else if (mode === "mirror" && Math.trunc(cycle + 1) % 2) {
     time = side < 0 ? startFrame - within : endFrame - within;
   } else {
     time = startFrame + within;
@@ -738,9 +770,10 @@ function evaluateWith(curve: FCurve, frame: number, search: KeySearch): number {
       if (modifier.step === 0) continue;
       if ((modifier.noBefore && time < modifier.start) || (modifier.noAfter && time > modifier.end)) continue;
       target = Math.trunc((time - modifier.offset) / modifier.step) * modifier.step + modifier.offset;
-    } else {
-      if (modifier.flag & 1) target = Math.max(target, modifier.rect[0]);
-      if (modifier.flag & 2) target = Math.min(target, modifier.rect[1]);
+    } else if (modifier.minFrame !== null && time < modifier.minFrame) {
+      target = modifier.minFrame;
+    } else if (modifier.maxFrame !== null && time > modifier.maxFrame) {
+      target = modifier.maxFrame;
     }
     time = mix(target, time, influenceAt(modifier, time));
   }
@@ -752,8 +785,8 @@ function evaluateWith(curve: FCurve, frame: number, search: KeySearch): number {
       if (i !== 0) return;
       target = value + offset;
     } else if (modifier.type === "limits") {
-      if (modifier.flag & 4) target = Math.max(target, modifier.rect[2]);
-      if (modifier.flag & 8) target = Math.min(target, modifier.rect[3]);
+      if (modifier.minValue !== null) target = Math.max(target, modifier.minValue);
+      if (modifier.maxValue !== null) target = Math.min(target, modifier.maxValue);
     } else {
       return;
     }
@@ -815,13 +848,11 @@ function stepsBeforeOffset(modifier: Extract<CurveModifier, { type: "stepped" }>
   return to >= from && latest >= from;
 }
 
-const CYCLES_REPEAT = 1;
-
 /** The Cycles modifier's period when it repeats the keys on `side` and a cycle starts at another value than it ends. */
 function jumpingPeriod(curve: FCurve, side: "before" | "after"): { first: number; period: number } | null {
   const cycles = cyclesOf(curve);
   const range = curveRange(curve);
-  if (cycles?.[side] !== CYCLES_REPEAT || !range) return null;
+  if (cycles?.[side] !== "repeat" || !range) return null;
   const [first, last] = range;
   const period = last - first;
   if (!(period > 0) || rawValue(curve, first) === rawValue(curve, last)) return null;
@@ -830,8 +861,9 @@ function jumpingPeriod(curve: FCurve, side: "before" | "after"): { first: number
 
 /**
  * Whether a Cycles modifier repeats the keys after the last one from `start` up to `end`, with a cycle that ends at or
- * after `start` and before `end` and starts again at another value. Repeating with an offset or mirrored keeps the
- * value, and so does a cycle that ends where it starts.
+ * after `start` and before `end` and starts again at another value. A cycle that ends where it starts does not, nor
+ * does repeating with an offset, which goes on from the value the cycle ends at. Mirroring turns back from that value,
+ * which `mirrorsHeldSegments` covers.
  */
 function cycleEndsBetween(curve: FCurve, start: number, end: number): boolean {
   const cycled = jumpingPeriod(curve, "after");
@@ -861,23 +893,39 @@ function cycleStartsBetween(curve: FCurve, start: number, end: number): boolean 
  * left to interpolation between frames.
  */
 export function canJump(curve: FCurve, start: number, end: number): boolean {
-  if (curve.discrete) return true;
   const stepsOrRanges = curve.modifiers.some(
     (modifier) => modifier.range !== null || (modifier.type === "stepped" && modifier.step >= 1),
   );
-  if (stepsOrRanges || cycleStartsBetween(curve, start, end)) return true;
+  return stepsOrRanges || cycleStartsBetween(curve, start, end) || holdsSegments(curve);
+}
+
+/** Whether the curve holds a key's value up to the next key: it is discrete or has a constant segment. */
+function holdsSegments(curve: FCurve): boolean {
+  if (curve.discrete) return true;
   const { count, interpolation } = curve.keys;
   for (let i = 0; i < count - 1; i++) if (interpolation[i] === Interpolation.constant) return true;
   return false;
 }
 
 /**
+ * Whether a Cycles modifier mirrors keys that hold their value up to the next key, on a side that reaches between
+ * `start` and `end`. Mirrored, time runs back through such a segment, so the next key's value shows only at its own
+ * frame and the held value follows just after it.
+ */
+function mirrorsHeldSegments(curve: FCurve, start: number, end: number): boolean {
+  const cycles = cyclesOf(curve);
+  const range = curveRange(curve);
+  if (!cycles || !range || !holdsSegments(curve)) return false;
+  return (cycles.after === "mirror" && end > range[1]) || (cycles.before === "mirror" && start < range[0]);
+}
+
+/**
  * Whether the value can jump just after a frame between `start` and `end`, keeping the value from before at that frame
- * itself: at the end of a cycle of a Cycles modifier, at the end of a modifier's frame range, where a Stepped modifier
- * stops, or at a step of a Stepped modifier before its offset.
+ * itself: at the end of a cycle of a Cycles modifier, at a key it mirrors after a held segment, at the end of a
+ * modifier's frame range, where a Stepped modifier stops, or at a step of a Stepped modifier before its offset.
  */
 export function canJumpAfter(curve: FCurve, start: number, end: number): boolean {
-  if (cycleEndsBetween(curve, start, end)) return true;
+  if (cycleEndsBetween(curve, start, end) || mirrorsHeldSegments(curve, start, end)) return true;
   return curve.modifiers.some(
     (modifier) =>
       modifier.range !== null ||
@@ -903,7 +951,7 @@ function addCycledFrames(
   const period = last - first;
   if (!(period >= 1)) return true;
   const offsets = new Set([0, ...within.map((frame) => frame - first)]);
-  if (cycles.before === 3 || cycles.after === 3) {
+  if (cycles.before === "mirror" || cycles.after === "mirror") {
     for (const offset of [...offsets]) offsets.add(period - offset);
   }
   const lastCycle = Math.ceil((end - first) / period);

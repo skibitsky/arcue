@@ -1,5 +1,5 @@
 import type { BlendFile, BlendStruct } from "../blend/file";
-import { datablocks, idName, isLinked } from "../blend/ids";
+import { datablocks, idName, isInPackedLibrary, isLinked } from "../blend/ids";
 import { ModifierType, modifierType, viewportModifiers } from "./modifiers";
 import {
   feedingOutputs,
@@ -58,7 +58,15 @@ export const ParentType = {
 } as const;
 
 const PARENT_TYPE_MASK = 15;
-export const ARMATURE_DEFORM_VERTEX_GROUPS = 1 << 0;
+
+/** The flags of an Armature modifier's and an armature's `deformflag`. */
+export const ArmatureDeformFlag = {
+  vertexGroups: 1 << 0,
+  envelope: 1 << 1,
+  preserveVolume: 1 << 2,
+  invertMask: 1 << 4,
+} as const;
+
 const OBJECT_HIDE_VIEWPORT = 1 << 0;
 const OBJECT_INSTANCES_VERTICES = 1 << 4;
 const OBJECT_INSTANCES_COLLECTION = 1 << 8;
@@ -71,6 +79,12 @@ const COLLECTION_HIDE_VIEWPORT = 1 << 0;
 const LAYER_COLLECTION_EXCLUDE = 1 << 4;
 const LAYER_COLLECTION_HIDE = 1 << 7;
 const BASE_HIDDEN = 1 << 8;
+const VIEW_LAYER_RENDER = 1 << 0;
+
+/** How an object follows its parent, one of `ParentType`. */
+export function parentTypeOf(object: BlendStruct): number {
+  return object.number("partype") & PARENT_TYPE_MASK;
+}
 
 export interface SceneObject {
   struct: BlendStruct;
@@ -91,14 +105,33 @@ export interface SceneObject {
   instancerHidden: boolean;
 }
 
+/** Kinds of data a file links from other .blend files, in the order a warning lists them. */
+export const LINKED_KINDS = ["scenes", "collections", "objects", "materials", "actions", "images"] as const;
+
+export type LinkedKind = (typeof LINKED_KINDS)[number];
+
+/** Data linked from another .blend file, which this file does not hold, by the name of what needs it. */
+export interface LinkedName {
+  kind: LinkedKind;
+  name: string;
+  /** Whether that file is packed into this one, which Arcue does not read. */
+  packed: boolean;
+}
+
+/** `name` for data linked from `datablock`'s file. */
+export function linkedName(kind: LinkedKind, name: string, datablock: BlendStruct): LinkedName {
+  return { kind, name, packed: isInPackedLibrary(datablock) };
+}
+
 export interface SceneContents {
   scene: BlendStruct | null;
   /** Shown objects, and the objects they need: their parents and the armatures that deform them. */
   objects: SceneObject[];
-  /** Objects that are, or whose mesh or armature data is, linked from other files, which this file does not hold. */
-  linkedObjects: string[];
-  /** Collections the scene links straight from other files. */
-  linkedCollections: string[];
+  /**
+   * What the scene needs from other files: background set scenes, collections linked straight into its tree, and
+   * objects that are linked or whose mesh or armature data is.
+   */
+  linked: LinkedName[];
 }
 
 function activeScene(file: BlendFile): BlendStruct | null {
@@ -276,11 +309,12 @@ function hidesInstancer(object: BlendStruct): boolean {
   return instances && object.has("duplicator_visibility_flag") && shown === 0;
 }
 
-function usesLinkedData(object: BlendStruct): boolean {
+/** The object's mesh or armature data when it is linked from another file, or null. */
+function linkedData(object: BlendStruct): BlendStruct | null {
   const type = object.number("type");
-  if (type !== ObjectType.mesh && type !== ObjectType.armature) return false;
+  if (type !== ObjectType.mesh && type !== ObjectType.armature) return null;
   const data = object.deref("data");
-  return data !== null && isLinked(data);
+  return data !== null && isLinked(data) ? data : null;
 }
 
 function describe(struct: BlendStruct, shown: boolean, hidden: boolean): SceneObject {
@@ -291,7 +325,7 @@ function describe(struct: BlendStruct, shown: boolean, hidden: boolean): SceneOb
     type: struct.number("type"),
     data: data && !isLinked(data) ? data : null,
     parent: struct.deref("parent"),
-    parentType: struct.number("partype") & PARENT_TYPE_MASK,
+    parentType: parentTypeOf(struct),
     parentBone: struct.string("parsubstr"),
     shown,
     hidden,
@@ -321,79 +355,126 @@ export function deformingArmatures(object: BlendStruct): ArmatureDeform[] {
     }
   }
   const parent = object.deref("parent");
-  if (
-    parent?.number("type") === ObjectType.armature &&
-    (object.number("partype") & PARENT_TYPE_MASK) === ParentType.armatureDeform
-  ) {
-    const flags = parent.deref("data")?.number("deformflag") ?? ARMATURE_DEFORM_VERTEX_GROUPS;
+  if (parent?.number("type") === ObjectType.armature && parentTypeOf(object) === ParentType.armatureDeform) {
+    const flags = parent.deref("data")?.number("deformflag") ?? ArmatureDeformFlag.vertexGroups;
     result.push({ target: parent, flags, maskGroup: "" });
   }
   return result;
 }
 
+/** The view layer Blender draws a background set with: the first that renders, or else the first. */
+function setViewLayer(scene: BlendStruct): BlendStruct | null {
+  const layers = scene.list("view_layers");
+  return layers.find((layer) => (layer.number("flag") & VIEW_LAYER_RENDER) !== 0) ?? layers[0] ?? null;
+}
+
+/** One place a collection has in a scene's tree, with the view layer's layer collection for that place. */
+interface Place {
+  collection: BlendStruct;
+  layer: BlendStruct | null;
+  parentHidden: boolean;
+}
+
 /**
- * The objects of the file's active scene, in the order its collections list them, with every object's parent before
- * it. Collections the active view layer excludes or that are disabled in viewports are left out with their children,
- * as are objects disabled in viewports. Objects the shown ones need come along unshown. Objects hidden with the eye,
- * a per-view-layer state that exporters keep, stay in and are marked hidden.
+ * The objects of the file's active scene and of its background sets, which Blender draws with it, in the order their
+ * collections list them, with every object's parent before it. Collections the view layer excludes or that are
+ * disabled in viewports are left out with their children, as are objects disabled in viewports. Objects the shown ones
+ * need come along unshown. Objects hidden with the eye, a per-view-layer state that exporters keep, stay in and are
+ * marked hidden.
  */
 export function collectSceneObjects(file: BlendFile): SceneContents {
   const scene = activeScene(file);
-  if (!scene) return { scene: null, objects: [], linkedObjects: [], linkedCollections: [] };
-  const viewLayer = activeViewLayer(file, scene);
-  const hiddenBases = eyeHiddenObjects(viewLayer);
+  if (!scene) return { scene: null, objects: [], linked: [] };
   const ordered: BlendStruct[] = [];
   const shown = new Set<number>();
-  const unhiddenByCollection = new Set<number>();
-  const linked = new Set<string>();
-  const linkedCollections = new Set<string>();
+  const unhidden = new Set<number>();
+  const linked = new Map<string, LinkedName>();
+  const addLinked = (kind: LinkedKind, name: string, datablock: BlendStruct) => {
+    const entry = linkedName(kind, name, datablock);
+    linked.set(`${entry.kind} ${entry.packed} ${entry.name}`, entry);
+  };
 
-  /** Walks one place a collection has in the tree, with the view layer's layer collection for that place. */
-  const visit = (
-    collection: BlendStruct,
-    layerCollection: BlendStruct | null,
-    parentHidden: boolean,
-    ancestors: ReadonlySet<number>,
-  ) => {
-    const flag = layerCollection?.number("flag") ?? 0;
-    if (
-      ancestors.has(collection.offset) ||
-      (flag & LAYER_COLLECTION_EXCLUDE) !== 0 ||
-      (collection.number("flag") & COLLECTION_HIDE_VIEWPORT) !== 0
-    ) {
-      return;
+  const childCollections = new Map<number, BlendStruct[]>();
+  const childrenOf = (collection: BlendStruct) => {
+    let children = childCollections.get(collection.offset);
+    if (!children) {
+      children = collection.list("children").flatMap((child) => child.deref("collection") ?? []);
+      childCollections.set(collection.offset, children);
     }
-    const collectionHidden = parentHidden || (flag & LAYER_COLLECTION_HIDE) !== 0;
-    for (const entry of collection.list("gobject")) {
-      const object = entry.deref("ob");
-      if (!object) continue;
-      if (isLinked(object)) {
-        linked.add(idName(object));
+    return children;
+  };
+
+  /**
+   * Walks a scene's collection tree once per place a collection has in it, which a layer collection of the view layer
+   * stands for. A place seen before adds nothing, and nor do a collection's objects listed before as hidden alike.
+   */
+  const walk = (master: BlendStruct, viewLayer: BlendStruct | null) => {
+    const eyeHidden = eyeHiddenObjects(viewLayer);
+    const visited = new Set<string>();
+    const listed = new Set<string>();
+    const pending: Place[] = [
+      { collection: master, layer: viewLayer?.list("layer_collections")[0] ?? null, parentHidden: false },
+    ];
+    for (let place = pending.pop(); place; place = pending.pop()) {
+      const { collection, layer, parentHidden } = place;
+      const key = `${collection.offset} ${layer?.offset ?? -1} ${parentHidden}`;
+      const flag = layer?.number("flag") ?? 0;
+      if (
+        visited.has(key) ||
+        (flag & LAYER_COLLECTION_EXCLUDE) !== 0 ||
+        (collection.number("flag") & COLLECTION_HIDE_VIEWPORT) !== 0
+      ) {
         continue;
       }
-      if ((object.number("restrictflag") & OBJECT_HIDE_VIEWPORT) !== 0) continue;
-      if (!collectionHidden) unhiddenByCollection.add(object.offset);
-      if (shown.has(object.offset)) continue;
-      shown.add(object.offset);
-      ordered.push(object);
-      if (usesLinkedData(object)) linked.add(idName(object));
-    }
-    const childLayers = layerCollection?.list("layer_collections") ?? [];
-    const path = new Set(ancestors).add(collection.offset);
-    for (const child of collection.list("children")) {
-      const nested = child.deref("collection");
-      if (!nested) continue;
-      const nestedLayer = childLayers.find((candidate) => candidate.deref("collection")?.offset === nested.offset);
-      if (isLinked(nested)) {
-        const excluded = ((nestedLayer?.number("flag") ?? 0) & LAYER_COLLECTION_EXCLUDE) !== 0;
-        if (!excluded) linkedCollections.add(idName(nested));
-        continue;
+      visited.add(key);
+      const collectionHidden = parentHidden || (flag & LAYER_COLLECTION_HIDE) !== 0;
+      const objects = `${collection.offset} ${collectionHidden}`;
+      for (const entry of listed.has(objects) ? [] : collection.list("gobject")) {
+        const object = entry.deref("ob");
+        if (!object) continue;
+        if (isLinked(object)) {
+          addLinked("objects", idName(object), object);
+          continue;
+        }
+        if ((object.number("restrictflag") & OBJECT_HIDE_VIEWPORT) !== 0) continue;
+        if (!collectionHidden && !eyeHidden.has(object.offset)) unhidden.add(object.offset);
+        if (shown.has(object.offset)) continue;
+        shown.add(object.offset);
+        ordered.push(object);
+        const data = linkedData(object);
+        if (data) addLinked("objects", idName(object), data);
       }
-      visit(nested, nestedLayer ?? null, collectionHidden, path);
+      listed.add(objects);
+      const childLayers = new Map<number, BlendStruct>();
+      for (const child of layer?.list("layer_collections") ?? []) {
+        const offset = child.deref("collection")?.offset;
+        if (offset !== undefined && !childLayers.has(offset)) childLayers.set(offset, child);
+      }
+      const children: Place[] = [];
+      for (const nested of childrenOf(collection)) {
+        const nestedLayer = childLayers.get(nested.offset) ?? null;
+        if (isLinked(nested)) {
+          const excluded = ((nestedLayer?.number("flag") ?? 0) & LAYER_COLLECTION_EXCLUDE) !== 0;
+          if (!excluded) addLinked("collections", idName(nested), nested);
+          continue;
+        }
+        children.push({ collection: nested, layer: nestedLayer, parentHidden: collectionHidden });
+      }
+      pushReversed(pending, children);
     }
   };
   const master = scene.deref("master_collection");
-  if (master) visit(master, viewLayer?.list("layer_collections")[0] ?? null, false, new Set());
+  if (master) walk(master, activeViewLayer(file, scene));
+  const sets = new Set<number>([scene.offset]);
+  for (let set = scene.deref("set"); set && !sets.has(set.offset); set = set.deref("set")) {
+    sets.add(set.offset);
+    if (isLinked(set)) {
+      addLinked("scenes", idName(set), set);
+      break;
+    }
+    const setMaster = set.deref("master_collection");
+    if (setMaster) walk(setMaster, setViewLayer(set));
+  }
 
   const needed = new Map<number, BlendStruct>();
   const need = (first: BlendStruct | null) => {
@@ -401,13 +482,14 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     for (let object = pending.pop(); object !== undefined; object = pending.pop()) {
       if (!object || shown.has(object.offset) || needed.has(object.offset)) continue;
       if (isLinked(object)) {
-        linked.add(idName(object));
+        addLinked("objects", idName(object), object);
         continue;
       }
-      if (usesLinkedData(object)) linked.add(idName(object));
+      const data = linkedData(object);
+      if (data) addLinked("objects", idName(object), data);
       needed.set(object.offset, object);
       const targets = deformingArmatures(object).map(({ target }) => target);
-      pending.push(...targets.reverse(), object.deref("parent"));
+      pushReversed(pending, [object.deref("parent"), ...targets]);
     }
   };
   for (const object of ordered) {
@@ -415,12 +497,19 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     for (const { target } of deformingArmatures(object)) need(target);
   }
 
-  const hidden = (object: BlendStruct) => hiddenBases.has(object.offset) || !unhiddenByCollection.has(object.offset);
   const all = [
-    ...ordered.map((object) => describe(object, true, hidden(object))),
+    ...ordered.map((object) => describe(object, true, !unhidden.has(object.offset))),
     ...[...needed.values()].map((object) => describe(object, false, false)),
   ];
-  return { scene, objects: parentsFirst(all), linkedObjects: [...linked], linkedCollections: [...linkedCollections] };
+  return { scene, objects: parentsFirst(all), linked: [...linked.values()] };
+}
+
+/** Pushes items onto a stack last first, so that it pops them in order, without spreading them into arguments. */
+function pushReversed<T>(stack: T[], items: readonly T[]): void {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index];
+    if (item !== undefined) stack.push(item);
+  }
 }
 
 /** Orders objects so each comes after its parent, keeping the given order among roots and among siblings. */
@@ -446,7 +535,7 @@ function parentsFirst(objects: readonly SceneObject[]): SceneObject[] {
       if (placed.has(object.struct.offset)) continue;
       placed.add(object.struct.offset);
       result.push(object);
-      pending.push(...[...(children.get(object.struct.offset) ?? [])].reverse());
+      pushReversed(pending, children.get(object.struct.offset) ?? []);
     }
   };
   for (const root of roots) place(root);

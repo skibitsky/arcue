@@ -35,6 +35,13 @@ export interface Sdna {
 
 /** The longest member or type name the reader takes; Blender's own are under 64 bytes. */
 const MAX_NAME_BYTES = 1024;
+/**
+ * The most names, types or structs the SDNA may list: members name their name and type by 16-bit index, and each
+ * struct has a type of its own. Blender's own list under 10,000 of each.
+ */
+const MAX_ENTRIES = 2 ** 16;
+/** The most members all structs may have together; Blender's own have under 10,000. */
+const MAX_MEMBERS = 2 ** 18;
 
 class Cursor {
   #offset: number;
@@ -99,7 +106,7 @@ class Cursor {
 
 function count(cursor: Cursor, what: string): number {
   const value = cursor.int32();
-  if (value < 0 || value > 1_000_000) throw new BlendParseError(`its SDNA block lists ${value} ${what}`);
+  if (value < 0 || value > MAX_ENTRIES) throw new BlendParseError(`its SDNA block lists ${value} ${what}`);
   return value;
 }
 
@@ -147,11 +154,14 @@ export function parseSdna(bytes: Uint8Array, little: boolean, pointerSize: numbe
   });
 
   const structs: SdnaStruct[] = [];
+  let members = 0;
   for (let i = count(cursor, "structs"), index = 0; i > 0; i--, index++) {
     const typeIndex = cursor.uint16();
     const fieldCount = cursor.uint16();
     const type = types[typeIndex];
     if (type === undefined) throw new BlendParseError(`its SDNA struct ${index} has an unknown type`);
+    members += fieldCount;
+    if (members > MAX_MEMBERS) throw new BlendParseError(`its SDNA structs have over ${MAX_MEMBERS} members`);
     const fields: SdnaField[] = [];
     let offset = 0;
     for (let f = 0; f < fieldCount; f++) {
@@ -164,6 +174,7 @@ export function parseSdna(bytes: Uint8Array, little: boolean, pointerSize: numbe
       }
       const elements = parsed.dims.reduce((product, dim) => product * dim, 1);
       const elementSize = parsed.pointerDepth > 0 ? pointerSize : (lengths[fieldType] ?? 0);
+      if (elementSize === 0) throw new BlendParseError(`its SDNA struct ${type} has a member of no size`);
       fields.push({
         name: parsed.name,
         type: typeName,
@@ -176,7 +187,7 @@ export function parseSdna(bytes: Uint8Array, little: boolean, pointerSize: numbe
       });
       offset += elementSize * elements;
       const declared = lengths[typeIndex] ?? 0;
-      if (!(elements <= declared && offset <= declared)) {
+      if (!(offset <= declared)) {
         throw new BlendParseError(`its SDNA struct ${type} has members past its ${declared} bytes`);
       }
     }

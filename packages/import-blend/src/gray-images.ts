@@ -21,6 +21,8 @@ const ADAM7 = [
 const MAX_ROW_BYTES = 2 ** 26;
 /** The most pixel bytes the checks of one import read, those of an 8-bit RGBA image 16384 pixels square. */
 export const GRAY_CHECK_BYTES = 2 ** 30;
+/** The most pixel bytes a check reads of an image where it looks only for a pixel that is not gray. */
+export const GRAY_SAMPLE_BYTES = 2 ** 20;
 
 /** The pixel bytes the gray checks of one import may still read. */
 export interface GrayCheckBudget {
@@ -69,9 +71,9 @@ interface RowPass {
 }
 
 /**
- * Reads a PNG's rows as they inflate, until a pixel is not gray or every row is read. PNG's filters predict each byte
- * from the same channel of the pixels to its left and above, so an image's filtered rows are gray exactly when its
- * pixels are, and they are read without undoing the filters.
+ * Reads a PNG's rows as they inflate, until a pixel is not gray, every row is read, or the next row would pass the
+ * limit. PNG's filters predict each byte from the same channel of the pixels to its left and above, so an image's
+ * filtered rows are gray exactly when its pixels are, and they are read without undoing the filters.
  */
 class GrayRows {
   readonly #passes: readonly RowPass[];
@@ -82,17 +84,21 @@ class GrayRows {
   #filled = 0;
   #line: Uint8Array;
   #color = false;
+  #damaged = false;
+  #left: number;
 
-  constructor(passes: readonly RowPass[], pixel: number, sample: number) {
+  constructor(passes: readonly RowPass[], pixel: number, sample: number, limit: number) {
     this.#passes = passes;
     this.#pixel = pixel;
     this.#sample = sample;
     this.#line = new Uint8Array(1 + (passes[0]?.bytes ?? 0));
+    this.#left = limit;
   }
 
-  /** Whether every row was read and each of its pixels is gray. */
-  get gray(): boolean {
-    return !this.#color && this.#pass === this.#passes.length;
+  /** Whether every pixel is gray: false once one is not, and null where the rows end early, stop or are damaged. */
+  get gray(): boolean | null {
+    if (this.#color) return false;
+    return !this.#damaged && this.#pass === this.#passes.length ? true : null;
   }
 
   /** Reads the next inflated bytes; false once there is nothing more to read. */
@@ -108,15 +114,21 @@ class GrayRows {
   }
 
   #reading(): boolean {
-    return !this.#color && this.#pass < this.#passes.length;
+    const more = this.#pass < this.#passes.length && this.#line.byteLength - 1 <= this.#left;
+    return more && !this.#color && !this.#damaged;
   }
 
   #endRow(): void {
     this.#filled = 0;
-    if ((this.#line[0] ?? 0) > LAST_FILTER || !isGrayRow(this.#line.subarray(1), this.#pixel, this.#sample)) {
+    if ((this.#line[0] ?? 0) > LAST_FILTER) {
+      this.#damaged = true;
+      return;
+    }
+    if (!isGrayRow(this.#line.subarray(1), this.#pixel, this.#sample)) {
       this.#color = true;
       return;
     }
+    this.#left -= this.#line.byteLength - 1;
     this.#row++;
     if (this.#row < (this.#passes[this.#pass]?.rows ?? 0)) return;
     this.#pass++;
@@ -151,18 +163,18 @@ function isGrayPalette(palette: Uint8Array): boolean {
   return true;
 }
 
-async function isGrayPng(bytes: Uint8Array, budget: GrayCheckBudget): Promise<boolean> {
+async function isGrayPng(bytes: Uint8Array, budget: GrayCheckBudget, limit: number): Promise<boolean | null> {
   const chunks = pngChunks(bytes);
   const header = chunks[0]?.type === "IHDR" ? chunks[0].data : null;
-  if (!header || header.byteLength < 13) return false;
+  if (!header || header.byteLength < 13) return null;
   const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
   const [width, height, depth, colorType] = [view.getUint32(0), view.getUint32(4), header[8], header[9]];
   if (colorType === PNG_GRAY || colorType === PNG_GRAY_ALPHA) return true;
   if (colorType === PNG_PALETTE) {
     const palette = chunks.find((chunk) => chunk.type === "PLTE")?.data;
-    return palette !== undefined && isGrayPalette(palette);
+    return palette !== undefined && isGrayPalette(palette) ? true : null;
   }
-  if ((colorType !== PNG_RGB && colorType !== PNG_RGBA) || (depth !== 8 && depth !== 16)) return false;
+  if ((colorType !== PNG_RGB && colorType !== PNG_RGBA) || (depth !== 8 && depth !== 16)) return null;
   const sample = depth / 8;
   const pixel = (colorType === PNG_RGBA ? 4 : 3) * sample;
   const sizes =
@@ -175,11 +187,14 @@ async function isGrayPng(bytes: Uint8Array, budget: GrayCheckBudget): Promise<bo
   const passes = sizes.flatMap(([across = 0, down = 0]) =>
     across > 0 && down > 0 ? [{ rows: down, bytes: across * pixel }] : [],
   );
-  if (passes.length === 0 || passes.some((pass) => pass.bytes > MAX_ROW_BYTES)) return false;
-  const scanned = passes.reduce((total, pass) => total + pass.rows * pass.bytes, 0);
-  if (scanned > budget.bytes) return false;
+  if (passes.length === 0 || passes.some((pass) => pass.bytes > MAX_ROW_BYTES)) return null;
+  const scanned = Math.min(
+    passes.reduce((total, pass) => total + pass.rows * pass.bytes, 0),
+    limit,
+  );
+  if (scanned > budget.bytes) return null;
   budget.bytes -= scanned;
-  const rows = new GrayRows(passes, pixel, sample);
+  const rows = new GrayRows(passes, pixel, sample, limit);
   await inflate(
     chunks.filter((chunk) => chunk.type === "IDAT").map((chunk) => chunk.data),
     (piece) => rows.take(piece),
@@ -203,16 +218,18 @@ function jpegComponents(bytes: Uint8Array): number | null {
 }
 
 /**
- * Whether every pixel of an image is gray, so that each of its color channels and its brightness equal its color. A
- * PNG is read to its last pixel unless it stores gray or a gray palette, and counts as color where its pixels take
- * more than the budget has left, which the pixels it reads use up; a JPEG counts only where it stores one component,
- * and other formats never do.
+ * Whether every pixel of an image is gray, so that each of its color channels and its brightness equal its color:
+ * false where a pixel is known not to be, and null where the check cannot tell. A PNG is read to its last pixel, or to
+ * the last whole row within `limit` bytes of pixels, unless it stores gray or a gray palette. It is not read where the
+ * pixels it would read take more than the budget has left, which they use up. A JPEG is gray where it stores one
+ * component, and other formats are not read.
  */
 export async function isGrayImage(
   bytes: Uint8Array,
   budget: GrayCheckBudget = { bytes: GRAY_CHECK_BYTES },
-): Promise<boolean> {
+  limit = Number.POSITIVE_INFINITY,
+): Promise<boolean | null> {
   const type = imageMimeType(bytes, "");
-  if (type === "image/png") return isGrayPng(bytes, budget);
-  return type === "image/jpeg" && jpegComponents(bytes) === 1;
+  if (type === "image/png") return isGrayPng(bytes, budget, limit);
+  return type === "image/jpeg" && jpegComponents(bytes) === 1 ? true : null;
 }

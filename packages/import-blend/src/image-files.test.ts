@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Reference, Version } from "../test/fixtures";
 import {
   findInFixtures,
+  fixtureName,
   fixturesDir,
   importBytes,
   importFixture,
@@ -16,6 +17,7 @@ import type { BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
 import { datablocks, idName } from "./blend/ids";
 import { sequencePath } from "./image-paths";
+import { blendImporter } from "./importer";
 import { sequenceFrame } from "./scene/materials";
 
 interface ImageReference {
@@ -121,15 +123,37 @@ describe.each(VERSIONS)("image files from Blender %s", async (version) => {
   });
 });
 
+type FindFile = (storedPath: string) => Promise<FoundFile | null>;
+
+/** Imports the bytes with `find` as the core's file search, keeping each stored path the import reads a file for. */
+async function importCountingReads(
+  fileName: string,
+  bytes: Uint8Array,
+  find: FindFile,
+): Promise<{ scene: SceneDescription; reads: string[] }> {
+  const reads: string[] = [];
+  const scene = await blendImporter.import({
+    fileName,
+    bytes,
+    readFile: () => Promise.resolve(null),
+    findFile: (storedPath) => {
+      reads.push(storedPath);
+      return find(storedPath);
+    },
+    locateFile: async (storedPath) => (await find(storedPath))?.path ?? null,
+  });
+  return { scene, reads };
+}
+
 describe.each(VERSIONS)("the gray images of the shading fixture from Blender %s", (version) => {
   it("are read once, for both the gray check and their textures", async () => {
-    const asked: string[] = [];
-    const scene = await importFixture("shading", version, (storedPath) => {
-      asked.push(storedPath);
-      return findInFixtures(storedPath);
-    });
-    expect(asked).toContain("textures/checker.png");
-    expect(asked.length).toBe(new Set(asked).size);
+    const { scene, reads } = await importCountingReads(
+      fixtureName("shading", version),
+      readFixture("shading", version),
+      findInFixtures,
+    );
+    expect(reads).toContain("textures/checker.png");
+    expect(reads.length).toBe(new Set(reads).size);
     expect(scene.textures.filter((texture) => texture.name === "checker")).toHaveLength(1);
   });
 });
@@ -160,18 +184,31 @@ function findLikeTheCore(storedPath: string): Promise<FoundFile | null> {
   return findInFixtures(stored.relative ?? `textures/${stored.name}`);
 }
 
-/** The images fixture with the path that the image of `material` stores changed to `path`. */
-async function withImagePath(version: Version, material: string, path: string): Promise<Uint8Array> {
+/** Finds an image as the core does in a moved folder: by the relative path it stores, or else by name in textures/. */
+async function findByName(storedPath: string): Promise<FoundFile | null> {
+  const stored = parseStoredPath(storedPath);
+  const atPath = stored.relative === null ? null : await findInFixtures(stored.relative);
+  return atPath ?? findInFixtures(`textures/${stored.name}`);
+}
+
+/** The images fixture with the paths that the images of materials store changed, by material. */
+async function withImagePaths(version: Version, paths: Record<string, string>): Promise<Uint8Array> {
   const expected = reference("images", version) as ImagesReference;
   const bytes = await decompressBlend(readFixture("images", version));
   const file = readBlendFile(bytes);
-  const image = datablocks(file, "IM").find((candidate) => idName(candidate) === expected.images[material]?.image);
-  const field = image?.field("filepath") ?? image?.field("name");
-  if (!image || !field) throw new Error(`No image for ${material}.`);
-  const encoded = new TextEncoder().encode(path);
-  bytes.fill(0, image.offset + field.offset, image.offset + field.offset + field.size);
-  bytes.set(encoded, image.offset + field.offset);
+  for (const [material, path] of Object.entries(paths)) {
+    const image = datablocks(file, "IM").find((candidate) => idName(candidate) === expected.images[material]?.image);
+    const field = image?.field("filepath") ?? image?.field("name");
+    if (!image || !field) throw new Error(`No image for ${material}.`);
+    bytes.fill(0, image.offset + field.offset, image.offset + field.offset + field.size);
+    bytes.set(new TextEncoder().encode(path), image.offset + field.offset);
+  }
   return bytes;
+}
+
+/** The images fixture with the path that the image of `material` stores changed to `path`. */
+function withImagePath(version: Version, material: string, path: string): Promise<Uint8Array> {
+  return withImagePaths(version, { [material]: path });
 }
 
 describe.each(VERSIONS)("image paths spelled differently in a file from Blender %s", (version) => {
@@ -189,8 +226,9 @@ describe.each(VERSIONS)("image paths spelled differently in a file from Blender 
           "Stored path: textures/absent.png, used as base color of AbsentA, base color of AbsentB",
         ],
       ]);
-      expect(materialNamed(scene, "AbsentA").missingTextures).toEqual({ baseColor: "textures/absent.png" });
-      expect(materialNamed(scene, "AbsentB").missingTextures).toEqual({ baseColor: path.slice(2) });
+      for (const name of ["AbsentA", "AbsentB"]) {
+        expect(materialNamed(scene, name).missingTextures).toEqual({ baseColor: "textures/absent.png" });
+      }
     },
   );
 
@@ -218,17 +256,47 @@ describe.each(VERSIONS)("image paths spelled differently in a file from Blender 
 
   it("loads one texture for a file that one image stores as relative and another as absolute", async () => {
     const absolute = `${fixturesDir}${expected.images.CheckerA?.file}`;
-    const scene = await importBytes(
-      "images.blend",
-      await withImagePath(version, "CheckerB", absolute),
-      findLikeTheCore,
-    );
+    const bytes = await withImagePath(version, "CheckerB", absolute);
+    const { scene, reads } = await importCountingReads("images.blend", bytes, findLikeTheCore);
+    expect(reads.filter((path) => path.endsWith("checker.png"))).toHaveLength(1);
     const checkers = ["CheckerA", "CheckerB"].map((name) => materialNamed(scene, name).baseColorTexture?.texture);
     expect(checkers[0]).toBeDefined();
     expect(checkers[1]).toBe(checkers[0]);
     expect(scene.textures.flatMap((texture) => texture.foundPath ?? [])).toEqual([expected.images.CheckerA?.file]);
     const absolutePath = scene.source.warnings.find((warning) => warning.code === "texture-path-absolute");
     expect(absolutePath?.materials).toEqual(["CheckerB"]);
+  });
+
+  it("reads a file once and shows it as one texture when images store different paths that lead to it", async () => {
+    const bytes = await withImagePath(version, "CheckerB", "//elsewhere/checker.png");
+    const { scene, reads } = await importCountingReads("images.blend", bytes, findByName);
+    expect(reads.filter((path) => path.endsWith("checker.png"))).toEqual([expected.images.CheckerA?.file]);
+    const checkers = ["CheckerA", "CheckerB"].map((name) => materialNamed(scene, name).baseColorTexture?.texture);
+    expect(checkers[0]).toBeDefined();
+    expect(checkers[1]).toBe(checkers[0]);
+    expect(scene.textures.flatMap((texture) => texture.foundPath ?? [])).toEqual([expected.images.CheckerA?.file]);
+  });
+
+  it("reads a file once and notes each absolute path when images store different absolute paths to it", async () => {
+    const bytes = await withImagePaths(version, {
+      CheckerA: "/nowhere/a/checker.png",
+      CheckerB: "/nowhere/b/checker.png",
+    });
+    const { scene, reads } = await importCountingReads("images.blend", bytes, findByName);
+    expect(reads.filter((path) => path.endsWith("checker.png"))).toHaveLength(1);
+    const checkers = ["CheckerA", "CheckerB"].map((name) => materialNamed(scene, name).baseColorTexture?.texture);
+    expect(checkers[0]).toBeDefined();
+    expect(checkers[1]).toBe(checkers[0]);
+    expect(scene.textures.flatMap((texture) => texture.foundPath ?? [])).toEqual([expected.images.CheckerA?.file]);
+    expect(scene.source.warnings.filter((warning) => warning.code === "texture-path-absolute")).toMatchObject([
+      {
+        subject: { kind: "texture", name: "checker.png" },
+        detail:
+          "Stored path: /nowhere/a/checker.png, used as base color of CheckerA; " +
+          "Stored path: /nowhere/b/checker.png, used as base color of CheckerB",
+        materials: ["CheckerA", "CheckerB"],
+      },
+    ]);
   });
 
   it("reports a missing file once when one image stores it as relative and another as absolute", async () => {

@@ -163,8 +163,8 @@ describe("evaluateFCurve", () => {
   it("finds the jumps a Cycles modifier repeats, and the ends of its cycles, which jump just after the frame", () => {
     const cycles: CurveModifier = {
       type: "cycles",
-      before: 0,
-      after: 1,
+      before: "none",
+      after: "repeat",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -193,7 +193,7 @@ describe("evaluateFCurve", () => {
     expect(canJumpAfter(ramp, 1, 10)).toBe(true);
     expect(canJumpAfter(ramp, 1, 3)).toBe(false);
     expect(canJumpAfter(ramp, 3, 5.5)).toBe(true);
-    expect(canJumpAfter({ ...ramp, modifiers: [{ ...cycles, after: 2 }] }, 1, 10)).toBe(false);
+    expect(canJumpAfter({ ...ramp, modifiers: [{ ...cycles, after: "repeat-offset" }] }, 1, 10)).toBe(false);
     [1, 0.0005, 1, 0.125].forEach((value, index) => {
       expect(evaluateFCurve(ramp, [3, 3.001, 5, 5.25][index] ?? 0)).toBeCloseTo(value, 9);
     });
@@ -202,8 +202,8 @@ describe("evaluateFCurve", () => {
   it("finds that a Cycles modifier repeating before the first key jumps at the start of each cycle", () => {
     const cycles: CurveModifier = {
       type: "cycles",
-      before: 1,
-      after: 0,
+      before: "repeat",
+      after: "none",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -223,8 +223,8 @@ describe("evaluateFCurve", () => {
     expect(canJump(ramp, 0, 10)).toBe(true);
     expect(canJump(ramp, 10, 19.5)).toBe(false);
     expect(canJump(ramp, 20, 40)).toBe(false);
-    expect(canJump({ ...ramp, modifiers: [{ ...cycles, before: 2 }] }, 0, 40)).toBe(false);
-    expect(canJump({ ...ramp, modifiers: [{ ...cycles, before: 0, after: 1 }] }, 0, 40)).toBe(false);
+    expect(canJump({ ...ramp, modifiers: [{ ...cycles, before: "repeat-offset" }] }, 0, 40)).toBe(false);
+    expect(canJump({ ...ramp, modifiers: [{ ...cycles, before: "none", after: "repeat" }] }, 0, 40)).toBe(false);
     expect(canJumpAfter(ramp, 0, 40)).toBe(false);
   });
 
@@ -237,8 +237,8 @@ describe("evaluateFCurve", () => {
     expect(jumpFrames(halves, 5, 10, 8)).toBeNull();
     const cycles: CurveModifier = {
       type: "cycles",
-      before: 1,
-      after: 1,
+      before: "repeat",
+      after: "repeat",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -267,8 +267,8 @@ describe("evaluateFCurve", () => {
     );
     const cycles: CurveModifier = {
       type: "cycles",
-      before: 1,
-      after: 1,
+      before: "repeat",
+      after: "repeat",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -286,7 +286,7 @@ describe("evaluateFCurve", () => {
       influence: 1,
     };
     expect(jumpFrames({ ...wholes, modifiers: [cycles] }, 0, 99_999, 100_000)).toHaveLength(99_998);
-    const mirrored = { ...wholes, modifiers: [{ ...cycles, before: 3, after: 3 }] };
+    const mirrored: FCurve = { ...wholes, modifiers: [{ ...cycles, before: "mirror", after: "mirror" }] };
     expect(jumpFrames(mirrored, 0, 99_999, 100_000)).toHaveLength(99_998);
     expect(jumpFrames({ ...wholes, modifiers: [cycles, stepped] }, 0, 60_001, 100_000)).toHaveLength(60_000);
     const shared = curve(
@@ -303,8 +303,8 @@ describe("evaluateFCurve", () => {
     );
     const mirror: CurveModifier = {
       type: "cycles",
-      before: 3,
-      after: 3,
+      before: "mirror",
+      after: "mirror",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -322,6 +322,39 @@ describe("evaluateFCurve", () => {
       { interpolation: Interpolation.constant, modifiers: [mirror] },
     );
     expect(jumpFrames(uneven, 0, 12, 100)?.sort((a, b) => a - b)).toEqual([1, 3, 4, 5, 7, 8, 9, 11]);
+  });
+
+  it("finds that mirrored constant keys jump just after each mirrored key, on either side, as Blender does", () => {
+    const mirror: CurveModifier = {
+      type: "cycles",
+      before: "none",
+      after: "mirror",
+      beforeCycles: 0,
+      afterCycles: 0,
+      range: null,
+      influence: 1,
+    };
+    const points: [number, number][] = [
+      [1, 0],
+      [5, 1],
+      [9, 2],
+    ];
+    const after = curve(points, { interpolation: Interpolation.constant, modifiers: [mirror] });
+    expect([9, 9.125, 10, 13, 13.125, 17].map((frame) => evaluateFCurve(after, frame))).toEqual([2, 1, 1, 1, 0, 0]);
+    expect(canJumpAfter(after, 1, 17)).toBe(true);
+    expect(canJumpAfter(after, 1, 9)).toBe(false);
+    expect(jumpFrames(after, 1, 17, 100)).toEqual(expect.arrayContaining([9, 13]));
+
+    const before = curve(points, {
+      interpolation: Interpolation.constant,
+      modifiers: [{ ...mirror, before: "mirror", after: "none" }],
+    });
+    expect([-7, -6.875, -3, -2.875, 1].map((frame) => evaluateFCurve(before, frame))).toEqual([2, 1, 1, 0, 0]);
+    expect(canJumpAfter(before, -7, 1)).toBe(true);
+    expect(canJumpAfter(before, 1, 17)).toBe(false);
+
+    expect(canJumpAfter(curve(points, { modifiers: [mirror] }), 1, 17)).toBe(false);
+    expect(canJumpAfter(curve(points, { discrete: true, modifiers: [mirror] }), 1, 17)).toBe(true);
   });
 
   it("finds jumps under a Stepped modifier of a frame or more per step, at any influence or frame range", () => {
@@ -471,8 +504,8 @@ describe("evaluateFCurve", () => {
   it("repeats the keyed range with a Cycles modifier, offset per cycle when it says so", () => {
     const cycles: CurveModifier = {
       type: "cycles",
-      before: 1,
-      after: 2,
+      before: "repeat",
+      after: "repeat-offset",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -507,8 +540,10 @@ describe("evaluateFCurve", () => {
   it("ramps a restricted Limits modifier in and out at its influence, as Blender does", () => {
     const limits: CurveModifier = {
       type: "limits",
-      rect: [0, 0, 0, 0.2],
-      flag: 8,
+      minFrame: null,
+      maxFrame: null,
+      minValue: null,
+      maxValue: 0.2,
       range: { start: 2, end: 8, blendIn: 2, blendOut: 1 },
       influence: 0.5,
     };
@@ -524,6 +559,26 @@ describe("evaluateFCurve", () => {
     frames.forEach((frame, index) => {
       expect(evaluateFCurve(ramp, frame)).toBeCloseTo(expected[index] ?? 0, 6);
     });
+  });
+
+  it("holds time at the lower bound of a Limits modifier whose bounds cross, as Blender does", () => {
+    const limits: CurveModifier = {
+      type: "limits",
+      minFrame: 6,
+      maxFrame: 4,
+      minValue: null,
+      maxValue: null,
+      range: null,
+      influence: 1,
+    };
+    const ramp = curve(
+      [
+        [0, 0],
+        [10, 10],
+      ],
+      { modifiers: [limits] },
+    );
+    expect([2, 5, 8].map((frame) => evaluateFCurve(ramp, frame))).toEqual([6, 6, 4]);
   });
 
   it("mixes Stepped and Cycles time changes by their influence, as Blender does", () => {
@@ -549,8 +604,8 @@ describe("evaluateFCurve", () => {
 
     const cycles: CurveModifier = {
       type: "cycles",
-      before: 0,
-      after: 2,
+      before: "none",
+      after: "repeat-offset",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -582,8 +637,8 @@ describe("curveEvaluator", () => {
   it("gives what evaluateFCurve gives, at rising and falling frames, on keys, near them and between them", () => {
     const cycles: CurveModifier = {
       type: "cycles",
-      before: 1,
-      after: 1,
+      before: "repeat",
+      after: "repeat",
       beforeCycles: 0,
       afterCycles: 0,
       range: null,
@@ -651,5 +706,102 @@ describe("readFCurve", () => {
     expect(keysOf([["float", "vec[3][3]"]], 3)).toBe(3);
     expect(keysOf([["char", "vec"]], 4096)).toBe(0);
     expect(keysOf([["float", "vec[3]"]], 16)).toBe(0);
+  });
+
+  it("names the modes and flags of its Cycles, Stepped and Limits modifiers", () => {
+    const structs: FileDefinition["structs"] = [
+      {
+        type: "ListBase",
+        fields: [
+          ["void", "*first"],
+          ["void", "*last"],
+        ],
+      },
+      {
+        type: "FModifier",
+        fields: [
+          ["FModifier", "*next"],
+          ["FModifier", "*prev"],
+          ["void", "*data"],
+          ["short", "type"],
+          ["short", "flag"],
+        ],
+      },
+      {
+        type: "FMod_Cycles",
+        fields: [
+          ["short", "before_mode"],
+          ["short", "after_mode"],
+          ["short", "before_cycles"],
+          ["short", "after_cycles"],
+        ],
+      },
+      {
+        type: "FMod_Stepped",
+        fields: [
+          ["float", "step_size"],
+          ["float", "offset"],
+          ["float", "start_frame"],
+          ["float", "end_frame"],
+          ["int", "flag"],
+        ],
+      },
+      {
+        type: "rctf",
+        fields: [
+          ["float", "xmin"],
+          ["float", "xmax"],
+          ["float", "ymin"],
+          ["float", "ymax"],
+        ],
+      },
+      {
+        type: "FMod_Limits",
+        fields: [
+          ["rctf", "rect"],
+          ["int", "flag"],
+        ],
+      },
+      { type: "FCurve", fields: [["ListBase", "modifiers"]] },
+    ];
+    const modifiersOf = (cycles: [before: number, after: number], stepped: number, limits: number) => {
+      const bytes = writeBlend({
+        header: "old",
+        pointerSize: 8,
+        little: true,
+        structs,
+        blocks: [
+          { code: "DATA", struct: "FCurve", address: 0x100n, data: [{ modifiers: { first: 0x200n, last: 0x220n } }] },
+          { code: "DATA", struct: "FModifier", address: 0x200n, data: [{ next: 0x210n, data: 0x300n, type: 4 }] },
+          { code: "DATA", struct: "FModifier", address: 0x210n, data: [{ next: 0x220n, data: 0x310n, type: 9 }] },
+          { code: "DATA", struct: "FModifier", address: 0x220n, data: [{ data: 0x320n, type: 8 }] },
+          {
+            code: "DATA",
+            struct: "FMod_Cycles",
+            address: 0x300n,
+            data: [{ before_mode: cycles[0], after_mode: cycles[1] }],
+          },
+          { code: "DATA", struct: "FMod_Stepped", address: 0x310n, data: [{ step_size: 2, flag: stepped }] },
+          {
+            code: "DATA",
+            struct: "FMod_Limits",
+            address: 0x320n,
+            data: [{ rect: { xmin: 2, xmax: 8, ymin: -1, ymax: 3 }, flag: limits }],
+          },
+        ],
+      });
+      const file = readBlendFile(bytes);
+      const block = file.blocksWithCode("DATA").find((candidate) => candidate.struct?.type === "FCurve");
+      const [struct] = block ? file.elements(block) : [];
+      if (!struct) throw new Error("No curve was written.");
+      return readFCurve(struct).modifiers;
+    };
+    const [cycles, stepped, limits] = modifiersOf([3, 2], 1, 0b1010);
+    expect(cycles).toMatchObject({ type: "cycles", before: "mirror", after: "repeat-offset" });
+    expect(stepped).toMatchObject({ type: "stepped", step: 2, noBefore: true, noAfter: false });
+    expect(limits).toMatchObject({ type: "limits", minFrame: null, maxFrame: 8, minValue: null, maxValue: 3 });
+    const [none, , open] = modifiersOf([0, 7], 2, 0b0101);
+    expect(none).toMatchObject({ before: "none", after: "repeat" });
+    expect(open).toMatchObject({ minFrame: 2, maxFrame: null, minValue: -1, maxValue: null });
   });
 });

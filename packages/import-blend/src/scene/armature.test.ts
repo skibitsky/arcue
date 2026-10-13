@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FileDefinition } from "../../test/synthetic";
 import { writeBlend } from "../../test/synthetic";
 import { readBlendFile } from "../blend/file";
-import { readBones } from "./armature";
+import { ArmatureReadError, readBones } from "./armature";
 
 const STRUCTS: FileDefinition["structs"] = [
   {
@@ -13,6 +13,14 @@ const STRUCTS: FileDefinition["structs"] = [
     ],
   },
   {
+    type: "ID",
+    fields: [
+      ["void", "*next"],
+      ["void", "*prev"],
+      ["char", "name[66]"],
+    ],
+  },
+  {
     type: "Bone",
     fields: [
       ["Bone", "*next"],
@@ -20,14 +28,29 @@ const STRUCTS: FileDefinition["structs"] = [
       ["char", "name[16]"],
       ["ListBase", "childbase"],
       ["float", "arm_mat[4][4]"],
+      ["float", "arm_head[3]"],
+      ["float", "arm_tail[3]"],
+      ["float", "rad_head"],
+      ["float", "rad_tail"],
+      ["float", "dist"],
+      ["float", "weight"],
     ],
   },
-  { type: "bArmature", fields: [["ListBase", "bonebase"]] },
+  {
+    type: "bArmature",
+    fields: [
+      ["ID", "id"],
+      ["ListBase", "bonebase"],
+    ],
+  },
 ];
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
-/** An armature written from scratch with `children` naming each bone's children; the first bone is the only root. */
+/**
+ * An armature written from scratch with `children` naming each bone's children; the first bone is the only root. The
+ * bone at `index` reaches from (0, index, 0) to (0, index + 1, 0), with radii 0.25 and 0.5, falloff 0.75 and weight 0.125.
+ */
 function armature(names: readonly string[], children: Readonly<Record<string, readonly string[]>>) {
   const indices = new Map(names.map((name, index) => [name, index]));
   const address = (name: string) => 0x1000n + BigInt(indices.get(name) ?? 0) * 0x100n;
@@ -54,6 +77,12 @@ function armature(names: readonly string[], children: Readonly<Record<string, re
           prev: prev ? address(prev) : 0n,
           childbase: list(children[name] ?? []),
           arm_mat: IDENTITY,
+          arm_head: [0, indices.get(name) ?? 0, 0],
+          arm_tail: [0, (indices.get(name) ?? 0) + 1, 0],
+          rad_head: 0.25,
+          rad_tail: 0.5,
+          dist: 0.75,
+          weight: 0.125,
         },
       ],
     };
@@ -64,7 +93,12 @@ function armature(names: readonly string[], children: Readonly<Record<string, re
     little: true,
     structs: STRUCTS,
     blocks: [
-      { code: "AR", struct: "bArmature", address: 0x10n, data: [{ bonebase: list(names.slice(0, 1)) }] },
+      {
+        code: "AR",
+        struct: "bArmature",
+        address: 0x10n,
+        data: [{ id: { name: "ARRigData" }, bonebase: list(names.slice(0, 1)) }],
+      },
       ...bones,
     ],
   });
@@ -86,11 +120,26 @@ describe("readBones", () => {
     ]);
   });
 
-  it("reads a chain of bones far deeper than the call stack", () => {
+  it("reads each bone's envelope at rest in armature space", () => {
+    const bones = readBones(armature(["Root", "Spine"], { Root: ["Spine"] }));
+    const reach = { headRadius: 0.25, tailRadius: 0.5, falloff: 0.75, weight: 0.125 };
+    expect(bones.map((bone) => bone.envelope)).toEqual([
+      { head: [0, 0, 0], tail: [0, 1, 0], ...reach },
+      { head: [0, 1, 0], tail: [0, 2, 0], ...reach },
+    ]);
+  });
+
+  it("reads a chain of bones far deeper than the call stack, with their envelopes", () => {
     const names = Array.from({ length: 20_000 }, (_, index) => `B${index}`);
     const children = Object.fromEntries(names.slice(0, -1).map((name, index) => [name, [names[index + 1] ?? ""]]));
     const bones = readBones(armature(names, children));
     expect(bones).toHaveLength(20_000);
     expect(bones.at(-1)?.parent).toBe(19_998);
+    expect(bones.at(-1)?.envelope).toMatchObject({ head: [0, 19_999, 0], tail: [0, 20_000, 0] });
+  });
+
+  it("refuses an armature whose bone lists reach a bone twice", () => {
+    const looped = armature(["Root", "Spine", "Neck"], { Root: ["Spine"], Spine: ["Neck"], Neck: ["Root"] });
+    expect(() => readBones(looped)).toThrow(new ArmatureReadError("Armature RigData lists bone Root twice"));
   });
 });

@@ -251,3 +251,19 @@ describe.each(VERSIONS)("triangulate, against a file from Blender %s", async (ve
     }
   });
 });
+
+describe("the topology fingerprint of a file's meshes", () => {
+  it("is the same in Blender 4.2 and 5.2 though their polyfill splits some n-gons otherwise", async () => {
+    const [older, newer] = await Promise.all(VERSIONS.map((version) => importFixture("polyfill", version)));
+    const triangles = (mesh: SceneDescription["meshes"][number]) =>
+      Array.from(mesh.indices, (rendered) => mesh.sourceVertex[rendered] ?? -1).join(" ");
+    let resplit = 0;
+    for (const mesh of older?.meshes ?? []) {
+      const other = newer?.meshes.find((candidate) => candidate.name === mesh.name);
+      if (!other) throw new Error(`No mesh ${mesh.name} in Blender 5.2.`);
+      if (triangles(mesh) !== triangles(other)) resplit++;
+      expect(other.topology, mesh.name).toEqual(mesh.topology);
+    }
+    expect(resplit).toBeGreaterThan(0);
+  });
+});

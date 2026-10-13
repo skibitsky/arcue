@@ -1,18 +1,23 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { fbxImporter } from "@arcue/import-fbx";
-import type { Clip, SceneDescription } from "@arcue/scene";
+import type { Clip, Mesh, SceneDescription } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import {
   findInFixtures,
+  fixtureFaces,
+  fixturesDir,
   importBytes,
   importFixture,
+  type MeshReference,
+  type Reference,
   readFixture,
   reference,
   repositoryDir,
   VERSIONS,
 } from "../test/fixtures";
 import {
+  cornerMismatches,
   invertAffine,
   matrixError,
   morphWeights,
@@ -20,6 +25,7 @@ import {
   placedSourceVertices,
   pointsError,
   shear,
+  strongestInfluences,
   worldMatrices,
 } from "../test/geometry";
 import { parsePosePath, readActions } from "./anim/actions";
@@ -54,6 +60,16 @@ const UNAPPLIED_SMOOTHING = [
   "HalfIgnoreSmooth",
   "AlwaysIgnoreSmooth",
 ];
+
+/** The render color attribute's value at each loop, four values a loop, or undefined for a mesh without one. */
+function loopColors(mesh: MeshReference): number[] | undefined {
+  const colors = mesh.colors;
+  if (!colors) return undefined;
+  return mesh.corners.flatMap(([vertex], loop) => {
+    const element = colors.domain === "POINT" ? vertex : loop;
+    return colors.values.slice(element * 4, element * 4 + 4);
+  });
+}
 
 function nodeIndex(scene: SceneDescription, name: string): number {
   const index = scene.nodes.findIndex((node) => node.name === name);
@@ -119,28 +135,24 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       }
     });
 
-    it("shades every face corner with Blender's normal: flat, smooth, sharp edges and custom normals", () => {
+    it("draws Blender's loop triangles, each corner with the normal, UVs and color of Blender's face corner", async () => {
+      expect(Object.keys(expected.meshes.Polygons?.uvs ?? {})).toEqual(["UVMap", "Detail"]);
+      const faces = await fixtureFaces("features", version);
       for (const [name, mesh] of Object.entries(expected.meshes)) {
         const built = scene.meshes[meshIndex(scene, name)];
-        if (!built) throw new Error(name);
-        const byVertex = new Map<number, number[][]>();
-        for (let r = 0; r < built.sourceVertex.length; r++) {
-          const list = byVertex.get(built.sourceVertex[r] ?? -1) ?? [];
-          list.push(Array.from(built.normals.subarray(r * 3, r * 3 + 3)));
-          byVertex.set(built.sourceVertex[r] ?? -1, list);
-        }
-        for (const [vertex, ...normal] of mesh.corners) {
-          const found = (byVertex.get(vertex) ?? []).some((candidate) => pointsError(candidate, normal) < 1e-3);
-          expect(found, `${name} vertex ${vertex}`).toBe(true);
-        }
-        for (const [vertex, normals] of byVertex) {
-          for (const normal of normals) {
-            const known = mesh.corners.some(
-              (corner) => corner[0] === vertex && pointsError(corner.slice(1), normal) < 1e-3,
-            );
-            expect(known, `${name} vertex ${vertex}`).toBe(true);
-          }
-        }
+        const meshFaces = faces.get(name);
+        if (!built || !meshFaces) throw new Error(name);
+        const loopVertices = mesh.corners.map(([vertex]) => vertex);
+        expect(Array.from(meshFaces.cornerVerts), name).toEqual(loopVertices);
+        const drawn = {
+          loopTriangles: mesh.triangleLoops,
+          loopVertices,
+          normals: mesh.corners.map((corner) => corner.slice(1)),
+          uvs: mesh.uvs,
+          colors: loopColors(mesh),
+        };
+        expect(cornerMismatches(built, drawn), name).toEqual([]);
+        expect(new Set(drawn.loopTriangles.flat()).size, name).toBe(loopVertices.length);
       }
     });
 
@@ -150,22 +162,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       if (!polygons || !expectedPolygons?.colors) throw new Error("no Polygons");
       expect(polygons.uvs.map((uv) => uv.name)).toEqual(expectedPolygons.uvMaps);
       expect(polygons.groups.map((group) => scene.materials[group.material]?.name)).toEqual(["Red", "Default", "Blue"]);
-      const { domain, values } = expectedPolygons.colors;
-      const cornerColors = new Map<number, number[][]>();
-      expectedPolygons.corners.forEach(([vertex], corner) => {
-        const list = cornerColors.get(vertex) ?? [];
-        list.push(
-          domain === "POINT" ? values.slice(vertex * 4, vertex * 4 + 4) : values.slice(corner * 4, corner * 4 + 4),
-        );
-        cornerColors.set(vertex, list);
-      });
-      for (let r = 0; r < polygons.sourceVertex.length; r++) {
-        const color = Array.from(polygons.colors?.subarray(r * 4, r * 4 + 4) ?? []);
-        const candidates = cornerColors.get(polygons.sourceVertex[r] ?? -1) ?? [];
-        expect(
-          candidates.some((candidate) => candidate.every((value, k) => Math.abs(value - (color[k] ?? 0)) < 2e-3)),
-        ).toBe(true);
-      }
+      expect(polygons.colors).not.toBeNull();
     });
 
     it("turns shape keys into morph targets, relative to their own reference keys and limited to their vertex groups", () => {
@@ -202,10 +199,14 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
     });
   });
 
-  describe("rig", async () => {
-    const scene = await importFixture("rig", version);
-    const expected = reference("rig", version);
+  describe.each(["rig", "rig-unit-scale"])("%s", async (fixture) => {
+    const scene = await importFixture(fixture, version);
+    const expected = reference(fixture, version);
     const body = meshIndex(scene, "Body");
+
+    it("reads the scene's unit scale", () => {
+      expect(scene.source.originalSpace.unitMeters).toBe(expected.unitScale);
+    });
 
     it("binds the mesh to the deform bones its vertex groups name, at rest", () => {
       const mesh = scene.meshes[body];
@@ -223,7 +224,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       ]);
     });
 
-    it("makes a clip of every action, assigned or not, over its frame range", () => {
+    it("makes a clip of every action, assigned or not, over its frame range, and one of the scene's", () => {
       expect(scene.clips.map((entry) => [entry.name, entry.frameCount, entry.fps])).toEqual([
         ["Ease", 61, 30],
         ["Partial", 9, 30],
@@ -232,6 +233,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["Stretch", 9, 30],
         ["Swell", 8, 30],
         ["Wave", 20, 30],
+        ["Scene", 250, 30],
       ]);
       expect(Array.from(clip(scene, "Wave").keyTimes)).toEqual([0, 5 / 30, 11 / 30].map(Math.fround));
     });
@@ -244,7 +246,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
     });
 
     it("evaluates every bone's pose in armature space as Blender does, inheritance modes included", async () => {
-      const file = readBlendFile(await decompressBlend(readFixture("rig", version)));
+      const file = readBlendFile(await decompressBlend(readFixture(fixture, version)));
       const built = buildScene(file);
       const armature = built.objects.find((record) => record.object.name === "Rig")?.armature;
       if (!armature) throw new Error("no Rig");
@@ -264,7 +266,7 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
           armature.bones.forEach((bone, index) => {
             const world = sample.bones[bone.name] ?? [];
             const expectedPose = multiply(invertAffine(rig), world);
-            const pose = toSceneAxes(poses[index] ?? new Float64Array(16), 1);
+            const pose = toSceneAxes(poses[index] ?? new Float64Array(16), expected.unitScale);
             expect(matrixError(pose, expectedPose), `${action.name} ${bone.name} at ${sample.frame}`).toBeLessThan(
               TOLERANCE,
             );
@@ -317,29 +319,32 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       });
     }
 
-    it("follows Blender's F-Curve evaluation: Bezier, linear, constant, easing, extrapolation and cycles", async () => {
-      const actions = readActions(readBlendFile(await decompressBlend(readFixture("rig", version))));
-      for (const [name, curves] of Object.entries(expected.curves ?? {})) {
-        const action = actions.find((candidate) => candidate.name === name);
-        const all = action?.slots.flatMap((slot) => slot.curves) ?? [];
-        expect(all).toHaveLength(curves.length);
-        for (const expectedCurve of curves) {
-          const curve = all.find(
-            (candidate) => candidate.path === expectedCurve.path && candidate.index === expectedCurve.index,
-          );
-          if (!curve) throw new Error(`${name} has no ${expectedCurve.path}[${expectedCurve.index}]`);
-          for (const [frame, value] of expectedCurve.samples) {
-            expect(
-              Math.abs(evaluateFCurve(curve, frame) - value),
-              `${name} ${curve.path}[${curve.index}] at ${frame}`,
-            ).toBeLessThan(2e-5);
+    it.runIf(expected.curves !== undefined)(
+      "follows Blender's F-Curve evaluation: Bezier, linear, constant, easing, extrapolation and cycles",
+      async () => {
+        const actions = readActions(readBlendFile(await decompressBlend(readFixture(fixture, version))));
+        for (const [name, curves] of Object.entries(expected.curves ?? {})) {
+          const action = actions.find((candidate) => candidate.name === name);
+          const all = action?.slots.flatMap((slot) => slot.curves) ?? [];
+          expect(all).toHaveLength(curves.length);
+          for (const expectedCurve of curves) {
+            const curve = all.find(
+              (candidate) => candidate.path === expectedCurve.path && candidate.index === expectedCurve.index,
+            );
+            if (!curve) throw new Error(`${name} has no ${expectedCurve.path}[${expectedCurve.index}]`);
+            for (const [frame, value] of expectedCurve.samples) {
+              expect(
+                Math.abs(evaluateFCurve(curve, frame) - value),
+                `${name} ${curve.path}[${curve.index}] at ${frame}`,
+              ).toBeLessThan(2e-5);
+            }
           }
         }
-      }
-    });
+      },
+    );
 
     it("leaves out the modifiers of a curve that turns them off", async () => {
-      const file = readBlendFile(await decompressBlend(readFixture("rig", version)));
+      const file = readBlendFile(await decompressBlend(readFixture(fixture, version)));
       const modified = (actions: ReturnType<typeof readActions>) =>
         actions.flatMap((action) => action.slots.flatMap((slot) => slot.curves)).filter((c) => c.modifiers.length > 0);
       expect(modified(readActions(file)).map((curve) => curve.path)).toEqual(
@@ -401,15 +406,22 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
     });
 
     it("reads alpha, backface culling and simple shaders", () => {
-      expect(material("Glass")).toMatchObject({ alphaMode: "blend", doubleSided: false });
+      expect(material("Glass")).toMatchObject({ alphaMode: "hash", doubleSided: false });
       expect(material("Glass").baseColor[3]).toBeCloseTo(0.4);
       expect(material("Glass").metallic).toBeCloseTo(0.25);
       expect(material("Diffuse")).toMatchObject({ roughness: 1, metallic: 0, doubleSided: true });
       expect(material("Glow").baseColor).toEqual([0, 0, 0, 1]);
       expect(material("Empty")).toMatchObject({ baseColor: [0, 0, 0, 1], metallic: 0, roughness: 1 });
       expect(material("Glow").emissive.map((value) => Math.round(value * 100) / 100)).toEqual([4, 0.8, 0.8]);
-      expect(material("Mixed").alphaMode).toBe("blend");
+      expect(material("Mixed").alphaMode).toBe("hash");
       expect(material("Mixed").baseColor[3]).toBeCloseTo(0.5);
+    });
+
+    it.runIf(version === "4.2")("shows a material whose Use Nodes is off by its own color, as Blender 4.2 does", () => {
+      const expected = reference("materials", version) as Reference & { nodeless?: unknown };
+      expect(expected.nodeless).toEqual({ diffuse: [0, 1, 0, 1], useNodes: false });
+      expect(material("Nodeless").baseColor).toEqual([0, 1, 0, 1]);
+      expect(scene.source.warnings.filter((warning) => warning.subject.name === "Nodeless")).toEqual([]);
     });
 
     it("clips at an Alpha Clip threshold of 0 as Blender does, dropping only texels with no alpha", async () => {
@@ -436,6 +448,8 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         baseColor: "textures/missing.png",
         emissive: "/nonexistent/arcue/absolute.png",
       });
+      const sampling = { uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null, alpha: "premultiply" };
+      expect(absent.missingTextureSampling).toEqual({ baseColor: sampling, emissive: sampling });
       expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name]).sort()).toEqual([
         ["material-approximated", "AlphaTint"],
         ["material-approximated", "Blended"],
@@ -456,7 +470,6 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
         ["material-approximated", "RedRough"],
         ["material-approximated", "Smart"],
         ["material-approximated", "Smoke"],
-        ["material-approximated", "SrgbRough"],
         ["material-approximated", "TangentDetail"],
         ["material-approximated", "Textured"],
         ["material-approximated", "Tinted"],
@@ -484,7 +497,6 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
           "Base color comes from Noise Texture, shown at the value set on the input; Normal comes from Bump, which the preview leaves out",
         ],
         ["Boxed", "checker.png uses Box projection, shown flat"],
-        ["SrgbRough", "checker.png is sRGB, shown as Non-Color"],
         ["Pixelated", "checker.png uses Closest interpolation, shown Linear"],
         ["AlphaTint", "Base color comes from the alpha of checker.png, which the preview leaves out"],
         ["Displaced", "Displacement comes from Displacement, which the preview leaves out"],
@@ -504,7 +516,8 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       expect(tilted?.scale[0]).toBeCloseTo(1);
       expect(tilted?.scale[1]).toBeCloseTo(Math.cos(0.3));
       expect(material("Pulsing").emissive).toEqual([2, 1, 0]);
-      expect(material("Smoke")).toMatchObject({ baseColor: [0, 0, 0, 0], alphaMode: "blend" });
+      expect(material("Smoke")).toMatchObject({ baseColor: [0, 0, 0, 0], alphaMode: "hash" });
+      expect(material("SrgbRough").roughnessTexture?.colorSpace).toBe("srgb");
       expect(material("RedRough").roughnessTexture).toBeNull();
       expect(material("ObjectNormal").normalTexture).toBeNull();
     });
@@ -581,6 +594,224 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
   });
 });
 
+interface HelpersReference {
+  helpers: Record<
+    string,
+    { displayType: string; hideRender: boolean; drawsSurface: boolean; modifiers: [string, string][] }
+  >;
+}
+
+describe.each(VERSIONS)("the helpers fixture from Blender %s", async (version) => {
+  const scene = await importFixture("helpers", version);
+  const expected: HelpersReference = JSON.parse(readFileSync(`${fixturesDir}helpers-${version}.json`, "utf8"));
+
+  it("starts hidden the parts of meshes Blender draws as wire or bounds, and shows those drawn solid or textured", () => {
+    const hidden = Object.fromEntries(scene.parts.map((part) => [part.name, part.hiddenByDefault === true]));
+    expect(hidden).toEqual({
+      Body: false,
+      Cage: true,
+      Base: false,
+      Cutter: true,
+      Proxy: true,
+      RenderOff: false,
+      Textured: false,
+    });
+    for (const [name, helper] of Object.entries(expected.helpers)) {
+      expect(hidden[name], `${name} drawn ${helper.displayType}`).toBe(!helper.drawsSurface);
+    }
+    expect(expected.helpers.RenderOff).toMatchObject({ displayType: "SOLID", hideRender: true });
+  });
+
+  it("keeps every helper as a node and warns only about the modifiers that use them", () => {
+    expect(scene.nodes.map((node) => node.name).sort()).toEqual(Object.keys(expected.helpers).sort());
+    expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
+      ["modifier-not-applied", "Body", "Shown without MeshDeform"],
+      ["modifier-not-applied", "Base", "Shown without Boolean"],
+    ]);
+    expect([expected.helpers.Body?.modifiers, expected.helpers.Base?.modifiers]).toEqual([
+      [["MeshDeform", "MESH_DEFORM"]],
+      [["Boolean", "BOOLEAN"]],
+    ]);
+  });
+});
+
+interface LibrariesReference {
+  libraries: { name: string; filepath: string; packed: boolean }[];
+}
+
+describe.each(VERSIONS)("the libraries fixture from Blender %s", async (version) => {
+  const scene = await importFixture("libraries", version);
+  const expected: LibrariesReference = JSON.parse(readFileSync(`${fixturesDir}libraries-${version}.json`, "utf8"));
+
+  it("names data from another file apart from data of a file Pack Linked Libraries packed into this one", () => {
+    expect(expected.libraries).toEqual([
+      { name: "charlib.blend", filepath: "//charlib.blend", packed: true },
+      { name: "kitlib.blend", filepath: "//kitlib.blend", packed: false },
+    ]);
+    const linked = scene.source.warnings.filter((warning) => warning.code === "library-not-loaded");
+    expect(linked.map((warning) => [warning.message, warning.detail])).toEqual([
+      [
+        `Linked data not shown: libraries-${version}.blend`,
+        "From other .blend files: collections Kit. From .blend files packed in this one, which Arcue does not read: collections Char",
+      ],
+    ]);
+  });
+});
+
+interface PackedReference {
+  objects: Record<string, { type: string; world: number[] }>;
+  meshes: Record<string, MeshReference>;
+  materials: Record<string, number[]>;
+  clips: Record<string, { frame: number; objects: Record<string, { type: string; world: number[] }> }[]>;
+}
+
+describe("the packed fixture from Blender 5.2", async () => {
+  const scene = await importFixture("packed", "5.2");
+  const expected: PackedReference = JSON.parse(readFileSync(`${fixturesDir}packed-5.2.json`, "utf8"));
+
+  it("shows data packed with its library where Blender shows it, without a linked-data warning", () => {
+    expect(scene.nodes.map((node) => node.name)).toEqual(expect.arrayContaining(["Body", "CharPart", "LocalBox"]));
+    const worlds = worldMatrices(scene);
+    for (const [name, object] of Object.entries(expected.objects)) {
+      expect(matrixError(worlds[nodeIndex(scene, name)] ?? [], object.world), name).toBeLessThan(TOLERANCE);
+    }
+    for (const [name, mesh] of Object.entries(expected.meshes)) {
+      const built = scene.meshes[meshIndex(scene, name)];
+      expect(pointsError(built?.restPositions ?? [], mesh.restPositions), name).toBeLessThan(TOLERANCE);
+    }
+    expect(scene.source.warnings.filter((warning) => warning.code === "library-not-loaded")).toEqual([]);
+  });
+
+  it("uses the packed material on the packed object and on a local one", () => {
+    for (const name of ["Body", "LocalBox"]) {
+      const shown = scene.meshes[meshIndex(scene, name)]?.groups.map((group) => scene.materials[group.material]);
+      expect(
+        shown?.map((entry) => entry?.name),
+        name,
+      ).toEqual(["Skin"]);
+      const color = shown?.[0]?.baseColor.map((channel) => Math.round(channel * 1e6) / 1e6);
+      expect(color, name).toEqual(expected.materials.Skin);
+    }
+  });
+
+  it("plays the packed actions as Blender does", () => {
+    for (const [name, object] of [
+      ["BodyMove", "Body"],
+      ["Wave", "CharPart"],
+    ] as const) {
+      const sampled = clip(scene, name);
+      const samples = expected.clips[name] ?? [];
+      expect(samples.length, name).toBeGreaterThan(0);
+      const start = samples[0]?.frame ?? 1;
+      for (const sample of samples) {
+        const worlds = worldMatrices(scene, sampled, (sample.frame - start) / sampled.fps);
+        expect(
+          matrixError(worlds[nodeIndex(scene, object)] ?? [], sample.objects[object]?.world ?? []),
+          `${object} at ${sample.frame}`,
+        ).toBeLessThan(TOLERANCE);
+      }
+    }
+  });
+});
+
+interface ParentsReference extends Reference {
+  /** Each mesh's vertices as Blender evaluates them with its shape keys, in scene space. */
+  shaped: Record<string, number[]>;
+}
+
+describe.each(VERSIONS)("the parents fixture from Blender %s", async (version) => {
+  const scene = await importFixture("parents", version);
+  const expected: ParentsReference = JSON.parse(readFileSync(`${fixturesDir}parents-${version}.json`, "utf8"));
+  const worlds = worldMatrices(scene);
+  const parentName = (name: string) => scene.nodes[scene.nodes[nodeIndex(scene, name)]?.parent ?? -1]?.name ?? null;
+
+  it("places objects parented to vertices where Blender does, under the parent or at the root to avoid a shear", () => {
+    for (const name of ["Pin", "ChildTri", "WidePin", "WideTri", "LiftPin"]) {
+      expect(matrixError(worlds[nodeIndex(scene, name)] ?? [], expected.objects[name]?.world ?? []), name).toBeLessThan(
+        TOLERANCE,
+      );
+    }
+    for (const name of ["ChildTri", "WideTri"]) {
+      const placed = placedSourceVertices(scene, meshIndex(scene, name), worlds, []);
+      expect(pointsError(placed, expected.meshes[name]?.restPositions ?? []), name).toBeLessThan(TOLERANCE);
+    }
+    const lifted = meshIndex(scene, "LiftPlate");
+    const quad = [0, 1, 2, 3];
+    expect([...new Set(scene.meshes[lifted]?.sourceVertex)].sort()).toEqual(quad);
+    const shaped = placedSourceVertices(scene, lifted, worlds, morphWeights(scene, lifted, null, 0));
+    const expectedShape = expected.shaped.LiftPlate ?? [];
+    expect(pointsError(shaped.subarray(0, quad.length * 3), expectedShape.slice(0, quad.length * 3))).toBeLessThan(
+      TOLERANCE,
+    );
+    expect(["Pin", "ChildTri", "WidePin", "WideTri", "LiftPin"].map(parentName)).toEqual([
+      "Plate",
+      "Plate",
+      null,
+      null,
+      "LiftPlate",
+    ]);
+  });
+
+  it("says where each vertex-parented object hangs, and reports no damaged data or shear", () => {
+    const warnings = scene.source.warnings;
+    const vertexParents = warnings.filter((warning) => warning.message.startsWith("Vertex parent not followed"));
+    expect(vertexParents.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
+      ["deform-approximated", "Pin", "It keeps its rest offset from Plate instead of following its vertices"],
+      ["deform-approximated", "ChildTri", "It keeps its rest offset from Plate instead of following its vertices"],
+      ["deform-approximated", "WidePin", "It stays where it is at rest instead of following the vertices of WidePlate"],
+      ["deform-approximated", "WideTri", "It stays where it is at rest instead of following the vertices of WidePlate"],
+      ["deform-approximated", "LiftPin", "It keeps its rest offset from LiftPlate instead of following its vertices"],
+    ]);
+    expect(warnings.filter((warning) => warning.code === "invalid-data")).toEqual([]);
+    expect(warnings.filter((warning) => warning.message.startsWith("Shear not shown"))).toEqual([]);
+  });
+
+  it("builds a mesh that objects share once, and places each object's copy where it is", () => {
+    const [plate, copy] = ["Plate", "PlateCopy"].map((name) => scene.meshes[meshIndex(scene, name)]);
+    expect(copy?.positions).toBe(plate?.positions);
+    expect(copy?.indices).toBe(plate?.indices);
+    for (const [name, mesh] of [
+      ["Plate", plate],
+      ["PlateCopy", copy],
+    ] as const) {
+      expect(pointsError(mesh?.restPositions ?? [], expected.meshes[name]?.restPositions ?? []), name).toBeLessThan(
+        TOLERANCE,
+      );
+    }
+  });
+
+  it("shows the objects of the scene's background set", () => {
+    const world = worlds[nodeIndex(scene, "BackgroundCube")] ?? [];
+    expect(matrixError(world, expected.objects.BackgroundCube?.world ?? [])).toBeLessThan(TOLERANCE);
+    const cube = scene.meshes[meshIndex(scene, "BackgroundCube")];
+    expect(pointsError(cube?.restPositions ?? [], expected.meshes.BackgroundCube?.restPositions ?? [])).toBeLessThan(
+      TOLERANCE,
+    );
+  });
+
+  it("shows a key that Shape Key Lock pins in its own shape, relative to another key, whatever its value", () => {
+    const sheet = meshIndex(scene, "Sheet");
+    expect(scene.meshes[sheet]?.morphTargets.map((target) => [target.name, target.defaultWeight])).toEqual([
+      ["Dome", 1],
+      ["Tilt", 1],
+    ]);
+    const placed = placedSourceVertices(scene, sheet, worlds, morphWeights(scene, sheet, null, 0));
+    expect(pointsError(placed, expected.shaped.Sheet ?? [])).toBeLessThan(TOLERANCE);
+    const node = nodeIndex(scene, "Sheet");
+    const weights = scene.clips.flatMap((entry) =>
+      entry.tracks.filter((track) => track.node === node && track.property === "weights"),
+    );
+    expect(weights).toEqual([]);
+    expect(scene.source.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "deform-approximated",
+        message: "Shape key pinned: Sheet",
+        detail: "Shows Tilt alone, as Blender does, so key values and their animation change nothing",
+      }),
+    );
+  });
+});
+
 describe("the Stone Striker's source file", async () => {
   const bytes = new Uint8Array(readFileSync(`${repositoryDir}tools/samples/sources/stone-striker.blend`));
   const scene = await importBytes("stone-striker.blend", bytes);
@@ -599,7 +830,28 @@ describe("the Stone Striker's source file", async () => {
     ]);
     expect(scene.source.warnings).toEqual([]);
   });
+
+  it("skins each rendered vertex with the four strongest bones of its source vertex, scaled to sum to 1", () => {
+    for (const mesh of scene.meshes) {
+      const expected = strongestInfluences(mesh, scene.skeletons[mesh.skeleton ?? -1]?.joints.length ?? 0);
+      expect(Array.from(mesh.joints ?? []), mesh.name).toEqual(Array.from(expected.joints));
+      const worst = Math.max(
+        ...Array.from(expected.weights, (weight, k) => Math.abs(weight - (mesh.weights?.[k] ?? 0))),
+      );
+      expect(worst, mesh.name).toBeLessThan(1e-6);
+    }
+  });
 });
+
+/** Each source vertex's UVs in the mesh's first UV map, one entry for each rendered vertex. */
+function uvsByVertex(mesh: Mesh): string[][] {
+  const result = Array.from({ length: mesh.sourceVertexCount }, (): string[] => []);
+  const values = mesh.uvs[0]?.values ?? new Float32Array(0);
+  mesh.sourceVertex.forEach((vertex, rendered) => {
+    result[vertex]?.push(`${values[rendered * 2]} ${values[rendered * 2 + 1]}`);
+  });
+  return result.map((uvs) => uvs.sort());
+}
 
 describe("the Stone Striker against the FBX Blender exported from it", async () => {
   const blend = await importBytes(
@@ -621,6 +873,15 @@ describe("the Stone Striker against the FBX Blender exported from it", async () 
       expect(exported?.indices.length).toBe(mesh.indices.length);
       expect(exported?.sourceVertex.length).toBe(mesh.sourceVertex.length);
       expect(pointsError(mesh.restPositions, exported?.restPositions ?? [])).toBeLessThan(1e-6);
+    }
+  });
+
+  it("gives each vertex the UVs the FBX gives it", () => {
+    for (const mesh of blend.meshes) {
+      const exported = fbx.meshes.find((candidate) => candidate.name === mesh.name);
+      if (!exported) throw new Error(`The FBX has no ${mesh.name}.`);
+      expect(mesh.uvs.map((uv) => uv.name)).toEqual(["UVMap"]);
+      expect(uvsByVertex(mesh), mesh.name).toEqual(uvsByVertex(exported));
     }
   });
 
