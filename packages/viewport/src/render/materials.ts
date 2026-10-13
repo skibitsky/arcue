@@ -6,6 +6,7 @@ import type {
   VertexColorUse,
   WrapMode,
 } from "@arcue/scene";
+import { VIEWPORT_UV_SETS } from "@arcue/scene";
 import type {
   ColorSpace,
   DataTexture,
@@ -156,7 +157,7 @@ function mapTexture(
   texture.colorSpace = COLOR_SPACES[ref.colorSpace ?? slotColorSpace];
   texture.wrapS = WRAPPING[ref.wrapU];
   texture.wrapT = WRAPPING[ref.wrapV];
-  texture.channel = ref.uvSet < uvSetCount && ref.uvSet < 4 ? ref.uvSet : 0;
+  texture.channel = ref.uvSet < uvSetCount && ref.uvSet < VIEWPORT_UV_SETS ? ref.uvSet : 0;
   texture.anisotropy = anisotropy;
   if (ref.transform) {
     const { offset, scale, rotation } = ref.transform;

@@ -23,6 +23,7 @@ import {
   isKeyedEveryFrame,
   mergeKeyTimes,
   topologyFingerprint,
+  unshownUvSetWarnings,
 } from "@arcue/scene";
 import type { ParsedClip, ParsedFbx, WireMaterial, WireTextureRef } from "./decode";
 import { FbxParseError } from "./decode";
@@ -143,6 +144,7 @@ async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<Sc
         ...parserWarnings(parsed.warnings, request.fileName),
         ...rootTransformWarnings(parsed.nodes, parsed.originalSpace),
         ...(await textures.warnings()),
+        ...unshownUvSetWarnings(materials),
       ],
     },
     nodes,

@@ -1,5 +1,6 @@
 import type { DisplayMode } from "@arcue/protocol";
 import type { Clip, Mesh, SceneDescription } from "@arcue/scene";
+import { VIEWPORT_UV_SETS } from "@arcue/scene";
 import type { Material, MeshBasicMaterial, MeshStandardMaterial, Side, Texture } from "three";
 import {
   Bone,
@@ -350,7 +351,7 @@ export function deindexedGeometry(mesh: Mesh, colors = false): BufferGeometry {
   geometry.setAttribute("position", new BufferAttribute(gather(mesh.positions, 3, floats), 3));
   geometry.setAttribute("normal", new BufferAttribute(gather(mesh.normals, 3, floats), 3));
   const uvNames = ["uv", "uv1", "uv2", "uv3"];
-  mesh.uvs.slice(0, uvNames.length).forEach((set, index) => {
+  mesh.uvs.slice(0, VIEWPORT_UV_SETS).forEach((set, index) => {
     geometry.setAttribute(uvNames[index] ?? "uv", new BufferAttribute(gather(set.values, 2, floats), 2));
   });
   if (colors && mesh.colors) {

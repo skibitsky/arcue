@@ -84,4 +84,5 @@ export {
   mergeKeyTimes,
   secondsToFrame,
 } from "./time";
+export { unshownUvSetWarnings, VIEWPORT_UV_SETS } from "./uv-sets";
 export { VertexIndex } from "./vertex-index";

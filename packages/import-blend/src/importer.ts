@@ -32,6 +32,7 @@ import {
   parseStoredPath,
   TEXTURE_SLOT_KEYS,
   TEXTURE_SLOTS,
+  unshownUvSetWarnings,
 } from "@arcue/scene";
 import { animatedPaths, readActions } from "./anim/actions";
 import type { ParsedClip } from "./anim/clips";
@@ -355,9 +356,13 @@ function buildClipList(clips: readonly ParsedClip[], fps: number): Clip[] {
   });
 }
 
+function unique(texts: readonly string[]): string[] {
+  return [...new Set(texts)];
+}
+
 /**
  * One warning for each code and subject, since a review keeps one warning per id: several, such as two ways a mesh
- * deforms differently, join their messages and details.
+ * deforms differently, join their distinct messages and details.
  */
 function mergeWarnings(warnings: readonly BlendWarning[]): BlendWarning[] {
   const groups = new Map<string, BlendWarning[]>();
@@ -370,8 +375,8 @@ function mergeWarnings(warnings: readonly BlendWarning[]): BlendWarning[] {
     if (!first) return [];
     if (rest.length === 0) return [first];
     const details = group.flatMap((warning) => (warning.detail === undefined ? [] : [warning.detail]));
-    const merged: BlendWarning = { ...first, message: group.map((warning) => warning.message).join("; ") };
-    if (details.length > 0) merged.detail = details.join("; ");
+    const merged: BlendWarning = { ...first, message: unique(group.map((warning) => warning.message)).join("; ") };
+    if (details.length > 0) merged.detail = unique(details).join("; ");
     return [merged];
   });
 }
@@ -485,8 +490,8 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const nodes = buildNodes(scene);
   const parts = hideBlenderHiddenParts(describeParts(nodes), scene);
   scene.warnings.push(...skinMotionWarnings(scene, clips), ...restPositionWarnings(scene, clips));
-  const warnings = mergeWarnings([...scene.warnings, ...driverWarnings(scene)]).map((warning) =>
-    toImportWarning(warning, request.fileName),
+  const warnings = mergeWarnings([...scene.warnings, ...driverWarnings(scene), ...unshownUvSetWarnings(materials)]).map(
+    (warning) => toImportWarning(warning, request.fileName),
   );
   const shared = shareFoundTextures(textures.textures, materials);
   return {

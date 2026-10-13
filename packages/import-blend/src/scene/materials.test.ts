@@ -563,6 +563,11 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
       ["TintedMetallic", "Metallic comes from the brightness of tinted.png, shown as its blue channel"],
       ["TintedBwRoughness", "Roughness comes from the brightness of tinted.png, shown as its green channel"],
       ["TintedRedBase", "Base color comes from the Red channel of tinted.png, which the preview leaves out"],
+      [
+        "SixthUvMap",
+        "checker.png uses Closest interpolation, shown Linear; " +
+          "Textures on UV map 6 show with the first UV map, since the preview draws only the first 4",
+      ],
     ]);
     const roughness = (name: string) => material(name).roughnessTexture;
     for (const name of ["RoughFromAlpha", "RerouteSeparate", "HsvSeparate", "RoughMathSeparate", "FloatMixLeftover"]) {
@@ -581,6 +586,28 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
     }
     expectNear(material("BaseFromRed").baseColor, [0.8, 0.8, 0.8, 1], 4);
     expect(scene.textures[material("BaseMixedByAlpha").baseColorTexture?.texture ?? -1]?.name).toBe("cutout");
+  });
+
+  it("joins the note about a texture on a UV map past the four the preview draws with the material's other notes", () => {
+    expect(plane("SixthUvMap").mesh.uvs.map((set) => set.name)).toEqual([
+      "UVMap",
+      "Detail",
+      "Third",
+      "Fourth",
+      "Fifth",
+      "Sixth",
+    ]);
+    expect(material("SixthUvMap").baseColorTexture?.uvSet).toBe(5);
+    const approximated = scene.source.warnings.filter(
+      (warning) => warning.code === "material-approximated" && warning.subject.name === "SixthUvMap",
+    );
+    expect(approximated.map((warning) => [warning.message, warning.detail])).toEqual([
+      [
+        "Material approximated: SixthUvMap",
+        "checker.png uses Closest interpolation, shown Linear; " +
+          "Textures on UV map 6 show with the first UV map, since the preview draws only the first 4",
+      ],
+    ]);
   });
 
   it("leaves out an image that reaches a color input only as one value, and shows one whose color does", () => {

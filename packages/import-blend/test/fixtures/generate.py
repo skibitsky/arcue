@@ -1985,11 +1985,12 @@ def build_shading():
     interpolation, color attributes, light that Add and Mix shaders add, the Specular BSDF, a UDIM image whose tiles
     are files, image sequences at a frame, the red channel of two packed images as a base color, one of them gray
     in every pixel, the color of a packed colored image as roughness and metallic, half alpha under the Blended and the
-    Dithered render methods, an image whose Alpha Mode is None, Image Texture nodes without an image, and gray.png
-    decoded as Non-Color and as Linear Rec.709. The reference holds what Cycles bakes for them: at the first texel each
-    material's diffuse color, with specular turned off so that it is the base color times one minus metallic, and its
-    emission; the roughness of the materials whose roughness an image gives, and the metallic the colored image gives;
-    where each Mapping sends the UVs of each texel; and the alpha each clip leaves there. It also holds what
+    Dithered render methods, an image whose Alpha Mode is None, Image Texture nodes without an image, gray.png
+    decoded as Non-Color and as Linear Rec.709, and an image on a mesh's sixth UV map. The reference holds what Cycles
+    bakes for them: at the first texel each material's diffuse color, with specular turned off so that it is the base
+    color times one minus metallic, and its emission; the roughness of the materials whose roughness an image gives,
+    and the metallic the colored image gives; where each Mapping sends the UVs of each texel; and the alpha each clip
+    leaves there. It also holds what
     Cycles renders over a transparent film for surfaces a bake cannot show, one that adds light to a Transparent BSDF,
     one with only a volume, a holdout and the images whose Alpha Mode is None, what EEVEE renders for an image's color
     where nodes read its alpha and where none do, and for the Image Texture nodes without an image under a white world,
@@ -2878,6 +2879,14 @@ def build_shading():
         tree.links.new(image_node(tree, decoded).outputs["Color"], bsdf.inputs[socket])
         materials.append(mat)
 
+    mat, tree, bsdf = shading_material("SixthUvMap")
+    texture = image_node(tree, checker, "Closest")
+    coordinates = tree.nodes.new("ShaderNodeUVMap")
+    coordinates.uv_map = "Sixth"
+    tree.links.new(coordinates.outputs["UV"], texture.inputs["Vector"])
+    tree.links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
+    materials.append(mat)
+
     objects = []
     for index, mat in enumerate(materials):
         bm = bmesh.new()
@@ -2898,6 +2907,11 @@ def build_shading():
         slots = (mat, other_attribute) if shared else (other_attribute, mat) if unused_first else (mat,)
         obj = mesh_object(mat.name + "Plane", bm, slots)
         obj.location = ((index % 8) * 1.5, (index // 8) * 1.5, 0)
+        if mat.name == "SixthUvMap":
+            for name in ("Third", "Fourth", "Fifth", "Sixth"):
+                obj.data.uv_layers.new(name=name)
+            assert [layer.name for layer in obj.data.uv_layers][5] == "Sixth"
+            assert obj.data.uv_layers.active.name == "UVMap"
         if mat.name.startswith("Attribute"):
             for name, kind, domain, color in (("Paint", "FLOAT_COLOR", "POINT", PAINT), ("Tint", "BYTE_COLOR", "CORNER", TINT)):
                 attribute = obj.data.color_attributes.new(name, kind, domain)
