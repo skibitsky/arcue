@@ -581,3 +581,19 @@ ${texture(4001, "paint")}`,
 	C: "OO",4001,5000
 	C: "OP",5000,3000, "DiffuseColor"`,
 );
+
+/** A chain of `depth` empty nodes, "Link0" at the root and each next one the child of the one before. */
+export function nodeChainFbx(depth: number): string {
+  const id = (index: number) => 7000 + index;
+  const models = Array.from(
+    { length: depth },
+    (_, index) => `	Model: ${id(index)}, "Model::Link${index}", "Null" {
+		Version: 232
+	}`,
+  );
+  const links = Array.from(
+    { length: depth },
+    (_, index) => `	C: "OO",${id(index)},${index === 0 ? 0 : id(index - 1)}`,
+  );
+  return asciiFbx(models.join("\n"), links.join("\n"));
+}

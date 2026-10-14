@@ -653,6 +653,24 @@ describe("composeScene", () => {
     expect(metal.baseColorTexture?.texture).toBe(0);
   });
 
+  it("adds more textures of another file than a call takes arguments", () => {
+    const count = 200_000;
+    const texture: Texture = {
+      name: "Tile",
+      mimeType: "image/png",
+      bytes: Uint8Array.of(1),
+      storedPath: "Tile.png",
+      foundPath: "Tile.png",
+    };
+    const member = scene({ nodes: [{ name: "Helmet", mesh: {} }], materials: ["Metal"] });
+    member.textures = Array.from({ length: count }, () => texture);
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: [{ member: { file: "Helmet.fbx", scene: member }, node: null, bone: null }],
+    });
+    expect(composed.textures).toHaveLength(legs.textures.length + count);
+  });
+
   it("adds a texture that several slots share once, and points every slot at it", () => {
     const texture: Texture = {
       name: "Atlas",

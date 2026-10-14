@@ -32,7 +32,7 @@ export type { Bounds, Quat, Vec3, Vec4 } from "./math";
 export { boundsOfPoints } from "./math";
 export type { MaterialGroup, Mesh, MorphTarget, SkinWeights, UvSet } from "./mesh";
 export type { NamedNode, NodeKind, SceneNode } from "./node";
-export { buildNodePaths, UNNAMED_NODE } from "./node";
+export { buildNodePaths, MAX_NODE_DEPTH, nestsTooDeep, UNNAMED_NODE } from "./node";
 export type { PartLevel, PartNode, PartRole, PartView, ScenePart } from "./parts";
 export {
   defaultPartView,

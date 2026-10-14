@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
-import type { FileDefinition } from "../../test/synthetic";
+import { describe, expect, it, vi } from "vitest";
+import type { BlockDefinition, FileDefinition } from "../../test/synthetic";
 import { writeBlend } from "../../test/synthetic";
+import type { BlendFile, BlendStruct } from "../blend/file";
 import { readBlendFile } from "../blend/file";
 import type { CurveModifier, FCurve, Keys } from "./fcurve";
 import {
@@ -8,6 +9,7 @@ import {
   canJumpAfter,
   curveEvaluator,
   evaluateFCurve,
+  hasActiveModifiers,
   Interpolation,
   jumpFrames,
   keyFrames,
@@ -804,4 +806,180 @@ describe("readFCurve", () => {
     expect(none).toMatchObject({ before: "none", after: "repeat" });
     expect(open).toMatchObject({ minFrame: 2, maxFrame: null, minValue: -1, maxValue: null });
   });
+
+  it("reads once the keys, samples, path and modifiers that curves share, giving each curve its own count", () => {
+    const structs: FileDefinition["structs"] = [
+      {
+        type: "ListBase",
+        fields: [
+          ["void", "*first"],
+          ["void", "*last"],
+        ],
+      },
+      {
+        type: "FModifier",
+        fields: [
+          ["FModifier", "*next"],
+          ["FModifier", "*prev"],
+          ["short", "type"],
+          ["short", "flag"],
+        ],
+      },
+      { type: "BezTriple", fields: [["float", "vec[3][3]"]] },
+      { type: "FPoint", fields: [["float", "vec[2]"]] },
+      {
+        type: "FCurve",
+        fields: [
+          ["FCurve", "*next"],
+          ["FCurve", "*prev"],
+          ["BezTriple", "*bezt"],
+          ["FPoint", "*fpt"],
+          ["char", "*rna_path"],
+          ["ListBase", "modifiers"],
+          ["int", "totvert"],
+        ],
+      },
+    ];
+    const path = `pose.bones["${"Bone".repeat(2000)}"].location`;
+    const shared = { rna_path: 0x700n, modifiers: { first: 0x800n, last: 0x800n } };
+    const bytes = writeBlend({
+      header: "old",
+      pointerSize: 8,
+      little: true,
+      structs,
+      blocks: [
+        { code: "DATA", struct: "FCurve", address: 0x100n, data: [{ ...shared, bezt: 0x500n, totvert: 3 }] },
+        { code: "DATA", struct: "FCurve", address: 0x110n, data: [{ ...shared, bezt: 0x500n, totvert: 2 }] },
+        { code: "DATA", struct: "FCurve", address: 0x120n, data: [{ ...shared, fpt: 0x600n, totvert: 3 }] },
+        { code: "DATA", struct: "FCurve", address: 0x130n, data: [{ ...shared, fpt: 0x600n, totvert: 2 }] },
+        {
+          code: "DATA",
+          struct: "BezTriple",
+          address: 0x500n,
+          data: [1, 2, 3].map((frame) => ({ vec: [frame - 1, 0, 0, frame, frame * 10, 0, frame + 1, 0, 0] })),
+        },
+        {
+          code: "DATA",
+          struct: "FPoint",
+          address: 0x600n,
+          data: [{ vec: [10, 1] }, { vec: [11, 2] }, { vec: [12, 4] }],
+        },
+        { code: "DATA", struct: null, address: 0x700n, data: new TextEncoder().encode(`${path}\0`) },
+        { code: "DATA", struct: "FModifier", address: 0x800n, data: [{ type: 5 }] },
+      ],
+    });
+    const file = readBlendFile(bytes);
+    const blocks = file.blocksWithCode("DATA").filter((block) => block.struct?.type === "FCurve");
+    const decode = vi.spyOn(TextDecoder.prototype, "decode");
+    const curves = blocks.map((block) => {
+      const struct = file.first(block);
+      if (!struct) throw new Error("No curve was written.");
+      return readFCurve(struct);
+    });
+    const pathDecodes = decode.mock.calls.filter(([input]) => input?.byteLength === path.length).length;
+    decode.mockRestore();
+    const [keyed, fewerKeys, sampled, fewerSamples] = curves;
+    if (!keyed || !fewerKeys || !sampled || !fewerSamples) throw new Error("Not every curve was read.");
+    expect(curves.map(keyFrames)).toEqual([
+      [1, 2, 3],
+      [1, 2],
+      [10, 11, 12],
+      [10, 11],
+    ]);
+    expect(Array.from(fewerKeys.keys.value)).toEqual([10, 20]);
+    expect(Array.from(fewerSamples.samples ?? [])).toEqual([1, 2]);
+    expect(fewerKeys.keys.frame.buffer).toBe(keyed.keys.frame.buffer);
+    expect(fewerSamples.samples?.buffer).toBe(sampled.samples?.buffer);
+    expect(curves.map((curve) => curve.path)).toEqual([path, path, path, path]);
+    expect(pathDecodes).toBe(1);
+    expect(fewerKeys.unsupportedModifiers).toEqual(["Noise"]);
+    expect(fewerKeys.unsupportedModifiers).toBe(keyed.unsupportedModifiers);
+  });
+
+  it("reads a modifier that the lists of several curves reach only with the first list that reaches it", () => {
+    const owners = [0x100n, 0x110n, 0x120n];
+    const file = sharedModifierTail(owners, [{ type: 5 }, { type: 3 }, { type: 7 }]);
+    const curves = owners.map((address) => readFCurve(ownerAt(file, address)));
+    expect(curves.map((curve) => curve.unsupportedModifiers)).toEqual([
+      ["Noise", "Envelope", "Python"],
+      ["Noise"],
+      ["Noise"],
+    ]);
+  });
 });
+
+describe("hasActiveModifiers", () => {
+  it("counts a modifier that the lists of several owners reach only with the first list that reaches it", () => {
+    const owners = [0x100n, 0x110n];
+    const file = sharedModifierTail(owners, [{ type: 5, flag: FMODIFIER_MUTED }, { type: 5 }]);
+    expect(owners.map((address) => hasActiveModifiers(ownerAt(file, address)))).toEqual([true, false]);
+  });
+});
+
+const FMODIFIER_MUTED = 1 << 3;
+
+/**
+ * A file of curves at `owners`, each with a modifier list of its own first modifier, `chain[0]`, followed by the other
+ * modifiers of `chain`, which every list shares.
+ */
+function sharedModifierTail(owners: readonly bigint[], chain: readonly Record<string, number>[]): BlendFile {
+  const [head, ...tail] = chain;
+  const tailAddress = (index: number) => 0x800n + BigInt(index) * 0x10n;
+  const last = tailAddress(tail.length - 1);
+  const bytes = writeBlend({
+    header: "old",
+    pointerSize: 8,
+    little: true,
+    structs: [
+      {
+        type: "ListBase",
+        fields: [
+          ["void", "*first"],
+          ["void", "*last"],
+        ],
+      },
+      {
+        type: "FModifier",
+        fields: [
+          ["FModifier", "*next"],
+          ["FModifier", "*prev"],
+          ["short", "type"],
+          ["short", "flag"],
+        ],
+      },
+      {
+        type: "FCurve",
+        fields: [
+          ["FCurve", "*next"],
+          ["FCurve", "*prev"],
+          ["ListBase", "modifiers"],
+        ],
+      },
+    ],
+    blocks: [
+      ...owners.flatMap((address, index): BlockDefinition[] => {
+        const own = 0x400n + BigInt(index) * 0x10n;
+        return [
+          { code: "DATA", struct: "FCurve", address, data: [{ modifiers: { first: own, last } }] },
+          { code: "DATA", struct: "FModifier", address: own, data: [{ ...head, next: tailAddress(0) }] },
+        ];
+      }),
+      ...tail.map(
+        (modifier, index): BlockDefinition => ({
+          code: "DATA",
+          struct: "FModifier",
+          address: tailAddress(index),
+          data: [{ ...modifier, next: index + 1 < tail.length ? tailAddress(index + 1) : 0n }],
+        }),
+      ),
+    ],
+  });
+  return readBlendFile(bytes);
+}
+
+/** The struct of the block at `address`, as the file wrote it. */
+function ownerAt(file: BlendFile, address: bigint): BlendStruct {
+  const struct = file.first(file.block(address));
+  if (!struct) throw new Error("No struct was written there.");
+  return struct;
+}

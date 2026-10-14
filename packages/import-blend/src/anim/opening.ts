@@ -48,7 +48,9 @@ function poseOf(written: readonly AnimatedValue[]): StartPose {
   for (const played of written) {
     const pose = parsePosePath(played.path);
     if (pose && isTransformProperty(pose.property, false)) {
-      bones.set(pose.bone, [...(bones.get(pose.bone) ?? []), { ...played, path: pose.property }]);
+      const channel = bones.get(pose.bone);
+      if (channel) channel.push({ ...played, path: pose.property });
+      else bones.set(pose.bone, [{ ...played, path: pose.property }]);
     } else if (!pose && isTransformProperty(played.path, true)) {
       own.push(played);
     }

@@ -178,6 +178,31 @@ describe.each(VERSIONS)("a UDIM image with one tile packed in a file from Blende
   });
 });
 
+describe.each(VERSIONS)("Image datablocks of a file from Blender %s that point at one packed file", (version) => {
+  it("share one texture, so that the bytes are copied once", async () => {
+    const expected = reference("images", version) as ImagesReference;
+    const bytes = await decompressBlend(readFixture("images", version));
+    const file = readBlendFile(bytes);
+    const imageOf = (material: string) =>
+      datablocks(file, "IM").find((image) => idName(image) === expected.images[material]?.image);
+    const packed = imageOf("Tiled")?.list("packedfiles")[0]?.pointer("packedfile");
+    if (!packed) throw new Error("The images fixture packs no tile.");
+    const sharing = ["CheckerA", "CheckerB", "AbsentA", "AbsentB"];
+    for (const material of sharing) {
+      const image = imageOf(material);
+      const field = image?.field("packedfile");
+      if (!image || !field) throw new Error(`The image of ${material} has no packed file.`);
+      file.view.setBigUint64(image.offset + field.offset, packed, file.little);
+    }
+    const scene = await importBytes("images.blend", bytes, findInFixtures);
+    const textures = new Set(
+      [...sharing, "Tiled"].map((material) => materialNamed(scene, material).baseColorTexture?.texture),
+    );
+    expect(textures.size).toBe(1);
+    expect(scene.textures[[...textures][0] ?? -1]?.bytes.length).toBe(expected.images.Tiled?.packedSize);
+  });
+});
+
 /** Finds an image as the core does: by the relative path it stores, or for an absolute path by name in textures/. */
 function findLikeTheCore(storedPath: string): Promise<FoundFile | null> {
   const stored = parseStoredPath(storedPath);

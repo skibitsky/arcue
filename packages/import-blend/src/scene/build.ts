@@ -1,12 +1,15 @@
 import type { ImportWarningCode, ImportWarningSubject, Mesh, MorphTarget, NodeKind, Skeleton } from "@arcue/scene";
+import { MAX_NODE_DEPTH, nestsTooDeep } from "@arcue/scene";
 import type { Action } from "../anim/actions";
 import { readActions, usedActions } from "../anim/actions";
 import type { StartPose, StartPoses } from "../anim/opening";
 import { startFrame, startPoses } from "../anim/opening";
 import type { SceneTimeline } from "../anim/timeline";
 import { sceneTimeline } from "../anim/timeline";
-import type { BlendFile, BlendStruct } from "../blend/file";
+import { BlendLimitError } from "../blend/errors";
+import type { BlendBlock, BlendFile, BlendStruct } from "../blend/file";
 import { idName, isLinked } from "../blend/ids";
+import { ownedList } from "../blend/lists";
 import type { Mat4 } from "../math";
 import {
   identity,
@@ -25,9 +28,9 @@ import { envelopeUse } from "./envelopes";
 import type { GrayCheck, GrayRead, MaterialDraft } from "./materials";
 import { defaultMaterial, imageUses, readMaterial } from "./materials";
 import type { BuildOptions, BuiltMesh, SkinBone } from "./mesh-build";
-import { buildMesh, MAX_UV_SETS } from "./mesh-build";
+import { buildMesh } from "./mesh-build";
 import type { MeshData } from "./mesh-data";
-import { defaultColorAttribute, MeshReadError, meshMaterials, readMeshData } from "./mesh-data";
+import { defaultColorAttribute, MAX_UV_SETS, MeshReadError, readMeshData } from "./mesh-data";
 import { changesPreview, ModifierType, modifierName, modifierType, viewportModifiers } from "./modifiers";
 import type { LinkedName, SceneContents, SceneObject } from "./objects";
 import {
@@ -181,7 +184,7 @@ function conversionMatrix(unitScale: number): Mat4 {
  * owner's path to its constraints, such as `pose.bones["Arm"].` for a bone or empty for an object.
  */
 function activeConstraints(owner: BlendStruct, path = "", animated: ReadonlySet<string> = new Set()): BlendStruct[] {
-  return owner.list("constraints").filter((constraint) => {
+  return ownedList(owner, "constraints").filter((constraint) => {
     const flag = constraint.number("flag");
     if ((flag & CONSTRAINT_OFF) !== 0 || (flag & CONSTRAINT_DISABLE) !== 0) return false;
     const influence = `${path}constraints["${quoted(constraint.string("name"))}"].influence`;
@@ -484,37 +487,102 @@ class MaterialTable {
   }
 }
 
-/** The material in each slot: the object's own where the slot links to the object, else the mesh's. */
-function slotMaterials(
-  file: BlendFile,
-  object: BlendStruct,
-  meshSlots: readonly (BlendStruct | null)[],
-): (slot: number) => BlendStruct | null {
-  const objectSlots = Math.max(object.number("totcol"), 0);
-  const objectMaterials = object.pointers("mat", objectSlots);
-  const links = object.target("matbits");
-  const linkBytes = links ? file.bytesOf(links) : new Uint8Array(0);
-  return (slot) => {
-    if ((linkBytes[slot] ?? 0) === 0) return meshSlots[slot] ?? null;
-    return file.first(object.resolve(objectMaterials[slot] ?? 0n));
-  };
+/** Blender's `MAXMAT`: the most material slots it gives an object or a mesh. */
+const MAX_MATERIAL_SLOTS = 32_767;
+
+type Slots = readonly (BlendStruct | null)[];
+
+/**
+ * Reads the material in each slot of the scene's meshes and objects. A mesh's slots are read once and shared by the
+ * objects that link none of their own. An array of materials or links serves only the first mesh or object that points
+ * at it, as Blender writes one for each, so an object's or mesh's slots are bounded by the bytes of its own arrays.
+ */
+class SlotReader {
+  readonly #file: BlendFile;
+  readonly #claimed = new Set<number>();
+  readonly #meshes = new Map<number, Slots>();
+  readonly #materials = new Map<number, BlendStruct | null>();
+
+  constructor(file: BlendFile) {
+    this.#file = file;
+  }
+
+  /** The material in each of the mesh's own slots, as many as its count and its array of materials both hold. */
+  mesh(mesh: BlendStruct): Slots {
+    let slots = this.#meshes.get(mesh.offset);
+    if (!slots) {
+      slots = this.#pointers(mesh, "mat").map((address) => this.#material(mesh, address));
+      this.#meshes.set(mesh.offset, slots);
+    }
+    return slots;
+  }
+
+  /**
+   * The material in each of the object's slots: its own where the slot links to the object, else the mesh's. The
+   * object has as many slots as its count and its arrays of materials and links hold, and at least the mesh's.
+   */
+  object(object: BlendStruct, meshSlots: Slots): Slots {
+    const materials = this.#pointers(object, "mat");
+    const linksBlock = this.#own(object, "matbits");
+    const links = linksBlock ? this.#file.bytesOf(linksBlock).subarray(0, this.#counted(object)) : new Uint8Array(0);
+    const count = Math.max(materials.length, links.length, meshSlots.length);
+    if (count === meshSlots.length && links.every((link) => link === 0)) return meshSlots;
+    return Array.from({ length: count }, (_, slot) =>
+      (links[slot] ?? 0) === 0 ? (meshSlots[slot] ?? null) : this.#material(object, materials[slot] ?? 0n),
+    );
+  }
+
+  #counted(owner: BlendStruct): number {
+    return Math.min(Math.max(owner.number("totcol"), 0), MAX_MATERIAL_SLOTS);
+  }
+
+  /** The block a pointer member points at, unless a mesh or object read before points at it too. */
+  #own(owner: BlendStruct, name: string): BlendBlock | null {
+    const block = owner.target(name);
+    if (!block || this.#claimed.has(block.index)) return null;
+    this.#claimed.add(block.index);
+    return block;
+  }
+
+  /** The material pointers in the owner's own array, as many as its count and the array both hold. */
+  #pointers(owner: BlendStruct, name: string): bigint[] {
+    return this.#own(owner, name) ? owner.pointers(name, this.#counted(owner)) : [];
+  }
+
+  #material(owner: BlendStruct, address: bigint): BlendStruct | null {
+    const block = owner.resolve(address);
+    if (!block) return null;
+    let material = this.#materials.get(block.index);
+    if (material === undefined) {
+      material = this.#file.first(block);
+      this.#materials.set(block.index, material);
+    }
+    return material;
+  }
 }
 
 /** A shown mesh object, its mesh, and the material in each of its slots. */
 export interface ShownMesh {
   object: SceneObject;
   mesh: BlendStruct;
-  slots: (BlendStruct | null)[];
+  slots: Slots;
 }
 
-/** The scene's shown mesh objects with the materials in their slots, which both the gray check and the build read. */
+/**
+ * The scene's shown mesh objects with the materials in their slots, which both the gray check and the build read.
+ * Objects that link no slot of their own share their mesh's slots.
+ */
 export function* shownMeshSlots(file: BlendFile, contents: SceneContents): Generator<ShownMesh> {
+  const reader = new SlotReader(file);
+  const read = new Map<number, Slots>();
   for (const object of contents.objects) {
     if (object.type !== ObjectType.mesh || !object.data || !object.shown) continue;
-    const meshSlots = meshMaterials(file, object.data);
-    const slotMaterial = slotMaterials(file, object.struct, meshSlots);
-    const count = Math.max(object.struct.number("totcol"), meshSlots.length);
-    yield { object, mesh: object.data, slots: Array.from({ length: count }, (_, slot) => slotMaterial(slot)) };
+    let slots = read.get(object.struct.offset);
+    if (!slots) {
+      slots = reader.object(object.struct, reader.mesh(object.data));
+      read.set(object.struct.offset, slots);
+    }
+    yield { object, mesh: object.data, slots };
   }
 }
 
@@ -538,7 +606,10 @@ export function grayCandidates(file: BlendFile, contents: SceneContents): GrayCa
   };
   const read = new Set<number>();
   const frame = imageFrame(contents.scene);
+  const scanned = new Set<Slots>();
   for (const { slots } of shownMeshSlots(file, contents)) {
+    if (scanned.has(slots)) continue;
+    scanned.add(slots);
     for (const material of slots) {
       if (!material || isLinked(material) || read.has(material.offset)) continue;
       read.add(material.offset);
@@ -762,7 +833,7 @@ class MeshCache {
 
 /** The vertex group names an object stores, which files before Blender 3.0 keep on the object. */
 function vertexGroupNames(object: BlendStruct): string[] {
-  return object.list("defbase").map((group) => group.string("name"));
+  return ownedList(object, "defbase").map((group) => group.string("name"));
 }
 
 /** Each shape key's weight by name, as the object shows its mesh at the scene's start frame. */
@@ -870,9 +941,13 @@ class SceneMeshes {
         "Shown in its basis shape",
       );
     }
+    if (data.shapeKeysLeftOut) {
+      const detail = `Its mesh has ${data.cornerCount} face corners for ${data.vertexCount} vertices; shown in its basis shape`;
+      warn("deform-approximated", object.name, `Shape keys not shown: ${object.name}`, detail);
+    }
     const built = cache.build(read, {
       conversion,
-      slotCount: Math.max(object.struct.number("totcol"), data.materials.length),
+      slotCount: slots.length,
       skinBones: skinBones(object, byOffset, warn),
       meshNode: record.node,
       smoothing,
@@ -1040,6 +1115,11 @@ export function buildScene(
   const { nodes, nodeWorlds, objects, byOffset } = objectNodes(contents, animated, poses, warn, (parent) =>
     cache.vertices(parent, poses),
   );
+  if (nestsTooDeep(nodes)) {
+    throw new BlendLimitError(
+      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show`,
+    );
+  }
   const restWorld = nodes.map((_, index) => nodeWorlds.of(index));
   const materials = new MaterialTable(file.version, isGray, imageFrame(contents.scene));
   const meshes = new SceneMeshes({

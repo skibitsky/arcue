@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import type { FoundFile, ImportRequest, SceneDescription } from "@arcue/scene";
-import { boundsOfPoints, cleanClipName, collectTransferables, lastFrame, parseStoredPath } from "@arcue/scene";
+import {
+  boundsOfPoints,
+  cleanClipName,
+  collectTransferables,
+  lastFrame,
+  MAX_NODE_DEPTH,
+  parseStoredPath,
+} from "@arcue/scene";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   ABSOLUTE_TEXTURE_FBX,
@@ -13,6 +20,7 @@ import {
   LEFT_HANDED_FBX,
   LOD_FBX,
   METAL_ROUGH_FBX,
+  nodeChainFbx,
   PARTLY_WEIGHTED_FBX,
   PHONG_SHININESS_FBX,
   PNG_SIGNATURE,
@@ -678,6 +686,16 @@ describe("errors", () => {
     await expect(fbxImporter.import({ ...noFiles, fileName: "broken.fbx", bytes })).rejects.toMatchObject({
       name: "ArcueError",
       code: "invalid-input",
+    });
+  });
+
+  it("nests as many nodes as the viewport walks, and refuses a file that nests more", async () => {
+    const scene = await importText("deep.fbx", nodeChainFbx(MAX_NODE_DEPTH));
+    expect(scene.nodes.map((node) => node.parent)).toEqual(scene.nodes.map((_, index) => index - 1));
+    await expect(importText("deeper.fbx", nodeChainFbx(MAX_NODE_DEPTH + 1))).rejects.toMatchObject({
+      name: "ArcueError",
+      code: "invalid-input",
+      message: `deeper.fbx nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show.`,
     });
   });
 

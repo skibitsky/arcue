@@ -118,6 +118,10 @@ export interface ShapeKey {
   value: number;
   min: number;
   max: number;
+  /**
+   * Whether Blender leaves the key out of the shape it shows: a muted key, or one without positions of its own for
+   * every vertex, whose positions here are the mesh's vertices.
+   */
   muted: boolean;
   vertexGroup: string;
 }
@@ -133,9 +137,12 @@ export type CustomNormals =
   | { kind: "encoded"; values: Int16Array }
   | { kind: "free"; domain: Domain; values: Float32Array };
 
+/** The UV maps a mesh's preview shows: the first, in Blender's order. */
+export const MAX_UV_SETS = 8;
+
 export interface UvMap {
   name: string;
-  /** Two values per face corner. */
+  /** Two values per face corner, or none for a map past the first `MAX_UV_SETS`, which the preview leaves out. */
   values: Float32Array;
 }
 
@@ -175,27 +182,70 @@ export interface MeshData {
   referenceKey: number;
   /** Whether the shape keys are absolute: Blender blends them by an evaluation time instead of each key's value. */
   absoluteKeys: boolean;
-  /** Material slots of the mesh data, as datablock structs or null for empty slots. */
-  materials: (BlendStruct | null)[];
+  /**
+   * Whether shape keys are left out because the mesh has more than `MAX_CORNERS_PER_KEYED_VERTEX` face corners for
+   * each vertex.
+   */
+  shapeKeysLeftOut: boolean;
 }
 
 export class MeshReadError extends Error {
   override readonly name = "MeshReadError";
 }
 
-/** The first `wanted` structs of a block, or as many as it holds, without making the others. */
-function structsOf(file: BlendFile, block: BlendBlock | null, wanted: number): BlendStruct[] {
+/**
+ * Far more layers of data than Blender's own meshes have, each attribute or array of elements a layer. A mesh that
+ * lists more is refused, and no more of them are read.
+ */
+const MAX_LAYERS = 2 ** 16;
+
+/** A mesh's block of layers of data, how many it counts, and the struct Blender writes each as. */
+interface LayerArray {
+  block: BlendBlock | null;
+  count: number;
+  struct: "Attribute" | "CustomDataLayer";
+}
+
+/** How many layers the array's block holds, up to its count: none when the block holds another struct. */
+function heldStructs({ block, count, struct }: LayerArray): number {
   const type = block?.struct;
-  if (!block || !type || type.size === 0) return [];
-  const count = Math.max(0, Math.min(wanted, block.count, Math.floor(block.size / type.size)));
+  if (!block || type?.type !== struct || type.size === 0) return 0;
+  return Math.max(0, Math.min(count, block.count, Math.floor(block.size / type.size)));
+}
+
+/** The layers of the array, as many as its block holds up to `MAX_LAYERS`, without making the others. */
+function structsOf(file: BlendFile, array: LayerArray): BlendStruct[] {
+  const { block } = array;
+  const type = block?.struct;
+  if (!block || !type) return [];
+  const count = Math.min(heldStructs(array), MAX_LAYERS);
   return Array.from({ length: count }, (_, index) => new BlendStruct(file, type, block, index * type.size));
 }
 
-function storageAttributes(mesh: BlendStruct): MeshAttribute[] {
+/** The attributes of a mesh from Blender 5 and on. */
+function storageArray(mesh: BlendStruct): LayerArray {
   const storage = mesh.struct("attribute_storage");
-  if (!storage) return [];
-  const count = storage.number("dna_attributes_num");
-  return structsOf(mesh.file, storage.target("dna_attributes"), count).flatMap((attribute) => {
+  const block = storage?.target("dna_attributes") ?? null;
+  return { block, count: storage?.number("dna_attributes_num") ?? 0, struct: "Attribute" };
+}
+
+/** The layers of one of a mesh's CustomData. */
+function layerArray(mesh: BlendStruct, field: LayerField): LayerArray {
+  const data = mesh.struct(field);
+  return { block: data?.target("layers") ?? null, count: data?.number("totlayer") ?? 0, struct: "CustomDataLayer" };
+}
+
+/** Refuses a mesh that lists more layers of data than `MAX_LAYERS` in its attributes or in one CustomData. */
+function checkLayerCounts(mesh: BlendStruct): void {
+  const counts = [storageArray(mesh), ...LAYER_DOMAINS.map(([field]) => layerArray(mesh, field))].map(heldStructs);
+  const most = Math.max(...counts);
+  if (most > MAX_LAYERS) {
+    throw new MeshReadError(`Mesh ${idName(mesh)} has ${most} layers of data, far more than Blender writes`);
+  }
+}
+
+function storageAttributes(mesh: BlendStruct): MeshAttribute[] {
+  return structsOf(mesh.file, storageArray(mesh)).flatMap((attribute) => {
     const type = STORAGE_TYPES[attribute.number("data_type")];
     const domain = DOMAINS[attribute.number("domain")];
     if (!type || !domain) return [];
@@ -218,8 +268,7 @@ const LAYER_DOMAINS: readonly [LayerField, Domain][] = [
 ];
 
 function layersOf(mesh: BlendStruct, field: LayerField): BlendStruct[] {
-  const data = mesh.struct(field);
-  return data ? structsOf(mesh.file, data.target("layers"), data.number("totlayer")) : [];
+  return structsOf(mesh.file, layerArray(mesh, field));
 }
 
 function readLayers(mesh: BlendStruct): CustomDataLayers {
@@ -406,6 +455,14 @@ function usedFirst(wanted: readonly (readonly string[])[], materialIndices: Int3
 }
 
 /**
+ * The structs of the arrays meshes before Blender 4.0 hold, each with the bytes of the members read from it, which the
+ * struct holds in every version Blender writes.
+ */
+const LEGACY_SIZES = { MVert: 12, MEdge: 8, MPoly: 8, MLoop: 8, MLoopUV: 8, MDeformVert: 8 } as const;
+
+type LegacyStruct = keyof typeof LEGACY_SIZES;
+
+/**
  * An array of structs read member by member at the offsets its SDNA gives, without an object per element, as meshes
  * before Blender 4.0 store their vertices, edges, faces, corners and UV maps.
  */
@@ -413,15 +470,20 @@ class StructArray {
   readonly #file: BlendFile;
   readonly #block: BlendBlock | null;
   readonly #stride: number;
-  /** How many elements the block holds. */
+  /**
+   * How many elements the block holds: none unless its struct is `struct`, the one Blender writes such arrays of, and
+   * the file's SDNA makes it large enough for the members read from it, so that elements take no more memory than the
+   * file's bytes.
+   */
   readonly length: number;
 
-  constructor(file: BlendFile, block: BlendBlock | null) {
+  constructor(file: BlendFile, block: BlendBlock | null, struct: LegacyStruct) {
     this.#file = file;
     this.#block = block;
     const type = block?.struct;
     this.#stride = type?.size ?? 0;
-    this.length = block && type && type.size > 0 ? Math.min(block.count, Math.floor(block.size / type.size)) : 0;
+    const held = block && type?.type === struct && type.size >= LEGACY_SIZES[struct];
+    this.length = held ? Math.min(block.count, Math.floor(block.size / type.size)) : 0;
   }
 
   /**
@@ -455,8 +517,18 @@ class StructArray {
   }
 }
 
-function legacyArray(file: BlendFile, layers: readonly BlendStruct[], type: number): StructArray {
-  return new StructArray(file, ofType(layers, type)[0]?.target("data") ?? null);
+/** The struct of each element of the legacy layers that hold a mesh's topology. */
+const LEGACY_STRUCTS = {
+  [CustomDataType.vertex]: "MVert",
+  [CustomDataType.edge]: "MEdge",
+  [CustomDataType.face]: "MPoly",
+  [CustomDataType.loop]: "MLoop",
+} as const;
+
+type TopologyLayer = keyof typeof LEGACY_STRUCTS;
+
+function legacyArray(file: BlendFile, layers: readonly BlendStruct[], type: TopologyLayer): StructArray {
+  return new StructArray(file, ofType(layers, type)[0]?.target("data") ?? null, LEGACY_STRUCTS[type]);
 }
 
 const LEGACY_FACE_SMOOTH = 1 << 0;
@@ -557,9 +629,12 @@ function readTopology(
   return { positions, edges, faceOffsets, cornerVerts, cornerEdges, materialIndices, sharpFaces, sharpEdges };
 }
 
+const UNSHOWN_UVS = new Float32Array(0);
+
 /**
  * The UV maps: the float vector corner attributes, then the MLoopUV layers of files from before Blender 4.0, as Blender
- * converts those after the attributes. The default is the render layer of the MLoopUV layers when there are any.
+ * converts those after the attributes. The default is the render layer of the MLoopUV layers when there are any. Only
+ * the maps the preview shows have values.
  */
 function readUvMaps(
   file: BlendFile,
@@ -569,20 +644,25 @@ function readUvMaps(
   sizes: Sizes,
 ): { maps: UvMap[]; default: number } {
   const maps: UvMap[] = [];
+  const add = (name: string, read: () => Float32Array) => {
+    maps.push({ name, values: maps.length < MAX_UV_SETS ? read() : UNSHOWN_UVS });
+  };
   for (const attribute of reader.attributes) {
     if (attribute.type !== "float2" || attribute.domain !== "corner" || attribute.name.startsWith(".")) continue;
-    maps.push({ name: attribute.name, values: reader.float32(attribute) });
+    add(attribute.name, () => reader.float32(attribute));
   }
   const legacy = ofType(layers.ldata, CustomDataType.loopUv);
   for (const layer of legacy) {
-    const corners = new StructArray(file, layer.target("data"));
-    const uv = corners.member("uv");
-    const values = new Float32Array(sizes.corner * 2);
-    for (let c = 0; c < Math.min(sizes.corner, corners.length); c++) {
-      values[c * 2] = uv(c, 0);
-      values[c * 2 + 1] = uv(c, 1);
-    }
-    maps.push({ name: layer.string("name"), values });
+    add(layer.string("name"), () => {
+      const corners = new StructArray(file, layer.target("data"), "MLoopUV");
+      const uv = corners.member("uv");
+      const values = new Float32Array(sizes.corner * 2);
+      for (let c = 0; c < Math.min(sizes.corner, corners.length); c++) {
+        values[c * 2] = uv(c, 0);
+        values[c * 2 + 1] = uv(c, 1);
+      }
+      return values;
+    });
   }
   const render = pickedLayer(legacy.length > 0 ? legacy : ofType(layers.ldata, CustomDataType.float2), "active_rnd");
   const wanted =
@@ -611,7 +691,9 @@ function readCustomNormals(reader: AttributeReader, file: BlendFile, layers: Cus
 
 /**
  * Reads each vertex's MDeformWeight array straight from its block, in two passes that size typed arrays first. Blender
- * writes one block per vertex, so the pointers resolve to block indices without making a block object for each.
+ * writes one block per vertex, so the pointers resolve to block indices without making a block object for each. A
+ * block that an earlier vertex points at gives a later one no weights, so that the weights read are at most those the
+ * file holds.
  */
 function readDeformWeights(
   file: BlendFile,
@@ -620,7 +702,7 @@ function readDeformWeights(
   sizes: Sizes,
 ): DeformWeights | null {
   const layer = ofType(layers.vdata, CustomDataType.deformVertex)[0];
-  const vertices = new StructArray(file, layer ? layer.target("data") : mesh.target("dvert"));
+  const vertices = new StructArray(file, layer ? layer.target("data") : mesh.target("dvert"), "MDeformVert");
   if (vertices.length === 0) return null;
   const count = Math.min(sizes.point, vertices.length);
   const pointerAt = vertices.pointer("dw");
@@ -634,6 +716,7 @@ function readDeformWeights(
 
   const offsets = new Uint32Array(sizes.point + 1);
   const blocks = new Int32Array(count).fill(-1);
+  const claimed = new Set<number>();
   let total = 0;
   for (let v = 0; v < count; v++) {
     offsets[v] = total;
@@ -641,7 +724,8 @@ function readDeformWeights(
     const wanted = totalOf(v);
     if (at < 0 || wanted <= 0 || stride === 0) continue;
     const block = file.pointedBlock(at, vertices.owner);
-    if (block < 0) continue;
+    if (block < 0 || claimed.has(block)) continue;
+    claimed.add(block);
     blocks[v] = block;
     total += Math.min(wanted, Math.floor(file.blockSize(block) / stride));
   }
@@ -674,34 +758,52 @@ interface ShapeKeys {
   absolute: boolean;
   /** The reference key's positions, which Blender shapes the mesh from instead of its vertices, when it has them all. */
   basis: Float32Array | null;
+  leftOut: boolean;
 }
 
-function readShapeKeys(mesh: BlendStruct, file: BlendFile, sizes: Sizes): ShapeKeys {
+/**
+ * The most face corners for each vertex that a mesh may have and still show its shape keys, far more than meshes have.
+ * Each shape key holds a position for every vertex, but the preview builds it for every face corner.
+ */
+export const MAX_CORNERS_PER_KEYED_VERTEX = 32;
+
+/**
+ * The mesh's shape keys. Each reads its positions from a data block that holds one for every vertex and that no earlier
+ * key reads, as Blender writes them; a key without one shares `vertices` and is left out, so that the keys read take
+ * memory only for the positions the file holds. A mesh with more than `MAX_CORNERS_PER_KEYED_VERTEX` face corners for
+ * each vertex keeps only its basis, since the preview would build every key for every corner.
+ */
+function readShapeKeys(mesh: BlendStruct, file: BlendFile, sizes: Sizes, vertices: Float32Array): ShapeKeys {
   const key = mesh.deref("key");
-  if (!key) return { keys: [], reference: -1, absolute: false, basis: null };
+  if (!key) return { keys: [], reference: -1, absolute: false, basis: null, leftOut: false };
   const blocks = key.list("block");
   const reference = blocks.findIndex((block) => block.offset === file.first(key.target("refkey"))?.offset);
-  const keys = blocks.map((block) => {
+  const claimed = new Set<number>();
+  const owned = blocks.map((block) => {
     const data = block.target("data");
-    const positions = data
-      ? padded(file.float32(data, sizes.point * 3), sizes.point * 3)
-      : new Float32Array(sizes.point * 3);
-    return {
-      name: block.string("name"),
-      positions,
-      relative: block.number("relative"),
-      value: block.number("curval"),
-      min: block.number("slidermin"),
-      max: block.number("slidermax"),
-      muted: (block.number("flag") & KEY_BLOCK_MUTE) !== 0,
-      vertexGroup: block.string("vgroup"),
-    };
+    if (!data || claimed.has(data.index) || Math.floor(data.size / 4) < sizes.point * 3) return null;
+    claimed.add(data.index);
+    return file.float32(data, sizes.point * 3);
   });
+  const keys = blocks.map((block, index) => ({
+    name: block.string("name"),
+    positions: owned[index] ?? vertices,
+    relative: block.number("relative"),
+    value: block.number("curval"),
+    min: block.number("slidermin"),
+    max: block.number("slidermax"),
+    muted: !owned[index] || (block.number("flag") & KEY_BLOCK_MUTE) !== 0,
+    vertexGroup: block.string("vgroup"),
+  }));
   const basisIndex = reference === -1 && keys.length > 0 ? 0 : reference;
   const basisBlock = blocks[basisIndex];
-  const basis = basisBlock?.number("totelem") === sizes.point ? (keys[basisIndex]?.positions ?? null) : null;
-  if (key.number("type") !== KEY_RELATIVE) return { keys: [], reference: -1, absolute: true, basis };
-  return { keys, reference: basisIndex, absolute: false, basis };
+  const basis = basisBlock?.number("totelem") === sizes.point ? (owned[basisIndex] ?? null) : null;
+  if (key.number("type") !== KEY_RELATIVE) return { keys: [], reference: -1, absolute: true, basis, leftOut: false };
+  if (sizes.corner > MAX_CORNERS_PER_KEYED_VERTEX * sizes.point) {
+    const shown = keys.some((shapeKey, index) => index !== basisIndex && !shapeKey.muted);
+    return { keys: [], reference: -1, absolute: false, basis, leftOut: shown };
+  }
+  return { keys, reference: basisIndex, absolute: false, basis, leftOut: false };
 }
 
 /**
@@ -726,7 +828,7 @@ function checkCounts(mesh: BlendStruct, reader: AttributeReader, layers: CustomD
   const edgeVerts = reader.find(".edge_verts", ["int32_2d"], "edge");
   const cornerVert = reader.find(".corner_vert", ["int32"], "corner");
   const offsets = mesh.target("poly_offset_indices");
-  const legacy = (field: LayerField, type: number) => legacyArray(mesh.file, layers[field], type).length;
+  const legacy = (field: LayerField, type: TopologyLayer) => legacyArray(mesh.file, layers[field], type).length;
   const held: Sizes = {
     point: position ? heldElements(position) : legacy("vdata", CustomDataType.vertex),
     edge: edgeVerts ? heldElements(edgeVerts) : legacy("edata", CustomDataType.edge),
@@ -756,6 +858,7 @@ export function readMeshData(
     face: Math.max(mesh.number("totpoly"), 0),
     corner: Math.max(mesh.number("totloop"), 0),
   };
+  checkLayerCounts(mesh);
   const layers = readLayers(mesh);
   const attributes = [...storageAttributes(mesh), ...customDataAttributes(layers)];
   const reader = new AttributeReader(file, attributes, sizes);
@@ -766,9 +869,8 @@ export function readMeshData(
   const groupNames = mesh.has("vertex_group_names")
     ? mesh.list("vertex_group_names").map((group) => group.string("name"))
     : [...objectGroups];
-  const shapeKeys = readShapeKeys(mesh, file, sizes);
+  const shapeKeys = readShapeKeys(mesh, file, sizes, topology.positions);
   const autoSmooth = (mesh.number("flag") & LEGACY_AUTO_SMOOTH) !== 0 && mesh.has("smoothresh") && file.version < 401;
-  const materials = meshMaterials(file, mesh);
   return {
     name: idName(mesh),
     vertexCount: sizes.point,
@@ -788,13 +890,8 @@ export function readMeshData(
     shapeKeys: shapeKeys.keys,
     referenceKey: shapeKeys.reference,
     absoluteKeys: shapeKeys.absolute,
-    materials,
+    shapeKeysLeftOut: shapeKeys.leftOut,
   };
-}
-
-/** The material in each of the mesh's own slots. */
-export function meshMaterials(file: BlendFile, mesh: BlendStruct): (BlendStruct | null)[] {
-  return mesh.pointers("mat", Math.max(mesh.number("totcol"), 0)).map((address) => file.first(mesh.resolve(address)));
 }
 
 function validateTopology(

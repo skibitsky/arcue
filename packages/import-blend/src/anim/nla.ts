@@ -1,4 +1,5 @@
 import type { BlendStruct } from "../blend/file";
+import { unseenList } from "../blend/lists";
 import type { Action, ActionUse } from "./actions";
 import {
   ADT_NLA_EDIT_ON,
@@ -446,21 +447,26 @@ interface TrackTiming {
   lane: Lane;
 }
 
-function readTrack(track: BlendStruct): TrackTiming {
+/** Reads a track's strips, leaving out those `seen` holds, as another track's, and adding the rest to it. */
+function readTrack(track: BlendStruct, seen: Set<number>): TrackTiming {
   const top = emptyList();
   const byOffset = new Map<number, Strip>();
   const lists = [top];
   let tooDeep = false;
   let transition = false;
-  const pending = track.list("strips").map((struct) => ({ struct, parent: null as Strip | null, depth: 0 }));
+  const pending = unseenList(track, "strips", seen).map((struct) => ({
+    struct,
+    parent: null as Strip | null,
+    depth: 0,
+  }));
   for (let next = 0; next < pending.length; next++) {
     const entry = pending[next];
-    if (!entry || byOffset.has(entry.struct.offset)) continue;
+    if (!entry) continue;
     const strip = stripOf(stripSettings(entry.struct), entry.parent);
     byOffset.set(entry.struct.offset, strip);
     (entry.parent?.inner ?? top).strips.push(strip);
     if (strip.type === StripType.transition) transition = true;
-    const inner = entry.struct.list("strips");
+    const inner = unseenList(entry.struct, "strips", seen);
     if (inner.length === 0) continue;
     if (entry.depth >= MAX_META_DEPTH) {
       tooDeep = true;
@@ -502,15 +508,16 @@ function trackTiming(top: StripList, byOffset: Map<number, Strip>, tooDeep: bool
   return { top, byOffset, tooDeep, transition, breaks: trackBreaks(top), at, players, lane };
 }
 
-/** The NLA tracks that players read, each track read once. */
+/** The NLA tracks that players read, each track read once, and each strip read with the first track that lists it. */
 export class NlaTracks {
   readonly #read = new Map<number, TrackTiming>();
   readonly #tweaked = new Map<number, TrackTiming | null>();
+  readonly #seen = new Set<number>();
 
   of(track: BlendStruct): TrackTiming {
     let timing = this.#read.get(track.offset);
     if (!timing) {
-      timing = readTrack(track);
+      timing = readTrack(track, this.#seen);
       this.#read.set(track.offset, timing);
     }
     return timing;
@@ -1010,10 +1017,11 @@ function nlaValues(
   const tweakedOffset = tracks.find((track) => (track.number("flag") & NLATRACK_DISABLED) !== 0)?.offset;
   const tweakedAction = actionOf(adt.deref("actstrip")?.deref("act") ?? null);
   const playing: Playing[] = [];
+  const read = new Set<number>();
   for (const track of evaluatedTracks(adt)) {
     const tweaked = track.offset === tweakedOffset ? tweakStrip(adt, tweakedAction) : null;
     if (track.offset === tweakedOffset && !tweaked) return null;
-    const played = playingStrip(tweaked ? soleStrip(tweaked) : readTrack(track).top, frame);
+    const played = playingStrip(tweaked ? soleStrip(tweaked) : readTrack(track, read).top, frame);
     if (played === null) return null;
     if (played) playing.push(played);
   }
@@ -1046,14 +1054,12 @@ function nlaValues(
   };
   if (trackAction && upper && !addToDomain(trackAction, trackSlot)) return null;
   const enabled = tracks.filter((track) => trackPlays(flag, track, true));
-  const pending = enabled.flatMap((track) => track.list("strips"));
   const visited = new Set<number>();
+  const pending = enabled.flatMap((track) => unseenList(track, "strips", visited));
   for (let strip = pending.pop(); strip; strip = pending.pop()) {
-    if (visited.has(strip.offset)) continue;
-    visited.add(strip.offset);
     const action = strip.deref("act");
     if (action && !addToDomain(action, slotHandle(strip, "action_slot_handle"))) return null;
-    pending.push(...strip.list("strips"));
+    for (const inner of unseenList(strip, "strips", visited)) pending.push(inner);
   }
 
   const values = new Map<string, Values>();

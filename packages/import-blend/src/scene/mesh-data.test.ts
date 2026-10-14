@@ -6,10 +6,18 @@ import { readBlendFile } from "../blend/file";
 import { datablocks } from "../blend/ids";
 import { identity } from "../math";
 import { buildMesh } from "./mesh-build";
-import { CustomDataType, type MeshData, readMeshData } from "./mesh-data";
+import { CustomDataType, defaultColorAttribute, type MeshData, MeshReadError, readMeshData } from "./mesh-data";
+import { shapeTargets } from "./shape-keys";
 
 /** The structs of a mesh as Blender 3.0 to 3.4 wrote them, with only the members the reader takes. */
 const STRUCTS: FileDefinition["structs"] = [
+  {
+    type: "ListBase",
+    fields: [
+      ["void", "*first"],
+      ["void", "*last"],
+    ],
+  },
   { type: "ID", fields: [["char", "name[66]"]] },
   {
     type: "CustomDataLayer",
@@ -92,9 +100,34 @@ const STRUCTS: FileDefinition["structs"] = [
     ],
   },
   {
+    type: "KeyBlock",
+    fields: [
+      ["KeyBlock", "*next"],
+      ["KeyBlock", "*prev"],
+      ["char", "name[64]"],
+      ["void", "*data"],
+      ["int", "totelem"],
+      ["int", "relative"],
+      ["float", "curval"],
+      ["float", "slidermin"],
+      ["float", "slidermax"],
+      ["short", "flag"],
+    ],
+  },
+  {
+    type: "Key",
+    fields: [
+      ["ID", "id"],
+      ["KeyBlock", "*refkey"],
+      ["ListBase", "block"],
+      ["int", "type"],
+    ],
+  },
+  {
     type: "Mesh",
     fields: [
       ["ID", "id"],
+      ["Key", "*key"],
       ["CustomData", "vdata"],
       ["CustomData", "edata"],
       ["CustomData", "pdata"],
@@ -186,7 +219,17 @@ interface Fold {
   withoutUvMaps?: boolean;
   /** MDeformWeight blocks that hold fewer weights than their vertex counts, or that the file does not hold. */
   damagedWeights?: boolean;
+  /** Every vertex's weights in the block of vertex 0's two, as no file Blender writes has them. */
+  sharedWeights?: boolean;
+  /** MLoopUV layers without data after the two UV maps. */
+  emptyUvMaps?: number;
+  /** Shape key blocks with their data: one of the `KEY_DATA` blocks, or none. The first is the reference key. */
+  shapeKeys?: { name: string; data: bigint | null }[];
 }
+
+/** The data blocks a fold's shape keys can have: its own positions, those lifted by 1, and those of 2 vertices. */
+const KEY_DATA = { basis: 0x600n, lifted: 0x610n, short: 0x620n } as const;
+const LIFTED = POSITIONS.map(([x = 0, y = 0, z = 0]) => [x, y, z + 1]);
 
 function floats(values: readonly number[], little: boolean): Uint8Array {
   const view = new DataView(new ArrayBuffer(values.length * 4));
@@ -211,6 +254,9 @@ function legacyFold(options: Fold = {}): Uint8Array {
     ...(options.withoutUvMaps
       ? []
       : [layer(CustomDataType.loopUv, "UVMap", 0x340n, 1), layer(CustomDataType.loopUv, "Lightmap", 0x350n, 1)]),
+    ...Array.from({ length: options.emptyUvMaps ?? 0 }, (_, index) =>
+      layer(CustomDataType.loopUv, `Empty${index}`, 0n),
+    ),
     ...(options.customNormals ? [layer(CustomDataType.customLoopNormal, "", 0x360n)] : []),
     ...(options.cornerColors ? [layer(CustomDataType.floatColor, "Paint", 0x380n)] : []),
   ];
@@ -226,6 +272,44 @@ function legacyFold(options: Fold = {}): Uint8Array {
       },
     ];
   });
+  const shapeKeys = options.shapeKeys ?? [];
+  const keyBlockAt = (index: number) => 0x700n + BigInt(index) * 0x10n;
+  const keyBlocks: BlockDefinition[] =
+    shapeKeys.length === 0
+      ? []
+      : [
+          {
+            code: "KE",
+            struct: "Key",
+            address: 0x6f0n,
+            data: [
+              {
+                id: { name: "KEKey" },
+                refkey: keyBlockAt(0),
+                block: { first: keyBlockAt(0), last: keyBlockAt(shapeKeys.length - 1) },
+                type: 1,
+              },
+            ],
+          },
+          ...shapeKeys.map(({ name, data }, index) => ({
+            code: "DATA",
+            struct: "KeyBlock",
+            address: keyBlockAt(index),
+            data: [
+              {
+                next: index + 1 < shapeKeys.length ? keyBlockAt(index + 1) : 0n,
+                prev: index > 0 ? keyBlockAt(index - 1) : 0n,
+                name,
+                data: data ?? 0n,
+                totelem: POSITIONS.length,
+                slidermax: 1,
+              },
+            ],
+          })),
+          { code: "DATA", struct: null, address: KEY_DATA.basis, data: floats(POSITIONS.flat(), little) },
+          { code: "DATA", struct: null, address: KEY_DATA.lifted, data: floats(LIFTED.flat(), little) },
+          { code: "DATA", struct: null, address: KEY_DATA.short, data: floats(POSITIONS.slice(0, 2).flat(), little) },
+        ];
   return writeBlend({
     header: "old",
     pointerSize: options.pointerSize ?? 8,
@@ -240,6 +324,7 @@ function legacyFold(options: Fold = {}): Uint8Array {
         data: [
           {
             id: { name: "MEFold" },
+            key: shapeKeys.length > 0 ? 0x6f0n : 0n,
             vdata: { layers: 0x200n, totlayer: 2 },
             edata: { layers: 0x210n, totlayer: 1 },
             pdata: { layers: 0x220n, totlayer: 1 },
@@ -300,12 +385,14 @@ function legacyFold(options: Fold = {}): Uint8Array {
         code: "DATA",
         struct: "MDeformVert",
         address: 0x400n,
-        data: WEIGHTS.map((pairs, vertex) => ({
-          dw: pairs.length > 0 ? 0x500n + BigInt(vertex) * 0x10n : 0n,
-          totweight: pairs.length,
-        })),
+        data: WEIGHTS.map((pairs, vertex) =>
+          options.sharedWeights
+            ? { dw: 0x500n, totweight: 2 }
+            : { dw: pairs.length > 0 ? 0x500n + BigInt(vertex) * 0x10n : 0n, totweight: pairs.length },
+        ),
       },
       ...weightBlocks,
+      ...keyBlocks,
     ],
   });
 }
@@ -449,6 +536,15 @@ describe("mesh data in files from Blender 3.0 to 3.4", () => {
     expect(arrays(little).positions).toEqual(POSITIONS.flat());
   });
 
+  it("reads the weights in memory sized by the mesh, not by the number of blocks in the whole file", () => {
+    const file = readBlendFile(legacyFold());
+    Object.defineProperty(file, "blockCount", { value: Number.MAX_SAFE_INTEGER });
+    const [mesh] = datablocks(file, "ME");
+    if (!mesh) throw new Error("The synthetic file has no mesh.");
+    const weights = readMeshData(file, mesh, ["Upper", "Lower"]).deformWeights;
+    expect(Array.from(weights?.offsets ?? [])).toEqual([0, 2, 3, 4, 4, 6, 6]);
+  });
+
   it("keeps the weights a vertex's block holds, and none for a block the file lacks", () => {
     const fold = readFold({ damagedWeights: true });
     expect(Array.from(fold.deformWeights?.offsets ?? [])).toEqual([0, 1, 2, 2, 2, 4, 4]);
@@ -496,5 +592,168 @@ describe("mesh data in files from Blender 3.0 to 3.4", () => {
     expect(performance.now() - start).toBeLessThan(2000);
     expect(data.uvMaps).toHaveLength(count);
     expect(data.defaultUv).toBe(count - 1);
+  });
+});
+
+describe("a damaged or crafted mesh", () => {
+  it("gives a block of weights only to the first vertex that points at it", () => {
+    const fold = readFold({ sharedWeights: true });
+    expect(Array.from(fold.deformWeights?.offsets ?? [])).toEqual([0, 2, 2, 2, 2, 2, 2]);
+    expect(Array.from(fold.deformWeights?.groups ?? [])).toEqual([0, 1]);
+  });
+
+  it("leaves out each shape key without positions of its own for every vertex, making none for it", () => {
+    const fold = readFold({
+      shapeKeys: [
+        { name: "Basis", data: KEY_DATA.basis },
+        { name: "Lift", data: KEY_DATA.lifted },
+        { name: "Empty", data: null },
+        { name: "Shared", data: KEY_DATA.lifted },
+        { name: "Short", data: KEY_DATA.short },
+      ],
+    });
+    expect(shapeTargets(fold).map((target) => target.name)).toEqual(["Lift"]);
+    expect(Array.from(fold.shapeKeys[1]?.positions ?? [])).toEqual(LIFTED.flat());
+    const left = fold.shapeKeys.slice(2);
+    expect(left.map((key) => [key.name, key.muted, Array.from(key.positions)])).toEqual(
+      ["Empty", "Shared", "Short"].map((name) => [name, true, POSITIONS.flat()]),
+    );
+    expect(new Set(left.map((key) => key.positions)).size).toBe(1);
+  });
+
+  it("keeps the names of UV maps past those the preview shows, and reads none of their values", () => {
+    const fold = readFold({ emptyUvMaps: 20 });
+    expect(fold.uvMaps.map((map) => map.name)).toEqual([
+      "UVMap",
+      "Lightmap",
+      ...Array.from({ length: 20 }, (_, index) => `Empty${index}`),
+    ]);
+    expect(fold.uvMaps.map((map) => map.values.length)).toEqual([...Array(8).fill(16), ...Array(14).fill(0)]);
+    expect(fold.defaultUv).toBe(1);
+  });
+
+  /** A mesh whose face corners list `count` layers of UV maps, in a block of `struct`, which holds one char. */
+  function layeredMesh(struct: string, count: number) {
+    const other: FileDefinition["structs"] =
+      struct === "CustomDataLayer" ? [] : [{ type: struct, fields: [["char", "type"]] }];
+    const file = readBlendFile(
+      writeBlend({
+        header: "old",
+        pointerSize: 8,
+        little: true,
+        version: "304",
+        structs: [
+          { type: "ID", fields: [["char", "name[66]"]] },
+          { type: "CustomDataLayer", fields: [["char", "type"]] },
+          ...other,
+          {
+            type: "CustomData",
+            fields: [
+              ["CustomDataLayer", "*layers"],
+              ["int", "totlayer"],
+            ],
+          },
+          {
+            type: "Mesh",
+            fields: [
+              ["ID", "id"],
+              ["CustomData", "vdata"],
+              ["CustomData", "ldata"],
+            ],
+          },
+        ],
+        blocks: [
+          {
+            code: "ME",
+            struct: "Mesh",
+            address: 0x100n,
+            data: [{ id: { name: "MEBytes" }, ldata: { layers: 0x200n, totlayer: count } }],
+          },
+          {
+            code: "DATA",
+            struct,
+            address: 0x200n,
+            data: Array.from({ length: count }, () => ({ type: CustomDataType.loopUv })),
+          },
+        ],
+      }),
+    );
+    const [mesh] = datablocks(file, "ME");
+    if (!mesh) throw new Error("The synthetic file has no mesh.");
+    return { file, mesh };
+  }
+
+  it("is refused when it lists far more layers than Blender writes", () => {
+    const { file, mesh } = layeredMesh("CustomDataLayer", 70_000);
+    expect(() => readMeshData(file, mesh)).toThrow(
+      new MeshReadError("Mesh Bytes has 70000 layers of data, far more than Blender writes"),
+    );
+    expect(defaultColorAttribute(mesh)).toBe("");
+  });
+
+  it("reads no layers from a block that holds a struct other than CustomDataLayer", () => {
+    const { file, mesh } = layeredMesh("Byte", 200_000);
+    expect(readMeshData(file, mesh).uvMaps).toEqual([]);
+  });
+
+  it.each([
+    ["a struct other than MVert", "Byte"],
+    ["an MVert of one byte", "MVert"],
+  ])("counts no vertices in a vertex layer whose block holds %s", (_, struct) => {
+    const count = 100_000;
+    const file = readBlendFile(
+      writeBlend({
+        header: "old",
+        pointerSize: 8,
+        little: true,
+        version: "304",
+        structs: [
+          { type: "ID", fields: [["char", "name[66]"]] },
+          { type: struct, fields: [["char", "value"]] },
+          {
+            type: "CustomDataLayer",
+            fields: [
+              ["int", "type"],
+              ["void", "*data"],
+            ],
+          },
+          {
+            type: "CustomData",
+            fields: [
+              ["CustomDataLayer", "*layers"],
+              ["int", "totlayer"],
+            ],
+          },
+          {
+            type: "Mesh",
+            fields: [
+              ["ID", "id"],
+              ["CustomData", "vdata"],
+              ["int", "totvert"],
+            ],
+          },
+        ],
+        blocks: [
+          {
+            code: "ME",
+            struct: "Mesh",
+            address: 0x100n,
+            data: [{ id: { name: "MEBytes" }, vdata: { layers: 0x200n, totlayer: 1 }, totvert: count }],
+          },
+          {
+            code: "DATA",
+            struct: "CustomDataLayer",
+            address: 0x200n,
+            data: [{ type: CustomDataType.vertex, data: 0x300n }],
+          },
+          { code: "DATA", struct, address: 0x300n, data: Array.from({ length: count }, () => ({ value: 0 })) },
+        ],
+      }),
+    );
+    const [mesh] = datablocks(file, "ME");
+    if (!mesh) throw new Error("The synthetic file has no mesh.");
+    expect(() => readMeshData(file, mesh)).toThrow(
+      new MeshReadError(`Mesh Bytes counts ${count} vertices but holds 0`),
+    );
   });
 });

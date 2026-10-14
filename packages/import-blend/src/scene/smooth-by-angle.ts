@@ -1,4 +1,4 @@
-import type { BlendFile, BlendStruct } from "../blend/file";
+import type { BlendBlock, BlendFile, BlendStruct } from "../blend/file";
 import { idName, isLinked } from "../blend/ids";
 import type { MeshData } from "./mesh-data";
 import { ModifierType, modifierType, viewportModifiers } from "./modifiers";
@@ -74,23 +74,46 @@ function propertyValue(group: BlendStruct | null, name: string): number | null {
 
 const SOCKET_INPUT = 1 << 0;
 
-/** The input sockets of a node group's interface in Blender's order, each panel's in its place. */
+/** A panel of a node group's interface whose items are being read, and the index of the next. */
+interface PanelItems {
+  panel: BlendStruct;
+  items: BlendBlock | null;
+  count: number;
+  next: number;
+}
+
+function panelItems(panel: BlendStruct): PanelItems {
+  const items = panel.target("items_array");
+  const held = items ? Math.floor(items.size / panel.file.pointerSize) : 0;
+  return { panel, items, count: Math.min(Math.max(panel.number("items_num"), 0), held), next: 0 };
+}
+
+/**
+ * The input sockets of a node group's interface in Blender's order, each panel's in its place. Panels are read on a
+ * stack of their own, however deep they nest, and each once.
+ */
 function groupInputs(group: BlendStruct): BlendStruct[] {
-  const inputs: BlendStruct[] = [];
-  const seen = new Set<number>();
-  const visit = (panel: BlendStruct): void => {
-    if (seen.has(panel.offset)) return;
-    seen.add(panel.offset);
-    const items = panel.pointers("items_array", Math.max(panel.number("items_num"), 0));
-    for (const item of items.map((address) => panel.file.first(panel.resolve(address)))) {
-      if (item?.typeName === "bNodeTreeInterfacePanel") visit(item);
-      else if (item?.typeName === "bNodeTreeInterfaceSocket" && (item.number("flag") & SOCKET_INPUT) !== 0) {
-        inputs.push(item);
-      }
-    }
-  };
   const root = group.struct("tree_interface")?.struct("root_panel");
-  if (root) visit(root);
+  if (!root) return [];
+  const inputs: BlendStruct[] = [];
+  const seen = new Set<number>([root.offset]);
+  const panels = [panelItems(root)];
+  for (let top = panels.at(-1); top; top = panels.at(-1)) {
+    if (!top.items || top.next >= top.count) {
+      panels.pop();
+      continue;
+    }
+    const { file } = top.panel;
+    const address = file.pointerAt(top.items.offset + top.next * file.pointerSize);
+    top.next++;
+    const item = file.first(top.panel.resolve(address));
+    if (item?.typeName === "bNodeTreeInterfacePanel" && !seen.has(item.offset)) {
+      seen.add(item.offset);
+      panels.push(panelItems(item));
+    } else if (item?.typeName === "bNodeTreeInterfaceSocket" && (item.number("flag") & SOCKET_INPUT) !== 0) {
+      inputs.push(item);
+    }
+  }
   return inputs;
 }
 

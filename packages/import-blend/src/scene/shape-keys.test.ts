@@ -60,7 +60,7 @@ function quad(keys: ShapeKey[]): MeshData {
     shapeKeys: keys,
     referenceKey: 0,
     absoluteKeys: false,
-    materials: [],
+    shapeKeysLeftOut: false,
   };
 }
 

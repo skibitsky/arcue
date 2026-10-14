@@ -22,6 +22,24 @@ export interface NamedNode {
   parent: number;
 }
 
+/**
+ * The most levels of nodes a scene may nest, far more than real scenes and rigs have. The viewport makes an object for
+ * each node and walks them with one nested call per level, so importers refuse a deeper scene.
+ */
+export const MAX_NODE_DEPTH = 1024;
+
+/** Whether a node nests more than `MAX_NODE_DEPTH` levels deep, a root being the first level. */
+export function nestsTooDeep(nodes: readonly Pick<NamedNode, "parent">[]): boolean {
+  const levels = new Int32Array(nodes.length);
+  for (let index = 0; index < nodes.length; index++) {
+    const parent = nodes[index]?.parent ?? -1;
+    const level = (parent >= 0 && parent < index ? (levels[parent] ?? 0) : 0) + 1;
+    if (level > MAX_NODE_DEPTH) return true;
+    levels[index] = level;
+  }
+  return false;
+}
+
 const ESCAPED = /[\\/#]/g;
 
 /** The name a node without one gets in its path. */

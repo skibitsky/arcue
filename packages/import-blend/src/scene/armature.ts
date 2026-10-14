@@ -58,18 +58,27 @@ export class ArmatureReadError extends Error {
 
 /**
  * The armature's bones, each parent before its children, in the order Blender lists them. Throws `ArmatureReadError`
- * when the lists reach a bone twice.
+ * as soon as the lists reach a bone twice, so that lists sharing their tails queue each bone at most once.
  */
 export function readBones(armature: BlendStruct): Bone[] {
   const bones: Bone[] = [];
-  const visited = new Set<number>();
-  const pending = [...armature.list("bonebase")].reverse().map((bone) => ({ bone, parent: -1 }));
+  const reached = new Set<number>();
+  const pending: { bone: BlendStruct; parent: number }[] = [];
+  const queue = (list: readonly BlendStruct[], parent: number) => {
+    for (const bone of list) {
+      if (reached.has(bone.offset)) {
+        throw new ArmatureReadError(`Armature ${idName(armature)} lists bone ${bone.string("name")} twice`);
+      }
+      reached.add(bone.offset);
+    }
+    for (let index = list.length - 1; index >= 0; index--) {
+      const bone = list[index];
+      if (bone) pending.push({ bone, parent });
+    }
+  };
+  queue(armature.list("bonebase"), -1);
   for (let next = pending.pop(); next; next = pending.pop()) {
     const { bone, parent } = next;
-    if (visited.has(bone.offset)) {
-      throw new ArmatureReadError(`Armature ${idName(armature)} lists bone ${bone.string("name")} twice`);
-    }
-    visited.add(bone.offset);
     const flag = bone.number("flag");
     const index = bones.length;
     const rest = mat4From(bone.numbers("arm_mat"));
@@ -97,7 +106,7 @@ export function readBones(armature: BlendStruct): Bone[] {
         weight: bone.number("weight"),
       },
     });
-    for (const child of [...bone.list("childbase")].reverse()) pending.push({ bone: child, parent: index });
+    queue(bone.list("childbase"), index);
   }
   return bones;
 }

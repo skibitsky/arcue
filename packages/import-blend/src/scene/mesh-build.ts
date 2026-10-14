@@ -3,13 +3,12 @@ import { topologyFingerprint } from "@arcue/scene";
 import { mix, randomKey } from "../blend/file";
 import type { Mat4 } from "../math";
 import { transformDirection } from "../math";
-import type { MeshData } from "./mesh-data";
+import { MAX_UV_SETS, type MeshData } from "./mesh-data";
 import { cornerNormals, freeCornerNormals } from "./normals";
 import { shapeOffsets } from "./shape-keys";
 import { applySmoothByAngle, type SmoothByAngle } from "./smooth-by-angle";
 import { triangulate } from "./triangulate";
 
-export const MAX_UV_SETS = 8;
 const MAX_JOINTS = 65534;
 /** Blender's armature deform leaves a vertex in place unless its weights add up to more than this. */
 const MIN_DEFORM_WEIGHT = 0.0001;

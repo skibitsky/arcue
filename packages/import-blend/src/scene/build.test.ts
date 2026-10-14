@@ -1,15 +1,25 @@
-import { describe, expect, it } from "vitest";
-import { readFixture, VERSIONS } from "../../test/fixtures";
+import { MAX_NODE_DEPTH } from "@arcue/scene";
+import { describe, expect, it, vi } from "vitest";
+import { importBytes, readFixture, VERSIONS } from "../../test/fixtures";
 import type { BlockDefinition, FieldValue, FileDefinition } from "../../test/synthetic";
 import { writeBlend } from "../../test/synthetic";
 import { decompressBlend } from "../blend/decompress";
+import { BlendLimitError } from "../blend/errors";
+import type { BlendStruct } from "../blend/file";
 import { readBlendFile } from "../blend/file";
+import { idName } from "../blend/ids";
 import type { Mat4 } from "../math";
 import { compose, decompose, multiply } from "../math";
 import type { BuiltScene } from "./build";
-import { buildScene, grayCandidates, linkedDataWarning } from "./build";
-import { CustomDataType } from "./mesh-data";
+import { buildScene, grayCandidates, linkedDataWarning, shownMeshSlots } from "./build";
+import { buildMesh } from "./mesh-build";
+import { CustomDataType, MAX_CORNERS_PER_KEYED_VERTEX } from "./mesh-data";
 import { collectSceneObjects } from "./objects";
+
+vi.mock("./mesh-build", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./mesh-build")>();
+  return { ...actual, buildMesh: vi.fn(actual.buildMesh) };
+});
 
 const STRUCTS: FileDefinition["structs"] = [
   {
@@ -108,7 +118,13 @@ const STRUCTS: FileDefinition["structs"] = [
       ["int", "totedge"],
       ["int", "totpoly"],
       ["int", "totloop"],
+      ["int", "totcol"],
+      ["void", "**mat"],
     ],
+  },
+  {
+    type: "Material",
+    fields: [["ID", "id"]],
   },
   {
     type: "Object",
@@ -128,6 +144,26 @@ const STRUCTS: FileDefinition["structs"] = [
       ["short", "rotmode"],
       ["short", "shapeflag"],
       ["short", "shapenr"],
+      ["int", "totcol"],
+      ["void", "**mat"],
+      ["char", "*matbits"],
+    ],
+  },
+  {
+    type: "Bone",
+    fields: [
+      ["Bone", "*next"],
+      ["Bone", "*prev"],
+      ["char", "name[64]"],
+      ["ListBase", "childbase"],
+      ["float", "arm_mat[4][4]"],
+    ],
+  },
+  {
+    type: "bArmature",
+    fields: [
+      ["ID", "id"],
+      ["ListBase", "bonebase"],
     ],
   },
   {
@@ -155,6 +191,7 @@ const STRUCTS: FileDefinition["structs"] = [
 ];
 
 const OBJECT_MESH = 1;
+const ARMATURE = 25;
 const XYZ_EULER = 1;
 const MESH_ADDRESS = 0x1000n;
 
@@ -163,11 +200,14 @@ function rows(...values: number[][]): number[] {
   return [0, 1, 2, 3].flatMap((column) => values.map((row) => row[column] ?? 0));
 }
 
-/** A mesh as Blender before 3.6 stored one, with one face on `face` and shape keys of the vertices moved by each. */
+/**
+ * A mesh as Blender before 3.6 stored one, with `copies` faces on `face` and shape keys of the vertices moved by each.
+ */
 function meshBlocks(
   vertices: number[][],
   face: number[],
   keys: { name: string; offsets: number[][]; value?: number; flag?: number; relative?: number }[] = [],
+  copies = 1,
 ): BlockDefinition[] {
   const at = (offset: number) => MESH_ADDRESS + BigInt(offset);
   const layer = (address: bigint, type: number, data: bigint): BlockDefinition => ({
@@ -218,8 +258,8 @@ function meshBlocks(
           ldata: { layers: at(0x40), totlayer: 1 },
           totvert: vertices.length,
           totedge: face.length,
-          totpoly: 1,
-          totloop: face.length,
+          totpoly: copies,
+          totloop: face.length * copies,
         },
       ],
     },
@@ -234,12 +274,17 @@ function meshBlocks(
       address: at(0x200),
       data: face.map((vertex, corner) => ({ v1: vertex, v2: face[(corner + 1) % face.length] ?? 0 })),
     },
-    { code: "DATA", struct: "MPoly", address: at(0x300), data: [{ loopstart: 0, totloop: face.length }] },
+    {
+      code: "DATA",
+      struct: "MPoly",
+      address: at(0x300),
+      data: Array.from({ length: copies }, (_, copy) => ({ loopstart: copy * face.length, totloop: face.length })),
+    },
     {
       code: "DATA",
       struct: "MLoop",
       address: at(0x400),
-      data: face.map((vertex, corner) => ({ v: vertex, e: corner })),
+      data: Array.from({ length: copies }, () => face.map((vertex, corner) => ({ v: vertex, e: corner }))).flat(),
     },
     ...keyBlocks,
     ...keyData,
@@ -523,16 +568,155 @@ describe("buildScene", () => {
     });
   });
 
-  it("walks a parent cycle far longer than the call stack", { timeout: 30_000 }, () => {
-    const length = 20_000;
-    const bytes = sceneFile(
-      Array.from({ length }, (_, index) => ({
-        id: { name: `OBO${index}` },
-        parent: objectAt((index + length - 1) % length),
-        loc: [1, 0, 0],
-      })),
+  it("nests as many objects as it may, and refuses a scene that nests more", { timeout: 30_000 }, () => {
+    const parentChain = (length: number, cycle: boolean) =>
+      readBlendFile(
+        sceneFile(
+          Array.from({ length }, (_, index) => ({
+            id: { name: `OBO${index}` },
+            parent: index > 0 || cycle ? objectAt((index + length - 1) % length) : 0n,
+            loc: [1, 0, 0],
+          })),
+        ),
+      );
+    const tooDeep = new BlendLimitError(
+      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show`,
     );
-    expect(buildScene(readBlendFile(bytes)).nodes).toHaveLength(length);
+    for (const cycle of [false, true]) {
+      const nodes = buildScene(parentChain(MAX_NODE_DEPTH, cycle)).nodes;
+      expect(nodes.map((node) => node.parent)).toEqual(nodes.map((_, index) => index - 1));
+      expect(() => buildScene(parentChain(MAX_NODE_DEPTH + 1, cycle))).toThrow(tooDeep);
+    }
+    expect(() => buildScene(parentChain(20_000, true))).toThrow(tooDeep);
+  });
+
+  it("counts an armature's bones among the levels a scene nests", async () => {
+    const armatureAt = 0x2000000n;
+    const boneAt = (index: number) => 0x3000000n + BigInt(index) * 0x100n;
+    const rig = (bones: number) =>
+      sceneFile(
+        [{ id: { name: "OBRig" }, type: ARMATURE, data: armatureAt }],
+        [
+          {
+            code: "AR",
+            struct: "bArmature",
+            address: armatureAt,
+            data: [{ id: { name: "ARRigData" }, bonebase: { first: boneAt(0), last: boneAt(0) } }],
+          },
+          ...Array.from({ length: bones }, (_, index) => ({
+            code: "DATA",
+            struct: "Bone",
+            address: boneAt(index),
+            data: [
+              {
+                name: `B${index}`,
+                childbase: { first: index + 1 < bones ? boneAt(index + 1) : 0n },
+                arm_mat: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+              },
+            ],
+          })),
+        ],
+      );
+    expect(buildScene(readBlendFile(rig(MAX_NODE_DEPTH - 1))).nodes).toHaveLength(MAX_NODE_DEPTH);
+    await expect(importBytes("deep.blend", rig(MAX_NODE_DEPTH))).rejects.toMatchObject({
+      code: "invalid-input",
+      message: `deep.blend nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show.`,
+    });
+  });
+
+  it("keeps an object's material slots to those its file holds, and to as many as Blender makes", () => {
+    const bitsAt = 0x5000000n;
+    const slotCounts = (object: Record<string, FieldValue>, bits = 0) => {
+      const more: BlockDefinition[] =
+        bits > 0 ? [{ code: "DATA", struct: null, address: bitsAt, data: new Uint8Array(bits) }] : [];
+      const file = readBlendFile(
+        sceneFile([{ ...PLATE, ...object }], [...meshBlocks(PLATE_VERTICES, [0, 1, 2, 3]), ...more]),
+      );
+      return [...shownMeshSlots(file, collectSceneObjects(file))].map(({ slots }) => slots.length);
+    };
+    expect(slotCounts({ totcol: 100_000 })).toEqual([0]);
+    expect(slotCounts({ totcol: 3, matbits: bitsAt }, 3)).toEqual([3]);
+    expect(slotCounts({ totcol: 40_000, matbits: bitsAt }, 40_000)).toEqual([32_767]);
+    const built = (totcol: number) => {
+      const bytes = sceneFile([{ ...PLATE, totcol }], meshBlocks(PLATE_VERTICES, [0, 1, 2, 3]));
+      vi.mocked(buildMesh).mockClear();
+      const { meshes } = buildScene(readBlendFile(bytes));
+      const given = vi.mocked(buildMesh).mock.calls.map(([, options]) => options.slotCount);
+      return { given, groups: meshes.map((mesh) => mesh.groups.length) };
+    };
+    expect(built(100_000)).toEqual({ given: [0], groups: [1] });
+    expect(built(2 ** 31 - 1)).toEqual({ given: [0], groups: [1] });
+  });
+
+  it("reads a mesh's slots once for all its objects, and an object's own slots only from arrays it alone holds", () => {
+    const slotCount = 1000;
+    const at = { shared: 0x6000000n, own: 0x6000100n, meshSlots: 0x6100000n, ownSlots: 0x6200000n, links: 0x6300000n };
+    const pointerArray = (address: bigint, target: bigint): BlockDefinition => {
+      const bytes = new Uint8Array(slotCount * 8);
+      const view = new DataView(bytes.buffer);
+      for (let slot = 0; slot < slotCount; slot++) view.setBigUint64(slot * 8, target, true);
+      return { code: "DATA", struct: null, address, data: bytes };
+    };
+    const mesh = meshBlocks(PLATE_VERTICES, [0, 1, 2, 3]).map((block) =>
+      block.code === "ME" && !(block.data instanceof Uint8Array)
+        ? { ...block, data: block.data.map((values) => ({ ...values, totcol: slotCount, mat: at.meshSlots })) }
+        : block,
+    );
+    const named = (name: string, more: Record<string, FieldValue> = {}) => ({
+      ...PLATE,
+      id: { name: `OB${name}` },
+      ...more,
+    });
+    const own = { totcol: slotCount, mat: at.ownSlots, matbits: at.links };
+    const file = readBlendFile(
+      sceneFile(
+        [named("A"), named("B"), named("Own", own), named("Again", own)],
+        [
+          ...mesh,
+          { code: "MA", struct: "Material", address: at.shared, data: [{ id: { name: "MAShared" } }] },
+          { code: "MA", struct: "Material", address: at.own, data: [{ id: { name: "MAOwn" } }] },
+          pointerArray(at.meshSlots, at.shared),
+          pointerArray(at.ownSlots, at.own),
+          { code: "DATA", struct: null, address: at.links, data: new Uint8Array(slotCount).fill(1) },
+        ],
+      ),
+    );
+    const shown = [...shownMeshSlots(file, collectSceneObjects(file))];
+    expect(shown.map(({ object }) => object.name)).toEqual(["A", "B", "Own", "Again"]);
+    const [a, b, ownSlots, again] = shown.map(({ slots }) => slots);
+    const names = (slots: readonly (BlendStruct | null)[] | undefined) =>
+      [...new Set(slots)].map((material) => (material ? idName(material) : null));
+    expect(a).toHaveLength(slotCount);
+    expect(names(a)).toEqual(["Shared"]);
+    expect(b).toBe(a);
+    expect(ownSlots).toHaveLength(slotCount);
+    expect(names(ownSlots)).toEqual(["Own"]);
+    expect(again).toBe(a);
+  });
+
+  it("shows the shape keys of a mesh with as many face corners for each vertex as it may, and of none with more", () => {
+    const keys = [
+      { name: "Basis", offsets: [] },
+      { name: "Lift", offsets: PLATE_VERTICES.map(() => [0, 0, 1]), value: 0.5 },
+    ];
+    const copies = (MAX_CORNERS_PER_KEYED_VERTEX * PLATE_VERTICES.length) / 4;
+    const scene = (faces: number) =>
+      buildScene(readBlendFile(sceneFile([PLATE], meshBlocks(PLATE_VERTICES, [0, 1, 2, 3], keys, faces))));
+    const shapeWarnings = (built: BuiltScene) => built.warnings.filter(({ message }) => message.startsWith("Shape"));
+    const kept = scene(copies);
+    expect(kept.meshes[0]?.morphTargets.map((target) => target.name)).toEqual(["Lift"]);
+    expect(shapeWarnings(kept)).toEqual([]);
+    const left = scene(copies + 1);
+    expect(left.meshes[0]?.morphTargets).toEqual([]);
+    expect(left.meshRecords[0]?.morphKeys).toEqual([]);
+    expect(shapeWarnings(left)).toEqual([
+      {
+        code: "deform-approximated",
+        subject: { kind: "node", name: "Plate" },
+        message: "Shape keys not shown: Plate",
+        detail: `Its mesh has ${(copies + 1) * 4} face corners for 5 vertices; shown in its basis shape`,
+      },
+    ]);
   });
 
   describe("with Shape Key Lock", () => {

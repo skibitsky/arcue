@@ -118,6 +118,25 @@ describe("Model pick materials", () => {
     model.dispose();
   });
 
+  it("builds a mesh whose groups use more materials than one call takes as arguments", async () => {
+    const count = 64_000;
+    const scene = stripScene();
+    const mesh = scene.meshes[0];
+    if (!mesh) throw new Error("the strip has a mesh");
+    const strip = mesh.indices;
+    mesh.indices = Uint32Array.from({ length: count * 3 }, (_, corner) => strip[corner % strip.length] ?? 0);
+    mesh.groups = Array.from({ length: count }, (_, material) => ({ start: material, triangleCount: 1, material }));
+    scene.materials = Array.from(
+      { length: count },
+      (_, material): SceneMaterial => ({ ...cutout, alphaMode: "opaque", doubleSided: material === 0 }),
+    );
+    const model = await Model.build(scene, DEFAULT_PALETTE, 1);
+    const runtime = model.meshes[0];
+    if (!runtime) throw new Error("the strip has a mesh");
+    expect([runtime.lit.length, materials(runtime.pickLit).length]).toEqual([count, count]);
+    model.dispose();
+  });
+
   it("cuts out alpha-mask texels in the ID pass only while the display cuts them out", async () => {
     const model = await Model.build(texturedStrip({ ...cutout, baseColorTexture: texture(0) }), DEFAULT_PALETTE, 1);
     const runtime = model.meshes[0];

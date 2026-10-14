@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { Nodes, ShaderTree } from "../../test/shader-trees";
+import type { NodeSpec } from "../../test/shader-trees";
+import { Nodes, ShaderTree, Socket } from "../../test/shader-trees";
 import { BlendStruct } from "../blend/file";
 import type { ShaderGraph } from "./shader-graph";
-import { constantOf, graphOf, inputSocket, upstreamNode } from "./shader-graph";
+import { constantOf, graphOf, inputSocket, linkedOutput, upstreamNode } from "./shader-graph";
 
 function graphOfTree(material: BlendStruct): ShaderGraph {
   const tree = material.deref("nodetree");
@@ -106,5 +107,76 @@ describe("constantOf", () => {
       expect(constantOf(graph, input(graph, "Principled BSDF", "Roughness")), version).toEqual([0]);
       expect(constantOf(graph, input(graph, "Principled BSDF", "Alpha")), version).toEqual([alpha]);
     }
+  });
+});
+
+function reroute(name: string): NodeSpec {
+  return {
+    idname: "NodeReroute",
+    name,
+    inputs: [{ name: "Input", type: Socket.color }],
+    outputs: [{ name: "Output", type: Socket.color }],
+  };
+}
+
+/** Reroutes `length` in a row, each reading the one before, and the index of the first and of the last. */
+function rerouteChain(tree: ShaderTree, length: number): { first: number; last: number } {
+  const first = tree.add(reroute("Reroute 0"));
+  let last = first;
+  for (let index = 1; index < length; index++) {
+    const next = tree.add(reroute(`Reroute ${index}`));
+    tree.link(last, "Output", next, "Input");
+    last = next;
+  }
+  return { first, last };
+}
+
+describe("linkedOutput", () => {
+  it("reads through far more reroutes than the call stack is deep", { timeout: 30_000 }, () => {
+    const tree = new ShaderTree();
+    const output = tree.add(Nodes.output());
+    const principled = tree.add(Nodes.principled());
+    tree.link(principled, "BSDF", output, "Surface");
+    const image = tree.add(Nodes.image({ name: "tex.png" }));
+    const { first, last } = rerouteChain(tree, 20_000);
+    tree.link(image, "Color", first, "Input");
+    tree.link(last, "Output", principled, "Base Color");
+    const graph = graphOfTree(tree.material());
+    const source = linkedOutput(graph, input(graph, "Principled BSDF", "Base Color"));
+    expect([source?.node.string("name"), source?.name]).toEqual(["Image Texture", "Color"]);
+  });
+
+  it("reads the reroutes that many inputs share once, however many inputs read through them", () => {
+    const tree = new ShaderTree();
+    const output = tree.add(Nodes.output());
+    const value = tree.add({ ...Nodes.math("Source"), inputs: [] });
+    const { first, last } = rerouteChain(tree, 1000);
+    tree.link(value, "Value", first, "Input");
+    const emissions = Array.from({ length: 1000 }, (_, index) => {
+      const emission = tree.add({ ...Nodes.emission(), name: `Emission ${index}` });
+      tree.link(last, "Output", emission, "Color");
+      return emission;
+    });
+    tree.link(emissions[0] ?? 0, "Emission", output, "Surface");
+    const graph = graphOfTree(tree.material());
+    const list = vi.spyOn(BlendStruct.prototype, "list");
+    for (let index = 0; index < emissions.length; index++) {
+      const source = linkedOutput(graph, input(graph, `Emission ${index}`, "Color"));
+      expect(source?.node.string("name")).toBe("Source");
+    }
+    expect(list.mock.calls.length).toBeLessThan(5_000);
+    list.mockRestore();
+  });
+
+  it("reads an input that a loop of reroutes feeds as unlinked, as Blender leaves out a loop's links", () => {
+    const tree = new ShaderTree();
+    const output = tree.add(Nodes.output());
+    const emission = tree.add(Nodes.emission());
+    tree.link(emission, "Emission", output, "Surface");
+    const { first, last } = rerouteChain(tree, 40);
+    tree.link(last, "Output", first, "Input");
+    tree.link(last, "Output", emission, "Color");
+    const graph = graphOfTree(tree.material());
+    expect(linkedOutput(graph, input(graph, "Emission", "Color"))).toBeNull();
   });
 });

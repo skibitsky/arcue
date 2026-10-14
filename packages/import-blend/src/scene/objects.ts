@@ -1,5 +1,6 @@
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { datablocks, idName, isInPackedLibrary, isLinked } from "../blend/ids";
+import { ownedLists } from "../blend/lists";
 import { ModifierType, modifierType, viewportModifiers } from "./modifiers";
 import {
   feedingOutputs,
@@ -219,62 +220,101 @@ function realizesAll(graph: ShaderGraph, node: BlendStruct): boolean {
   });
 }
 
-/** Whether the modifier holds baked data packed into the file, which Blender outputs in place of what it baked. */
+/**
+ * Whether the modifier holds baked data packed into the file, which Blender outputs in place of what it baked. Only
+ * the bakes it counts are read, each where its block's struct lays out the pointer to the packed data.
+ */
 function holdsPackedBake(modifier: BlendStruct): boolean {
-  return modifier.derefAll("bakes").some((bake) => bake.pointer("packed") !== 0n);
+  const block = modifier.target("bakes");
+  const type = block?.struct;
+  const packed = type?.field("packed");
+  if (!block || !type || !packed || packed.pointerDepth === 0) return false;
+  const count = Math.min(Math.max(modifier.number("bakes_num"), 0), block.count, Math.floor(block.size / type.size));
+  for (let bake = 0; bake < count; bake++) {
+    if (modifier.file.pointedBlock(block.offset + bake * type.size + packed.offset, block.owner) >= 0) return true;
+  }
+  return false;
 }
 
 const outputsInstances = new WeakMap<BlendFile, Map<string, boolean>>();
 
+/** The search of one node group for nodes that output instances, from its Group Output up. */
+interface GroupSearch {
+  key: string;
+  graph: ShaderGraph;
+  /** Nodes to look at, each with whether a Realize Instances node that realizes them all is below it. */
+  pending: [BlendStruct, boolean][];
+  reached: Set<string>;
+}
+
 /**
  * Whether a node group may output instances or grease pencil, through the nodes that feed its output. Below a Realize
  * Instances node that realizes them all, an instancing node counts as the geometry its instances hold: what it reads,
- * or an OBJ file's meshes. A group from another file may output them.
+ * or an OBJ file's meshes. A group from another file may output them. Groups that Group nodes run are searched on a
+ * stack of their own, however deep they nest, and a group that runs itself adds nothing.
  */
-function mayOutputInstances(
-  group: BlendStruct | null,
-  realized: boolean,
-  baked: boolean,
-  walking = new Set<string>(),
-): boolean {
+function mayOutputInstances(group: BlendStruct | null, realized: boolean, baked: boolean): boolean {
   if (!group) return false;
-  if (isLinked(group)) return true;
-  const key = `${group.offset} ${realized} ${baked}`;
   let known = outputsInstances.get(group.file);
   if (!known) {
     known = new Map();
     outputsInstances.set(group.file, known);
   }
-  const found = known.get(key);
-  if (found !== undefined) return found;
-  if (walking.has(key)) return false;
-  walking.add(key);
-  const result = reachesInstances(group, realized, baked, walking);
-  known.set(key, result);
-  return result;
-}
-
-function reachesInstances(group: BlendStruct, realized: boolean, baked: boolean, walking: Set<string>): boolean {
-  const graph = graphOf(group);
-  const output = groupOutput(graph.nodes);
-  if (!output) return false;
-  const reached = new Set<string>();
-  const pending: [BlendStruct, boolean][] = [[output, realized]];
-  for (let next = pending.pop(); next; next = pending.pop()) {
+  const answers = known;
+  const searching = new Set<string>();
+  const searches: GroupSearch[] = [];
+  const answer = (group: BlendStruct | null, realized: boolean): boolean | null => {
+    if (!group) return false;
+    if (isLinked(group)) return true;
+    const key = `${group.offset} ${realized} ${baked}`;
+    const found = answers.get(key);
+    if (found !== undefined) return found;
+    if (searching.has(key)) return false;
+    searching.add(key);
+    const graph = graphOf(group);
+    const output = groupOutput(graph.nodes);
+    searches.push({ key, graph, pending: output ? [[output, realized]] : [], reached: new Set() });
+    return null;
+  };
+  const first = answer(group, realized);
+  if (first !== null) return first;
+  let last = false;
+  const finish = (search: GroupSearch, result: boolean) => {
+    answers.set(search.key, result);
+    searches.pop();
+    last = result;
+  };
+  for (let search = searches.at(-1); search; search = searches.at(-1)) {
+    const next = search.pending.pop();
+    if (!next) {
+      finish(search, false);
+      continue;
+    }
     const [node, under] = next;
     const type = activeType(node);
-    if (INSTANCING_NODES.has(type) && !(under && REALIZED_TO_INPUTS.has(type))) return true;
-    if (baked && BAKING_NODES.has(type)) return true;
-    if (type === "GeometryNodeGroup" && mayOutputInstances(node.deref("id"), under, baked, walking)) return true;
-    const realizing = under || (type === "GeometryNodeRealizeInstances" && realizesAll(graph, node));
-    for (const source of feedingOutputs(graph, node)) {
-      const key = `${source.node.offset} ${realizing}`;
-      if (!CARRIES_GEOMETRY.has(socketType(source.socket)) || reached.has(key)) continue;
-      reached.add(key);
-      pending.push([source.node, realizing]);
+    let found = INSTANCING_NODES.has(type) && !(under && REALIZED_TO_INPUTS.has(type));
+    found ||= baked && BAKING_NODES.has(type);
+    if (!found && type === "GeometryNodeGroup") {
+      const inner = answer(node.deref("id"), under);
+      if (inner === null) {
+        search.pending.push(next);
+        continue;
+      }
+      found = inner;
+    }
+    if (found) {
+      finish(search, true);
+      continue;
+    }
+    const realizing = under || (type === "GeometryNodeRealizeInstances" && realizesAll(search.graph, node));
+    for (const source of feedingOutputs(search.graph, node)) {
+      const reached = `${source.node.offset} ${realizing}`;
+      if (!CARRIES_GEOMETRY.has(socketType(source.socket)) || search.reached.has(reached)) continue;
+      search.reached.add(reached);
+      search.pending.push([source.node, realizing]);
     }
   }
-  return false;
+  return last;
 }
 
 /**
@@ -302,9 +342,16 @@ export function childInstancing(object: BlendStruct): "vertex" | "face" | null {
   return null;
 }
 
+/** Whether the object has a particle system, read from the first item of its list only. */
+function hasParticles(object: BlendStruct): boolean {
+  const list = object.struct("particlesystem");
+  const first = list && list.pointer("first") !== 0n ? list.deref("first") : null;
+  return first !== null && first.type.size >= object.file.pointerSize;
+}
+
 /** Whether Blender hides the object in viewports to draw only the instances or particles it makes. */
 function hidesInstancer(object: BlendStruct): boolean {
-  const instances = (object.number("transflag") & OBJECT_INSTANCES) !== 0 || object.list("particlesystem").length > 0;
+  const instances = (object.number("transflag") & OBJECT_INSTANCES) !== 0 || hasParticles(object);
   const shown = object.number("duplicator_visibility_flag") & INSTANCER_SHOWN_IN_VIEWPORT;
   return instances && object.has("duplicator_visibility_flag") && shown === 0;
 }
@@ -394,11 +441,14 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     linked.set(`${entry.kind} ${entry.packed} ${entry.name}`, entry);
   };
 
+  const childEntries = ownedLists("children");
+  const objectEntries = ownedLists("gobject");
+  const layerCollections = ownedLists("layer_collections");
   const childCollections = new Map<number, BlendStruct[]>();
   const childrenOf = (collection: BlendStruct) => {
     let children = childCollections.get(collection.offset);
     if (!children) {
-      children = collection.list("children").flatMap((child) => child.deref("collection") ?? []);
+      children = childEntries(collection).flatMap((child) => child.deref("collection") ?? []);
       childCollections.set(collection.offset, children);
     }
     return children;
@@ -406,30 +456,33 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
 
   /**
    * Walks a scene's collection tree once per place a collection has in it, which a layer collection of the view layer
-   * stands for. A place seen before adds nothing, and nor do a collection's objects listed before as hidden alike.
+   * stands for. A place queued before adds nothing, and nor do a collection's objects listed before as hidden alike.
    */
   const walk = (master: BlendStruct, viewLayer: BlendStruct | null) => {
     const eyeHidden = eyeHiddenObjects(viewLayer);
-    const visited = new Set<string>();
+    const queued = new Set<string>();
     const listed = new Set<string>();
-    const pending: Place[] = [
-      { collection: master, layer: viewLayer?.list("layer_collections")[0] ?? null, parentHidden: false },
-    ];
+    const pending: Place[] = [];
+    const queue = (places: readonly Place[]) => {
+      const unqueued = places.filter(({ collection, layer, parentHidden }) => {
+        const key = `${collection.offset} ${layer?.offset ?? -1} ${parentHidden}`;
+        if (queued.has(key)) return false;
+        queued.add(key);
+        return true;
+      });
+      pushReversed(pending, unqueued);
+    };
+    const masterLayer = viewLayer ? (layerCollections(viewLayer)[0] ?? null) : null;
+    queue([{ collection: master, layer: masterLayer, parentHidden: false }]);
     for (let place = pending.pop(); place; place = pending.pop()) {
       const { collection, layer, parentHidden } = place;
-      const key = `${collection.offset} ${layer?.offset ?? -1} ${parentHidden}`;
       const flag = layer?.number("flag") ?? 0;
-      if (
-        visited.has(key) ||
-        (flag & LAYER_COLLECTION_EXCLUDE) !== 0 ||
-        (collection.number("flag") & COLLECTION_HIDE_VIEWPORT) !== 0
-      ) {
+      if ((flag & LAYER_COLLECTION_EXCLUDE) !== 0 || (collection.number("flag") & COLLECTION_HIDE_VIEWPORT) !== 0) {
         continue;
       }
-      visited.add(key);
       const collectionHidden = parentHidden || (flag & LAYER_COLLECTION_HIDE) !== 0;
       const objects = `${collection.offset} ${collectionHidden}`;
-      for (const entry of listed.has(objects) ? [] : collection.list("gobject")) {
+      for (const entry of listed.has(objects) ? [] : objectEntries(collection)) {
         const object = entry.deref("ob");
         if (!object) continue;
         if (isLinked(object)) {
@@ -446,7 +499,7 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
       }
       listed.add(objects);
       const childLayers = new Map<number, BlendStruct>();
-      for (const child of layer?.list("layer_collections") ?? []) {
+      for (const child of layer ? layerCollections(layer) : []) {
         const offset = child.deref("collection")?.offset;
         if (offset !== undefined && !childLayers.has(offset)) childLayers.set(offset, child);
       }
@@ -460,7 +513,7 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
         }
         children.push({ collection: nested, layer: nestedLayer, parentHidden: collectionHidden });
       }
-      pushReversed(pending, children);
+      queue(children);
     }
   };
   const master = scene.deref("master_collection");
@@ -478,9 +531,15 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
 
   const needed = new Map<number, BlendStruct>();
   const need = (first: BlendStruct | null) => {
-    const pending = [first];
-    for (let object = pending.pop(); object !== undefined; object = pending.pop()) {
-      if (!object || shown.has(object.offset) || needed.has(object.offset)) continue;
+    const pending = new ObjectStack();
+    const queue = (objects: readonly (BlendStruct | null)[]) => {
+      for (let index = objects.length - 1; index >= 0; index--) {
+        const object = objects[index];
+        if (object && !shown.has(object.offset) && !needed.has(object.offset)) pending.push(object);
+      }
+    };
+    queue([first]);
+    for (let object = pending.pop(); object; object = pending.pop()) {
       if (isLinked(object)) {
         addLinked("objects", idName(object), object);
         continue;
@@ -488,8 +547,7 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
       const data = linkedData(object);
       if (data) addLinked("objects", idName(object), data);
       needed.set(object.offset, object);
-      const targets = deformingArmatures(object).map(({ target }) => target);
-      pushReversed(pending, [object.deref("parent"), ...targets]);
+      queue([object.deref("parent"), ...deformingArmatures(object).map(({ target }) => target)]);
     }
   };
   for (const object of ordered) {
@@ -502,6 +560,39 @@ export function collectSceneObjects(file: BlendFile): SceneContents {
     ...[...needed.values()].map((object) => describe(object, false, false)),
   ];
   return { scene, objects: parentsFirst(all), linked: [...linked.values()] };
+}
+
+interface StackEntry {
+  object: BlendStruct;
+  live: boolean;
+}
+
+/**
+ * A stack of objects that holds each object once: pushing an object it already holds moves it to the top. It pops
+ * objects in the order a stack holding every push would first pop them, while holding no more entries than about
+ * twice the objects it holds.
+ */
+class ObjectStack {
+  #entries: StackEntry[] = [];
+  readonly #held = new Map<number, StackEntry>();
+
+  push(object: BlendStruct): void {
+    const held = this.#held.get(object.offset);
+    if (held) held.live = false;
+    const entry = { object, live: true };
+    this.#entries.push(entry);
+    this.#held.set(object.offset, entry);
+    if (this.#entries.length > 2 * this.#held.size + 16) this.#entries = this.#entries.filter((kept) => kept.live);
+  }
+
+  pop(): BlendStruct | undefined {
+    for (let entry = this.#entries.pop(); entry; entry = this.#entries.pop()) {
+      if (!entry.live) continue;
+      this.#held.delete(entry.object.offset);
+      return entry.object;
+    }
+    return undefined;
+  }
 }
 
 /** Pushes items onto a stack last first, so that it pops them in order, without spreading them into arguments. */

@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FileDefinition } from "../../test/synthetic";
 import { writeBlend } from "../../test/synthetic";
-import { readBlendFile } from "../blend/file";
+import { BlendFile, readBlendFile } from "../blend/file";
+import { datablocks } from "../blend/ids";
 import { ArmatureReadError, readBones } from "./armature";
 
 const STRUCTS: FileDefinition["structs"] = [
@@ -141,5 +142,46 @@ describe("readBones", () => {
   it("refuses an armature whose bone lists reach a bone twice", () => {
     const looped = armature(["Root", "Spine", "Neck"], { Root: ["Spine"], Spine: ["Neck"], Neck: ["Root"] });
     expect(() => readBones(looped)).toThrow(new ArmatureReadError("Armature RigData lists bone Root twice"));
+  });
+
+  it("refuses child lists that share their tails before queuing any bone twice", () => {
+    const count = 1000;
+    const address = (index: number) => 0x1000n + BigInt(index) * 0x100n;
+    const bones = Array.from({ length: count }, (_, index) => ({
+      code: "DATA",
+      struct: "Bone",
+      address: address(index),
+      data: [
+        {
+          name: `B${index}`,
+          next: index > 0 && index + 1 < count ? address(index + 1) : 0n,
+          childbase: { first: index + 1 < count ? address(index + 1) : 0n },
+          arm_mat: IDENTITY,
+        },
+      ],
+    }));
+    const file = readBlendFile(
+      writeBlend({
+        header: "old",
+        pointerSize: 8,
+        little: true,
+        structs: STRUCTS,
+        blocks: [
+          {
+            code: "AR",
+            struct: "bArmature",
+            address: 0x10n,
+            data: [{ id: { name: "ARRigData" }, bonebase: { first: address(0), last: address(0) } }],
+          },
+          ...bones,
+        ],
+      }),
+    );
+    const [shared] = datablocks(file, "AR");
+    if (!shared) throw new Error("No armature was written.");
+    const first = vi.spyOn(BlendFile.prototype, "first");
+    expect(() => readBones(shared)).toThrow(ArmatureReadError);
+    expect(first.mock.calls.length).toBeLessThan(3 * count);
+    first.mockRestore();
   });
 });

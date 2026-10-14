@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildNodePaths } from "./node";
+import { buildNodePaths, MAX_NODE_DEPTH, nestsTooDeep } from "./node";
 
 describe("buildNodePaths", () => {
   it("joins names from the root down", () => {
@@ -48,5 +48,27 @@ describe("buildNodePaths", () => {
         { name: "Parent", parent: -1 },
       ]),
     ).toThrow(RangeError);
+  });
+});
+
+describe("nestsTooDeep", () => {
+  const chain = (length: number) => Array.from({ length }, (_, index) => ({ parent: index - 1 }));
+
+  it("allows nodes nested as deep as the viewport walks, beside any number of roots", () => {
+    expect(nestsTooDeep(chain(MAX_NODE_DEPTH))).toBe(false);
+    expect(nestsTooDeep([...chain(MAX_NODE_DEPTH), ...Array.from({ length: 5000 }, () => ({ parent: -1 }))])).toBe(
+      false,
+    );
+  });
+
+  it("finds a node one level deeper than that, wherever its branch starts", () => {
+    expect(nestsTooDeep(chain(MAX_NODE_DEPTH + 1))).toBe(true);
+    const branched = [
+      { parent: -1 },
+      { parent: -1 },
+      ...chain(MAX_NODE_DEPTH - 1).map(({ parent }) => ({ parent: parent + 2 })),
+    ];
+    expect(nestsTooDeep(branched)).toBe(false);
+    expect(nestsTooDeep([...branched, { parent: branched.length - 1 }])).toBe(true);
   });
 });

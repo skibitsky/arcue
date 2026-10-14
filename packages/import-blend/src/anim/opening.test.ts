@@ -9,7 +9,7 @@ import { writeBlend } from "../../test/synthetic";
 import { readBlendFile } from "../blend/file";
 import { datablocks } from "../blend/ids";
 import { CustomDataType } from "../scene/mesh-data";
-import { objectValues } from "../scene/transforms";
+import { objectValues, restChannel } from "../scene/transforms";
 import { readActions } from "./actions";
 import { Interpolation } from "./fcurve";
 import { startPoses } from "./opening";
@@ -399,5 +399,39 @@ describe("startPoses", () => {
     const values = objectValues(mover);
     expect(startPoses(scene, []).of(mover).object(values).location[0]).toBe(keyedX(7));
     expect(startPoses(scene, readActions(file)).of(mover).object(values).location[0]).toBeCloseTo(keyedX(10), 6);
+  });
+
+  it("plays an action that keys one bone channel with many curves without copying the bone's values for each", {
+    timeout: 30_000,
+  }, () => {
+    const count = 100_000;
+    const curve = (index: number) => 0x100000n + BigInt(index) * 0x40n;
+    const path = new TextEncoder().encode('pose.bones["Bone"].location\0');
+    const blocks: BlockDefinition[] = [
+      { code: "OB", struct: "Object", address: 0x300n, data: [{ id: { name: "OBRig" }, adt: 0x310n }] },
+      { code: "DATA", struct: "AnimData", address: 0x310n, data: [{ action: 0x500n }] },
+      {
+        code: "AC",
+        struct: "bAction",
+        address: 0x500n,
+        data: [{ id: { name: "ACBusy" }, curves: { first: curve(0) } }],
+      },
+      { code: "DATA", struct: "BezTriple", address: 0x520n, data: [{ vec: [0, 3, 0, 1, 3, 0, 2, 3, 0] }] },
+      { code: "DATA", struct: null, address: 0x530n, data: path },
+      ...Array.from({ length: count }, (_, index) => ({
+        code: "DATA",
+        struct: "FCurve",
+        address: curve(index),
+        data: [{ next: index + 1 < count ? curve(index + 1) : 0n, bezt: 0x520n, rna_path: 0x530n, totvert: 1 }],
+      })),
+    ];
+    const file = readBlendFile(writeBlend({ header: "old", pointerSize: 8, little: true, structs: STRUCTS, blocks }));
+    const [rig] = datablocks(file, "OB");
+    if (!rig) throw new Error("The synthetic file has no object.");
+    const poses = startPoses(null, readActions(file));
+    const start = performance.now();
+    const location = poses.of(rig).channel("Bone", restChannel()).location;
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(location).toEqual([3, 0, 0]);
   });
 });

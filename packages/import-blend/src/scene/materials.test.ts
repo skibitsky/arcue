@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Version } from "../../test/fixtures";
 import { findInFixtures, fixturesDir, importBytes, importFixture, readFixture, VERSIONS } from "../../test/fixtures";
 import type { ImageSpec, MaterialSpec } from "../../test/shader-trees";
-import { Nodes, ShaderTree } from "../../test/shader-trees";
+import { Nodes, ShaderTree, Socket } from "../../test/shader-trees";
 import { decompressBlend } from "../blend/decompress";
 import { BlendStruct, readBlendFile } from "../blend/file";
 import { datablocks, idName } from "../blend/ids";
@@ -883,6 +883,29 @@ describe("a material read from its node tree", () => {
       baseColor: [0, 0, 0, 1],
       approximations: ["Its surface nests shaders more than 16 deep, which the preview leaves out"],
     });
+  });
+
+  it("follows an image through any number of reroutes", () => {
+    const draft = readTree((tree, output) => {
+      const principled = tree.add(Nodes.principled());
+      tree.link(principled, "BSDF", output, "Surface");
+      let previous = tree.add(Nodes.image({ name: "tex.png" }));
+      let previousOutput = "Color";
+      for (let index = 0; index < 40; index++) {
+        const reroute = tree.add({
+          idname: "NodeReroute",
+          name: `Reroute ${index}`,
+          inputs: [{ name: "Input", type: Socket.color }],
+          outputs: [{ name: "Output", type: Socket.color }],
+        });
+        tree.link(previous, previousOutput, reroute, "Input");
+        previous = reroute;
+        previousOutput = "Output";
+      }
+      tree.link(previous, previousOutput, principled, "Base Color");
+    });
+    expect(draft.baseColorImage?.image.string("name")).toBe("//tex.png");
+    expect(draft.approximations).toEqual([]);
   });
 
   it("notes an input whose nodes it stops following before an image", () => {

@@ -5,6 +5,7 @@ import { matrixError, worldMatrices } from "../../test/geometry";
 import type { BlockDefinition, FieldValue, FileDefinition } from "../../test/synthetic";
 import { writeBlend } from "../../test/synthetic";
 import { decompressBlend } from "../blend/decompress";
+import type { BlendStruct } from "../blend/file";
 import { readBlendFile } from "../blend/file";
 import { datablocks, idName } from "../blend/ids";
 import { channelValues, objectValues } from "../scene/transforms";
@@ -174,6 +175,7 @@ interface StripSpec {
   curves?: readonly CurveSpec[];
   modified?: boolean;
   tweaked?: boolean;
+  strips?: readonly StripSpec[];
 }
 
 interface TrackSpec {
@@ -245,7 +247,7 @@ class FileBuilder {
     });
   }
 
-  strips(specs: readonly StripSpec[]) {
+  strips(specs: readonly StripSpec[]): { first: bigint; last: bigint } {
     return this.list(specs, "NlaStrip", (spec, address) => {
       if (spec.tweaked) this.tweakedStrip = address;
       return {
@@ -265,6 +267,7 @@ class FileBuilder {
         extendmode: spec.extendMode ?? Extend.hold,
         type: spec.type ?? 0,
         flag: spec.flag ?? 0,
+        strips: this.strips(spec.strips ?? []),
       };
     });
   }
@@ -1043,6 +1046,80 @@ describe("stretches of the clock", () => {
       [20, 25],
     ]);
     expect(withoutSpans([[0, 10]], [[Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY]])).toEqual([]);
+  });
+});
+
+/**
+ * A file whose object plays the action ACWalk, keyed from frame 1 to 11, on one NLA track of `count` strips one after
+ * another, each of which lists all of them as its own strips, as Blender never writes them.
+ */
+function sharedStrips(count: number): { object: BlendStruct; action: Action } {
+  const builder = new FileBuilder();
+  const action = builder.address();
+  const curves = builder.curves([{ path: "location", keys: [1, 0, 11, 10] }]);
+  builder.blocks.push({ code: "AC", struct: "bAction", address: action, data: [{ id: { name: "ACWalk" }, curves }] });
+  const first = 0x10000000n;
+  const strip = (index: number) => first + BigInt(index) * 0x100n;
+  const shared = { first, last: strip(count - 1) };
+  for (let index = 0; index < count; index++) {
+    builder.blocks.push({
+      code: "DATA",
+      struct: "NlaStrip",
+      address: strip(index),
+      data: [
+        {
+          next: index + 1 < count ? strip(index + 1) : 0n,
+          strips: shared,
+          act: action,
+          start: 1 + 10 * index,
+          end: 11 + 10 * index,
+          actstart: 1,
+          actend: 11,
+          repeat: 1,
+          scale: 1,
+          influence: 1,
+        },
+      ],
+    });
+  }
+  builder.blocks.push(
+    { code: "DATA", struct: "NlaTrack", address: 0x300n, data: [{ strips: shared }] },
+    { code: "DATA", struct: "AnimData", address: 0x200n, data: [{ nla_tracks: { first: 0x300n, last: 0x300n } }] },
+    { code: "OB", struct: "Object", address: 0x100n, data: [{ id: { name: "OBShared" }, adt: 0x200n }] },
+  );
+  const file = readBlendFile(
+    writeBlend({ header: "old", pointerSize: 8, little: true, structs: STRUCTS, blocks: builder.blocks }),
+  );
+  const [object] = datablocks(file, "OB");
+  const [walk] = readActions(file);
+  if (!object || !walk) throw new Error("The synthetic file has no object or action.");
+  return { object, action: walk };
+}
+
+describe("NLA strips that a file lists more than once or in long lists", () => {
+  it("writes what a muted meta strip's strips key, for more strips than a call takes arguments", {
+    timeout: 30_000,
+  }, () => {
+    const inner = Array.from({ length: 200_000 }, (_, index) => ({ action: "Walk", start: index, end: index + 1 }));
+    const meta: StripSpec = { type: StripType.meta, flag: StripFlag.muted, start: 0, end: 200_000, strips: inner };
+    expect(written({ actions: { Walk: y(1, 2, 11, 2) }, tracks: [{ strips: [meta] }] }, 1)).toEqual({
+      "location[1]": 0,
+    });
+  });
+
+  it("reads each strip of a track once where every strip lists all of them as its own", () => {
+    const { object, action } = sharedStrips(3000);
+    const track = object.deref("adt")?.list("nla_tracks")[0];
+    const strip = track?.list("strips")[0];
+    if (!track || !strip) throw new Error("The synthetic file has no strip.");
+    const start = performance.now();
+    const use = { action: action.struct, slot: -1, played: true, strip: { strip, track } };
+    const player = scenePlayer(object, use, action, new NlaTracks());
+    const frames = [1, 6, 11, 12].map((time) => player.frameAt(time));
+    const values = animatedValues(object, 6, new Map([[action.struct.offset, action]]));
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(frames).toEqual([1, 6, 11, null]);
+    expect(values).toEqual([{ path: "location", index: 0, value: 5 }]);
   });
 });
 

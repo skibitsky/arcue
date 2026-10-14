@@ -219,7 +219,7 @@ function grid(center: [number, number]): MeshData {
     shapeKeys: [],
     referenceKey: -1,
     absoluteKeys: false,
-    materials: [null, null],
+    shapeKeysLeftOut: false,
   };
 }
 

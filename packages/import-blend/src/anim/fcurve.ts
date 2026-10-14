@@ -1,4 +1,5 @@
-import type { BlendStruct } from "../blend/file";
+import type { BlendBlock, BlendFile, BlendStruct } from "../blend/file";
+import { unseenList } from "../blend/lists";
 import type { SdnaStruct } from "../blend/sdna";
 
 /** A curve's keyframes as parallel arrays: each key, its two handles, and how it interpolates to the next key. */
@@ -58,9 +59,9 @@ export interface FCurve {
   linearExtrapolation: boolean;
   discrete: boolean;
   muted: boolean;
-  modifiers: CurveModifier[];
+  modifiers: readonly CurveModifier[];
   /** Names of modifiers this evaluator does not apply. */
-  unsupportedModifiers: string[];
+  unsupportedModifiers: readonly string[];
   /** No keys, no samples and no modifier that makes values: Blender leaves the property alone. */
   empty: boolean;
 }
@@ -148,10 +149,57 @@ function cyclesMode(mode: number): CyclesMode {
   return mode === CYCLES_MIRROR ? "mirror" : "repeat";
 }
 
-function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupported: string[] } {
+interface CurveModifiers {
+  modifiers: readonly CurveModifier[];
+  unsupported: readonly string[];
+  /** Whether a modifier gives a curve without keys a value, muted or not. */
+  makesValues: boolean;
+}
+
+interface Samples {
+  samples: Float32Array;
+  start: number;
+}
+
+/**
+ * What a file's curves read from blocks that several curves can point at, by block index: a whole block's keys,
+ * samples or path, and a modifier list and its modifiers by the list's first block. `listed` holds the struct offset of
+ * every modifier a list has read.
+ */
+interface SharedReads {
+  keys: Map<number, Keys>;
+  samples: Map<number, Samples | null>;
+  paths: Map<number, string>;
+  modifierLists: Map<number, readonly BlendStruct[]>;
+  modifiers: Map<number, CurveModifiers>;
+  listed: Set<number>;
+}
+
+const sharedReads = new WeakMap<BlendFile, SharedReads>();
+
+function sharedReadsOf(file: BlendFile): SharedReads {
+  let reads = sharedReads.get(file);
+  if (!reads) {
+    reads = {
+      keys: new Map(),
+      samples: new Map(),
+      paths: new Map(),
+      modifierLists: new Map(),
+      modifiers: new Map(),
+      listed: new Set(),
+    };
+    sharedReads.set(file, reads);
+  }
+  return reads;
+}
+
+const NO_KEYS = emptyKeys(0);
+const NO_MODIFIERS: CurveModifiers = { modifiers: [], unsupported: [], makesValues: false };
+
+function modifiersOf(list: readonly BlendStruct[]): CurveModifiers {
   const modifiers: CurveModifier[] = [];
   const unsupported: string[] = [];
-  for (const modifier of curve.list("modifiers")) {
+  for (const modifier of list) {
     const flag = modifier.number("flag");
     if ((flag & (FMODIFIER_MUTED | FMODIFIER_DISABLED)) !== 0) continue;
     const type = modifier.number("type");
@@ -205,14 +253,42 @@ function readModifiers(curve: BlendStruct): { modifiers: CurveModifier[]; unsupp
       unsupported.push(MODIFIER_NAMES[type] ?? modifier.string("name"));
     }
   }
-  return { modifiers, unsupported };
+  const makesValues = list.some((modifier) => VALUE_MODIFIERS.has(modifier.number("type")));
+  return { modifiers, unsupported, makesValues };
+}
+
+/**
+ * The modifier list of a curve or an NLA strip, read once for each list. Blender gives each modifier to one list, so a
+ * list ends before a modifier that an earlier list read.
+ */
+function modifierList(owner: BlendStruct, reads: SharedReads): readonly BlendStruct[] {
+  const first = owner.struct("modifiers")?.target("first");
+  if (!first) return [];
+  let list = reads.modifierLists.get(first.index);
+  if (!list) {
+    list = unseenList(owner, "modifiers", reads.listed);
+    reads.modifierLists.set(first.index, list);
+  }
+  return list;
+}
+
+/** The modifiers of a curve's list, read once for each list that curves share. */
+function readModifiers(curve: BlendStruct, reads: SharedReads): CurveModifiers {
+  const first = curve.struct("modifiers")?.target("first");
+  if (!first) return NO_MODIFIERS;
+  let read = reads.modifiers.get(first.index);
+  if (!read) {
+    read = modifiersOf(modifierList(curve, reads));
+    reads.modifiers.set(first.index, read);
+  }
+  return read;
 }
 
 /** Whether a curve or an NLA strip has a modifier that is neither muted nor disabled. */
 export function hasActiveModifiers(owner: BlendStruct): boolean {
-  return owner
-    .list("modifiers")
-    .some((modifier) => (modifier.number("flag") & (FMODIFIER_MUTED | FMODIFIER_DISABLED)) === 0);
+  return modifierList(owner, sharedReadsOf(owner.file)).some(
+    (modifier) => (modifier.number("flag") & (FMODIFIER_MUTED | FMODIFIER_DISABLED)) === 0,
+  );
 }
 
 /** Where a struct holds `count` of `type` under `name`, or -1 where its member is missing or laid out otherwise. */
@@ -221,19 +297,18 @@ function memberOffset(struct: SdnaStruct, name: string, type: "float" | "char", 
   return field?.type === type && field.pointerDepth === 0 && field.count === count ? field.offset : -1;
 }
 
-/** Reads the BezTriple array of a curve straight from the file through the struct's member offsets. */
-function readKeys(curve: BlendStruct, count: number): Keys {
-  const block = curve.target("bezt");
-  const type = block?.struct;
+/** Reads every BezTriple of a block straight from the file through the struct's member offsets. */
+function readBlockKeys(file: BlendFile, block: BlendBlock): Keys {
+  const type = block.struct;
   const vec = type ? memberOffset(type, "vec", "float", 9) : -1;
-  if (!block || !type || vec < 0) return emptyKeys(0);
-  const { view, little } = curve.file;
+  if (!type || vec < 0) return NO_KEYS;
+  const { view, little } = file;
   const ipo = memberOffset(type, "ipo", "char", 1);
   const easing = memberOffset(type, "easing", "char", 1);
   const back = memberOffset(type, "back", "float", 1);
   const amplitude = memberOffset(type, "amplitude", "float", 1);
   const period = memberOffset(type, "period", "float", 1);
-  const keys = emptyKeys(Math.max(0, Math.min(count, Math.floor(block.size / type.size))));
+  const keys = emptyKeys(Math.floor(block.size / type.size));
   const float = (at: number) => view.getFloat32(at, little);
   for (let i = 0; i < keys.count; i++) {
     const base = block.offset + i * type.size;
@@ -252,30 +327,88 @@ function readKeys(curve: BlendStruct, count: number): Keys {
   return keys;
 }
 
-function readSamples(curve: BlendStruct, count: number): { samples: Float32Array; start: number } | null {
-  const block = curve.target("fpt");
-  const type = block?.struct;
+/** The first `count` of `keys`, over the same arrays. */
+function firstKeys(keys: Keys, count: number): Keys {
+  if (count >= keys.count) return keys;
+  return {
+    count,
+    frame: keys.frame.subarray(0, count),
+    value: keys.value.subarray(0, count),
+    leftFrame: keys.leftFrame.subarray(0, count),
+    leftValue: keys.leftValue.subarray(0, count),
+    rightFrame: keys.rightFrame.subarray(0, count),
+    rightValue: keys.rightValue.subarray(0, count),
+    interpolation: keys.interpolation.subarray(0, count),
+    easing: keys.easing.subarray(0, count),
+    back: keys.back.subarray(0, count),
+    amplitude: keys.amplitude.subarray(0, count),
+    period: keys.period.subarray(0, count),
+  };
+}
+
+/** A curve's first `count` keys, from its BezTriple block as `readBlockKeys` reads it once. */
+function readKeys(curve: BlendStruct, count: number, reads: SharedReads): Keys {
+  const block = count > 0 ? curve.target("bezt") : null;
+  if (!block) return NO_KEYS;
+  let keys = reads.keys.get(block.index);
+  if (!keys) {
+    keys = readBlockKeys(curve.file, block);
+    reads.keys.set(block.index, keys);
+  }
+  return firstKeys(keys, count);
+}
+
+function readBlockSamples(file: BlendFile, block: BlendBlock): Samples | null {
+  const type = block.struct;
   const vec = type ? memberOffset(type, "vec", "float", 2) : -1;
-  if (!block || !type || vec < 0) return null;
-  const available = Math.max(0, Math.min(count, Math.floor(block.size / type.size)));
-  if (available === 0) return null;
-  const { view, little } = curve.file;
-  const samples = new Float32Array(available);
-  for (let i = 0; i < available; i++) samples[i] = view.getFloat32(block.offset + i * type.size + vec + 4, little);
+  if (!type || vec < 0) return null;
+  const count = Math.floor(block.size / type.size);
+  if (count === 0) return null;
+  const { view, little } = file;
+  const samples = new Float32Array(count);
+  for (let i = 0; i < count; i++) samples[i] = view.getFloat32(block.offset + i * type.size + vec + 4, little);
   return { samples, start: view.getFloat32(block.offset + vec, little) };
 }
 
-/** Reads an FCurve struct. */
+/** A curve's first `count` samples, from its FPoint block as `readBlockSamples` reads it once. */
+function readSamples(curve: BlendStruct, count: number, reads: SharedReads): Samples | null {
+  const block = count > 0 ? curve.target("fpt") : null;
+  if (!block) return null;
+  let all = reads.samples.get(block.index);
+  if (all === undefined) {
+    all = readBlockSamples(curve.file, block);
+    reads.samples.set(block.index, all);
+  }
+  if (!all || count >= all.samples.length) return all;
+  return { samples: all.samples.subarray(0, count), start: all.start };
+}
+
+/** A curve's property path, from its text block as the file decodes it once. */
+function readPath(curve: BlendStruct, reads: SharedReads): string {
+  const block = curve.target("rna_path");
+  if (!block) return "";
+  let path = reads.paths.get(block.index);
+  if (path === undefined) {
+    path = curve.file.text(block.offset, block.offset + block.size);
+    reads.paths.set(block.index, path);
+  }
+  return path;
+}
+
+/**
+ * Reads an FCurve struct. Curves that share a key, sample or path block, or a modifier list, share what is read from
+ * it, so the returned curve's arrays are for reading only.
+ */
 export function readFCurve(curve: BlendStruct): FCurve {
+  const reads = sharedReadsOf(curve.file);
   const count = Math.max(curve.number("totvert"), 0);
-  const keys = readKeys(curve, count);
-  const sampled = keys.count === 0 ? readSamples(curve, count) : null;
+  const keys = readKeys(curve, count, reads);
+  const sampled = keys.count === 0 ? readSamples(curve, count, reads) : null;
   const flag = curve.number("flag");
-  const { modifiers, unsupported } =
-    (flag & FCURVE_MODIFIERS_OFF) !== 0 ? { modifiers: [], unsupported: [] } : readModifiers(curve);
-  const makesValues = curve.list("modifiers").some((modifier) => VALUE_MODIFIERS.has(modifier.number("type")));
+  const { modifiers, unsupported, makesValues } = readModifiers(curve, reads);
+  const modifiersOff = (flag & FCURVE_MODIFIERS_OFF) !== 0;
   return {
-    path: curve.text("rna_path"),
+    path: readPath(curve, reads),
     index: curve.number("array_index"),
     keys,
     samples: sampled?.samples ?? null,
@@ -283,8 +416,8 @@ export function readFCurve(curve: BlendStruct): FCurve {
     linearExtrapolation: curve.number("extend") === FCURVE_EXTRAPOLATE_LINEAR,
     discrete: (flag & FCURVE_DISCRETE_VALUES) !== 0,
     muted: (flag & FCURVE_MUTED) !== 0 || ((curve.deref("grp")?.number("flag") ?? 0) & ACTION_GROUP_MUTED) !== 0,
-    modifiers,
-    unsupportedModifiers: unsupported,
+    modifiers: modifiersOff ? [] : modifiers,
+    unsupportedModifiers: modifiersOff ? [] : unsupported,
     empty: keys.count === 0 && sampled === null && !makesValues,
   };
 }

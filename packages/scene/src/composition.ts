@@ -295,7 +295,7 @@ class SceneBuilder {
     if (state.materialOffset !== null) return state.materialOffset;
     const { materials, textures } = state.member.scene;
     const textureOffset = this.#textures.length;
-    this.#textures.push(...textures);
+    for (const texture of textures) this.#textures.push(texture);
     state.materialOffset = this.#materials.length;
     for (const material of materials) {
       const moved = { ...material };

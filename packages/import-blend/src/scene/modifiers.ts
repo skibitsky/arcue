@@ -1,4 +1,5 @@
 import type { BlendStruct } from "../blend/file";
+import { ownedList } from "../blend/lists";
 
 /** Blender's `eModifierType` values this importer acts on. */
 export const ModifierType = {
@@ -34,9 +35,12 @@ export function modifierName(modifier: BlendStruct): string {
   return modifierHeader(modifier)?.string("name") ?? "";
 }
 
-/** The object's modifiers that are on in viewports, in stack order. */
+/**
+ * The object's modifiers that are on in viewports, in stack order. Each object's list is read once. Blender gives each
+ * modifier to one object, so a list ends before a modifier that another object's list holds.
+ */
 export function viewportModifiers(object: BlendStruct): BlendStruct[] {
-  return object.list("modifiers").filter((modifier) => {
+  return ownedList(object, "modifiers").filter((modifier) => {
     const mode = modifierHeader(modifier)?.number("mode") ?? 0;
     return (mode & MODE_REALTIME) !== 0;
   });

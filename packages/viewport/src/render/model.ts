@@ -181,7 +181,7 @@ export class Model {
       ? lit.map((material) => idMaterial(index, material.side, material))
       : null;
     const drawing = [...lit, clay, wireFill, wireLines, pickSolid, ...(pickGroups ?? [])];
-    this.materials.push(...drawing);
+    for (const material of drawing) this.materials.push(material);
     const morphs =
       mesh.morphTargets.length > 0 ? new MorphTargets(mesh.morphTargets, Math.floor(mesh.positions.length / 3)) : null;
     if (morphs) for (const material of drawing) morphs.patch(material);

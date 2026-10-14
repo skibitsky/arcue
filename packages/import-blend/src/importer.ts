@@ -40,8 +40,8 @@ import { buildClips, driverWarnings } from "./anim/clips";
 import { restPositionWarnings } from "./anim/rest-position";
 import { skinMotionWarnings } from "./anim/skin-motion";
 import { decompressBlend } from "./blend/decompress";
-import { BlendParseError } from "./blend/errors";
-import type { BlendFile, BlendStruct } from "./blend/file";
+import { BlendLimitError, BlendParseError } from "./blend/errors";
+import type { BlendBlock, BlendFile, BlendStruct } from "./blend/file";
 import { readBlendFile } from "./blend/file";
 import { idName, idOf } from "./blend/ids";
 import { GRAY_CHECK_BYTES, GRAY_SAMPLE_BYTES, isGrayImage } from "./gray-images";
@@ -131,14 +131,14 @@ function imagePaths(image: BlendStruct, frame: number | null): StoredPaths {
   return { relative: stored, absolute: stored };
 }
 
-/** The bytes of the file packed into an image, as a view of the file's bytes. */
-function packedBytes(file: BlendFile, image: BlendStruct): Uint8Array | null {
+/** The bytes of the file packed into an image, as a view of the file's bytes, and the block that holds them. */
+function packedData(file: BlendFile, image: BlendStruct): { block: BlendBlock; bytes: Uint8Array } | null {
   const packed = packedFile(image);
   if (!packed) return null;
   const block = packed.target("data");
   if (!block) return null;
   const size = Math.min(Math.max(packed.number("size"), 0), block.size);
-  return file.bytes.subarray(block.offset, block.offset + size);
+  return { block, bytes: file.bytes.subarray(block.offset, block.offset + size) };
 }
 
 type FindFile = ImportRequest["findFile"];
@@ -175,8 +175,8 @@ function searchingOnce(request: ImportRequest): { findFile: FindFile; locateFile
  */
 async function imageBytes(file: BlendFile, image: BlendStruct, findFile: FindFile): Promise<Uint8Array | null> {
   if (image.typeName !== "Image") return null;
-  const packed = packedBytes(file, image);
-  if (packed) return packed;
+  const packed = packedData(file, image);
+  if (packed) return packed.bytes;
   if (!readsFile(image, null)) return null;
   const { relative, absolute } = imagePaths(image, null);
   for (const path of new Set([relative, absolute])) {
@@ -211,9 +211,9 @@ async function grayImages(
 /**
  * The texture files the materials use: one for each image file found through a relative path, however many Image
  * datablocks store a path to it and however they spell it, one for each other stored path, however it is spelled, and
- * one for each packed image. Absolute paths keep their own texture files, so the textures note each of them. An image
- * linked from another .blend file has none, since this file holds only its name, unless the image was packed with its
- * library.
+ * one for each block of packed bytes, however many Image datablocks point at it. Absolute paths keep their own texture
+ * files, so the textures note each of them. An image linked from another .blend file has none, since this file holds
+ * only its name, unless the image was packed with its library.
  */
 class ImageFiles {
   readonly files: TextureFile[] = [];
@@ -232,7 +232,9 @@ class ImageFiles {
     if (!packed && !readsFile(image, frame)) return null;
     const paths = imagePaths(image, frame);
     if (packed) {
-      return this.#add(`packed ${image.offset}`, paths, () => packedBytes(this.#file, image)?.slice() ?? null);
+      const data = packedData(this.#file, image);
+      const key = data ? `packed block ${data.block.index}` : `packed image ${image.offset}`;
+      return this.#add(key, paths, () => data?.bytes.slice() ?? null);
     }
     const spelled = `path ${normalizedPath(paths.relative)}`;
     const known = this.#index.get(spelled);
@@ -451,6 +453,9 @@ function readingScene<T>(request: ImportRequest, read: () => T): T {
     return read();
   } catch (error) {
     if (error instanceof BlendParseError) throw unreadable(request, error);
+    if (error instanceof BlendLimitError) {
+      throw new ArcueError("invalid-input", `${request.fileName} ${error.message}.`, { cause: error });
+    }
     const reason = error instanceof Error ? error.message : String(error);
     throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, {
       cause: error,
@@ -489,10 +494,13 @@ async function importBlend(request: ImportRequest): Promise<SceneDescription> {
   const materials = await buildMaterials(scene, images, textures);
   const nodes = buildNodes(scene);
   const parts = hideBlenderHiddenParts(describeParts(nodes), scene);
-  scene.warnings.push(...skinMotionWarnings(scene, clips), ...restPositionWarnings(scene, clips));
-  const warnings = mergeWarnings([...scene.warnings, ...driverWarnings(scene), ...unshownUvSetWarnings(materials)]).map(
-    (warning) => toImportWarning(warning, request.fileName),
-  );
+  const warnings = mergeWarnings([
+    ...scene.warnings,
+    ...skinMotionWarnings(scene, clips),
+    ...restPositionWarnings(scene, clips),
+    ...driverWarnings(scene),
+    ...unshownUvSetWarnings(materials),
+  ]).map((warning) => toImportWarning(warning, request.fileName));
   const shared = shareFoundTextures(textures.textures, materials);
   return {
     source: {

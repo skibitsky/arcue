@@ -27,10 +27,15 @@ export interface ShaderGraph {
   linksTo: Map<number, BlendStruct[]>;
 }
 
+/** A node's output socket, with the name a link from it goes by. */
+interface NodeOutput {
+  node: BlendStruct;
+  socket: BlendStruct;
+  name: string;
+}
+
 /** Where an input's value comes from: a node's output, or the value set on a socket. */
-type Source =
-  | { kind: "output"; node: BlendStruct; socket: BlendStruct; name: string }
-  | { kind: "value"; socket: BlendStruct };
+type Source = ({ kind: "output" } & NodeOutput) | { kind: "value"; socket: BlendStruct };
 
 export function graphOf(tree: BlendStruct): ShaderGraph {
   const linksTo = new Map<number, BlendStruct[]>();
@@ -128,22 +133,59 @@ function passedInput(graph: ShaderGraph, node: BlendStruct, output: BlendStruct)
   return selected;
 }
 
+/** For each graph, the node output each input socket reads through reroutes and muted nodes, or null, by its offset. */
+const passedOutputs = new WeakMap<ShaderGraph, Map<number, NodeOutput | null>>();
+
 /**
- * Where an input's value comes from, looking through reroutes and muted nodes as Blender does. A muted link, or a
- * reroute or muted node that passes on no link, leaves the input at its own value.
+ * One step upstream from an input: the node output it reads, or the input that the reroute or muted node it reads
+ * passes on, or null for neither. A muted link, or a reroute or muted node that passes on no link, leaves neither.
  */
-function sourceOf(graph: ShaderGraph, socket: BlendStruct, depth = 0): Source {
-  const own: Source = { kind: "value", socket };
-  const link = graph.linksTo.get(socket.offset)?.[0];
-  if (!link || depth > 32 || !available(socket) || (link.number("flag") & LINK_MUTED) !== 0) return own;
+function readFrom(graph: ShaderGraph, input: BlendStruct): NodeOutput | { passedOn: BlendStruct | null } {
+  const link = graph.linksTo.get(input.offset)?.[0];
+  if (!link || !available(input) || (link.number("flag") & LINK_MUTED) !== 0) return { passedOn: null };
   const node = link.deref("fromnode");
   const output = link.deref("fromsock");
-  if (!node || !output || !available(output)) return own;
-  const passing = nodeType(node) === "NodeReroute" || isMuted(node);
-  if (!passing) return { kind: "output", node, socket: output, name: socketName(output) };
-  const input = nodeType(node) === "NodeReroute" ? node.list("inputs")[0] : passedInput(graph, node, output);
-  const passed = input ? sourceOf(graph, input, depth + 1) : own;
-  return passed.kind === "output" ? passed : own;
+  if (!node || !output || !available(output)) return { passedOn: null };
+  if (nodeType(node) !== "NodeReroute" && !isMuted(node)) return { node, socket: output, name: socketName(output) };
+  const passedOn = nodeType(node) === "NodeReroute" ? node.list("inputs")[0] : passedInput(graph, node, output);
+  return { passedOn: passedOn ?? null };
+}
+
+/**
+ * The node output an input reads, looking through reroutes and muted nodes as Blender does, however many there are, or
+ * null where they lead to none or loop, as Blender leaves out a loop's links. Every input on the way reads the same
+ * output, so each is looked through once for a graph.
+ */
+function passedOutput(graph: ShaderGraph, socket: BlendStruct): NodeOutput | null {
+  let known = passedOutputs.get(graph);
+  if (!known) {
+    known = new Map();
+    passedOutputs.set(graph, known);
+  }
+  const passed = new Set<number>();
+  let found: NodeOutput | null = null;
+  for (let input: BlendStruct | null = socket; input !== null && !passed.has(input.offset); ) {
+    const answer = known.get(input.offset);
+    if (answer !== undefined) {
+      found = answer;
+      break;
+    }
+    passed.add(input.offset);
+    const step = readFrom(graph, input);
+    if ("node" in step) {
+      found = step;
+      break;
+    }
+    input = step.passedOn;
+  }
+  for (const offset of passed) known.set(offset, found);
+  return found;
+}
+
+/** Where an input's value comes from: the node output it reads, or else its own value. */
+function sourceOf(graph: ShaderGraph, socket: BlendStruct): Source {
+  const output = passedOutput(graph, socket);
+  return output ? { kind: "output", ...output } : { kind: "value", socket };
 }
 
 /**
@@ -162,13 +204,8 @@ export function feedingOutputs(graph: ShaderGraph, node: BlendStruct): { node: B
 }
 
 /** The node output an input reads, or null when the input keeps a value. */
-export function linkedOutput(
-  graph: ShaderGraph,
-  socket: BlendStruct | null,
-): { node: BlendStruct; socket: BlendStruct; name: string } | null {
-  if (!socket) return null;
-  const source = sourceOf(graph, socket);
-  return source.kind === "output" ? source : null;
+export function linkedOutput(graph: ShaderGraph, socket: BlendStruct | null): NodeOutput | null {
+  return socket ? passedOutput(graph, socket) : null;
 }
 
 /** The value set on a socket, as Blender stores it for the socket's type. */
