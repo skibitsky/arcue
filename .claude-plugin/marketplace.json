@@ -1,0 +1,19 @@
+{
+  "name": "arcue",
+  "description": "Lets Claude Code and Codex apply Arcue's 3D model reviews and open models in Arcue at a clip and frame.",
+  "owner": {
+    "name": "Arcue"
+  },
+  "plugins": [
+    {
+      "name": "arcue",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/skibitsky/arcue.git",
+        "path": "plugins/arcue",
+        "ref": "plugin"
+      },
+      "description": "Lets Claude Code and Codex apply Arcue's 3D model reviews and open models in Arcue at a clip and frame."
+    }
+  ]
+}

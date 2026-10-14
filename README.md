@@ -15,6 +15,8 @@ claude plugin marketplace add skibitsky/arcue#plugin && claude plugin install ar
 codex plugin marketplace add skibitsky/arcue@plugin && codex plugin add arcue@arcue
 ```
 
+The Code tab of the Claude desktop app uses the plugins that `claude` installs, so run the first line in a terminal.
+
 The skill alone installs with `npx skills add skibitsky/arcue`, but it then needs `arcue` on your PATH.
 
 ## Develop

@@ -16,6 +16,8 @@ claude plugin marketplace add skibitsky/arcue#plugin
 claude plugin install arcue@arcue
 ```
 
+The Code tab of the Claude desktop app uses the plugins that `claude` installs.
+
 Codex:
 
 ```sh

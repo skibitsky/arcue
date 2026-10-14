@@ -16,6 +16,8 @@ export const PLUGIN = {
 
 export const PLUGIN_PATH = `plugins/${PLUGIN.name}`;
 
+export const PLUGIN_BRANCH = "plugin";
+
 export interface PluginSources {
   skill: string;
   cliBuild: string;
@@ -53,6 +55,26 @@ export function marketplaceManifest() {
     description: PLUGIN.description,
     owner: { name: PLUGIN.displayName },
     plugins: [{ name: PLUGIN.name, source: `./${PLUGIN_PATH}`, description: PLUGIN.description }],
+  };
+}
+
+/**
+ * The marketplace committed at `.claude-plugin/marketplace.json` on `main`, for hosts that read only the default
+ * branch, such as the Claude desktop app. It installs the plugin from the plugin branch. Codex has no `github` source
+ * and claude.ai refuses `owner/repo` in a `git-subdir` source, so the entry is a `git-subdir` with the full URL.
+ */
+export function mainMarketplaceManifest() {
+  return {
+    name: PLUGIN.name,
+    description: PLUGIN.description,
+    owner: { name: PLUGIN.displayName },
+    plugins: [
+      {
+        name: PLUGIN.name,
+        source: { source: "git-subdir", url: `${PLUGIN.homepage}.git`, path: PLUGIN_PATH, ref: PLUGIN_BRANCH },
+        description: PLUGIN.description,
+      },
+    ],
   };
 }
 

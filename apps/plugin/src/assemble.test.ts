@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assemblePlugin, PLUGIN, PLUGIN_PATH } from "./assemble";
+import { assemblePlugin, mainMarketplaceManifest, PLUGIN, PLUGIN_BRANCH, PLUGIN_PATH } from "./assemble";
 
 const fromRoot = (path: string) => fileURLToPath(new URL(`../../../${path}`, import.meta.url));
 const skill = fromRoot("skills/arcue");
@@ -89,5 +89,25 @@ describe("assemblePlugin", () => {
     await rm(join(cli, "arcue.js"));
 
     await expect(assemblePlugin(sources(), out)).rejects.toThrow("pnpm --filter @arcue/cli build");
+  });
+});
+
+describe("the marketplace on main", () => {
+  it("matches mainMarketplaceManifest", async () => {
+    expect(await readJson(fromRoot(".claude-plugin/marketplace.json"))).toEqual(mainMarketplaceManifest());
+  });
+
+  it("installs the plugin from where the plugin branch keeps it", () => {
+    expect(mainMarketplaceManifest().plugins).toEqual([
+      expect.objectContaining({
+        name: PLUGIN.name,
+        source: {
+          source: "git-subdir",
+          url: "https://github.com/skibitsky/arcue.git",
+          path: PLUGIN_PATH,
+          ref: PLUGIN_BRANCH,
+        },
+      }),
+    ]);
   });
 });
