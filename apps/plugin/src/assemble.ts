@@ -4,8 +4,7 @@ import { dirname, join } from "node:path";
 export const PLUGIN = {
   name: "arcue",
   displayName: "Arcue",
-  description:
-    "Lets Claude Code and Codex apply Arcue's 3D model reviews and open models in Arcue at a clip and frame.",
+  description: "Apply Arcue's 3D model reviews and open models in Arcue at a clip and frame.",
   shortDescription: "Apply Arcue reviews and open models in Arcue",
   homepage: "https://github.com/skibitsky/arcue",
   license: "MIT",
