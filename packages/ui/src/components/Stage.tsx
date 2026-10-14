@@ -91,7 +91,7 @@ function RelinkOffer({ session }: { session: AssetSession }) {
 function DropMenu({ store, assetId }: { store: WorkspaceStore; assetId: string }) {
   const prompt = useSelect(store.state, (state) => (state.dropPrompt?.assetId === assetId ? state.dropPrompt : null));
   if (!prompt) return null;
-  const dropped = prompt.files.length > 0;
+  const dropped = prompt.at !== null;
   return (
     <DropdownMenu.Root open onOpenChange={(open) => (open ? undefined : store.dismissDrop())} modal={false}>
       <DropdownMenu.Trigger asChild>

@@ -1,7 +1,7 @@
 import type { Clip, Material, SceneDescription } from "@arcue/scene";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import type { FileHost } from "../store/view-files";
 import { flush, NOW, setup, TestViewport } from "../test-helpers";
@@ -320,7 +320,11 @@ describe("Workspace", () => {
       doubleSided: false,
     };
     const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Stone.png");
-    const files: FileHost = { pick: async () => [picked], place: async () => [], open: () => {} };
+    const files: FileHost = {
+      pick: async () => ({ paths: [picked], files: [] }),
+      place: async () => [],
+      open: () => {},
+    };
     const { client } = await renderStone({
       files,
       scene: (scene) => ({
@@ -356,7 +360,7 @@ describe("Workspace", () => {
   it("asks where a model dropped on the 3D view goes, and discards the placed copy when Escape dismisses it", async () => {
     const discarded: string[][] = [];
     const files: FileHost = {
-      pick: async () => [],
+      pick: async () => ({ paths: [], files: [] }),
       place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
       open: () => {},
       discard: (dropped) => {
@@ -387,11 +391,18 @@ describe("Workspace", () => {
 });
 
 describe("choosing how a model joins the view", () => {
+  const discarded: string[][] = [];
   const files: FileHost = {
-    pick: async () => ["/work/Jacket.blend"],
+    pick: async () => ({ paths: ["/work/Jacket.blend"], files: [new File(["x"], "Jacket.blend")] }),
     place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
     open: () => {},
+    discard: (dropped) => {
+      discarded.push(dropped.map((entry) => entry.name));
+    },
   };
+  beforeEach(() => {
+    discarded.length = 0;
+  });
   const roles = (path: string) =>
     path.endsWith("Jacket.blend")
       ? { role: "set" as const, roles: ["set" as const, "animation" as const] }
@@ -448,6 +459,16 @@ describe("choosing how a model joins the view", () => {
     await user.click(within(menu).getByRole("menuitem", { name: "Add to view" }));
     await act(() => flush());
     expect(added(client)).toEqual([expect.objectContaining({ file: "/work/Jacket.blend", role: "set" })]);
+    expect(discarded).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Asset info" }));
+    await user.click(screen.getByRole("button", { name: "Add file" }));
+    await act(() => flush());
+    expect(screen.getByRole("menu", { name: "Picked file" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    await act(() => flush());
+    expect(screen.queryByRole("menu", { name: "Picked file" })).toBeNull();
+    expect(discarded).toEqual([["Jacket.blend"]]);
   });
 });
 

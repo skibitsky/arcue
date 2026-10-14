@@ -171,7 +171,11 @@ describe("import warnings in the status bar", () => {
 
   it("chooses an image for the slot a missing texture names, through the host's open dialog", async () => {
     const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Eyes.png");
-    const files: FileHost = { pick: vi.fn(async () => [picked]), place: async () => [], open: () => {} };
+    const files: FileHost = {
+      pick: vi.fn(async () => ({ paths: [picked], files: [] })),
+      place: async () => [],
+      open: () => {},
+    };
     const { client } = await renderStone(withWarnings, files);
     const user = userEvent.setup();
     await user.click(statusItem());
@@ -188,7 +192,11 @@ describe("import warnings in the status bar", () => {
 
   it("offers Choose file and Retry for a model whose file is gone, and relinks to the picked file", async () => {
     const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "StoneStriker.fbx");
-    const files: FileHost = { pick: vi.fn(async () => [picked]), place: async () => [], open: () => {} };
+    const files: FileHost = {
+      pick: vi.fn(async () => ({ paths: [picked], files: [] })),
+      place: async () => [],
+      open: () => {},
+    };
     const { client } = await renderStone((scene) => scene, files);
     const [asset] = (await client.query("asset.list", {})).assets;
     await act(async () => {

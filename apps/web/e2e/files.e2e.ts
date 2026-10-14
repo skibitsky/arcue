@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
 import type { CoreClient } from "@arcue/protocol";
@@ -159,6 +160,131 @@ test("adds an animation file from the open dialog, groups its clips, and removes
   await expect
     .poll(async () => (await sceneFacts(page, assetId)).clips.map(([name]) => name))
     .not.toContain("beetle-turn.fbx//Armature|Turn");
+});
+
+/** Holds each `composition.fileRoles` query the window sends until `release` lets the one at an index through. */
+async function holdRoles(page: Page) {
+  await page.evaluate(() => {
+    const target = window as unknown as { arcue: ArcueGlobal; heldRoles: (() => void)[] };
+    const { client } = target.arcue;
+    const query = client.query.bind(client);
+    target.heldRoles = [];
+    client.query = async (name, input) => {
+      if (name === "composition.fileRoles") await new Promise<void>((resolve) => target.heldRoles.push(resolve));
+      return query(name, input);
+    };
+  });
+  return {
+    held: () => page.evaluate(() => (window as unknown as { heldRoles: unknown[] }).heldRoles.length),
+    release: (index: number) =>
+      page.evaluate((at) => (window as unknown as { heldRoles: (() => void)[] }).heldRoles.splice(at, 1)[0]?.(), index),
+  };
+}
+
+function fileState(page: Page, path: string) {
+  return page.evaluate(async (target) => {
+    const { client } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+    return client.query("asset.inspect", { path: target }).then(
+      () => "found",
+      (error: { code?: string }) => error.code,
+    );
+  }, path);
+}
+
+async function pickFiles(page: Page, files: { name: string; mimeType: string; buffer: Buffer }[]) {
+  const add = page.getByRole("button", { name: "Add file" });
+  if (!(await add.isVisible())) await page.getByRole("button", { name: "Asset info" }).click();
+  const chooser = page.waitForEvent("filechooser");
+  await add.click();
+  await (await chooser).setFiles(files);
+}
+
+const model = (name: string, source: string) => ({
+  name,
+  mimeType: "application/octet-stream",
+  buffer: readFileSync(sample(source)),
+});
+
+/** Drops a sample on the asset's view under another name, without waiting for the drop to finish. */
+function startDrop(page: Page, assetId: string, name: string, source: string) {
+  return page.evaluate(
+    async (drop) => {
+      const { store } = (window as unknown as { arcue: ArcueGlobal }).arcue;
+      const bytes = await (await fetch(`samples/${drop.source}`)).arrayBuffer();
+      void store.dropOnView(drop.assetId, [new File([bytes], drop.name)], { x: 100, y: 100 });
+    },
+    { assetId, name, source },
+  );
+}
+
+test("removes the copies of picked files when their question is dismissed", async ({ page }) => {
+  await page.goto("/?sample=beetle-turn");
+  await readyAsset(page, "beetle-turn.fbx");
+  await pickFiles(page, [model("picked-beetle.fbx", "beetle.fbx"), WOOD]);
+  const prompt = page.getByRole("menu", { name: "Picked file" });
+  await expect(prompt.getByRole("menuitem", { name: "Add as animation" })).toBeVisible();
+  await expect(prompt.getByRole("menuitem", { name: "New tab" })).toHaveCount(0);
+  expect(await fileState(page, "/samples/picked-beetle.fbx")).toBe("found");
+  await page.keyboard.press("Escape");
+  await expect(prompt).toHaveCount(0);
+  await expect.poll(() => fileState(page, "/samples/picked-beetle.fbx")).toBe("not-found");
+});
+
+test("removes the copy of a picked model the core refuses, so a fixed file of that name takes its place", async ({
+  page,
+}) => {
+  await page.goto("/?sample=beetle-turn");
+  const assetId = await readyAsset(page, "beetle-turn.fbx");
+  await pickFiles(page, [{ name: "prop.fbx", mimeType: "application/octet-stream", buffer: Buffer.from("not fbx") }]);
+  await expect(page.locator('.toast[data-kind="alert"]')).toBeVisible();
+  await expect.poll(() => fileState(page, "/samples/prop.fbx")).toBe("not-found");
+  await pickFiles(page, [model("prop.fbx", "crate.fbx")]);
+  await expect(page.getByText("Added prop.fbx")).toBeVisible();
+  await expect.poll(async () => (await sceneFacts(page, assetId)).parts).toContain("prop.fbx//Crate");
+});
+
+test("removes a picked file's copy when a drop that was still being read asks in its place", async ({ page }) => {
+  await page.goto("/?sample=beetle-turn");
+  const assetId = await readyAsset(page, "beetle-turn.fbx");
+  const roles = await holdRoles(page);
+  await startDrop(page, assetId, "dropped-crate.fbx", "crate.fbx");
+  await expect.poll(roles.held).toBe(1);
+  await pickFiles(page, [model("picked-beetle.fbx", "beetle.fbx")]);
+  await expect.poll(roles.held).toBe(2);
+  await roles.release(1);
+  const picked = page.getByRole("menu", { name: "Picked file" });
+  await expect(picked).toBeVisible();
+  await roles.release(0);
+  const dropped = page.getByRole("menu", { name: "Dropped file" });
+  await expect(dropped).toBeVisible();
+  await expect(picked).toHaveCount(0);
+  await expect.poll(() => fileState(page, "/samples/picked-beetle.fbx")).toBe("not-found");
+  expect(await fileState(page, "/samples/dropped-crate.fbx")).toBe("found");
+  await page.keyboard.press("Escape");
+  await expect(dropped).toHaveCount(0);
+  await expect.poll(() => fileState(page, "/samples/dropped-crate.fbx")).toBe("not-found");
+});
+
+test("keeps a picked copy that a drop of the same file uses when the drop's question replaces the pick's", async ({
+  page,
+}) => {
+  await page.goto("/?sample=beetle-turn");
+  const assetId = await readyAsset(page, "beetle-turn.fbx");
+  const roles = await holdRoles(page);
+  await pickFiles(page, [model("shared-beetle.fbx", "beetle.fbx")]);
+  await expect.poll(roles.held).toBe(1);
+  await startDrop(page, assetId, "shared-beetle.fbx", "beetle.fbx");
+  await expect.poll(roles.held).toBe(2);
+  await roles.release(0);
+  await expect(page.getByRole("menu", { name: "Picked file" })).toBeVisible();
+  await roles.release(0);
+  const dropped = page.getByRole("menu", { name: "Dropped file" });
+  await expect(dropped).toBeVisible();
+  await expect(page.getByRole("menu", { name: "Picked file" })).toHaveCount(0);
+  await dropped.getByRole("menuitem", { name: "Add to view" }).click();
+  await expect
+    .poll(async () => (await sceneFacts(page, assetId)).parts.some((part) => part.startsWith("shared-beetle.fbx//")))
+    .toBe(true);
 });
 
 test("drops models on a model's view: animations join at once, anything else asks", async ({ page }) => {

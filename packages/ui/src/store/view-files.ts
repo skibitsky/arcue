@@ -11,14 +11,22 @@ export type FileKind = "model" | "image";
  * copies picked and dropped files into the core's in-memory workspace beside the asset first.
  */
 export interface FileHost {
-  /** Shows the host's open dialog and returns paths the core can read, or none when it was cancelled. */
-  pick(kind: FileKind, assetPath: string): Promise<string[]>;
+  /** Shows the host's open dialog and returns what was chosen in it. */
+  pick(kind: FileKind, assetPath: string): Promise<PickedFiles>;
   /** Paths the core can read for files dropped on an asset's tab, in their order. */
   place(files: readonly File[], assetPath: string): Promise<string[]>;
   /** Opens dropped files in new tabs, as a drop on an empty tab does. */
   open(files: readonly File[]): void;
-  /** Removes what `place` made for dropped files that neither open nor join the view. */
+  /** Removes what `place` or `pick` made for files that neither open nor join the view. */
   discard?(files: readonly File[]): void | Promise<void>;
+}
+
+/** The files chosen in a host's open dialog. */
+export interface PickedFiles {
+  /** Paths the core can read, in their order; none when the dialog was cancelled. */
+  paths: string[];
+  /** The chosen files, for `discard`, when the host copied them for the core; none when it reads them in place. */
+  files: readonly File[];
 }
 
 /**
@@ -29,7 +37,7 @@ export interface DropPrompt {
   assetId: string;
   /** The drop point, in pixels from the 3D view's top left corner, or null for picked models. */
   at: { x: number; y: number } | null;
-  /** The dropped files, which "New tab" opens; none for picked models. */
+  /** The dropped or picked files, for "New tab" after a drop, and for `discard` when no model joins the view. */
   files: readonly File[];
   models: readonly DroppedModel[];
 }
