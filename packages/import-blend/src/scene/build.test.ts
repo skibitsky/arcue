@@ -648,6 +648,42 @@ describe("buildScene", () => {
     expect(built(2 ** 31 - 1)).toEqual({ given: [0], groups: [1] });
   });
 
+  it("numbers a mesh's materials in slot order, whichever slot its first face uses", () => {
+    const at = { slots: 0x6400000n, first: 0x6400100n, second: 0x6400200n };
+    const pointers = new Uint8Array(16);
+    const view = new DataView(pointers.buffer);
+    view.setBigUint64(0, at.first, true);
+    view.setBigUint64(8, at.second, true);
+    const mesh = meshBlocks(PLATE_VERTICES, [0, 1, 2, 3]).map((block) =>
+      block.code === "ME" && !(block.data instanceof Uint8Array)
+        ? { ...block, data: block.data.map((values) => ({ ...values, totcol: 2, mat: at.slots })) }
+        : block,
+    );
+    const bytes = sceneFile(
+      [PLATE],
+      [
+        ...mesh,
+        { code: "DATA", struct: null, address: at.slots, data: pointers },
+        { code: "MA", struct: "Material", address: at.first, data: [{ id: { name: "MAFirst" } }] },
+        { code: "MA", struct: "Material", address: at.second, data: [{ id: { name: "MASecond" } }] },
+      ],
+    );
+    vi.mocked(buildMesh).mockImplementationOnce((data, options) => {
+      const built = vi.mocked(buildMesh).getMockImplementation();
+      const mesh = built ? built(data, options) : buildMesh(data, options);
+      return {
+        ...mesh,
+        groups: [
+          { start: 0, triangleCount: 1, material: 1 },
+          { start: 1, triangleCount: 1, material: 0 },
+        ],
+      };
+    });
+    const scene = buildScene(readBlendFile(bytes));
+    expect(scene.materials.map((material) => material.name)).toEqual(["First", "Second"]);
+    expect(scene.meshes[0]?.groups.map((group) => group.material)).toEqual([1, 0]);
+  });
+
   it("reads a mesh's slots once for all its objects, and an object's own slots only from arrays it alone holds", () => {
     const slotCount = 1000;
     const at = { shared: 0x6000000n, own: 0x6000100n, meshSlots: 0x6100000n, ownSlots: 0x6200000n, links: 0x6300000n };
@@ -855,7 +891,6 @@ describe.each(VERSIONS)("the gray check of the fixtures from Blender %s", (versi
     const asked = new Set<number>();
     buildScene(
       file,
-      new Set(),
       (image) => {
         asked.add(image.offset);
         return false;

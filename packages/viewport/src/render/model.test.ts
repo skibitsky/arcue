@@ -432,3 +432,34 @@ describe("Model visibility", () => {
     model.dispose();
   });
 });
+
+describe("Model draw groups", () => {
+  it("joins runs of one material only where they follow each other, shares the material between runs apart, and draws one material's runs together", async () => {
+    const scene = stripScene();
+    const mesh = scene.meshes[0];
+    if (!mesh) throw new Error("the strip has a mesh");
+    mesh.groups = [
+      { start: 0, triangleCount: 1, material: 1 },
+      { start: 1, triangleCount: 1, material: 0 },
+      { start: 2, triangleCount: 1, material: 1 },
+      { start: 3, triangleCount: 1, material: 1 },
+    ];
+    scene.materials = [
+      { ...cutout, name: "Red", alphaMode: "opaque", doubleSided: false },
+      { ...cutout, name: "Blue", alphaMode: "opaque", doubleSided: true },
+    ];
+    const model = await Model.build(scene, DEFAULT_PALETTE, 1);
+    const runtime = model.meshes[0];
+    if (!runtime) throw new Error("the strip has a mesh");
+    expect(runtime.display.geometry.groups).toEqual([
+      { start: 0, count: 3, materialIndex: 0 },
+      { start: 6, count: 6, materialIndex: 0 },
+      { start: 3, count: 3, materialIndex: 1 },
+    ]);
+    expect(runtime.lit.map((material) => material.name)).toEqual(["Blue", "Red"]);
+    expect(materials(runtime.pickLit).map((material) => material.side)).toEqual(
+      runtime.lit.map((material) => material.side),
+    );
+    model.dispose();
+  });
+});

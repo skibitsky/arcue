@@ -10,7 +10,7 @@ import {
   worldMatrices,
 } from "../../test/geometry";
 import { identity } from "../math";
-import { buildMesh } from "./mesh-build";
+import { type BuildOptions, type BuiltMesh, buildMesh, MAX_MATERIAL_GROUPS } from "./mesh-build";
 import type { MeshData } from "./mesh-data";
 
 interface SkinReference extends Reference {
@@ -181,31 +181,25 @@ describe.each(VERSIONS)("shape keys in a file from Blender %s", async (version) 
   });
 });
 
-/** Four quads in a grid around vertex 4 at `center`, in material slots 1, 0, 1 and 0. */
-function grid(center: [number, number]): MeshData {
-  const faces = [
-    [0, 1, 4, 3],
-    [1, 2, 5, 4],
-    [3, 4, 7, 6],
-    [4, 5, 8, 7],
-  ];
-  const positions = Array.from({ length: 9 }, (_, vertex) =>
-    vertex === 4 ? [...center, 0] : [(vertex % 3) - 1, Math.floor(vertex / 3) - 1, 0],
-  );
-  const edges = [...new Set(faces.flatMap((face) => face.map((v, k) => [v, face[(k + 1) % 4] ?? 0].sort().join(" "))))];
+/** A mesh of the given faces, each a list of its vertices, face f in material slot `slots[f]`. */
+function faceMesh(name: string, positions: number[][], faces: number[][], slots: readonly number[]): MeshData {
+  const next = (face: number[], k: number) => face[(k + 1) % face.length] ?? 0;
+  const edges = [...new Set(faces.flatMap((face) => face.map((v, k) => [v, next(face, k)].sort().join(" "))))];
   const edgeOf = (a: number, b: number) => edges.indexOf([a, b].sort().join(" "));
+  const faceOffsets = [0];
+  for (const face of faces) faceOffsets.push((faceOffsets[faceOffsets.length - 1] ?? 0) + face.length);
   return {
-    name: "Grid",
-    vertexCount: 9,
+    name,
+    vertexCount: positions.length,
     edgeCount: edges.length,
     faceCount: faces.length,
-    cornerCount: 16,
+    cornerCount: faces.flat().length,
     positions: Float32Array.from(positions.flat()),
     edges: Int32Array.from(edges.flatMap((edge) => edge.split(" ").map(Number))),
-    faceOffsets: Int32Array.of(0, 4, 8, 12, 16),
+    faceOffsets: Int32Array.from(faceOffsets),
     cornerVerts: Int32Array.from(faces.flat()),
-    cornerEdges: Int32Array.from(faces.flatMap((face) => face.map((v, k) => edgeOf(v, face[(k + 1) % 4] ?? 0)))),
-    materialIndices: Int32Array.of(1, 0, 1, 0),
+    cornerEdges: Int32Array.from(faces.flatMap((face) => face.map((v, k) => edgeOf(v, next(face, k))))),
+    materialIndices: Int32Array.from(slots),
     sharpFaces: null,
     sharpEdges: null,
     autoSmoothAngle: null,
@@ -223,19 +217,67 @@ function grid(center: [number, number]): MeshData {
   };
 }
 
+/** Four quads in a grid around vertex 4 at `center`, in material slots 1, 0, 1 and 0. */
+function grid(center: [number, number]): MeshData {
+  const faces = [
+    [0, 1, 4, 3],
+    [1, 2, 5, 4],
+    [3, 4, 7, 6],
+    [4, 5, 8, 7],
+  ];
+  const positions = Array.from({ length: 9 }, (_, vertex) =>
+    vertex === 4 ? [...center, 0] : [(vertex % 3) - 1, Math.floor(vertex / 3) - 1, 0],
+  );
+  return faceMesh("Grid", positions, faces, [1, 0, 1, 0]);
+}
+
+/** A row of unit quads, face f in material slot `slots[f]`. */
+function row(slots: readonly number[]): MeshData {
+  const columns = slots.length + 1;
+  const faces = slots.map((_, face) => [face, face + 1, columns + face + 1, columns + face]);
+  return faceMesh("Row", rowPositions(columns), faces, slots);
+}
+
+function rowPositions(columns: number): number[][] {
+  return Array.from({ length: columns * 2 }, (_, vertex) => [vertex % columns, Math.floor(vertex / columns), 0]);
+}
+
+function buildOptions(slotCount: number): BuildOptions {
+  return { conversion: identity(), slotCount, skinBones: null, meshNode: 0, smoothing: null, blenderVersion: 402 };
+}
+
+/** The source vertices of each triangle the mesh draws, in its order. */
+function triangles(mesh: BuiltMesh): number[][] {
+  return Array.from({ length: mesh.indices.length / 3 }, (_, triangle) =>
+    [0, 1, 2].map((k) => mesh.sourceVertex[mesh.indices[triangle * 3 + k] ?? 0] ?? -1),
+  );
+}
+
+/** The face of each triangle the mesh draws: the one whose corners hold the triangle's three source vertices. */
+function facesOf(data: MeshData, mesh: BuiltMesh): number[] {
+  const faceVertices = Array.from({ length: data.faceCount }, (_, face) =>
+    Array.from(data.cornerVerts.subarray(data.faceOffsets[face] ?? 0, data.faceOffsets[face + 1] ?? 0)),
+  );
+  return triangles(mesh).map((corners) =>
+    faceVertices.findIndex((vertices) => corners.every((vertex) => vertices.includes(vertex))),
+  );
+}
+
+/** The fingerprint of the quads in `faces` order, each fanned from its first corner. */
+function fanTopology(data: MeshData, faces: readonly number[]) {
+  const indices = faces.flatMap((face) => {
+    const [a = 0, b = 0, c = 0, d = 0] = Array.from(data.cornerVerts.subarray(face * 4, face * 4 + 4));
+    return [a, b, c, a, c, d];
+  });
+  return topologyFingerprint({
+    indices: Uint32Array.from(indices),
+    sourceVertex: Uint32Array.from({ length: data.vertexCount }, (_, vertex) => vertex),
+    sourceVertexCount: data.vertexCount,
+  });
+}
+
 describe("the topology fingerprint", () => {
-  const options = {
-    conversion: identity(),
-    slotCount: 2,
-    skinBones: null,
-    meshNode: 0,
-    smoothing: null,
-    blenderVersion: 402,
-  };
-  const triangles = (mesh: ReturnType<typeof buildMesh>) =>
-    Array.from({ length: mesh.indices.length / 3 }, (_, triangle) =>
-      [0, 1, 2].map((k) => mesh.sourceVertex[mesh.indices[triangle * 3 + k] ?? 0] ?? -1),
-    );
+  const options = buildOptions(2);
 
   it("stays when a moved vertex makes Blender split a quad along its other diagonal", () => {
     const flat = buildMesh(grid([0, 0]), options);
@@ -244,13 +286,13 @@ describe("the topology fingerprint", () => {
     expect(concave.topology).toEqual(flat.topology);
   });
 
-  it("fans each face from its first corner in the order the mesh draws its triangles, by slot", () => {
+  it("fans each face from its first corner in the order the mesh draws its triangles", () => {
     const mesh = buildMesh(grid([0.8, -0.8]), options);
     const fans = [
-      [1, 2, 5, 1, 5, 4],
-      [4, 5, 8, 4, 8, 7],
       [0, 1, 4, 0, 4, 3],
+      [1, 2, 5, 1, 5, 4],
       [3, 4, 7, 3, 7, 6],
+      [4, 5, 8, 4, 8, 7],
     ];
     const expected = topologyFingerprint({
       indices: Uint32Array.from(fans.flat()),
@@ -265,6 +307,66 @@ describe("the topology fingerprint", () => {
         `triangle ${triangle}`,
       ).toBe(true);
     });
+  });
+});
+
+describe("the draw order", () => {
+  it("keeps the file's face order and gives each run of faces in one slot a group of its own", () => {
+    const data = row([2, 2, 0, 1, 1, 1, 0]);
+    const mesh = buildMesh(data, buildOptions(3));
+    expect(facesOf(data, mesh)).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]);
+    expect(mesh.groups).toEqual([
+      { start: 0, triangleCount: 4, material: 2 },
+      { start: 4, triangleCount: 2, material: 0 },
+      { start: 6, triangleCount: 6, material: 1 },
+      { start: 12, triangleCount: 2, material: 0 },
+    ]);
+    expect(mesh.topology).toEqual(fanTopology(data, [0, 1, 2, 3, 4, 5, 6]));
+  });
+
+  it("leaves faces without triangles out of the runs", () => {
+    const left = [0, 1, 4, 3];
+    const edge = [1, 4];
+    const right = [1, 2, 5, 4];
+    const cases = [
+      { faces: [left, edge, right], drawn: [0, 0, 2, 2] },
+      { faces: [edge, left, right], drawn: [1, 1, 2, 2] },
+    ];
+    for (const { faces, drawn } of cases) {
+      const slots = faces.map((face) => (face === edge ? 1 : 0));
+      const data = faceMesh("Row", rowPositions(3), faces, slots);
+      const mesh = buildMesh(data, buildOptions(2));
+      expect(mesh.groups).toEqual([{ start: 0, triangleCount: 4, material: 0 }]);
+      expect(facesOf(data, mesh)).toEqual(drawn);
+    }
+  });
+
+  it("keeps the fingerprint and every triangle's source vertices when one face changes material", () => {
+    const before = buildMesh(row([0, 0, 1, 1, 0]), buildOptions(2));
+    const after = buildMesh(row([0, 1, 1, 1, 0]), buildOptions(2));
+    expect(after.groups).not.toEqual(before.groups);
+    expect(triangles(after)).toEqual(triangles(before));
+    expect(after.topology).toEqual(before.topology);
+  });
+
+  it("sorts the triangles by slot when the faces change slot more often than a mesh has groups", () => {
+    const alternating = (count: number) => Array.from({ length: count }, (_, face) => face % 2);
+    const most = row(alternating(MAX_MATERIAL_GROUPS));
+    const kept = buildMesh(most, buildOptions(2));
+    expect(kept.groups).toHaveLength(MAX_MATERIAL_GROUPS);
+    expect(facesOf(most, kept)).toEqual(Array.from({ length: MAX_MATERIAL_GROUPS * 2 }, (_, t) => Math.floor(t / 2)));
+
+    const data = row(alternating(MAX_MATERIAL_GROUPS + 1));
+    const mesh = buildMesh(data, buildOptions(2));
+    const faces = Array.from({ length: data.faceCount }, (_, face) => face);
+    const sorted = [...faces.filter((face) => face % 2 === 0), ...faces.filter((face) => face % 2 === 1)];
+    expect(facesOf(data, mesh)).toEqual(sorted.flatMap((face) => [face, face]));
+    const evens = Math.ceil(data.faceCount / 2) * 2;
+    expect(mesh.groups).toEqual([
+      { start: 0, triangleCount: evens, material: 0 },
+      { start: evens, triangleCount: data.faceCount * 2 - evens, material: 1 },
+    ]);
+    expect(mesh.topology).toEqual(fanTopology(data, sorted));
   });
 });
 

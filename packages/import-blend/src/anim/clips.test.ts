@@ -10,7 +10,7 @@ import { datablocks, idName } from "../blend/ids";
 import type { BlendWarning, BuiltScene } from "../scene/build";
 import { buildScene } from "../scene/build";
 import type { Action } from "./actions";
-import { animatedPaths, IdCode, readActions, slotFor, usedActions } from "./actions";
+import { IdCode, readActions, slotFor, usedActions } from "./actions";
 import type { ClipLimits } from "./clips";
 import { buildClips } from "./clips";
 import { evaluateFCurve } from "./fcurve";
@@ -260,7 +260,7 @@ describe.each(VERSIONS)("the clips fixture from Blender %s", async (version) => 
   const built = async () => {
     const file = readBlendFile(await decompressBlend(readFixture("clips", version)));
     const actions = readActions(file);
-    return { file, actions, scene: buildScene(file, animatedPaths(file, actions)) };
+    return { file, actions, scene: buildScene(file) };
   };
   const sampled = (scene: BuiltScene, actions: readonly Action[], limits?: Partial<ClipLimits>) => {
     const warnings: BlendWarning[] = [];

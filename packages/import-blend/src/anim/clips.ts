@@ -6,6 +6,7 @@ import { decompose, identity, invert, multiply, SHEAR_TOLERANCE, shearOf, toScen
 import type { Bone } from "../scene/armature";
 import { BoneFlag, inheritsFully, poseMatrices } from "../scene/armature";
 import type { ArmatureRecord, BlendWarning, BuiltScene, MeshRecord, ObjectRecord } from "../scene/build";
+import { constraintWarnings } from "../scene/build";
 import { ObjectType } from "../scene/objects";
 import type { TransformValues } from "../scene/transforms";
 import {
@@ -17,7 +18,16 @@ import {
   setTransformProperty,
 } from "../scene/transforms";
 import type { Action, ActionSlot } from "./actions";
-import { actionRange, animationUses, IdCode, parsePosePath, parseShapeKeyPath, slotFor, usedActions } from "./actions";
+import {
+  actionRange,
+  animatedPaths,
+  animationUses,
+  IdCode,
+  parsePosePath,
+  parseShapeKeyPath,
+  slotFor,
+  usedActions,
+} from "./actions";
 import type { FCurve } from "./fcurve";
 import { canJump, canJumpAfter, curveEvaluator, jumpFrames, keyFrames } from "./fcurve";
 import type { Lane, Player, Span } from "./nla";
@@ -320,6 +330,25 @@ function assignTargets(actions: readonly Action[], scene: BuiltScene): Targets {
     }
   }
   return { assigned, lost };
+}
+
+/**
+ * The property paths that animation plays on each object: those Blender plays now, as `animatedPaths` finds them, and
+ * the unmuted curves of the slots that `clipped`, the assignments of the clips Arcue makes, give the object.
+ */
+function playedPaths(
+  scene: BuiltScene,
+  actions: readonly Action[],
+  clipped: readonly (readonly Assignment[])[],
+): Map<ObjectRecord, Set<string>> {
+  const byOffset = new Map(actions.map((action) => [action.struct.offset, action]));
+  const paths = new Map(scene.objects.map((record) => [record, animatedPaths(record.object.struct, byOffset)]));
+  for (const { slot, target } of clipped.flat()) {
+    const played = target.kind === "object" ? paths.get(target.record) : undefined;
+    if (!played) continue;
+    for (const curve of slot.curves) if (!curve.muted && !curve.empty) played.add(curve.path);
+  }
+  return paths;
 }
 
 function snapTime(seconds: number, fps: number): number {
@@ -1445,7 +1474,8 @@ function buildClip(plan: ClipPlan, clipScene: ClipScene): ParsedClip | null {
 /**
  * The clips of the actions that animate the scene, then, where the scene plays more than one action, a clip named
  * after the scene that plays them together over its frame range. A clip that would pass `limits` is left out with a
- * warning, as is an action that nothing plays and that `assignTargets` places nowhere.
+ * warning, as is an action that nothing plays and that `assignTargets` places nowhere. It also warns about the
+ * constraints Blender evaluates where the scene's animation or one of these clips plays, which the preview does not.
  */
 export function buildClips(
   scene: BuiltScene,
@@ -1472,10 +1502,12 @@ export function buildClips(
     buffer: new Float64Array(0),
   };
   const clips: ParsedClip[] = [];
+  const clipped: Assignment[][] = [];
   for (const action of actions) {
     const assignments = assigned.get(action);
     const clip = assignments ? buildClip(actionPlan(action, assignments, scene), clipScene) : null;
     if (clip) clips.push(clip);
+    if (clip && assignments) clipped.push(assignments);
     if (lost.has(action)) {
       warnings.push({
         code: "clip-not-sampled",
@@ -1485,6 +1517,7 @@ export function buildClips(
       });
     }
   }
+  for (const warning of constraintWarnings(scene.objects, playedPaths(scene, actions, clipped))) warnings.push(warning);
   const together = scenePlan(scene, actions, warnings);
   const clip = together ? buildClip(together, clipScene) : null;
   if (clip) clips.push(clip);

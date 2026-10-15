@@ -254,9 +254,52 @@ function cornerNormalsOf(source: MeshData, smoothing: SmoothByAngle | null): Flo
   });
 }
 
-/** The triangles in material slot order, each slot's in face order, and the group of each slot that has any. */
-function sortBySlot(mesh: MeshData, faceTriangles: Uint32Array, slotCount: number) {
+/**
+ * The most groups a mesh draws its triangles in when they keep the file's face order. A mesh whose faces change slot
+ * more often draws its triangles sorted by slot, in one group per slot.
+ */
+export const MAX_MATERIAL_GROUPS = 256;
+
+/** The order a mesh draws its triangles in, as triangle numbers of the triangulation, and the face of each. */
+interface DrawOrder {
+  order: Uint32Array;
+  faceAt: Uint32Array;
+  groups: MaterialGroup[];
+}
+
+/**
+ * The triangles in the file's face order, with a group for each run of faces in one slot, so that assigning a face
+ * another material keeps every triangle's number and the fingerprint. A mesh with more runs than
+ * `MAX_MATERIAL_GROUPS` gets its triangles sorted by slot instead.
+ */
+function drawOrder(mesh: MeshData, faceTriangles: Uint32Array, slotCount: number): DrawOrder {
   const slotOf = (face: number) => Math.min(Math.max(mesh.materialIndices?.[face] ?? 0, 0), slotCount - 1);
+  const groups: MaterialGroup[] = [];
+  for (let f = 0; f < mesh.faceCount; f++) {
+    const start = faceTriangles[f] ?? 0;
+    const triangleCount = (faceTriangles[f + 1] ?? 0) - start;
+    if (triangleCount === 0) continue;
+    const slot = slotOf(f);
+    const last = groups[groups.length - 1];
+    if (last?.material === slot) last.triangleCount += triangleCount;
+    else if (groups.length === MAX_MATERIAL_GROUPS) return sortBySlot(mesh, faceTriangles, slotOf, slotCount);
+    else groups.push({ start, triangleCount, material: slot });
+  }
+  const triangleCount = faceTriangles[mesh.faceCount] ?? 0;
+  const order = new Uint32Array(triangleCount);
+  for (let triangle = 0; triangle < triangleCount; triangle++) order[triangle] = triangle;
+  const faceAt = new Uint32Array(triangleCount);
+  for (let f = 0; f < mesh.faceCount; f++) faceAt.fill(f, faceTriangles[f] ?? 0, faceTriangles[f + 1] ?? 0);
+  return { order, faceAt, groups };
+}
+
+/** The triangles in material slot order, each slot's in face order, and the group of each slot that has any. */
+function sortBySlot(
+  mesh: MeshData,
+  faceTriangles: Uint32Array,
+  slotOf: (face: number) => number,
+  slotCount: number,
+): DrawOrder {
   const counts = new Uint32Array(slotCount);
   for (let f = 0; f < mesh.faceCount; f++) {
     const slot = slotOf(f);
@@ -286,12 +329,8 @@ function sortBySlot(mesh: MeshData, faceTriangles: Uint32Array, slotCount: numbe
 }
 
 /** The fingerprint of each face fanned from its first corner, triangle by triangle in the order the mesh draws them. */
-function fanFingerprint(
-  mesh: MeshData,
-  faceTriangles: Uint32Array,
-  sorted: { order: Uint32Array; faceAt: Uint32Array },
-): TopologyFingerprint {
-  const { order, faceAt } = sorted;
+function fanFingerprint(mesh: MeshData, faceTriangles: Uint32Array, drawn: DrawOrder): TopologyFingerprint {
+  const { order, faceAt } = drawn;
   const indices = new Uint32Array(order.length * 3);
   for (let position = 0; position < order.length; position++) {
     const face = faceAt[position] ?? 0;
@@ -461,14 +500,14 @@ function tableSize(count: number): number {
 
 /**
  * Turns mesh data into Arcue's triangle mesh: corners become rendered vertices, shared where the vertex, normal, UVs
- * and color all match, and where every shape key shades them alike, and triangles sort by material slot. Positions and
- * normals go through `conversion`.
+ * and color all match, and where every shape key shades them alike, and triangles keep the file's face order in a group
+ * for each run of faces in one material slot. Positions and normals go through `conversion`.
  */
 export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
   const normals = cornerNormalsOf(mesh, options.smoothing);
   const { corners, faceTriangles } = triangulate(mesh, options.blenderVersion);
-  const sorted = sortBySlot(mesh, faceTriangles, Math.max(options.slotCount, 1));
-  const { order, groups } = sorted;
+  const drawn = drawOrder(mesh, faceTriangles, Math.max(options.slotCount, 1));
+  const { order, groups } = drawn;
   const triangleCount = order.length;
   const uvMaps = mesh.uvMaps.slice(0, MAX_UV_SETS);
   const colorValues = mesh.colors;
@@ -616,7 +655,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     indices,
     sourceVertex: source,
     sourceVertexCount: mesh.vertexCount,
-    topology: fanFingerprint(mesh, faceTriangles, sorted),
+    topology: fanFingerprint(mesh, faceTriangles, drawn),
     groups,
     morphTargets,
     morphKeys: morphs.map((target) => target.name),

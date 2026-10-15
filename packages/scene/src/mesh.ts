@@ -65,6 +65,7 @@ export interface Mesh {
   weights: Float32Array | null;
   /** Three rendered vertex indices per triangle. */
   indices: Uint32Array;
+  /** Runs of triangles that draw in one material. Several groups may use the same material. */
   groups: MaterialGroup[];
   morphTargets: MorphTarget[];
   sourceVertex: Uint32Array;

@@ -34,7 +34,7 @@ import {
   TEXTURE_SLOTS,
   unshownUvSetWarnings,
 } from "@arcue/scene";
-import { animatedPaths, readActions } from "./anim/actions";
+import { readActions } from "./anim/actions";
 import type { ParsedClip } from "./anim/clips";
 import { buildClips, driverWarnings } from "./anim/clips";
 import { restPositionWarnings } from "./anim/rest-position";
@@ -469,7 +469,7 @@ function readScene(
   isGray: GrayCheck,
 ): { scene: BuiltScene; clips: ParsedClip[] } {
   const actions = readActions(file);
-  const scene = buildScene(file, animatedPaths(file, actions), isGray, contents, actions);
+  const scene = buildScene(file, isGray, contents, actions);
   return { scene, clips: buildClips(scene, actions, scene.warnings) };
 }
 

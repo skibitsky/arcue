@@ -5,13 +5,12 @@ import { decompressBlend } from "../blend/decompress";
 import { readBlendFile } from "../blend/file";
 import { decompose, toSceneAxes } from "../math";
 import { buildScene } from "../scene/build";
-import { animatedPaths, readActions } from "./actions";
 import type { ParsedClip } from "./clips";
 import { skinMotionWarnings } from "./skin-motion";
 
 describe("skinMotionWarnings on the relations fixture", async () => {
   const file = readBlendFile(await decompressBlend(readFixture("relations", "5.2")));
-  const sceneOf = () => buildScene(file, animatedPaths(file, readActions(file)));
+  const sceneOf = () => buildScene(file);
   const scene = sceneOf();
   const nodeOf = (name: string) => scene.nodes.findIndex((candidate) => candidate.name === name);
 

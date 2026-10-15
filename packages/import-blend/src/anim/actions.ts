@@ -265,17 +265,19 @@ export function usedActions(id: BlendStruct): ActionUse[] {
   return uses;
 }
 
-/** Every property path an action, or a driver on an object, animates, such as `constraints["Follow"].influence`. */
-export function animatedPaths(file: BlendFile, actions: readonly Action[]): Set<string> {
+/**
+ * Every property path an ID's own animation animates, such as `constraints["Follow"].influence`: the unmuted curves of
+ * the action slots it plays, from `actions` by struct offset, and its unmuted drivers.
+ */
+export function animatedPaths(id: BlendStruct, actions: ReadonlyMap<number, Action>): Set<string> {
   const paths = new Set<string>();
-  for (const action of actions) {
-    for (const slot of action.slots) {
-      for (const curve of slot.curves) if (!curve.muted && !curve.empty) paths.add(curve.path);
-    }
+  const { uses, drivers } = animationUses(id);
+  for (const use of uses) {
+    const action = use.played ? actions.get(use.action) : undefined;
+    const slot = action ? slotFor(action, use.slot) : undefined;
+    for (const curve of slot?.curves ?? []) if (!curve.muted && !curve.empty) paths.add(curve.path);
   }
-  for (const object of datablocks(file, "OB")) {
-    for (const driver of animationUses(object).drivers) if (!driver.muted) paths.add(driver.path);
-  }
+  for (const driver of drivers) if (!driver.muted) paths.add(driver.path);
   return paths;
 }
 

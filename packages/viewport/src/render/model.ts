@@ -1,5 +1,5 @@
 import type { DisplayMode } from "@arcue/protocol";
-import type { Clip, Mesh, SceneDescription } from "@arcue/scene";
+import type { Clip, MaterialGroup, Mesh, SceneDescription } from "@arcue/scene";
 import { VIEWPORT_UV_SETS } from "@arcue/scene";
 import type { Material, MeshBasicMaterial, MeshStandardMaterial, Side, Texture } from "three";
 import {
@@ -151,12 +151,9 @@ export class Model {
     const geometry = deindexedGeometry(mesh, colored);
     this.geometries.push(geometry);
     const tint = new RegionTint(triangleCount);
-    const slots = new Map<number, number>();
-    for (const group of groups) {
-      if (!slots.has(group.material)) slots.set(group.material, slots.size);
-      geometry.addGroup(group.start * 3, group.triangleCount * 3, slots.get(group.material) ?? 0);
-    }
-    const used = [...slots.keys()].map((material) => this.scene.materials[material]);
+    const draws = drawGroups(groups);
+    for (const draw of draws.groups) geometry.addGroup(draw.start, draw.count, draw.materialIndex);
+    const used = draws.materials.map((material) => this.scene.materials[material]);
     const lit = used.map((material) =>
       withRegionTint(
         litMaterial({
@@ -327,6 +324,27 @@ export class Model {
     }
     for (const image of this.images) image?.close();
   }
+}
+
+/**
+ * The geometry's draw groups, in corners, and the scene material of each draw material, each used once. A mesh's
+ * groups that follow each other in one material draw as one group; groups of one material apart share its draw
+ * material but draw on their own, since the triangles between them use others. Groups draw by material, so a pass
+ * switches materials once per material, not once per group.
+ */
+function drawGroups(groups: readonly MaterialGroup[]) {
+  const drawMaterialOf = new Map<number, number>();
+  const draws: { start: number; count: number; materialIndex: number }[] = [];
+  for (const group of groups) {
+    if (!drawMaterialOf.has(group.material)) drawMaterialOf.set(group.material, drawMaterialOf.size);
+    const materialIndex = drawMaterialOf.get(group.material) ?? 0;
+    const [start, count] = [group.start * 3, group.triangleCount * 3];
+    const last = draws[draws.length - 1];
+    if (last?.materialIndex === materialIndex && last.start + last.count === start) last.count += count;
+    else draws.push({ start, count, materialIndex });
+  }
+  draws.sort((a, b) => a.materialIndex - b.materialIndex);
+  return { groups: draws, materials: [...drawMaterialOf.keys()] };
 }
 
 /**

@@ -161,7 +161,14 @@ describe.each(VERSIONS)("a file from Blender %s", (version) => {
       const expectedPolygons = expected.meshes.Polygons;
       if (!polygons || !expectedPolygons?.colors) throw new Error("no Polygons");
       expect(polygons.uvs.map((uv) => uv.name)).toEqual(expectedPolygons.uvMaps);
-      expect(polygons.groups.map((group) => scene.materials[group.material]?.name)).toEqual(["Red", "Default", "Blue"]);
+      expect(polygons.groups.map((group) => scene.materials[group.material]?.name)).toEqual([
+        "Red",
+        "Default",
+        "Blue",
+        "Red",
+        "Default",
+        "Blue",
+      ]);
       expect(polygons.colors).not.toBeNull();
     });
 
@@ -562,7 +569,6 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
   it("warns about what the preview leaves out, down to data linked from other files that shown objects need", () => {
     expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
       ["object-not-shown", "KitInstance", "Arcue does not expand instances of Kit"],
-      ["constraint-not-evaluated", "Follower", undefined],
       ["deform-approximated", "RelChild", "It stays with RelRig at rest instead of following bone Holder"],
       ["deform-approximated", "Skewed", "Its parent's scale shears it, which the preview drops"],
       [
@@ -584,6 +590,7 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
         "SpinnerAction",
         "Keys on rotation mode are left out; each object and bone keeps the mode it was saved with",
       ],
+      ["constraint-not-evaluated", "Follower", undefined],
     ]);
     expect(scene.meshes[meshIndex(scene, "Morph")]?.morphTargets).toEqual([]);
     const masked = scene.source.warnings.find(

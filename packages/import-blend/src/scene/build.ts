@@ -180,10 +180,11 @@ function conversionMatrix(unitScale: number): Mat4 {
 }
 
 /**
- * The constraints Blender evaluates: on, valid, and with some influence now or an animated influence. `path` is the
- * owner's path to its constraints, such as `pose.bones["Arm"].` for a bone or empty for an object.
+ * The constraints Blender evaluates: on, valid, and with some influence now or an influence among `animated`, the paths
+ * that animation plays on the object. `path` is the object's path to the owner's constraints, such as
+ * `pose.bones["Arm"].` for a bone or empty for the object itself.
  */
-function activeConstraints(owner: BlendStruct, path = "", animated: ReadonlySet<string> = new Set()): BlendStruct[] {
+function activeConstraints(owner: BlendStruct, path: string, animated: ReadonlySet<string>): BlendStruct[] {
   return ownedList(owner, "constraints").filter((constraint) => {
     const flag = constraint.number("flag");
     if ((flag & CONSTRAINT_OFF) !== 0 || (flag & CONSTRAINT_DISABLE) !== 0) return false;
@@ -195,6 +196,47 @@ function activeConstraints(owner: BlendStruct, path = "", animated: ReadonlySet<
 /** A name as Blender quotes it inside a property path. */
 function quoted(name: string): string {
   return name.replace(/["\\]/g, "\\$&");
+}
+
+/**
+ * Warnings about the constraints Blender evaluates on each object and its bones, which the preview does not, given the
+ * property paths that animation plays on each object.
+ */
+export function constraintWarnings(
+  objects: readonly ObjectRecord[],
+  animated: ReadonlyMap<ObjectRecord, ReadonlySet<string>>,
+): BlendWarning[] {
+  const warnings: BlendWarning[] = [];
+  for (const record of objects) {
+    const { object } = record;
+    const paths = animated.get(record) ?? new Set<string>();
+    const subject: ImportWarningSubject = { kind: "node", name: object.name };
+    const channels = new Map(
+      object.struct
+        .deref("pose")
+        ?.list("chanbase")
+        .map((channel) => [channel.string("name"), channel]),
+    );
+    const constrained = (record.armature?.bones ?? []).filter((bone) => {
+      const channel = channels.get(bone.name);
+      return (
+        channel !== undefined && activeConstraints(channel, `pose.bones["${quoted(bone.name)}"].`, paths).length > 0
+      );
+    });
+    if (constrained.length > 0) {
+      const message = `Bone constraints not evaluated: ${object.name}`;
+      const detail = `Bones: ${constrained.map((bone) => bone.name).join(", ")}`;
+      warnings.push({ code: "constraint-not-evaluated", subject, message, detail });
+    }
+    if (activeConstraints(object.struct, "", paths).length > 0) {
+      warnings.push({
+        code: "constraint-not-evaluated",
+        subject,
+        message: `Constraints not evaluated: ${object.name}`,
+      });
+    }
+  }
+  return warnings;
 }
 
 /** Rest world matrices of nodes in Blender's space, each worked out once. */
@@ -228,7 +270,6 @@ function addArmature(
   record: ObjectRecord,
   data: BlendStruct,
   nodes: NodeDraft[],
-  animated: ReadonlySet<string>,
   warn: Warn,
   startPose: StartPose,
 ): void {
@@ -261,20 +302,6 @@ function addArmature(
   if (bones.some((bone) => bone.deform && bone.segments > 1)) {
     warn("deform-approximated", object.name, `B-Bones bend as straight bones: ${object.name}`);
   }
-  const constrained = bones.filter((bone) => {
-    const channel = channels.get(bone.name);
-    return (
-      channel !== undefined && activeConstraints(channel, `pose.bones["${quoted(bone.name)}"].`, animated).length > 0
-    );
-  });
-  if (constrained.length > 0) {
-    warn(
-      "constraint-not-evaluated",
-      object.name,
-      `Bone constraints not evaluated: ${object.name}`,
-      `Bones: ${constrained.map((bone) => bone.name).join(", ")}`,
-    );
-  }
 }
 
 /** Whether Blender draws geometry for the object, which instancing on vertices or faces would copy. */
@@ -296,13 +323,7 @@ function geometryAncestors(objects: readonly SceneObject[]): Set<number> {
 }
 
 /** A node for every object, each armature's bones under it, and an object parented to a bone under that bone. */
-function objectNodes(
-  contents: SceneContents,
-  animated: ReadonlySet<string>,
-  poses: StartPoses,
-  warn: Warn,
-  vertices: ParentVertices,
-) {
+function objectNodes(contents: SceneContents, poses: StartPoses, warn: Warn, vertices: ParentVertices) {
   const worlds = new WorldMatrices(vertices);
   const nodes: NodeDraft[] = [];
   const nodeWorlds = new NodeWorlds(nodes);
@@ -340,10 +361,7 @@ function objectNodes(
       warn("deform-approximated", object.name, `Shear not shown: ${object.name}`, detail);
     }
     if (object.type === ObjectType.armature && object.data) {
-      addArmature(record, object.data, nodes, animated, warn, startPose);
-    }
-    if (activeConstraints(object.struct, "", animated).length > 0) {
-      warn("constraint-not-evaluated", object.name, `Constraints not evaluated: ${object.name}`);
+      addArmature(record, object.data, nodes, warn, startPose);
     }
     if (object.shown && UNSHOWN_GEOMETRY.has(object.type)) {
       const kind = UNSHOWN_GEOMETRY.get(object.type);
@@ -983,10 +1001,11 @@ class SceneMeshes {
       names: data.attributeNames,
       defaultName: defaultColor,
     };
-    const groups = built.groups.map((group) => ({
-      ...group,
-      material: materials.indexOf(slots[group.material] ?? null, uvMaps, meshColors),
-    }));
+    const usedSlots = [...new Set(built.groups.map((group) => group.material))].sort((a, b) => a - b);
+    const materialOfSlot = new Map(
+      usedSlots.map((slot) => [slot, materials.indexOf(slots[slot] ?? null, uvMaps, meshColors)]),
+    );
+    const groups = built.groups.map((group) => ({ ...group, material: materialOfSlot.get(group.material) ?? 0 }));
     const morphs = startMorphTargets(object, mesh, data, built, poses, warn);
 
     const node = nodes[record.node];
@@ -1097,7 +1116,6 @@ export function linkedDataWarning(linked: readonly LinkedName[]): BlendWarning |
  */
 export function buildScene(
   file: BlendFile,
-  animated: ReadonlySet<string> = new Set(),
   isGray: GrayCheck = () => null,
   contents: SceneContents = collectSceneObjects(file),
   actions: readonly Action[] = readActions(file),
@@ -1112,7 +1130,7 @@ export function buildScene(
   const shown = [...shownMeshSlots(file, contents)];
   const cache = new MeshCache(file, shown);
   const poses = startPoses(contents.scene, actions);
-  const { nodes, nodeWorlds, objects, byOffset } = objectNodes(contents, animated, poses, warn, (parent) =>
+  const { nodes, nodeWorlds, objects, byOffset } = objectNodes(contents, poses, warn, (parent) =>
     cache.vertices(parent, poses),
   );
   if (nestsTooDeep(nodes)) {
