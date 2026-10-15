@@ -257,7 +257,14 @@ test("a lane drag selects a range in the feedback color, and a resolved comment 
   await commentBox.getByRole("textbox", { name: "Comment text" }).fill("Slow the step down.");
   await page.keyboard.press("Enter");
   await expect(commentBox).toBeHidden();
+  await expect(range).toHaveCount(0);
+  await expect(page.locator(".range-chip")).toHaveCount(0);
+  await expect(page.locator(".mk-bar")).toHaveCount(0);
+  await page.locator(".mk-dot").click();
+  await expect(page.locator(".mk-bar.is-selected")).toBeVisible();
+  await expect(range).toHaveCount(0);
   await page.keyboard.press("Escape");
+  await expect(page.locator(".mk-bar")).toHaveCount(0);
   await page.getByRole("button", { name: /Copy prompt/ }).click();
   await expect(page.getByText("Copied 1 comment as round 1")).toBeVisible();
   const prompt = await page.evaluate(() => navigator.clipboard.readText());

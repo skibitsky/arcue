@@ -87,17 +87,29 @@ describe("timeline", () => {
     expect(adjacentKey(clip("Charge"), 34, 1)).toBe(35);
   });
 
-  it("places a dot for a frame comment, a bar for a range, and numbers drafts by queue order", () => {
+  it("places a dot for a frame comment, a bar for a selected range, and numbers drafts by queue order", () => {
     const review = stoneResonatorReview(NOW);
     const charge = timelineMarkers(review, "Armature|Charge", "c7");
     expect(charge.dots).toEqual([
       { frame: 34, markers: [expect.objectContaining({ id: "c7", number: 1, status: "draft", selected: true })] },
     ]);
-    const run = timelineMarkers(review, "Armature|Run", null);
-    expect(run.bars).toEqual([expect.objectContaining({ id: "c8", number: 2, start: 12, end: 24 })]);
-    const walk = timelineMarkers(review, "Armature|Walk", null);
+    const run = timelineMarkers(review, "Armature|Run", "c8");
+    expect(run).toEqual({
+      bars: [expect.objectContaining({ id: "c8", number: 2, start: 12, end: 24, selected: true })],
+      dots: [],
+    });
+    const walk = timelineMarkers(review, "Armature|Walk", "c4");
     expect(walk.bars[0]).toMatchObject({ id: "c4", number: null, status: "resolved", round: 3 });
     expect(timelineMarkers(review, null, null)).toEqual({ bars: [], dots: [] });
+  });
+
+  it("shows a range that is not selected as a dot at its start", () => {
+    const review = stoneResonatorReview(NOW);
+    expect(timelineMarkers(review, "Armature|Run", null)).toEqual({
+      bars: [],
+      dots: [{ frame: 12, markers: [expect.objectContaining({ id: "c8", number: 2, selected: false })] }],
+    });
+    expect(timelineMarkers(review, "Armature|Run", "c7").bars).toEqual([]);
   });
 
   it("groups dots on the same frame", () => {

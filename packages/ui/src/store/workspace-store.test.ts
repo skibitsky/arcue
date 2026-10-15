@@ -144,12 +144,53 @@ describe("comments", () => {
       screenshot: null,
       time: { kind: "range", clip: "Armature|Charge", start: 10, end: 20 },
     });
+    expect(session.state.get().range).toBeNull();
+  });
+
+  it("clears the timeline's range once a comment is made on it", async () => {
+    const { session, viewport } = await openStone();
+    session.setRange({ start: 10, end: 20 });
+    viewport.emit("pinPlaced", { anchor: POINT });
+    expect(session.state.get().box?.time).toEqual({ kind: "range", clip: "Armature|Charge", start: 10, end: 20 });
+    session.setBoxText("The arm swings too wide here.");
+    expect(await session.submitBox()).toBe(true);
+    expect(session.state.get().range).toBeNull();
+    expect(viewport.range).toBeNull();
+  });
+
+  it("keeps a range picked after the box opened", async () => {
+    const { session, viewport } = await openStone();
+    session.setRange({ start: 10, end: 20 });
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setRange({ start: 2, end: 6 });
+    session.setBoxText("The arm swings too wide here.");
+    expect(await session.submitBox()).toBe(true);
+    expect(session.state.get().range).toEqual({ start: 2, end: 6 });
+  });
+
+  it("loops playback in a selected comment's range until it is deselected", async () => {
+    const { session, viewport } = await openStone();
+    session.selectComment("c8");
+    expect(viewport.range).toEqual({ start: 12 / 60, end: 24 / 60 });
+    session.setFrame(24);
+    session.setPlaying(true);
+    expect(session.currentFrame()).toBe(12);
+    session.setPlaying(false);
+    session.setRange({ start: 2, end: 6 });
+    expect(viewport.range).toEqual({ start: 2 / 60, end: 6 / 60 });
+    session.setRange(null);
+    expect(viewport.range).toEqual({ start: 12 / 60, end: 24 / 60 });
+    session.deselect();
+    expect(session.state.get().range).toBeNull();
+    expect(viewport.range).toBeNull();
   });
 
   it("selects a draft: jumps to its time and camera and opens it for editing", async () => {
     const { session, viewport } = await openStone();
     session.selectComment("c8");
-    expect(session.state.get()).toMatchObject({ clip: "Armature|Run", range: { start: 12, end: 24 }, selection: "c8" });
+    expect(session.state.get()).toMatchObject({ clip: "Armature|Run", range: null, selection: "c8" });
+    expect(session.currentFrame()).toBe(12);
+    expect(viewport.range).toEqual({ start: 12 / 60, end: 24 / 60 });
     expect(session.state.get().box).toMatchObject({ mode: "edit", commentId: "c8" });
     expect(viewport.camera.position).toEqual([4.3, 1.4, 0.95]);
     session.selectComment("c4");
@@ -189,6 +230,15 @@ describe("comments", () => {
     await session.submitBox();
     await flush();
     expect(session.state.get().review?.queue.at(-1)).toBe("c5");
+  });
+
+  it("picks a reopened comment's range for the follow-up, and clears it once sent", async () => {
+    const { session } = await openStone();
+    session.reopen("c4");
+    expect(session.state.get()).toMatchObject({ clip: "Armature|Walk", range: { start: 20, end: 28 } });
+    session.setBoxText("The foot still slides.");
+    expect(await session.submitBox()).toBe(true);
+    expect(session.state.get().range).toBeNull();
   });
 
   it("numbers draft pins by queue order and shows a selected resolved comment without a number", async () => {
