@@ -5,7 +5,15 @@ import { formatWhen, targetLabel, timeLabel } from "../format";
 import { NOW, POINT } from "../test-helpers";
 import { placeBox } from "./box-placement";
 import { currentMessage, historyRounds, pendingFollowUp, roundSummaryText } from "./history";
-import { adjacentKey, draftCountsByClip, keyFrames, rulerTicks, stepFrame, timelineMarkers } from "./timeline";
+import {
+  adjacentKey,
+  draftCountsByClip,
+  isPlayable,
+  keyFrames,
+  rulerTicks,
+  stepFrame,
+  timelineMarkers,
+} from "./timeline";
 
 function withComments(review: ReviewFile, update: (comment: Comment) => Comment): ReviewFile {
   return { ...review, comments: review.comments.map(update) };
@@ -76,6 +84,23 @@ describe("timeline", () => {
     const sparse = rulerTicks(120, 1000, keys);
     expect(sparse.mode).toBe("keys");
     expect(sparse.ticks.map((tick) => tick.frame)).toEqual(keys);
+  });
+
+  it("plays clips of three frames or more, and treats shorter ones as poses", () => {
+    const poses = fakeScene({
+      ...STONE_RESONATOR,
+      clips: [
+        ["Pose", 1 / 60],
+        ["Still", 0],
+        ["Blink", 2 / 60],
+      ],
+    });
+    expect(poses.clips.map((candidate) => [candidate.frameCount, isPlayable(candidate)])).toEqual([
+      [2, false],
+      [1, false],
+      [3, true],
+    ]);
+    expect(isPlayable(clip("Release"))).toBe(true);
   });
 
   it("steps frames with and without looping, and jumps between keys", () => {

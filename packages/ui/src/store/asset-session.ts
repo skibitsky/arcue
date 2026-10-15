@@ -32,7 +32,7 @@ import { currentMessage, lastRound, pendingFollowUp, queuedComments } from "./hi
 import { Store } from "./observable";
 import type { OutlineFile } from "./outline";
 import { hasOutline } from "./outline";
-import { adjacentKey, clampFrame, normalizeRange, stepFrame } from "./timeline";
+import { adjacentKey, clampFrame, isPlayable, normalizeRange, stepFrame } from "./timeline";
 
 export const NEW_COMMENT_OVERLAY = "new";
 export const BRUSH_MIN = 6;
@@ -576,10 +576,13 @@ export class AssetSession {
     this.#scheduleReport();
   }
 
-  /** Starting at the end of the range, or at the clip's end without looping, starts again from the start. */
+  /**
+   * Starting at the end of the range, or at the clip's end without looping, starts again from the start. The rest pose
+   * and clips of one or two frames do not play.
+   */
   setPlaying(playing: boolean): void {
     const clip = this.clipInfo();
-    if (!clip && playing) return;
+    if (playing && (!clip || !isPlayable(clip))) return;
     if (playing && clip) {
       const { loop } = this.state.get();
       const range = this.#playbackRange();

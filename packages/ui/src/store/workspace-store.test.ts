@@ -1,7 +1,7 @@
 import { ArcueError, commands } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
-import { flush, openStone, POINT, setup } from "../test-helpers";
+import { flush, openStone, POINT, setup, withPoseClips } from "../test-helpers";
 import { NEW_COMMENT_OVERLAY } from "./asset-session";
 import { VIEW_COMMANDS } from "./workspace-store";
 
@@ -70,6 +70,24 @@ describe("view commands", () => {
     expect(store.state.get().tabs).toEqual([]);
     expect(store.session(session.assetId)).toBeNull();
     expect(client.calls.slice(before)).toEqual([]);
+  });
+
+  it("does not play a clip of one or two frames", async () => {
+    const { client, session, viewport } = await openStone({ scene: withPoseClips });
+    session.setClip("Armature|Pose", 1);
+    session.togglePlaying();
+    await client.execute("view.setPlaying", { assetId: session.assetId, playing: true });
+    expect(session.time.get().playing).toBe(false);
+    expect(viewport.playing).toBe(false);
+    expect(session.currentFrame()).toBe(1);
+    session.step(1);
+    expect(session.currentFrame()).toBe(0);
+    session.setClip("Armature|Still");
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(false);
+    session.setClip("Armature|Charge");
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(true);
   });
 
   it("refuses commands that do not run in a window, and unknown clips", async () => {
