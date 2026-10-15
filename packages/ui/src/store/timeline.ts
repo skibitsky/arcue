@@ -105,7 +105,7 @@ export interface MarkerDots {
   markers: TimelineMarker[];
 }
 
-/** Markers of the clip's comments: a bar per range, and dots grouped by frame. */
+/** Markers of the clip's comments, as dots grouped by frame. A range is a dot at its start, and a bar while selected. */
 export function timelineMarkers(
   review: ReviewFile | null,
   clip: string | null,
@@ -127,8 +127,12 @@ export function timelineMarkers(
       round: lastRound(comment),
       selected: comment.id === selection,
     };
-    if (time.kind === "range") bars.push({ ...marker, start: time.start, end: time.end });
-    else dots.set(time.frame, [...(dots.get(time.frame) ?? []), marker]);
+    if (time.kind === "range" && marker.selected) {
+      bars.push({ ...marker, start: time.start, end: time.end });
+      continue;
+    }
+    const frame = time.kind === "range" ? time.start : time.frame;
+    dots.set(frame, [...(dots.get(frame) ?? []), marker]);
   }
   const grouped = [...dots].sort(([a], [b]) => a - b).map(([frame, markers]) => ({ frame, markers }));
   return { bars, dots: grouped };

@@ -264,7 +264,7 @@ export class AssetSession {
     const keepSelection = selection !== null && ids.has(selection) ? selection : null;
     this.state.patch({ review, selection: keepSelection, box: this.#refreshBox(box, review) });
     this.#dropThumbnails(review);
-    this.#syncOverlays();
+    this.#syncSelection();
     void this.refreshWarnings();
   }
 
@@ -384,7 +384,7 @@ export class AssetSession {
     }
     this.state.patch({ viewportReady: true });
     viewport.setHighlight(this.#highlightedMeshes());
-    this.#syncOverlays(true);
+    this.#syncSelection(true);
   }
 
   #applyInitialView(viewport: Viewport, scene: SceneDescription): void {
@@ -561,7 +561,7 @@ export class AssetSession {
     if (viewport) {
       viewport.setPlaying(false);
       viewport.setClip(name);
-      viewport.setPlaybackRange(null);
+      this.#syncPlaybackRange();
       viewport.setTime(seconds);
     }
     this.#scheduleReport();
@@ -581,7 +581,8 @@ export class AssetSession {
     const clip = this.clipInfo();
     if (!clip && playing) return;
     if (playing && clip) {
-      const { range, loop } = this.state.get();
+      const { loop } = this.state.get();
+      const range = this.#playbackRange();
       const frame = this.currentFrame();
       const start = range?.start ?? 0;
       const end = range?.end ?? lastFrame(clip);
@@ -627,10 +628,33 @@ export class AssetSession {
     const clip = this.clipInfo();
     const next = clip && range ? normalizeRange(clampFrame(range.start, clip), clampFrame(range.end, clip)) : null;
     this.state.patch({ range: next });
-    this.#viewport?.setPlaybackRange(
-      next && clip ? { start: frameToSeconds(next.start, clip.fps), end: frameToSeconds(next.end, clip.fps) } : null,
-    );
+    this.#syncPlaybackRange();
     this.#scheduleReport();
+  }
+
+  /** Playback loops in the range picked on the timeline, else in the range of the selected comment. */
+  #playbackRange(): FrameRange | null {
+    const { range, selection } = this.state.get();
+    if (range) return range;
+    const clip = this.clipInfo();
+    const time = selection ? this.comment(selection)?.time : undefined;
+    if (!clip || time?.kind !== "range" || time.clip !== clip.name) return null;
+    return normalizeRange(clampFrame(time.start, clip), clampFrame(time.end, clip));
+  }
+
+  #syncPlaybackRange(): void {
+    const clip = this.clipInfo();
+    const range = this.#playbackRange();
+    this.#viewport?.setPlaybackRange(
+      range && clip ? { start: frameToSeconds(range.start, clip.fps), end: frameToSeconds(range.end, clip.fps) } : null,
+    );
+  }
+
+  /** A comment made on the timeline's range takes it over: the range clears, and the comment shows it when selected. */
+  #releaseRange(time: TimeSelection): void {
+    const { clip, range } = this.state.get();
+    if (time.kind !== "range" || !range || time.clip !== clip) return;
+    if (time.start === range.start && time.end === range.end) this.setRange(null);
   }
 
   setCamera(camera: CameraAnchor, animate: boolean): void {
@@ -685,12 +709,12 @@ export class AssetSession {
     const { box } = this.state.get();
     const sameBox = box?.mode === "edit" && box.commentId === id;
     if (!sameBox && this.#refuseToClose()) return "refused";
-    this.#jumpTo(comment.time);
+    this.#jumpTo(comment.time, false);
     this.#viewport?.setCamera(comment.camera, { animate: true });
     this.#restoreParts(comment);
     const nextBox = sameBox ? box : comment.status === "draft" ? this.#editBox(comment) : null;
     this.state.patch({ selection: id, box: nextBox });
-    this.#syncOverlays();
+    this.#syncSelection();
     return "selected";
   }
 
@@ -702,10 +726,11 @@ export class AssetSession {
 
   deselect(): void {
     this.state.patch({ selection: null, box: null });
-    this.#syncOverlays();
+    this.#syncSelection();
   }
 
-  #jumpTo(time: TimeAnchor): void {
+  /** Shows the time's clip at its frame, or at the start of its range; `selectRange` also picks the range. */
+  #jumpTo(time: TimeAnchor, selectRange: boolean): void {
     if (this.time.get().playing) this.setPlaying(false);
     if (time.kind === "none") {
       if (this.state.get().clip !== null) this.setClip(null);
@@ -716,7 +741,7 @@ export class AssetSession {
       this.setClip(time.clip, time.frame);
     } else {
       this.setClip(time.clip, time.start);
-      this.setRange({ start: time.start, end: time.end });
+      if (selectRange) this.setRange({ start: time.start, end: time.end });
     }
   }
 
@@ -800,7 +825,7 @@ export class AssetSession {
         needsRepick: false,
       },
     });
-    this.#syncOverlays();
+    this.#syncSelection();
   }
 
   #openNew(target: SpatialAnchor): void {
@@ -811,7 +836,7 @@ export class AssetSession {
     }
     if (this.#refuseToClose()) return;
     this.state.patch({ selection: null, box: this.#newBox({ time: this.currentTime(), target }) });
-    this.#syncOverlays();
+    this.#syncSelection();
   }
 
   #onRegionPainted(overlayId: string | null, anchor: SpatialAnchor | null): void {
@@ -845,7 +870,7 @@ export class AssetSession {
     if (chip === "followUp" && box.mode === "reopen") {
       this.state.patch({ box: { ...box, mode: "new", commentId: null, followUpRound: null } });
     }
-    this.#syncOverlays();
+    this.#syncSelection();
   }
 
   /** Closes the box, or discards the comment being written. */
@@ -857,7 +882,7 @@ export class AssetSession {
     const comment = this.comment(commentId);
     if (!comment || comment.status === "draft") return;
     if (this.#refuseToClose()) return;
-    this.#jumpTo(comment.time);
+    this.#jumpTo(comment.time, true);
     this.#viewport?.setCamera(comment.camera, { animate: true });
     this.#restoreParts(comment);
     const box = this.#newBox({
@@ -871,7 +896,7 @@ export class AssetSession {
       anchorVersion: comment.anchorVersion,
     });
     this.state.patch({ selection: null, box });
-    this.#syncOverlays();
+    this.#syncSelection();
   }
 
   async submitBox(): Promise<boolean> {
@@ -893,7 +918,8 @@ export class AssetSession {
         this.#flashAdded(commentId);
       }
       if (this.state.get().box?.busy) this.state.patch({ box: null, selection: null });
-      this.#syncOverlays();
+      this.#releaseRange(box.time);
+      this.#syncSelection();
       return true;
     } catch (error) {
       const current = this.state.get().box;
@@ -992,8 +1018,10 @@ export class AssetSession {
     const trimmed = text.trim();
     if (!trimmed) return false;
     try {
-      const commentId = await this.#create(trimmed, this.currentTime(), null, null);
+      const time = this.currentTime();
+      const commentId = await this.#create(trimmed, time, null, null);
       this.#flashAdded(commentId);
+      this.#releaseRange(time);
       return true;
     } catch (error) {
       this.#host.notify({ message: messageOf(error), kind: "alert" });
@@ -1009,7 +1037,7 @@ export class AssetSession {
         box: box?.mode === "edit" && box.commentId === commentId ? null : box,
         selection: selection === commentId ? null : selection,
       });
-      this.#syncOverlays();
+      this.#syncSelection();
     } catch (error) {
       this.#host.notify({ message: messageOf(error), kind: "alert" });
     }
@@ -1049,7 +1077,7 @@ export class AssetSession {
       const current = this.state.get().box;
       const keepBox = current !== null && current.mode !== "edit" && current.text.trim() !== "";
       this.state.patch({ selection: null, box: keepBox ? current : null });
-      this.#syncOverlays();
+      this.#syncSelection();
       if (copied) {
         this.#host.notify({ message: `Copied ${plural(count, "comment")} as round ${round}`, kind: "copied" });
       } else {
@@ -1198,7 +1226,9 @@ export class AssetSession {
     return overlays;
   }
 
-  #syncOverlays(force = false): void {
+  /** Shows the selection in the view: the comments' overlays, and the range playback loops in. */
+  #syncSelection(force = false): void {
+    this.#syncPlaybackRange();
     const viewport = this.#viewport;
     if (!viewport || !this.state.get().viewportReady) return;
     const { review, selection, box } = this.state.get();
