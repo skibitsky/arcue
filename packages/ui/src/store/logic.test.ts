@@ -86,7 +86,7 @@ describe("timeline", () => {
     expect(sparse.ticks.map((tick) => tick.frame)).toEqual(keys);
   });
 
-  it("plays clips of three frames or more, and treats shorter ones as poses", () => {
+  it("plays clips and ranges of three frames or more, and treats shorter ones as poses", () => {
     const poses = fakeScene({
       ...STONE_RESONATOR,
       clips: [
@@ -101,6 +101,8 @@ describe("timeline", () => {
       [3, true],
     ]);
     expect(isPlayable(clip("Release"))).toBe(true);
+    expect(isPlayable(clip("Walk"), { start: 10, end: 11 })).toBe(false);
+    expect(isPlayable(clip("Walk"), { start: 10, end: 12 })).toBe(true);
   });
 
   it("steps frames with and without looping, and jumps between keys", () => {

@@ -10,7 +10,6 @@ import type { MarkerBar, TimelineMarker } from "../store/timeline";
 import {
   draftCountsByClip,
   frameAt,
-  isPlayable,
   keyFrames,
   percentOf,
   rulerTicks,
@@ -30,10 +29,10 @@ export function Timeline({ store, session }: { store: WorkspaceStore; session: A
   const loop = useSelect(session.state, (state) => state.loop);
   const range = useSelect(session.state, (state) => state.range);
   const playing = useSelect(session.time, (state) => state.playing);
+  const playable = useSelect(session.state, () => session.canPlay());
   const clip = useMemo(() => scene?.clips.find((candidate) => candidate.name === clipName) ?? null, [scene, clipName]);
   if (scene && scene.clips.length === 0) return null;
   const steppable = clip !== null && lastFrame(clip) > 0;
-  const playable = clip !== null && isPlayable(clip);
   return (
     <section className="timeline" aria-label="Timeline">
       <div className="tl-bar">

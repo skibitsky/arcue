@@ -140,7 +140,7 @@ describe("Workspace", () => {
     expect(client.calls.some((call) => call.name === "round.copy")).toBe(true);
   });
 
-  it("keeps a clip of one or two frames still: steps between its frames, with play, loop and speed off", async () => {
+  it("keeps a clip or range of one or two frames still: steps between frames, with play, loop and speed off", async () => {
     const { session } = await renderStone({ scene: withPoseClips });
     const timeline = screen.getByRole("region", { name: "Timeline" });
     const enabled = (name: string) => !within(timeline).getByRole("button", { name }).hasAttribute("disabled");
@@ -159,6 +159,11 @@ describe("Workspace", () => {
     expect(session.time.get().playing).toBe(false);
     act(() => session.setClip("Armature|Still"));
     expect(controls().every(([, on]) => !on)).toBe(true);
+    act(() => session.setClip("Armature|Charge"));
+    act(() => session.setRange({ start: 10, end: 11 }));
+    expect(controls().map(([, on]) => on)).toEqual([true, false, true, false, false]);
+    act(() => session.setRange({ start: 10, end: 12 }));
+    expect(controls().every(([, on]) => on)).toBe(true);
   });
 
   it("selects a comment from its timeline marker", async () => {

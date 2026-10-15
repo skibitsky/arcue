@@ -576,13 +576,19 @@ export class AssetSession {
     this.#scheduleReport();
   }
 
+  /** False for the rest pose, and for a clip or playback range of one or two frames. */
+  canPlay(): boolean {
+    const clip = this.clipInfo();
+    return clip !== null && isPlayable(clip, this.#playbackRange());
+  }
+
   /**
-   * Starting at the end of the range, or at the clip's end without looping, starts again from the start. The rest pose
-   * and clips of one or two frames do not play.
+   * Starting at the end of the range, or at the clip's end without looping, starts again from the start. Does not start
+   * when `canPlay` is false.
    */
   setPlaying(playing: boolean): void {
     const clip = this.clipInfo();
-    if (playing && (!clip || !isPlayable(clip))) return;
+    if (playing && !this.canPlay()) return;
     if (playing && clip) {
       const { loop } = this.state.get();
       const range = this.#playbackRange();
@@ -651,6 +657,7 @@ export class AssetSession {
     this.#viewport?.setPlaybackRange(
       range && clip ? { start: frameToSeconds(range.start, clip.fps), end: frameToSeconds(range.end, clip.fps) } : null,
     );
+    if (this.time.get().playing && !this.canPlay()) this.setPlaying(false);
   }
 
   /** A comment made on the timeline's range takes it over: the range clears, and the comment shows it when selected. */

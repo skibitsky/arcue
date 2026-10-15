@@ -60,9 +60,12 @@ export function adjacentKey(clip: Clip, frame: number, direction: 1 | -1): numbe
   return candidates[0] ?? null;
 }
 
-/** Whether the clip can play. A clip of one or two frames is a pose, and looping it would only flicker. */
-export function isPlayable(clip: Clip): boolean {
-  return lastFrame(clip) >= 2;
+/**
+ * Whether the clip can play, looping in `range` when there is one. A clip or range of one or two frames is a pose, and
+ * looping it would only flicker.
+ */
+export function isPlayable(clip: Clip, range: FrameRange | null = null): boolean {
+  return (range ? range.end - range.start : lastFrame(clip)) >= 2;
 }
 
 export function clampFrame(frame: number, clip: Clip): number {
