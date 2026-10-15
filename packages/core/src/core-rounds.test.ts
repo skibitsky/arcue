@@ -135,10 +135,10 @@ describe("round.copy", () => {
     expect(result.prompt.replaceAll(first, "<first>").replaceAll(third, "<third>")).toMatchInlineSnapshot(`
       "3D review · round 1 · 3 comments
       Asset: /work/game/Assets/Art/Hero.fbx
-      Version 737efd4, exported 14:02
+      Version 737efd4, saved 14:02
       Data and screenshots: /work/game/.arcue/reviews/Assets/Art/Hero.fbx/rounds/round-1/
       Meters, right-handed, Y up. Frames count from each clip's first frame (0) at 60 fps.
-      Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.
+      Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender.
 
       1. Clip "Charge", frame 34 · point on "Body", near bone "Head"
          View: front · screenshot: <first>.png

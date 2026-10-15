@@ -105,10 +105,10 @@ describe("renderPrompt", () => {
     });
     const specExample = `3D review · round 4 · 3 comments
 Asset: /work/game/Assets/Art/Characters/StoneResonator/Models/StoneResonator.fbx
-Version 3f9a2c1, exported 14:02
+Version 3f9a2c1, saved 14:02
 Data and screenshots: /work/game/.arcue/reviews/…/StoneResonator.fbx/rounds/round-4/
 Meters, right-handed, Y up. Frames count from each clip's first frame (0) at 60 fps.
-Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.
+Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender.
 
 1. Clip "Charge", frame 34 · region on "StoneResonator", 46 vertices
    Bones: Right_ThumbDistal 64%, Right_ThumbIntermediate 31%
@@ -158,10 +158,10 @@ Vertex numbers follow the file's vertex order, which is Blender's order for Blen
     ).toMatchInlineSnapshot(`
       "3D review · round 6 · 2 comments
       Asset: /work/game/Hero.fbx
-      Version 3f9a2c1, exported 09:15
+      Version 3f9a2c1, saved 09:15
       Data and screenshots: /work/game/.arcue/reviews/Hero.fbx/rounds/round-6/
       Meters, right-handed, Y up. Frames count from each clip's first frame (0) at 60 fps.
-      Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.
+      Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender.
 
       1. Rest pose · point on "StoneResonator", near bone "Head" · follow-up, first sent in round 4
          View: front · screenshot: c9.png
@@ -210,10 +210,10 @@ Vertex numbers follow the file's vertex order, which is Blender's order for Blen
     ).toMatchInlineSnapshot(`
       "3D review · round 1 · 1 comment
       Asset: /work/Hero.fbx
-      Version 3f9a2c1, exported 23:59
+      Version 3f9a2c1, saved 23:59
       Data and screenshots: /app-data/reviews/work/Hero.fbx/rounds/round-1/
       Meters, right-handed, Z up as in Blender. Frames count from each clip's first frame (0) at 29.97 fps.
-      Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.
+      Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender.
 
       1. Clip "Idle", frame 0 · region on "Body", 1 vertex
          Screenshot: c1.png

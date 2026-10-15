@@ -105,7 +105,7 @@ export const commands = {
     output: z.void(),
   }),
   "comment.resolve": command({
-    description: "Mark a sent comment resolved: the new export fixed it.",
+    description: "Mark a sent comment resolved: the new version of the file fixed it.",
     runsIn: "core",
     input: z.object(commentRef),
     output: z.void(),

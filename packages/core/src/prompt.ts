@@ -27,11 +27,11 @@ export function renderPrompt({ data, assetPath, roundFolder, exportedAt, partNam
   const header = [
     `3D review · round ${data.round} · ${count} ${count === 1 ? "comment" : "comments"}`,
     `Asset: ${assetPath}`,
-    `Version ${data.asset.version.slice(0, 7)}, exported ${exportedAt}`,
+    `Version ${data.asset.version.slice(0, 7)}, saved ${exportedAt}`,
     ...compositionLine(data),
     `Data and screenshots: ${roundFolder.endsWith("/") ? roundFolder : `${roundFolder}/`}`,
     `Meters, right-handed, ${up}. Frames count from each clip's first frame (0) at ${formatNumber(data.asset.fps)} fps.`,
-    "Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.",
+    "Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender.",
   ].join("\n");
   return [header, ...data.comments.map((comment) => renderComment(comment, partNames))].join("\n\n");
 }

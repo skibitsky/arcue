@@ -36,6 +36,6 @@ A list that starts `Fix these import warnings for <model>` comes from Arcue's wa
 
 - Don't write in `.arcue/` except composition files. Arcue owns the reviews there.
 - Keep the model's path and each mesh object's name and parent: comments find their mesh by its path.
-- When a fix needs no new geometry, move vertices rather than adding, removing or reordering vertices or faces, so comments most likely keep their vertex numbers.
+- When a fix needs no new geometry, move vertices rather than adding, removing or reordering vertices or faces. Comments then most likely keep their exact vertices, while other changes make Arcue map them onto the new mesh by position. In a .blend, assigning faces another material keeps them exact as well.
 
 To show separate animation files, attachments or textures with a model, see [references/composition.md](references/composition.md).
