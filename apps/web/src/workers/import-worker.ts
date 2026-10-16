@@ -1,6 +1,9 @@
-import { startFbxImportWorker } from "@arcue/import-fbx";
-import { portEndpoint } from "@arcue/protocol";
+import { blendImporter } from "@arcue/import-blend";
+import { fbxImporter } from "@arcue/import-fbx";
+import { portEndpoint, serveImportWorker } from "@arcue/protocol";
 
-self.addEventListener("message", (event: MessageEvent<MessagePort>) => startFbxImportWorker(portEndpoint(event.data)), {
-  once: true,
-});
+self.addEventListener(
+  "message",
+  (event: MessageEvent<MessagePort>) => serveImportWorker(portEndpoint(event.data), [fbxImporter, blendImporter]),
+  { once: true },
+);

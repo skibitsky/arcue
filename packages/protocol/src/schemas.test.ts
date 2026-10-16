@@ -268,6 +268,21 @@ describe("roundDataSchema", () => {
     };
     expect(roundDataSchema.parse(round).comments[0]?.earlierMessages).toEqual([]);
   });
+
+  it("keeps the file's own frame numbers where a round has them, and loads rounds written without them", () => {
+    const [example] = specRoundExample.comments;
+    if (!example) throw new Error("The fixture has a comment.");
+    const frame = { ...example.time, sourceFrame: 35 };
+    const range = { clip: "Armature|Run", clipDisplayName: "Run", frames: [12, 24], seconds: [0.2, 0.4] };
+    const parse = (time: object) => roundDataSchema.parse({ ...specRoundExample, comments: [{ ...example, time }] });
+    expect(parse(frame).comments[0]?.time).toEqual(frame);
+    expect(parse({ ...range, sourceFrames: [112.5, 124.5] }).comments[0]?.time).toEqual({
+      ...range,
+      sourceFrames: [112.5, 124.5],
+    });
+    expect(parse(range).comments[0]?.time).toEqual(range);
+    expect(() => parse({ ...example.time, sourceFrame: "35" })).toThrow();
+  });
 });
 
 describe("reviewFileSchema", () => {

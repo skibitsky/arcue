@@ -116,7 +116,10 @@ export function keyIndexAt(times: Float32Array, time: number): number {
   return found;
 }
 
-/** Writes the track's value at `time` into `out`; rotations blend spherically. */
+/**
+ * Writes the track's value at `time` into `out`; rotations blend spherically. It interpolates at the float32 rounding
+ * of `time`, as the key times are stored, so a frame keyed just before a jump reads its own key and none of the jump.
+ */
 export function sampleTrack(track: Track, time: number, out: Float64Array): void {
   const stride = trackStride(track);
   const keys = track.times.length;
@@ -129,7 +132,7 @@ export function sampleTrack(track: Track, time: number, out: Float64Array): void
   }
   const t0 = track.times[index] ?? 0;
   const t1 = track.times[index + 1] ?? t0;
-  const alpha = t1 > t0 ? Math.min(1, Math.max(0, (time - t0) / (t1 - t0))) : 0;
+  const alpha = t1 > t0 ? Math.min(1, Math.max(0, (Math.fround(time) - t0) / (t1 - t0))) : 0;
   const a = index * stride;
   const b = (index + 1) * stride;
   if (track.property === "rotation" && stride === 4) {

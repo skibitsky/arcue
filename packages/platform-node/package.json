@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@arcue/core": "workspace:*",
+    "@arcue/import-blend": "workspace:*",
     "@arcue/import-fbx": "workspace:*",
     "@arcue/protocol": "workspace:*"
   },

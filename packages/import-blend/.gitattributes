@@ -1,0 +1,3 @@
+test/fixtures/*.blend binary
+test/fixtures/*.json -diff
+test/fixtures/textures/*.png binary

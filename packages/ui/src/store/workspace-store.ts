@@ -6,19 +6,27 @@ import type {
   ConnectionState,
   CoordinateConvention,
   CoreClient,
+  FileRole,
   IncomingRequest,
-  MemberRole,
   Settings,
   ViewState,
 } from "@arcue/protocol";
-import { ArcueError, commands, isCommandName, memberRoleFor, withTransfer } from "@arcue/protocol";
+import { ArcueError, commands, isCommandName, withTransfer } from "@arcue/protocol";
 import type { TextureSlot } from "@arcue/scene";
 import { fileNameOf, materialSlots, missingSlots } from "@arcue/scene";
 import type { SessionHost, ToastInput } from "./asset-session";
 import { AssetSession, messageOf, NEW_COMMENT_OVERLAY } from "./asset-session";
 import { Store } from "./observable";
 import type { DropChoice, DropPrompt, DroppedModel, FileHost } from "./view-files";
-import { besideModel, isImageFile, isModelFile, slotLabel, sortDropped } from "./view-files";
+import {
+  besideModel,
+  isImageFile,
+  isModelFile,
+  offersAnimation,
+  onlyAnimation,
+  slotLabel,
+  sortDropped,
+} from "./view-files";
 
 export type TabEntry = { kind: "asset"; id: string } | { kind: "empty"; id: string };
 
@@ -448,15 +456,35 @@ export class WorkspaceStore {
     return this.#files !== null;
   }
 
-  /** Opens the host's dialog for model files and adds each picked one to the asset's view. */
+  /**
+   * Opens the host's dialog for model files and adds each picked one to the asset's view in the role the core gives it.
+   * When one of them can also join as an animation file, it asks "Add to view" or "Add as animation" first. An
+   * unanswered drop prompt closes before the dialog opens.
+   */
   async addFileToView(assetId: string): Promise<void> {
     const host = this.#files;
     if (!host) return;
     try {
+      this.dismissDrop();
+      await this.#dropCleanup;
+      const session = this.#sessions.get(assetId);
       const picked = await host.pick("model", this.#assetPath(assetId));
-      const models = picked.filter(isModelFile);
-      if (picked.length > 0 && models.length === 0) throw new ArcueError("invalid-input", "Choose an FBX file.");
-      for (const model of models) await this.#addFile(assetId, model);
+      if (picked.paths.length === 0) return;
+      const paths = picked.paths.filter(isModelFile);
+      if (paths.length === 0) {
+        this.#discard(picked.files);
+        throw new ArcueError("invalid-input", "Choose an FBX or Blender file.");
+      }
+      const models = await this.#rolesOf(assetId, paths);
+      if (!session || this.#sessions.get(assetId) !== session) {
+        this.#discard(picked.files);
+        return;
+      }
+      if (offersAnimation(models)) {
+        this.#ask({ assetId, at: null, files: picked.files, models });
+        return;
+      }
+      await this.#addModels(assetId, models, undefined, picked.files);
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
     }
@@ -467,8 +495,9 @@ export class WorkspaceStore {
     const host = this.#files;
     if (!host) return;
     try {
-      const [image] = (await host.pick("image", this.#assetPath(assetId))).filter(isImageFile);
-      if (image) await this.#setTexture(assetId, material, slot, image);
+      const picked = await host.pick("image", this.#assetPath(assetId));
+      const [image] = picked.paths.filter(isImageFile);
+      await this.#takeOrDiscard(image, picked.files, (path) => this.#setTexture(assetId, material, slot, path));
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
     }
@@ -479,8 +508,9 @@ export class WorkspaceStore {
     const host = this.#files;
     if (!host) return;
     try {
-      const [model] = (await host.pick("model", this.#assetPath(assetId))).filter(isModelFile);
-      if (model) await this.client.execute("asset.relink", { assetId, path: model });
+      const picked = await host.pick("model", this.#assetPath(assetId));
+      const [model] = picked.paths.filter(isModelFile);
+      await this.#takeOrDiscard(model, picked.files, (path) => this.client.execute("asset.relink", { assetId, path }));
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
     }
@@ -494,7 +524,7 @@ export class WorkspaceStore {
       const [image] = sortDropped(files).images;
       if (!image) throw new ArcueError("invalid-input", "Drop an image.");
       const [path] = await host.place([image], this.#assetPath(assetId));
-      if (path) await this.#setTexture(assetId, material, slot, path);
+      await this.#takeOrDiscard(path, [image], (placed) => this.#setTexture(assetId, material, slot, placed));
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
     }
@@ -523,7 +553,8 @@ export class WorkspaceStore {
 
   /**
    * Files dropped on an asset's 3D view at a point. Animation-only models join the view at once; other models ask
-   * "New tab" or "Add to view" there. An image goes to the only slot whose texture is missing.
+   * "New tab" or "Add to view" there, and "Add as animation" when one of them can also join as an animation file. An
+   * image goes to the only slot whose texture is missing.
    */
   dropOnView(assetId: string, files: readonly File[], at: { x: number; y: number }): Promise<void> {
     this.#dropWork = this.#dropWork.then(() => this.#placeDrop(assetId, files, at));
@@ -540,28 +571,30 @@ export class WorkspaceStore {
       if (models.length > 0) {
         const session = this.#sessions.get(assetId);
         const placed = (await host.place(files, this.#assetPath(assetId))).filter(isModelFile);
-        const roles = await this.#rolesOf(placed);
+        const models = await this.#rolesOf(assetId, placed);
         if (!session || this.#sessions.get(assetId) !== session) {
-          await host.discard?.(files);
+          this.#discard(files);
           return;
         }
-        if (placed.length > 0 && roles.every((role) => role === "animation")) {
-          for (const model of placed) await this.#addFile(assetId, model, "animation");
+        if (models.length > 0 && models.every(onlyAnimation)) {
+          await this.#addModels(assetId, models, "animation", files);
           return;
         }
-        const models = placed.map((path, index) => ({ path, role: roles[index] ?? null }));
-        this.state.patch({ dropPrompt: { assetId, x: at.x, y: at.y, files: [...files], models } });
+        this.#ask({ assetId, at, files: [...files], models });
         return;
       }
       const [image] = images;
-      if (!image) throw new ArcueError("invalid-input", "Drop an FBX file or an image.");
+      if (!image) throw new ArcueError("invalid-input", "Drop an FBX or Blender file, or an image.");
       await this.#imageOnView(assetId, image);
     } catch (error) {
       this.notify({ message: messageOf(error), kind: "alert" });
     }
   }
 
-  /** Answers the drop prompt: opens the dropped files in new tabs, or adds the models to the view. */
+  /**
+   * Answers the drop prompt: opens the dropped files in new tabs, or adds the models to the view, each in its own role
+   * or, for "animation", as an animation file wherever the core allows it.
+   */
   async answerDrop(choice: DropChoice): Promise<void> {
     const prompt = this.state.get().dropPrompt;
     if (!prompt) return;
@@ -570,27 +603,39 @@ export class WorkspaceStore {
       this.#files?.open(prompt.files);
       return;
     }
+    let added = 0;
     for (const model of prompt.models) {
+      const role = choice === "animation" && model.roles.includes("animation") ? "animation" : model.role;
       try {
-        await this.#addFile(prompt.assetId, model.path, model.role ?? undefined);
+        await this.#addFile(prompt.assetId, model.path, role ?? undefined);
+        added += 1;
       } catch (error) {
         this.notify({ message: messageOf(error), kind: "alert" });
       }
     }
+    if (added === 0) this.#discard(prompt.files);
   }
 
-  /** Closes the drop prompt without an answer, and lets the host remove the files it placed for the drop. */
+  /** Closes the drop prompt without an answer, and lets the host remove the files it placed for the prompt. */
   dismissDrop(): void {
     const prompt = this.state.get().dropPrompt;
     if (!prompt) return;
     this.state.patch({ dropPrompt: null });
-    try {
-      this.#dropCleanup = Promise.resolve(this.#files?.discard?.(prompt.files)).catch((error: unknown) => {
-        this.notify({ message: messageOf(error), kind: "alert" });
-      });
-    } catch (error) {
+    this.#discard(prompt.files);
+  }
+
+  /** Shows a drop prompt in place of any open one, whose files the host may then remove. */
+  #ask(prompt: DropPrompt): void {
+    this.dismissDrop();
+    this.state.patch({ dropPrompt: prompt });
+  }
+
+  #discard(files: readonly File[]): void {
+    if (files.length === 0) return;
+    const discarding = (async () => this.#files?.discard?.(files))().catch((error: unknown) => {
       this.notify({ message: messageOf(error), kind: "alert" });
-    }
+    });
+    this.#dropCleanup = Promise.all([this.#dropCleanup, discarding]).then(() => undefined);
   }
 
   #assetPath(assetId: string): string {
@@ -599,7 +644,42 @@ export class WorkspaceStore {
     return path;
   }
 
-  async #addFile(assetId: string, file: string, role?: MemberRole): Promise<void> {
+  /** Adds the models in order until the core refuses one, and lets the host remove `files` when none was added. */
+  async #addModels(
+    assetId: string,
+    models: readonly DroppedModel[],
+    role: FileRole | undefined,
+    files: readonly File[],
+  ): Promise<void> {
+    let added = 0;
+    try {
+      for (const model of models) {
+        await this.#addFile(assetId, model.path, role);
+        added += 1;
+      }
+    } finally {
+      if (added === 0) this.#discard(files);
+    }
+  }
+
+  /** Hands `path` to `take`, and lets the host remove `files` when there is no path or `take` fails. */
+  async #takeOrDiscard(
+    path: string | undefined,
+    files: readonly File[],
+    take: (path: string) => Promise<unknown>,
+  ): Promise<void> {
+    let taken = false;
+    try {
+      if (path) {
+        await take(path);
+        taken = true;
+      }
+    } finally {
+      if (!taken) this.#discard(files);
+    }
+  }
+
+  async #addFile(assetId: string, file: string, role?: FileRole): Promise<void> {
     await this.client.execute("composition.addFile", { assetId, file, ...(role ? { role } : {}) });
     this.notify({ message: `Added ${fileNameOf(file)}`, kind: "info" });
   }
@@ -610,16 +690,16 @@ export class WorkspaceStore {
   }
 
   /**
-   * The role each model takes in a view, read once here so adding it does not parse it again: "animation" for clips and
-   * no meshes, "set" for meshes, and null when the file cannot be inspected or holds neither.
+   * How each model would join the asset's view, as the core tells, with no roles where it cannot. The core keeps the
+   * last model it parsed here, so adding a single model does not parse it again.
    */
-  async #rolesOf(models: readonly string[]): Promise<DroppedModel["role"][]> {
-    const roles: DroppedModel["role"][] = [];
+  async #rolesOf(assetId: string, models: readonly string[]): Promise<DroppedModel[]> {
+    const answers: DroppedModel[] = [];
     for (const path of models) {
-      const inspection = await this.client.query("asset.inspect", { path }).catch(() => null);
-      roles.push(inspection && memberRoleFor({ meshes: inspection.meshes.length, clips: inspection.clips.length }));
+      const answer = await this.client.query("composition.fileRoles", { assetId, file: path }).catch(() => null);
+      answers.push({ path, role: answer?.role ?? null, roles: answer?.roles ?? [] });
     }
-    return roles;
+    return answers;
   }
 
   async #imageOnView(assetId: string, image: File): Promise<void> {
@@ -635,7 +715,9 @@ export class WorkspaceStore {
       return;
     }
     const [path] = (await this.#files?.place([image], this.#assetPath(assetId))) ?? [];
-    if (path) await this.#setTexture(assetId, only.material, only.slot.slot, path);
+    await this.#takeOrDiscard(path, [image], (placed) =>
+      this.#setTexture(assetId, only.material, only.slot.slot, placed),
+    );
   }
 
   /** Tells the core this window has focus, so new assets open here. */

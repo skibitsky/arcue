@@ -6,6 +6,7 @@ import type { TestCore } from "./test-support";
 import {
   HERO_REVIEW,
   heroFiles,
+  heroSpec,
   looseComment,
   openAsset,
   pinComment,
@@ -134,10 +135,10 @@ describe("round.copy", () => {
     expect(result.prompt.replaceAll(first, "<first>").replaceAll(third, "<third>")).toMatchInlineSnapshot(`
       "3D review · round 1 · 3 comments
       Asset: /work/game/Assets/Art/Hero.fbx
-      Version 737efd4, exported 14:02
+      Version 737efd4, saved 14:02
       Data and screenshots: /work/game/.arcue/reviews/Assets/Art/Hero.fbx/rounds/round-1/
       Meters, right-handed, Y up. Frames count from each clip's first frame (0) at 60 fps.
-      Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.
+      Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender.
 
       1. Clip "Charge", frame 34 · point on "Body", near bone "Head"
          View: front · screenshot: <first>.png
@@ -151,6 +152,36 @@ describe("round.copy", () => {
          View: back, slightly above · screenshot: <third>.png
          "Soften this whole rim.""
     `);
+  });
+
+  it("gives each frame as the file numbers it too, where the importer knows the clip's first frame there", async () => {
+    const spec = {
+      ...heroSpec,
+      clips: [
+        { name: "Armature|Charge", frames: 61, sourceStartFrame: 1 },
+        { name: "Armature|Run", frames: 31, sourceStartFrame: 100.5 },
+      ],
+    };
+    const test = await startTestCore(heroFiles(spec));
+    const assetId = await openAsset(test);
+    const { version } = await test.core.client.query("scene.get", { assetId });
+    await test.core.client.execute("comment.create", pinComment(assetId, "The thumb bends outward.", version));
+    await test.core.client.execute("comment.create", { ...regionComment(assetId), version });
+    const { prompt } = await test.core.client.execute("round.copy", { assetId });
+
+    const data = roundDataSchema.parse(await readJson(test.platform, `${HERO_REVIEW}/rounds/round-1/round.json`));
+    expect(data.comments.map((comment) => comment.time)).toEqual([
+      { clip: "Armature|Charge", clipDisplayName: "Charge", frame: 34, seconds: 0.567, sourceFrame: 35 },
+      {
+        clip: "Armature|Run",
+        clipDisplayName: "Run",
+        frames: [12, 24],
+        seconds: [0.2, 0.4],
+        sourceFrames: [112.5, 124.5],
+      },
+    ]);
+    expect(prompt).toContain('1. Clip "Charge", frame 34 (file frame 35) · point on "Body"');
+    expect(prompt).toContain('2. Clip "Run", frames 12–24 (file frames 112.5–124.5) · region on "Body"');
   });
 
   it("copies to the platform clipboard when there is one", async () => {

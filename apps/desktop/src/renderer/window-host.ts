@@ -60,7 +60,7 @@ export class WindowHost {
       onListenerError: (error) => console.error(error),
     });
     const files: FileHost = {
-      pick: (kind) => this.#bridge.pickFiles(kind),
+      pick: async (kind) => ({ paths: await this.#bridge.pickFiles(kind), files: [] }),
       place: async (dropped) => this.#paths(dropped),
       open: (dropped) => this.openFiles(dropped),
     };

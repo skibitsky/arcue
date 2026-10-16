@@ -76,6 +76,16 @@ describe("sampleTrack at exact frame times", () => {
     sampleTrack({ ...linear, times: Float32Array.of(0, Math.fround(0.1), 1) }, 0.1, out);
     expect(out[0]).toBeCloseTo(1, 5);
   });
+
+  it("reads none of a jump keyed just after a frame whose float32 key time falls before the frame's exact time", () => {
+    const frame = 3001 / 24;
+    const key = Math.fround(frame);
+    expect(frame - key).toBeGreaterThan(2e-6);
+    const jump = track("translation", "linear", [0, 0, 0, 1, 1, 1, 5, 5, 5]);
+    const out = new Float64Array(3);
+    sampleTrack({ ...jump, times: Float32Array.of(0, key, key + 1e-4) }, frame, out);
+    expect([...out]).toEqual([1, 1, 1]);
+  });
 });
 
 describe("keyIndexAt", () => {

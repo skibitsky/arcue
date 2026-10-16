@@ -8,7 +8,7 @@ export const PLUGIN = {
   shortDescription: "Apply Arcue reviews and open models in Arcue",
   homepage: "https://github.com/skibitsky/arcue",
   license: "MIT",
-  keywords: ["3d", "fbx", "animation", "review", "feedback"],
+  keywords: ["3d", "fbx", "blender", "animation", "review", "feedback"],
   brandColor: "#DD653D",
   defaultPrompts: ["Apply the Arcue review I pasted", "Show me this model in Arcue"],
 } as const;

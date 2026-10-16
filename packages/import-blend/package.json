@@ -1,0 +1,22 @@
+{
+  "name": "@arcue/import-blend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@arcue/protocol": "workspace:*",
+    "@arcue/scene": "workspace:*"
+  },
+  "devDependencies": {
+    "@arcue/import-fbx": "workspace:*",
+    "@types/node": "catalog:",
+    "vitest": "catalog:"
+  }
+}

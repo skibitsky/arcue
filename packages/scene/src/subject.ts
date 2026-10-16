@@ -1,6 +1,6 @@
 import { MEMBER_SEPARATOR } from "./composition";
 import { fileNameOf } from "./image";
-import type { Material, TextureRef } from "./material";
+import { TEXTURE_REF_KEYS } from "./material";
 import type { SceneDescription } from "./scene";
 import type { ImportWarningSubjectKind } from "./source";
 
@@ -10,16 +10,6 @@ export interface SubjectRef {
   name: string;
   file?: string | undefined;
 }
-
-const TEXTURE_REFS = [
-  "baseColorTexture",
-  "metallicRoughnessTexture",
-  "roughnessTexture",
-  "metalnessTexture",
-  "normalTexture",
-  "occlusionTexture",
-  "emissiveTexture",
-] as const satisfies readonly (keyof Material)[];
 
 /**
  * The node paths of the meshes a warning's subject covers: a material's meshes, the meshes of the materials that use
@@ -73,8 +63,11 @@ function materialsUsingTexture(scene: SceneDescription, subject: SubjectRef): Se
     ),
   );
   for (const material of scene.materials) {
-    const refs = TEXTURE_REFS.map((key) => material[key] as TextureRef | null);
-    if (refs.some((ref) => (ref ? shown.has(ref.texture) : false))) names.add(material.name);
+    const showsOne = TEXTURE_REF_KEYS.some((key) => {
+      const ref = material[key];
+      return ref ? shown.has(ref.texture) : false;
+    });
+    if (showsOne) names.add(material.name);
   }
   return names;
 }

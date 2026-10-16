@@ -1,6 +1,6 @@
 import type { Clip, Track } from "./clip";
-import type { Material, Texture, TextureRef, TextureSlot } from "./material";
-import { TEXTURE_SLOTS } from "./material";
+import type { Material, Texture, TextureRef, TextureSampling, TextureSlot } from "./material";
+import { TEXTURE_REF_KEYS, TEXTURE_SLOT_KEYS, TEXTURE_SLOTS } from "./material";
 import type { Mesh } from "./mesh";
 import type { SceneNode } from "./node";
 import type { ScenePart } from "./parts";
@@ -74,12 +74,13 @@ const LISTED_NAMES = 5;
 
 /**
  * One scene from a model and the other files of its composition. The model's nodes, meshes and clips keep their
- * indices and paths. Clips from animation files bind to the model's nodes by name, preferring bones, and bones a
- * clip lacks keep the rest pose. Attached nodes keep their rest placement in scene space, as both files were exported
- * in the same rest frame: under a bone they follow it, otherwise they stay in place. A bone in an attached file that
- * matches a model bone by name is that model bone, so skinned meshes and children of those bones follow the model's
- * skeleton, as Unreal's leader pose does. Nodes and clips from other files take the file as a prefix on their paths
- * and names. The inputs are not changed; typed arrays are shared with them.
+ * indices and paths. Clips from animation files bind to the model's nodes by name, preferring bones, without the
+ * tracks that only hold their file's pose, and bones a clip lacks keep the rest pose. Attached nodes keep their rest
+ * placement in scene space, as both files were exported in the same rest frame: under a bone they follow it,
+ * otherwise they stay in place. A bone in an attached file that matches a model bone by name is that model bone, so
+ * skinned meshes and children of those bones follow the model's skeleton, as Unreal's leader pose does. Nodes and
+ * clips from other files take the file as a prefix on their paths and names. The inputs are not changed; typed arrays
+ * are shared with them.
  */
 export function composeScene(model: SceneDescription, composition: Composition): SceneDescription {
   const builder = new SceneBuilder(model, composition.warnings ?? []);
@@ -294,20 +295,15 @@ class SceneBuilder {
     if (state.materialOffset !== null) return state.materialOffset;
     const { materials, textures } = state.member.scene;
     const textureOffset = this.#textures.length;
-    this.#textures.push(...textures);
-    const moved = (ref: TextureRef | null) => (ref ? { ...ref, texture: ref.texture + textureOffset } : null);
+    for (const texture of textures) this.#textures.push(texture);
     state.materialOffset = this.#materials.length;
     for (const material of materials) {
-      this.#materials.push({
-        ...material,
-        baseColorTexture: moved(material.baseColorTexture),
-        metallicRoughnessTexture: moved(material.metallicRoughnessTexture),
-        roughnessTexture: moved(material.roughnessTexture),
-        metalnessTexture: moved(material.metalnessTexture),
-        normalTexture: moved(material.normalTexture),
-        occlusionTexture: moved(material.occlusionTexture),
-        emissiveTexture: moved(material.emissiveTexture),
-      });
+      const moved = { ...material };
+      for (const key of TEXTURE_REF_KEYS) {
+        const ref = material[key];
+        moved[key] = ref && { ...ref, texture: ref.texture + textureOffset };
+      }
+      this.#materials.push(moved);
     }
     return state.materialOffset;
   }
@@ -372,7 +368,7 @@ class SceneBuilder {
         const tracks: Track[] = [];
         for (const track of clip.tracks) {
           const node = member.scene.nodes[track.node];
-          if (!node) continue;
+          if (!node || track.held) continue;
           const target = this.#lookup.byName(node.name, node.kind === "bone");
           if (target !== null) {
             tracks.push(
@@ -457,7 +453,10 @@ class SceneBuilder {
     }
   }
 
-  /** Puts each slot's texture on the materials of its name. A texture several slots share is added once. */
+  /**
+   * Puts each slot's texture on the materials of its name. A texture several slots share is added once. It samples as
+   * the slot's own texture did, or would have where the file's image was not found.
+   */
   overrideTextures(materials: Composition["materials"]): void {
     const added = new Map<Texture, number>();
     const indexOf = (texture: Texture): number => {
@@ -479,15 +478,13 @@ class SceneBuilder {
       for (const slot of TEXTURE_SLOTS) {
         const entry = slots[slot];
         if (!entry) continue;
-        const ref: TextureRef | null = entry.texture
-          ? { texture: indexOf(entry.texture), uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null }
-          : null;
+        const texture = entry.texture ? indexOf(entry.texture) : null;
         for (const target of targets) {
           const material = this.#materials[target];
           if (!material) continue;
-          const overrides = { ...material.textureOverrides, [slot]: { path: entry.path, found: ref !== null } };
+          const overrides = { ...material.textureOverrides, [slot]: { path: entry.path, found: texture !== null } };
           this.#materials[target] = {
-            ...(ref ? withTexture(material, slot, ref) : material),
+            ...(texture === null ? material : withTexture(material, slot, { ...samplingOf(material, slot), texture })),
             textureOverrides: overrides,
           };
         }
@@ -544,6 +541,18 @@ function subtree(nodes: readonly SceneNode[], roots: readonly number[]): boolean
     if (node.parent >= 0 && included[node.parent]) included[index] = true;
   });
   return included;
+}
+
+const PLAIN_SAMPLING: TextureSampling = { uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null };
+
+/** How a slot samples its texture: as its own texture does, else as its missing image would have, else plainly. */
+function samplingOf(material: Material, slot: TextureSlot): TextureSampling {
+  const own = material[TEXTURE_SLOT_KEYS[slot]];
+  if (own) {
+    const { texture: _, ...sampling } = own;
+    return sampling;
+  }
+  return material.missingTextureSampling?.[slot] ?? PLAIN_SAMPLING;
 }
 
 /** The material with a texture in a slot. Its color factor turns white, so the texture shows as it is. */

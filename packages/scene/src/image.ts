@@ -13,22 +13,22 @@ const SIGNATURES: readonly { mimeType: string; offset: number; bytes: readonly n
   { mimeType: "image/bmp", offset: 0, bytes: [0x42, 0x4d] },
 ];
 
-const EXTENSIONS: Readonly<Record<string, string>> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  tga: "image/x-tga",
-  tif: "image/tiff",
-  tiff: "image/tiff",
-  dds: "image/vnd-ms.dds",
-  ktx2: "image/ktx2",
-  exr: "image/x-exr",
-  hdr: "image/vnd.radiance",
-  psd: "image/vnd.adobe.photoshop",
-};
+const EXTENSIONS: ReadonlyMap<string, string> = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+  ["bmp", "image/bmp"],
+  ["tga", "image/x-tga"],
+  ["tif", "image/tiff"],
+  ["tiff", "image/tiff"],
+  ["dds", "image/vnd-ms.dds"],
+  ["ktx2", "image/ktx2"],
+  ["exr", "image/x-exr"],
+  ["hdr", "image/vnd.radiance"],
+  ["psd", "image/vnd.adobe.photoshop"],
+]);
 
 /** The file name at the end of a path written with either separator. */
 export function fileNameOf(path: string): string {
@@ -44,5 +44,5 @@ export function imageMimeType(bytes: Uint8Array, path: string): string {
   if (signature) return signature.mimeType;
   const name = fileNameOf(path);
   const dot = name.lastIndexOf(".");
-  return (dot === -1 ? undefined : EXTENSIONS[name.slice(dot + 1).toLowerCase()]) ?? "application/octet-stream";
+  return (dot === -1 ? undefined : EXTENSIONS.get(name.slice(dot + 1).toLowerCase())) ?? "application/octet-stream";
 }

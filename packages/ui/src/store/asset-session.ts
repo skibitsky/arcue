@@ -28,6 +28,7 @@ import {
 } from "@arcue/scene";
 import type { CommentOverlay, ScreenPosition, ToolId, Viewport } from "@arcue/viewport";
 import { plural } from "../format";
+import { commentPartView } from "./comment-view";
 import { currentMessage, lastRound, pendingFollowUp, queuedComments } from "./history";
 import { Store } from "./observable";
 import type { OutlineFile } from "./outline";
@@ -728,9 +729,12 @@ export class AssetSession {
     return "selected";
   }
 
-  /** Shows the parts a comment was made with; a comment that stores none was made in the default view. */
+  /**
+   * Shows the parts a comment was made with, where a comment that stores none was made in the default view, and the
+   * part that holds its target.
+   */
   #restoreParts(comment: Comment): void {
-    const parts = comment.parts ?? defaultPartView();
+    const parts = commentPartView(this.state.get().scene, comment);
     if (!samePartView(parts, this.state.get().parts)) this.setPartView(parts);
   }
 

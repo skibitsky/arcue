@@ -1,5 +1,11 @@
 import type { CoreClient, Peer } from "@arcue/protocol";
-import { createPeer, createRemoteClient, IMAGE_FILE_EXTENSIONS, portEndpoint } from "@arcue/protocol";
+import {
+  createPeer,
+  createRemoteClient,
+  IMAGE_FILE_EXTENSIONS,
+  MODEL_FILE_EXTENSIONS,
+  portEndpoint,
+} from "@arcue/protocol";
 import type { FileHost, FileKind, SampleAsset, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore, isImageFile, isModelFile } from "@arcue/ui";
 import { chooseFiles } from "./choose-files";
@@ -17,12 +23,16 @@ import type {
   WriteCompositionInput,
 } from "./host-protocol";
 import { hostEvents, hostRequests, pageEvents } from "./host-protocol";
+import { PlacedCopies } from "./placed-copies";
 
 const RELOAD_HINT = "reload the page to get the current version.";
 
 const IMAGE_ACCEPT = IMAGE_FILE_EXTENSIONS.join(",");
 /** Models come with the textures picked beside them, since the page cannot read the folder they were in. */
-const ACCEPT: Record<FileKind, string> = { model: `.fbx,${IMAGE_ACCEPT}`, image: IMAGE_ACCEPT };
+const ACCEPT: Record<FileKind, string> = {
+  model: `${MODEL_FILE_EXTENSIONS.join(",")},${IMAGE_ACCEPT}`,
+  image: IMAGE_ACCEPT,
+};
 
 /** A script that fails to load fires a plain "error" event; an uncaught error inside a running worker fires an ErrorEvent. */
 function isLoadFailure(event: Event): boolean {
@@ -53,8 +63,8 @@ export class WebHost {
   readonly #ready: Promise<unknown>;
   readonly #seededSamples = new Map<string, Promise<void>>();
   readonly #importWorkers = new Map<number, Worker>();
-  /** The copy each dropped or picked file made beside an asset, for files whose copy no file there had yet. */
-  readonly #copies = new WeakMap<File, string>();
+  /** The copies dropped and picked files made beside assets, until they open in a tab or are dismissed. */
+  readonly #copies = new PlacedCopies<File>();
 
   constructor(samples: readonly SampleInfo[], baseUrl: string) {
     this.#sampleInfo = samples;
@@ -85,7 +95,7 @@ export class WebHost {
     const files: FileHost = {
       pick: async (kind, assetPath) => {
         const chosen = await chooseFiles({ accept: ACCEPT[kind], multiple: kind === "model" });
-        return chosen.length > 0 ? this.placeFiles(chosen, assetPath) : [];
+        return { paths: chosen.length > 0 ? await this.placeFiles(chosen, assetPath) : [], files: chosen };
       },
       place: (dropped, assetPath) => this.placeFiles(dropped, assetPath),
       open: (dropped) => {
@@ -126,7 +136,7 @@ export class WebHost {
   /** Writes each model into its own folder with copies of the files picked with it, then opens them; see `planOpen`. */
   async openFiles(files: readonly File[]): Promise<string[]> {
     const { models } = partitionFiles(files);
-    if (models.length === 0) throw new Error("Choose an .fbx file. Its textures can come along with it.");
+    if (models.length === 0) throw new Error("Choose an .fbx or .blend file. Its textures can come along with it.");
     const plans = planOpen(files);
     const seeds = await Promise.all(
       plans.flatMap((plan) =>
@@ -168,7 +178,7 @@ export class WebHost {
     )) as PlaceFilesOutput;
     output.files.forEach((placed, index) => {
       const file = usable[index];
-      if (file && placed.created) this.#copies.set(file, placed.path);
+      if (file) this.#copies.place(file, placed.path, placed.created);
     });
     return output.files.map((placed) => placed.path);
   }
@@ -194,13 +204,9 @@ export class WebHost {
     this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" });
   }
 
-  /** Removes the copies dropped files made beside an asset, once they open in a tab of their own or are dismissed. */
+  /** Removes the copies dropped or picked files made beside an asset, once they open in a tab or are dismissed. */
   async #removeCopies(files: readonly File[]): Promise<void> {
-    const paths = files.flatMap((file) => {
-      const copy = this.#copies.get(file);
-      this.#copies.delete(file);
-      return copy === undefined ? [] : [copy];
-    });
+    const paths = this.#copies.release(files);
     if (paths.length === 0) return;
     const input: RemoveFilesInput = { paths };
     await this.#host.request("command", hostRequests.removeFiles, input);

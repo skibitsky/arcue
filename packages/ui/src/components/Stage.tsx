@@ -5,6 +5,7 @@ import type { DragEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AssetSession } from "../store/asset-session";
 import { useSelect } from "../store/observable";
+import { offersAnimation } from "../store/view-files";
 import type { WorkspaceStore } from "../store/workspace-store";
 import { CommentBoxLayer } from "./CommentBox";
 import { IconButton } from "./controls";
@@ -60,7 +61,7 @@ export function Stage({
           <ViewportStatus session={session} />
           <RelinkOffer session={session} />
           <CommentBoxLayer session={session} />
-          <DropMenu store={store} assetId={session.assetId} />
+          {active ? <DropMenu store={store} assetId={session.assetId} /> : null}
         </section>
       </div>
     </section>
@@ -82,14 +83,23 @@ function RelinkOffer({ session }: { session: AssetSession }) {
   );
 }
 
-/** "New tab" or "Add to view" at the point where a model was dropped on a tab that shows a model. */
+/**
+ * "New tab", "Add to view" and, when a model can also join as an animation file, "Add as animation", at the point where
+ * models were dropped on a tab that shows a model, or at the view's center for models picked in the open dialog. It
+ * waits while the tab is in the background.
+ */
 function DropMenu({ store, assetId }: { store: WorkspaceStore; assetId: string }) {
   const prompt = useSelect(store.state, (state) => (state.dropPrompt?.assetId === assetId ? state.dropPrompt : null));
   if (!prompt) return null;
+  const dropped = prompt.at !== null;
   return (
     <DropdownMenu.Root open onOpenChange={(open) => (open ? undefined : store.dismissDrop())} modal={false}>
       <DropdownMenu.Trigger asChild>
-        <span className="drop-anchor" style={{ left: prompt.x, top: prompt.y }} aria-hidden="true" />
+        <span
+          className="drop-anchor"
+          style={prompt.at ? { left: prompt.at.x, top: prompt.at.y } : { left: "50%", top: "50%" }}
+          aria-hidden="true"
+        />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
@@ -98,16 +108,25 @@ function DropMenu({ store, assetId }: { store: WorkspaceStore; assetId: string }
           align="start"
           sideOffset={4}
           collisionPadding={8}
-          aria-label="Dropped file"
+          aria-label={dropped ? "Dropped file" : "Picked file"}
+          aria-labelledby={undefined}
         >
-          <DropdownMenu.Item className="menu-item" onSelect={() => void store.answerDrop("tab")}>
-            <Icon name="tab" className="mi-icon" />
-            <span className="mi-label">New tab</span>
-          </DropdownMenu.Item>
+          {dropped ? (
+            <DropdownMenu.Item className="menu-item" onSelect={() => void store.answerDrop("tab")}>
+              <Icon name="tab" className="mi-icon" />
+              <span className="mi-label">New tab</span>
+            </DropdownMenu.Item>
+          ) : null}
           <DropdownMenu.Item className="menu-item" onSelect={() => void store.answerDrop("view")}>
             <Icon name="layers" className="mi-icon" />
             <span className="mi-label">Add to view</span>
           </DropdownMenu.Item>
+          {offersAnimation(prompt.models) ? (
+            <DropdownMenu.Item className="menu-item" onSelect={() => void store.answerDrop("animation")}>
+              <Icon name="film" className="mi-icon" />
+              <span className="mi-label">Add as animation</span>
+            </DropdownMenu.Item>
+          ) : null}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

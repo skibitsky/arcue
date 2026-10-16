@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Clip } from "./clip";
 import { composeScene, findNode, memberPath, splitMemberPath } from "./composition";
-import type { Material, Texture } from "./material";
+import type { Material, Texture, TextureRef, TextureSampling } from "./material";
+import { TEXTURE_REF_KEYS } from "./material";
 import type { Quat, Vec3 } from "./math";
 import type { Mesh } from "./mesh";
 import type { NodeKind, SceneNode } from "./node";
@@ -330,6 +331,33 @@ describe("composeScene", () => {
     expect(legs.clips).toHaveLength(1);
   });
 
+  it("leaves out the tracks that only hold an animation file's pose, and does not miss their bones", () => {
+    const wave = scene({
+      nodes: [
+        { name: "Armature" },
+        { name: "Body", parent: 0, kind: "bone" },
+        { name: "Leg", parent: 1, kind: "bone" },
+        { name: "Control", parent: 0, kind: "bone" },
+      ],
+      clips: [{ name: "Armature|Wave", animate: [1, 2, 3] }],
+    });
+    for (const track of wave.clips[0]?.tracks ?? []) track.held = track.node !== 1;
+    const composed = composeScene(legs, { ...noComposition(), animations: [{ file: "Legs@Wave.blend", scene: wave }] });
+    expect(composed.clips.at(-1)?.tracks.map((track) => composed.nodes[track.node]?.path)).toEqual(["Armature/Body"]);
+    expect(composed.source.warnings).toEqual([]);
+  });
+
+  it("keeps the frame number another file gives its clip's first frame", () => {
+    const take = scene({ nodes: [{ name: "Body", kind: "bone" }], clips: [{ name: "Walk", animate: [0] }] });
+    const walk = take.clips[0];
+    if (walk) walk.sourceStartFrame = 101;
+    const composed = composeScene(legs, { ...noComposition(), animations: [{ file: "Legs@Walk.blend", scene: take }] });
+    expect(composed.clips.map((clip) => [clip.name, clip.sourceStartFrame])).toEqual([
+      ["Armature|Walk", undefined],
+      ["Legs@Walk.blend//Walk", 101],
+    ]);
+  });
+
   it("names another file's clips within that file, so adding or removing other files never renames them", () => {
     const take = (name: string) => scene({ nodes: [{ name: "Body", kind: "bone" }], clips: [{ name, animate: [0] }] });
     const names = (files: string[]) =>
@@ -540,6 +568,107 @@ describe("composeScene", () => {
     expect(composed.source.warnings.map((warning) => [warning.code, warning.subject.name])).toEqual([
       ["material-not-found", "Missing"],
     ]);
+  });
+
+  it("samples a composition's texture as the slot's own texture did, or as its missing image would have", () => {
+    const own: Texture = {
+      name: "ShellPaint",
+      mimeType: "image/png",
+      bytes: Uint8Array.of(1),
+      storedPath: "ShellPaint.png",
+      foundPath: "ShellPaint.png",
+    };
+    const chosen: Texture = { ...own, name: "Repainted", storedPath: "Repainted.png", foundPath: "Repainted.png" };
+    const ownSampling: TextureSampling = {
+      uvSet: 1,
+      wrapU: "mirror",
+      wrapV: "clamp",
+      transform: { offset: [0.5, 0], scale: [2, 2], rotation: 0.25 },
+      alpha: "premultiply",
+      colorSpace: "linear",
+    };
+    const tiled: TextureSampling = {
+      uvSet: 1,
+      wrapU: "repeat",
+      wrapV: "repeat",
+      transform: { offset: [0, 0], scale: [4, 4], rotation: 0 },
+      colorSpace: "srgb",
+    };
+    const painted = scene({ nodes: [{ name: "ShellA", mesh: {} }], materials: ["Shell"] });
+    painted.textures = [own];
+    painted.materials = painted.materials.map((entry) => ({
+      ...entry,
+      baseColorTexture: { ...ownSampling, texture: 0 },
+      missingTextures: { normal: "C:/elsewhere/Bumps.png" },
+      missingTextureSampling: { normal: tiled },
+    }));
+    const composed = composeScene(painted, {
+      ...noComposition(),
+      materials: {
+        Shell: {
+          baseColor: { path: "Repainted.png", texture: chosen },
+          normal: { path: "Bumps.png", texture: chosen },
+          roughness: { path: "Rough.png", texture: chosen },
+        },
+      },
+    });
+    const index = composed.textures.indexOf(chosen);
+    const shell = composed.materials[0];
+    expect(index).toBe(1);
+    expect(shell?.baseColorTexture).toEqual({ ...ownSampling, texture: index });
+    expect(shell?.normalTexture).toEqual({ ...tiled, texture: index });
+    expect(shell?.roughnessTexture).toEqual({
+      texture: index,
+      uvSet: 0,
+      wrapU: "repeat",
+      wrapV: "repeat",
+      transform: null,
+    });
+    expect(painted.materials[0]?.baseColorTexture).toEqual({ ...ownSampling, texture: 0 });
+  });
+
+  it("moves every texture reference of another file's materials past the model's textures", () => {
+    const image = (name: string): Texture => ({
+      name,
+      mimeType: "image/png",
+      bytes: Uint8Array.of(1),
+      storedPath: `${name}.png`,
+      foundPath: `${name}.png`,
+    });
+    const model = scene({ nodes: [{ name: "Body", mesh: {} }] });
+    model.textures = [image("Skin"), image("Eyes")];
+    const member = scene({ nodes: [{ name: "Helmet", mesh: {} }], materials: ["Metal"] });
+    member.textures = [image("Metal")];
+    const ref: TextureRef = { texture: 0, uvSet: 0, wrapU: "repeat", wrapV: "repeat", transform: null };
+    const metal = member.materials[0];
+    if (!metal) throw new Error("the helmet has a material");
+    for (const key of TEXTURE_REF_KEYS) metal[key] = ref;
+    const composed = composeScene(model, {
+      ...noComposition(),
+      attach: [{ member: { file: "Helmet.fbx", scene: member }, node: null, bone: null }],
+    });
+    const moved = composed.materials.find((entry) => entry.name === "Metal");
+    expect(TEXTURE_REF_KEYS.map((key) => moved?.[key]?.texture)).toEqual(TEXTURE_REF_KEYS.map(() => 2));
+    expect(composed.textures[2]?.name).toBe("Metal");
+    expect(metal.baseColorTexture?.texture).toBe(0);
+  });
+
+  it("adds more textures of another file than a call takes arguments", () => {
+    const count = 200_000;
+    const texture: Texture = {
+      name: "Tile",
+      mimeType: "image/png",
+      bytes: Uint8Array.of(1),
+      storedPath: "Tile.png",
+      foundPath: "Tile.png",
+    };
+    const member = scene({ nodes: [{ name: "Helmet", mesh: {} }], materials: ["Metal"] });
+    member.textures = Array.from({ length: count }, () => texture);
+    const composed = composeScene(legs, {
+      ...noComposition(),
+      attach: [{ member: { file: "Helmet.fbx", scene: member }, node: null, bone: null }],
+    });
+    expect(composed.textures).toHaveLength(legs.textures.length + count);
   });
 
   it("adds a texture that several slots share once, and points every slot at it", () => {

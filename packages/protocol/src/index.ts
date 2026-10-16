@@ -37,17 +37,29 @@ export {
 export type { ConnectionState, CoreClient, Unsubscribe } from "./client";
 export type { CommandArgs, CommandInput, CommandName, CommandOutput, Commands } from "./commands";
 export { commands, isCommandName } from "./commands";
-export type { CompositionAttach, CompositionFile, MaterialTextures, MemberRole, TextureSlotName } from "./composition";
+export type {
+  CompositionAttach,
+  CompositionFile,
+  FileRole,
+  MaterialTextures,
+  MemberContent,
+  MemberRole,
+  TextureSlotName,
+} from "./composition";
 export {
+  animatesModel,
   COMPOSITION_FILE_NAME,
   COMPOSITION_VERSION,
   compositionAttachSchema,
   compositionFileSchema,
+  fileRoleSchema,
   IMAGE_FILE_EXTENSIONS,
   joinsByName,
+  keysModelBones,
+  MODEL_FILE_EXTENSIONS,
   materialTexturesSchema,
-  memberRoleFor,
   memberRoleSchema,
+  memberRoles,
   relativeFileSchema,
   textureSlotSchema,
 } from "./composition";

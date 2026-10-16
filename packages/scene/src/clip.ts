@@ -13,6 +13,11 @@ export interface Track {
    * morph target, from 0 to 1.
    */
   values: Float32Array;
+  /**
+   * True for a track that only holds the pose the file saves on a node the clip does not key. A composition leaves it
+   * out, so the model's node keeps its own pose.
+   */
+  held?: boolean;
 }
 
 export interface Clip {
@@ -38,6 +43,11 @@ export interface Clip {
   keyedEveryFrame: boolean;
   /** For a clip from another file of a composition: that file, relative to the model's folder. */
   file?: string;
+  /**
+   * The frame number the file itself gives the clip's frame 0, so frame n is the file's frame sourceStartFrame + n.
+   * Unset where the file's frame numbers do not step with the clip's frames.
+   */
+  sourceStartFrame?: number;
 }
 
 const UNTITLED_CLIP = "Untitled clip";

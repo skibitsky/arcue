@@ -50,6 +50,8 @@ export interface FakeCoreOptions {
   coreClipboard?: boolean;
   /** What `asset.inspect` reports for a path, or null when it cannot. */
   inspect?: (path: string) => AssetInspection | null;
+  /** What `composition.fileRoles` reports for a file, or null when it cannot. */
+  roles?: (file: string) => QueryOutput<"composition.fileRoles"> | null;
   now?: () => Date;
 }
 
@@ -791,6 +793,12 @@ export class FakeCoreClient implements CoreClient {
           slots: slots.map(({ slot, state, path, overridden }) => ({ slot, state, path, overridden })),
         })),
       };
+    },
+    "composition.fileRoles": ({ assetId, file }) => {
+      this.#asset(assetId);
+      const answer = this.#options.roles?.(file);
+      if (!answer) throw new ArcueError("unavailable", "The catalog does not read added files.");
+      return answer;
     },
     "asset.inspect": ({ path }) => {
       const inspection = this.#options.inspect?.(path);

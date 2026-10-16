@@ -27,11 +27,11 @@ export function renderPrompt({ data, assetPath, roundFolder, exportedAt, partNam
   const header = [
     `3D review · round ${data.round} · ${count} ${count === 1 ? "comment" : "comments"}`,
     `Asset: ${assetPath}`,
-    `Version ${data.asset.version.slice(0, 7)}, exported ${exportedAt}`,
+    `Version ${data.asset.version.slice(0, 7)}, saved ${exportedAt}`,
     ...compositionLine(data),
     `Data and screenshots: ${roundFolder.endsWith("/") ? roundFolder : `${roundFolder}/`}`,
     `Meters, right-handed, ${up}. Frames count from each clip's first frame (0) at ${formatNumber(data.asset.fps)} fps.`,
-    "Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports.",
+    "Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender.",
   ].join("\n");
   return [header, ...data.comments.map((comment) => renderComment(comment, partNames))].join("\n\n");
 }
@@ -85,8 +85,19 @@ function renderWarningComment(comment: RoundComment, warning: NonNullable<RoundC
 
 function timeLabel({ time }: RoundComment): string {
   if (time === null) return "Rest pose";
-  if ("frame" in time) return `Clip "${time.clipDisplayName}", frame ${time.frame}`;
-  return `Clip "${time.clipDisplayName}", frames ${time.frames[0]}–${time.frames[1]}`;
+  if ("frame" in time) {
+    const { sourceFrame } = time;
+    const source =
+      sourceFrame === undefined || sourceFrame === time.frame ? "" : ` (file frame ${formatNumber(sourceFrame)})`;
+    return `Clip "${time.clipDisplayName}", frame ${time.frame}${source}`;
+  }
+  const [first, last] = time.sourceFrames ?? [];
+  const same = first === time.frames[0] && last === time.frames[1];
+  const source =
+    first === undefined || last === undefined || same
+      ? ""
+      : ` (file frames ${formatNumber(first)}–${formatNumber(last)})`;
+  return `Clip "${time.clipDisplayName}", frames ${time.frames[0]}–${time.frames[1]}${source}`;
 }
 
 function targetLabel({ target }: RoundComment): string {

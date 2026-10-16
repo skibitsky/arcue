@@ -1,4 +1,5 @@
 import type { SceneDescription } from "@arcue/scene";
+import { importWarning } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import { buildAssetScene, MEMBER_IMPORTS_AT_ONCE, readAssetFiles } from "./composition-load";
 import { MemoryPlatform } from "./memory-platform";
@@ -84,5 +85,65 @@ describe("buildAssetScene", () => {
     expect([shell?.baseColorTexture?.texture, shell?.emissiveTexture?.texture, shell?.normalTexture?.texture]).toEqual([
       0, 0, 0,
     ]);
+  });
+
+  it("joins Blender files named after the model as animation files, as it joins FBX files", async () => {
+    const platform = new MemoryPlatform({
+      files: {
+        [MODEL]: fakeAsset(model),
+        [`${FOLDER}/Bug@Wave.blend`]: fakeAsset(clip("Wave")),
+        [`${FOLDER}/Bug@Wave.blend1`]: fakeAsset(clip("Backup")),
+        [`${FOLDER}/Bug@Notes.txt`]: "notes",
+      },
+    });
+    const files = await readAssetFiles(platform, MODEL, COMPOSITION, FOLDER, { brokenComposition: "reject" });
+    expect(files.animations).toEqual([`${FOLDER}/Bug@Wave.blend`]);
+    const scene = await buildAssetScene(files, async (file) => parseFake(file));
+    expect(scene.clips.map((entry) => entry.name)).toEqual(["Bug@Wave.blend//Wave"]);
+  });
+
+  it("keeps the warnings that explain an animation file's clips, such as constraints and drivers not evaluated", async () => {
+    const motion = (code: "constraint-not-evaluated" | "driver-not-evaluated", name: string) =>
+      importWarning(code, { kind: "node", name }, `Not evaluated: ${name}`);
+    const animation: FakeAssetSpec = {
+      ...clip("Wave"),
+      meshes: [
+        { name: "Shell", grid: 2 },
+        { name: "Cape", grid: 2 },
+      ],
+      warnings: [
+        motion("constraint-not-evaluated", "Hero"),
+        motion("driver-not-evaluated", "Hero"),
+        motion("driver-not-evaluated", "Shell"),
+        motion("constraint-not-evaluated", "Cape"),
+        motion("constraint-not-evaluated", "Gone"),
+        importWarning("library-not-loaded", { kind: "file", name: "" }, "Linked data not shown"),
+        importWarning("unweighted-vertices", { kind: "node", name: "Shell" }, "Unweighted vertices: Shell"),
+      ],
+    };
+    const platform = new MemoryPlatform({
+      files: { [MODEL]: fakeAsset(model), [`${FOLDER}/Bug@Wave.blend`]: fakeAsset(animation) },
+    });
+    const files = await readAssetFiles(platform, MODEL, COMPOSITION, FOLDER, { brokenComposition: "reject" });
+    const kept = async (shapeKeys: { model: boolean; animation: boolean }) => {
+      const scene = await buildAssetScene(files, async (file) => {
+        const parsed = parseFake(file);
+        const shell = parsed.meshes[0];
+        if (shell && shapeKeys[file.path === MODEL ? "model" : "animation"]) {
+          shell.morphTargets = [{ name: "Bulge", defaultWeight: 0, positions: new Float32Array(12), normals: null }];
+        }
+        return parsed;
+      });
+      return scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.file]);
+    };
+    const armature = [
+      ["constraint-not-evaluated", "Hero", "Bug@Wave.blend"],
+      ["driver-not-evaluated", "Hero", "Bug@Wave.blend"],
+    ];
+    const shell = ["driver-not-evaluated", "Shell", "Bug@Wave.blend"];
+    const library = ["library-not-loaded", "", "Bug@Wave.blend"];
+    expect(await kept({ model: false, animation: false })).toEqual([...armature, shell, library]);
+    expect(await kept({ model: false, animation: true })).toEqual([...armature, library]);
+    expect(await kept({ model: true, animation: true })).toEqual([...armature, shell, library]);
   });
 });

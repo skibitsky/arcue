@@ -1,7 +1,7 @@
 import type { Clip, Material, SceneDescription } from "@arcue/scene";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import type { FileHost } from "../store/view-files";
 import { flush, NOW, setup, TestViewport, withPoseClips } from "../test-helpers";
@@ -196,7 +196,7 @@ describe("Workspace", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "New tab" }));
     expect(store.state.get().tabs).toHaveLength(2);
-    expect(screen.getByText("Drop an FBX file")).toBeTruthy();
+    expect(screen.getByText("Drop an FBX or Blender file")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "StoneResonator.fbx" }));
     await act(() => flush());
     expect(client.calls.filter((call) => call.name === "asset.open")).toHaveLength(2);
@@ -346,7 +346,11 @@ describe("Workspace", () => {
       doubleSided: false,
     };
     const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Stone.png");
-    const files: FileHost = { pick: async () => [picked], place: async () => [], open: () => {} };
+    const files: FileHost = {
+      pick: async () => ({ paths: [picked], files: [] }),
+      place: async () => [],
+      open: () => {},
+    };
     const { client } = await renderStone({
       files,
       scene: (scene) => ({
@@ -382,7 +386,7 @@ describe("Workspace", () => {
   it("asks where a model dropped on the 3D view goes, and discards the placed copy when Escape dismisses it", async () => {
     const discarded: string[][] = [];
     const files: FileHost = {
-      pick: async () => [],
+      pick: async () => ({ paths: [], files: [] }),
       place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
       open: () => {},
       discard: (dropped) => {
@@ -397,7 +401,7 @@ describe("Workspace", () => {
         await flush();
       });
     await drop();
-    expect(store.state.get().dropPrompt?.models).toEqual([{ path: "/work/Crate.fbx", role: null }]);
+    expect(store.state.get().dropPrompt?.models).toEqual([{ path: "/work/Crate.fbx", role: null, roles: [] }]);
     const user = userEvent.setup();
     await user.click(screen.getByRole("menuitem", { name: "Add to view" }));
     await act(() => flush());
@@ -409,6 +413,88 @@ describe("Workspace", () => {
     await act(() => flush());
     expect(store.state.get().dropPrompt).toBeNull();
     expect(discarded).toEqual([["Crate.fbx"]]);
+  });
+});
+
+describe("choosing how a model joins the view", () => {
+  const discarded: string[][] = [];
+  const files: FileHost = {
+    pick: async () => ({ paths: ["/work/Jacket.blend"], files: [new File(["x"], "Jacket.blend")] }),
+    place: async (dropped) => dropped.map((entry) => `/work/${entry.name}`),
+    open: () => {},
+    discard: (dropped) => {
+      discarded.push(dropped.map((entry) => entry.name));
+    },
+  };
+  beforeEach(() => {
+    discarded.length = 0;
+  });
+  const roles = (path: string) =>
+    path.endsWith("Jacket.blend")
+      ? { role: "set" as const, roles: ["set" as const, "animation" as const] }
+      : { role: "set" as const, roles: ["set" as const] };
+  const added = (client: { calls: readonly { name: string; input: unknown }[] }) =>
+    client.calls.filter((call) => call.name === "composition.addFile").map((call) => call.input);
+
+  it("offers a dropped model whose clips key the model's bones as an animation file", async () => {
+    const { client } = await renderStone({ files, roles });
+    const view = screen.getByRole("region", { name: "3D view" });
+    const drop = (name: string) =>
+      act(async () => {
+        fireEvent.drop(view, { dataTransfer: { files: [new File(["x"], name)], types: ["Files"] } });
+        await flush();
+      });
+    await drop("Crate.fbx");
+    const menu = screen.getByRole("menu", { name: "Dropped file" });
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["New tab", "Add to view"]);
+    const user = userEvent.setup();
+    await user.keyboard("{Escape}");
+    await act(() => flush());
+
+    await drop("Jacket.blend");
+    const offer = screen.getByRole("menu", { name: "Dropped file" });
+    expect(
+      within(offer)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["New tab", "Add to view", "Add as animation"]);
+    await user.click(within(offer).getByRole("menuitem", { name: "Add as animation" }));
+    await act(() => flush());
+    expect(added(client)).toEqual([expect.objectContaining({ file: "/work/Jacket.blend", role: "animation" })]);
+  });
+
+  it("asks at the view's center how a picked model joins when it can join as an animation file", async () => {
+    const { client } = await renderStone({ files, roles });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Asset info" }));
+    await user.click(screen.getByRole("button", { name: "Add file" }));
+    await act(() => flush());
+    const menu = screen.getByRole("menu", { name: "Picked file" });
+    const anchor = document.querySelector<HTMLElement>(".drop-anchor");
+    expect([anchor?.style.left, anchor?.style.top]).toEqual(["50%", "50%"]);
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Add to view", "Add as animation"]);
+    expect(added(client)).toEqual([]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Add to view" }));
+    await act(() => flush());
+    expect(added(client)).toEqual([expect.objectContaining({ file: "/work/Jacket.blend", role: "set" })]);
+    expect(discarded).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Asset info" }));
+    await user.click(screen.getByRole("button", { name: "Add file" }));
+    await act(() => flush());
+    expect(screen.getByRole("menu", { name: "Picked file" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    await act(() => flush());
+    expect(screen.queryByRole("menu", { name: "Picked file" })).toBeNull();
+    expect(discarded).toEqual([["Jacket.blend"]]);
   });
 });
 

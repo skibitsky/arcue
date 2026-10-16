@@ -42,6 +42,8 @@ export interface FakeMesh {
   skin?: string[];
   /** Index into the spec's materials. */
   material?: number;
+  /** Hides the mesh's part until someone shows it, as Blender's eye does. */
+  hidden?: boolean;
 }
 
 /** A bone under the root or another bone, by name. */
@@ -57,7 +59,7 @@ export interface FakeAssetSpec {
   bones?: FakeBone[];
   materials?: string[];
   /** Each clip turns the bones it names, by name. */
-  clips?: { name: string; frames: number; fps?: number; bones?: string[] }[];
+  clips?: { name: string; frames: number; fps?: number; bones?: string[]; sourceStartFrame?: number }[];
   fps?: number;
   exporter?: { name: string; version: string | null } | null;
   /** Makes the import fail with this message. */
@@ -162,9 +164,15 @@ export function fakeScene(spec: FakeAssetSpec): SceneDescription {
       })),
       keyTimes: new Float32Array(),
       keyedEveryFrame: false,
+      ...(clip.sourceStartFrame === undefined ? {} : { sourceStartFrame: clip.sourceStartFrame }),
     };
   });
-  const parts = describeParts(nodes);
+  const hiddenMeshes = new Set(spec.meshes.flatMap((mesh, index) => (mesh.hidden ? [index] : [])));
+  const parts = describeParts(nodes).map((part) =>
+    part.levels.some((level) => level.meshes.some((mesh) => hiddenMeshes.has(mesh)))
+      ? { ...part, hiddenByDefault: true }
+      : part,
+  );
   return {
     source: {
       format: "fbx",

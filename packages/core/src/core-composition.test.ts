@@ -344,7 +344,7 @@ describe("a composition file that cannot be read", () => {
 });
 
 describe("warnings from the files of a composition", () => {
-  it("lists each file's own warnings with its file, and only the clip warnings of an animation file", async () => {
+  it("lists each file's own warnings with its file, and only the warnings about clips from an animation file", async () => {
     const shellWarning = importWarning(
       "unweighted-vertices",
       { kind: "node", name: "ShellA" },
@@ -353,6 +353,16 @@ describe("warnings from the files of a composition", () => {
     const turnWarnings = [
       importWarning("root-scale", { kind: "node", name: "Body" }, "Root scale x100: Body"),
       importWarning("clip-not-sampled", { kind: "clip", name: "Armature|Turn" }, "Clip not sampled: Armature|Turn"),
+      importWarning(
+        "curve-modifier-not-applied",
+        { kind: "clip", name: "Armature|Turn" },
+        "Curve modifiers not applied: Armature|Turn",
+      ),
+      importWarning(
+        "action-layer-not-played",
+        { kind: "clip", name: "Armature|Turn" },
+        "Only the first layer played: Armature|Turn",
+      ),
     ];
     const test = await setup({
       [SHELLS]: fakeAsset({ ...shells, warnings: [shellWarning] }),
@@ -362,6 +372,14 @@ describe("warnings from the files of a composition", () => {
     expect(warnings.map((warning) => [warning.id, warning.fix])).toEqual([
       [
         "clip-not-sampled:clip:Anim/BugTurn.fbx//Armature|Turn",
+        { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
+      ],
+      [
+        "curve-modifier-not-applied:clip:Anim/BugTurn.fbx//Armature|Turn",
+        { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
+      ],
+      [
+        "action-layer-not-played:clip:Anim/BugTurn.fbx//Armature|Turn",
         { kind: "show-clip", clip: "Anim/BugTurn.fbx//Armature|Turn" },
       ],
       ["unweighted-vertices:node:BugShells.fbx//ShellA", null],
@@ -759,6 +777,79 @@ describe("adding a file without naming its role", () => {
     ]);
   });
 
+  it("adds a file with meshes and clips as an animation file when it animates the model, and an outfit in place", async () => {
+    const wave = [{ name: "Armature|Wave", frames: 11, bones: ["Body", "Leg"] }];
+    const test = await setup({
+      [COMPOSITION]: null,
+      [`${FOLDER}/BugAnims.fbx`]: fakeAsset({ ...bug, clips: wave }),
+      [`${FOLDER}/BugPose.fbx`]: fakeAsset({ ...bug, meshes: [{ name: "Legs.001", grid: 3 }], clips: wave }),
+      [`${FOLDER}/Jacket.fbx`]: fakeAsset({
+        ...bug,
+        meshes: [{ name: "Jacket", grid: 4, skin: ["Body"] }],
+        clips: wave,
+      }),
+      [`${FOLDER}/Chest.fbx`]: fakeAsset({
+        bones: [{ name: "Body" }, { name: "Lid", parent: "Body" }],
+        meshes: [{ name: "Legs", grid: 3 }],
+        clips: [{ name: "Open", frames: 11, bones: ["Body", "Lid"] }],
+      }),
+    });
+    const add = (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file });
+    await expect(add("BugAnims.fbx")).resolves.toEqual({ path: COMPOSITION, role: "animation" });
+    await expect(add("BugPose.fbx")).resolves.toEqual({ path: COMPOSITION, role: "animation" });
+    await expect(add("Jacket.fbx")).resolves.toEqual({ path: COMPOSITION, role: "set" });
+    await expect(add("Chest.fbx")).resolves.toEqual({ path: COMPOSITION, role: "set" });
+    expect(await readJson(test.platform, COMPOSITION)).toEqual({
+      version: 1,
+      animations: ["BugAnims.fbx", "BugPose.fbx"],
+      attach: [{ file: "Jacket.fbx" }, { file: "Chest.fbx" }],
+    });
+    const { scene } = await sceneOf(test, test.assetId);
+    expect(scene.clips.map((clip) => clip.name)).toEqual([
+      "Armature|Walk",
+      "BugAnims.fbx//Armature|Wave",
+      "BugPose.fbx//Armature|Wave",
+    ]);
+    expect(scene.parts.map((part) => part.id)).toEqual([
+      "Hero/Legs",
+      "Jacket.fbx//Hero/Jacket",
+      "Chest.fbx//Hero/Legs",
+    ]);
+  });
+
+  it("adds a file that hides bone shapes, or keeps a floor beside its copy of the model, as an animation file", async () => {
+    const wave = [{ name: "Armature|Wave", frames: 11, bones: ["Body", "Leg"] }];
+    const test = await setup({
+      [COMPOSITION]: null,
+      [`${FOLDER}/BugShapes.fbx`]: fakeAsset({
+        ...bug,
+        meshes: [...bug.meshes, { name: "WGT-Leg", grid: 2, parent: "Leg", hidden: true }],
+        clips: wave,
+      }),
+      [`${FOLDER}/BugFloor.fbx`]: fakeAsset({
+        ...bug,
+        meshes: [...bug.meshes, { name: "Floor", grid: 5 }],
+        clips: wave,
+      }),
+      [`${FOLDER}/Jacket.fbx`]: fakeAsset({
+        ...bug,
+        meshes: [{ name: "Jacket", grid: 4, skin: ["Body"] }],
+        clips: wave,
+      }),
+    });
+    const add = (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file });
+    await expect(add("BugShapes.fbx")).resolves.toEqual({ path: COMPOSITION, role: "animation" });
+    await expect(add("BugFloor.fbx")).resolves.toEqual({ path: COMPOSITION, role: "animation" });
+    await expect(add("Jacket.fbx")).resolves.toEqual({ path: COMPOSITION, role: "set" });
+    const { scene } = await sceneOf(test, test.assetId);
+    expect(scene.clips.map((clip) => clip.name)).toEqual([
+      "Armature|Walk",
+      "BugShapes.fbx//Armature|Wave",
+      "BugFloor.fbx//Armature|Wave",
+    ]);
+    expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs", "Jacket.fbx//Hero/Jacket"]);
+  });
+
   it("refuses a file with neither meshes nor clips, and one that does not parse, without writing", async () => {
     const test = await plain();
     const add = (file: string) => test.window.client.execute("composition.addFile", { assetId: test.assetId, file });
@@ -772,6 +863,93 @@ describe("adding a file without naming its role", () => {
       message: "Shells.fbx is outside the asset's workspace.",
     });
     await expect(test.platform.exists(COMPOSITION)).resolves.toBe(false);
+  });
+});
+
+describe("telling how a file would join the view", () => {
+  const wave = [{ name: "Armature|Wave", frames: 11, bones: ["Body", "Leg"] }];
+
+  async function files(): Promise<TestCore & { assetId: string }> {
+    return setup({
+      [COMPOSITION]: null,
+      [`${FOLDER}/BugAnims.fbx`]: fakeAsset({ ...bug, clips: wave }),
+      [`${FOLDER}/Jacket.fbx`]: fakeAsset({
+        ...bug,
+        meshes: [{ name: "Jacket", grid: 4, skin: ["Body"] }],
+        clips: wave,
+      }),
+      [`${FOLDER}/Chest.fbx`]: fakeAsset({
+        bones: [{ name: "Body" }, { name: "Lid", parent: "Body" }],
+        meshes: [{ name: "Chest", grid: 4 }],
+        clips: [{ name: "Open", frames: 11, bones: ["Body", "Lid"] }],
+      }),
+      [`${FOLDER}/Empty.fbx`]: fakeAsset({ meshes: [] }),
+    });
+  }
+
+  it("gives the role a file takes without one, then the other role a caller may name", async () => {
+    const test = await files();
+    const roles = (file: string) => test.window.client.query("composition.fileRoles", { assetId: test.assetId, file });
+    await expect(roles(TURN)).resolves.toEqual({ role: "animation", roles: ["animation"] });
+    await expect(roles("BugShells.fbx")).resolves.toEqual({ role: "set", roles: ["set"] });
+    await expect(roles("BugAnims.fbx")).resolves.toEqual({ role: "animation", roles: ["animation", "set"] });
+    await expect(roles("Jacket.fbx")).resolves.toEqual({ role: "set", roles: ["set", "animation"] });
+    await expect(roles("Chest.fbx")).resolves.toEqual({ role: "set", roles: ["set"] });
+    await expect(test.platform.exists(COMPOSITION)).resolves.toBe(false);
+  });
+
+  it("reads the file once for the question and the add that follows, which may name the other role", async () => {
+    const test = await files();
+    const parsed = test.platform.parsed.length;
+    await test.window.client.query("composition.fileRoles", { assetId: test.assetId, file: "Jacket.fbx" });
+    await expect(
+      test.window.client.execute("composition.addFile", {
+        assetId: test.assetId,
+        file: "Jacket.fbx",
+        role: "animation",
+      }),
+    ).resolves.toEqual({ path: COMPOSITION, role: "animation" });
+    expect(test.platform.parsed.slice(parsed)).toEqual(["Jacket.fbx"]);
+    const { scene } = await sceneOf(test, test.assetId);
+    expect(scene.clips.map((clip) => clip.name)).toEqual(["Armature|Walk", "Jacket.fbx//Armature|Wave"]);
+    expect(scene.parts.map((part) => part.id)).toEqual(["Hero/Legs"]);
+  });
+
+  it("keeps only the file it read last besides the model and the files in the view", async () => {
+    const test = await files();
+    const roles = (file: string) => test.window.client.query("composition.fileRoles", { assetId: test.assetId, file });
+    const parsed = test.platform.parsed.length;
+    await roles("Jacket.fbx");
+    await roles("Chest.fbx");
+    await test.window.client.execute("composition.addFile", { assetId: test.assetId, file: "Jacket.fbx" });
+    await roles("BugAnims.fbx");
+    await roles("Jacket.fbx");
+    await roles("BugAnims.fbx");
+    expect(test.platform.parsed.slice(parsed)).toEqual([
+      "Jacket.fbx",
+      "Chest.fbx",
+      "Jacket.fbx",
+      "BugAnims.fbx",
+      "BugAnims.fbx",
+    ]);
+  });
+
+  it("refuses the model itself, a file outside the workspace, and a file with neither meshes nor clips", async () => {
+    const test = await files();
+    const roles = (file: string) => test.window.client.query("composition.fileRoles", { assetId: test.assetId, file });
+    await expect(roles(MODEL)).rejects.toMatchObject({
+      code: "invalid-input",
+      message: "Bug.fbx is the model itself.",
+    });
+    await expect(roles("/elsewhere/Shells.fbx")).rejects.toMatchObject({
+      code: "invalid-input",
+      message: "Shells.fbx is outside the asset's workspace.",
+    });
+    await expect(roles("Empty.fbx")).rejects.toMatchObject({
+      code: "invalid-input",
+      message: "Empty.fbx has no meshes or clips.",
+    });
+    await expect(roles("Missing.fbx")).rejects.toMatchObject({ code: "not-found" });
   });
 });
 

@@ -1,5 +1,5 @@
 import type { CompositionFile } from "@arcue/protocol";
-import { joinsByName } from "@arcue/protocol";
+import { joinsByName, MODEL_FILE_EXTENSIONS } from "@arcue/protocol";
 
 /** The image types an importer may read beside a model, as the core's referenced-file check allows them. */
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "tga", "tif", "tiff", "bmp", "dds", "exr", "hdr", "webp"]);
@@ -30,8 +30,9 @@ function safeName(name: string): string {
 }
 
 /**
- * Each opened model gets its own folder, named after the model without its extension, and the textures picked with
- * it go beside it there, so textures of the same name from different drops do not overwrite each other.
+ * Each opened model gets its own folder, and the textures picked with it go beside it there, so textures of the same
+ * name from different drops do not overwrite each other. An FBX file's folder is its name without the extension; other
+ * formats keep theirs, so "Hero.blend" and "Hero.fbx" opened apart keep their textures apart.
  */
 export function openedFilePath(model: string, file: string = model): string {
   return `${openedModelFolder(model)}/${safeName(file)}`;
@@ -40,7 +41,8 @@ export function openedFilePath(model: string, file: string = model): string {
 export function openedModelFolder(model: string): string {
   const name = safeName(model);
   const dot = name.lastIndexOf(".");
-  return `${FILES_FOLDER}/${dot > 0 ? name.slice(0, dot) : name}`;
+  const fbx = dot > 0 && name.slice(dot).toLowerCase() === ".fbx";
+  return `${FILES_FOLDER}/${fbx ? name.slice(0, dot) : name}`;
 }
 
 /**
@@ -76,7 +78,7 @@ export function partitionFiles<Item extends { name: string }>(
   const ignored: Item[] = [];
   for (const file of files) {
     const extension = extensionOf(file.name);
-    if (extension === "fbx") models.push(file);
+    if (MODEL_FILE_EXTENSIONS.includes(`.${extension}`)) models.push(file);
     else if (IMAGE_EXTENSIONS.has(extension)) textures.push(file);
     else ignored.push(file);
   }
@@ -91,7 +93,7 @@ export interface OpenPlan<Item> {
 
 /**
  * What to open from files picked or dropped together. Each model opens with the textures of the drop beside it, unless
- * it joins another model in the drop by its name, "<model stem>@<clip>.fbx", as the core joins such files.
+ * it joins another model in the drop by its name, "<model stem>@<clip>" as a model file, as the core joins such files.
  */
 export function planOpen<Item extends { name: string }>(files: readonly Item[]): OpenPlan<Item>[] {
   const { models, textures } = partitionFiles(files);

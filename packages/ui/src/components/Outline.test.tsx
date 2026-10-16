@@ -68,7 +68,11 @@ describe("the outline", () => {
 
   it("adds a file through the host's open dialog from the plus in its header", async () => {
     const picked = STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "beetle-turn.fbx");
-    const files: FileHost = { pick: vi.fn(async () => [picked]), place: async () => [], open: () => {} };
+    const files: FileHost = {
+      pick: vi.fn(async () => ({ paths: [picked], files: [] })),
+      place: async () => [],
+      open: () => {},
+    };
     const { client } = await renderStone(composedStone(), files);
     const user = userEvent.setup();
     await user.keyboard("o");

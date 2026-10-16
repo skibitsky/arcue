@@ -1,21 +1,10 @@
 import type { AssetInspection, InspectedMaterial, InspectedMember, InspectedTexture } from "@arcue/protocol";
-import type { Material, SceneDescription, TextureRef } from "@arcue/scene";
+import type { Material, SceneDescription } from "@arcue/scene";
+import { TEXTURE_REF_KEYS, TEXTURE_REF_NAMES } from "@arcue/scene";
 import type { AssetFiles } from "./composition-load";
 import { round5 } from "./coordinates";
 import { basename } from "./paths";
 import { meshesOf, partsOf } from "./scene-lookup";
-
-type TextureKey = { [Key in keyof Material]-?: Material[Key] extends TextureRef | null ? Key : never }[keyof Material];
-
-const TEXTURE_KEY_SLOTS: Record<TextureKey, string> = {
-  baseColorTexture: "baseColor",
-  metallicRoughnessTexture: "metallicRoughness",
-  roughnessTexture: "roughness",
-  metalnessTexture: "metalness",
-  normalTexture: "normal",
-  occlusionTexture: "occlusion",
-  emissiveTexture: "emissive",
-};
 
 export function exporterName(scene: SceneDescription): string | null {
   const exporter = scene.source.exporter;
@@ -53,7 +42,7 @@ export function inspectScene(scene: SceneDescription, file: InspectedFiles): Ass
     parts: partsOf(scene),
     triangles: meshes.reduce((sum, mesh) => sum + mesh.triangles, 0),
     bones: scene.nodes.flatMap(({ name, path, kind }) => (kind === "bone" ? [{ name, path }] : [])),
-    materials: scene.materials.map((material) => inspectMaterial(scene, material)),
+    materials: inspectMaterials(scene),
     textures: inspectTextures(scene),
     clips: scene.clips.map((clip) => ({
       name: clip.name,
@@ -68,12 +57,33 @@ export function inspectScene(scene: SceneDescription, file: InspectedFiles): Ass
   };
 }
 
+/**
+ * One entry per material name with the textures of all its copies, since an importer makes a copy of a material for
+ * each way a mesh reads it, such as another UV map or vertex colors.
+ */
+function inspectMaterials(scene: SceneDescription): InspectedMaterial[] {
+  const byName = new Map<string, InspectedMaterial>();
+  for (const material of scene.materials) {
+    const inspected = inspectMaterial(scene, material);
+    const known = byName.get(inspected.name);
+    if (!known) {
+      byName.set(inspected.name, inspected);
+      continue;
+    }
+    for (const texture of inspected.textures) {
+      const listed = known.textures.some((entry) => entry.slot === texture.slot && entry.texture === texture.texture);
+      if (!listed) known.textures.push(texture);
+    }
+  }
+  return [...byName.values()];
+}
+
 function inspectMaterial(scene: SceneDescription, material: Material): InspectedMaterial {
   const textures: InspectedMaterial["textures"] = [];
-  for (const [key, slot] of Object.entries(TEXTURE_KEY_SLOTS) as [TextureKey, string][]) {
+  for (const key of TEXTURE_REF_KEYS) {
     const ref = material[key];
     const texture = ref ? scene.textures[ref.texture] : undefined;
-    if (texture) textures.push({ slot, texture: texture.name });
+    if (texture) textures.push({ slot: TEXTURE_REF_NAMES[key], texture: texture.name });
   }
   return { name: material.name, textures };
 }

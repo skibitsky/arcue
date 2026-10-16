@@ -18,16 +18,23 @@ const clipRef = {
   clipDisplayName: z.string().min(1),
 };
 
+/**
+ * `sourceFrame` is the frame number the clip's file itself uses for `frame`, such as Blender's frame; it is absent where
+ * Arcue does not know it, as in rounds written before it existed.
+ */
 const frameTimeSchema = z.object({
   ...clipRef,
   frame: indexSchema,
   seconds: z.number(),
+  sourceFrame: z.number().optional(),
 });
 
+/** `sourceFrames` are the frame numbers the clip's file itself uses for `frames`, where Arcue knows them. */
 const rangeTimeSchema = z.object({
   ...clipRef,
   frames: z.tuple([indexSchema, indexSchema]),
   seconds: z.tuple([z.number(), z.number()]),
+  sourceFrames: z.tuple([z.number(), z.number()]).optional(),
 });
 
 /** `mesh` is the object's name as the exporting tool shows it; `meshPath` is its node path in the file. */

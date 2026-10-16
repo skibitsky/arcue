@@ -8,7 +8,8 @@ export const USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>]
       Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
       files its composition lists.
-      --clip names a clip by its name in the file, such as "Armature|Walk"; --frame is a whole frame number from 0.
+      --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
+      --frame is a whole frame number from 0.
   arcue inspect <file> [--json]
       Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
       composed with the files its composition lists, as opening it would.

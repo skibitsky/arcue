@@ -1,5 +1,5 @@
-import type { Material, TextureRef, TextureSlot } from "./material";
-import { TEXTURE_SLOTS } from "./material";
+import type { Material, TextureSlot } from "./material";
+import { TEXTURE_SLOT_KEYS, TEXTURE_SLOTS } from "./material";
 import type { SceneDescription } from "./scene";
 
 /** A slot with an image, a slot whose image was not found, or a slot without one. */
@@ -21,18 +21,10 @@ export interface MaterialSlots {
   slots: MaterialSlot[];
 }
 
-const REF_KEYS: Record<TextureSlot, keyof Material> = {
-  baseColor: "baseColorTexture",
-  normal: "normalTexture",
-  roughness: "roughnessTexture",
-  metalness: "metalnessTexture",
-  emissive: "emissiveTexture",
-};
-
 const STATE_ORDER: Record<SlotState, number> = { set: 0, missing: 1, empty: 2 };
 
 function slotOf(scene: Pick<SceneDescription, "textures">, material: Material, slot: TextureSlot): MaterialSlot {
-  const ref = material[REF_KEYS[slot]] as TextureRef | null;
+  const ref = material[TEXTURE_SLOT_KEYS[slot]];
   const texture = ref ? scene.textures[ref.texture] : undefined;
   const shown = texture && ref ? ref.texture : null;
   const override = material.textureOverrides?.[slot];

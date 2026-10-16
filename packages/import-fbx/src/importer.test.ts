@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import type { FoundFile, ImportRequest, SceneDescription } from "@arcue/scene";
-import { boundsOfPoints, cleanClipName, collectTransferables, lastFrame, parseStoredPath } from "@arcue/scene";
+import {
+  boundsOfPoints,
+  cleanClipName,
+  collectTransferables,
+  lastFrame,
+  MAX_NODE_DEPTH,
+  parseStoredPath,
+} from "@arcue/scene";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   ABSOLUTE_TEXTURE_FBX,
@@ -13,6 +20,7 @@ import {
   LEFT_HANDED_FBX,
   LOD_FBX,
   METAL_ROUGH_FBX,
+  nodeChainFbx,
   PARTLY_WEIGHTED_FBX,
   PHONG_SHININESS_FBX,
   PNG_SIGNATURE,
@@ -565,6 +573,13 @@ describe("export checks", () => {
     expect((await importText("blender.fbx", Y_UP_ROOT_ROTATION_FBX)).source.warnings).toEqual([]);
   });
 
+  const stoneSampling = {
+    uvSet: 1,
+    wrapU: "clamp",
+    wrapV: "repeat",
+    transform: { offset: [-0.125, -0.125], scale: [0.5, 0.25], rotation: 0 },
+  };
+
   it("warns about a texture stored only with an absolute path, even when it is found by name", async () => {
     const found: string[] = [];
     const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX, (storedPath) => {
@@ -572,6 +587,7 @@ describe("export checks", () => {
       return Promise.resolve({ path: "../Textures/StoneStriker-BaseColor.png", bytes: PNG_SIGNATURE });
     });
     expect(found).toEqual(["/tmp/export-staging/StoneStriker-BaseColor.png"]);
+    expect(scene.materials[0]?.baseColorTexture).toEqual({ texture: 0, ...stoneSampling });
     expect(scene.textures).toEqual([
       {
         name: "StoneStriker-BaseColor",
@@ -594,12 +610,13 @@ describe("export checks", () => {
     ]);
   });
 
-  it("reports a texture that is not found as an error", async () => {
+  it("reports a texture that is not found as an error, and keeps how the material would have sampled it", async () => {
     const scene = await importText("striker.fbx", ABSOLUTE_TEXTURE_FBX);
     expect(scene.materials[0]?.baseColorTexture).toBeNull();
     expect(scene.materials[0]?.missingTextures).toEqual({
       baseColor: "/tmp/export-staging/StoneStriker-BaseColor.png",
     });
+    expect(scene.materials[0]?.missingTextureSampling).toEqual({ baseColor: stoneSampling });
     expect(scene.source.warnings.map((warning) => [warning.code, warning.severity, warning.message])).toEqual([
       ["texture-path-absolute", "warning", "Absolute texture path: StoneStriker-BaseColor.png"],
       ["texture-not-found", "error", "Texture not found: StoneStriker-BaseColor.png"],
@@ -669,6 +686,16 @@ describe("errors", () => {
     await expect(fbxImporter.import({ ...noFiles, fileName: "broken.fbx", bytes })).rejects.toMatchObject({
       name: "ArcueError",
       code: "invalid-input",
+    });
+  });
+
+  it("nests as many nodes as the viewport walks, and refuses a file that nests more", async () => {
+    const scene = await importText("deep.fbx", nodeChainFbx(MAX_NODE_DEPTH));
+    expect(scene.nodes.map((node) => node.parent)).toEqual(scene.nodes.map((_, index) => index - 1));
+    await expect(importText("deeper.fbx", nodeChainFbx(MAX_NODE_DEPTH + 1))).rejects.toMatchObject({
+      name: "ArcueError",
+      code: "invalid-input",
+      message: `deeper.fbx nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show.`,
     });
   });
 

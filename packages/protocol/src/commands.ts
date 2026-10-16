@@ -105,7 +105,7 @@ export const commands = {
     output: z.void(),
   }),
   "comment.resolve": command({
-    description: "Mark a sent comment resolved: the new export fixed it.",
+    description: "Mark a sent comment resolved: the new version of the file fixed it.",
     runsIn: "core",
     input: z.object(commentRef),
     output: z.void(),
@@ -148,7 +148,7 @@ export const commands = {
   }),
   "composition.addFile": command({
     description:
-      "Load another file into the asset's view and save it in the asset's composition file, composition.json in the asset's review folder, which is created on the first edit. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place, and its bones merge into the model's bones of the same name, so a skinned mesh binds to the rig. Without a role the core reads the file: clips and no meshes make an animation file, meshes a set file. Adding a file again with the same node replaces its entry. Undo with review.undo.",
+      "Load another file into the asset's view and save it in the asset's composition file, composition.json in the asset's review folder, which is created on the first edit. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place, and its bones merge into the model's bones of the same name, so a skinned mesh binds to the rig. Without a role the core reads the file: clips make an animation file when the file has no meshes, or when most bones they key are the model's bones by name and its meshes copy the model's, so that each mesh it shows is a copy of one of the model's, or it holds a copy of each mesh the model shows and its other meshes are rigid. Other files with meshes are set files. composition.fileRoles tells the role before adding. Adding a file again with the same node replaces its entry. Undo with review.undo.",
     runsIn: "core",
     input: z
       .object({
@@ -172,7 +172,7 @@ export const commands = {
   }),
   "composition.removeFile": command({
     description:
-      'Remove a file from the asset\'s view and from its composition file. Files named "<model>@<clip>.fbx" beside the model join by their name and cannot be removed this way. Undo with review.undo.',
+      'Remove a file from the asset\'s view and from its composition file. Files named "<model>@<clip>.fbx" or "<model>@<clip>.blend" beside the model join by their name and cannot be removed this way. Undo with review.undo.',
     runsIn: "core",
     input: z.object({ ...assetRef, file: compositionMemberSchema }),
     output: compositionOutput,
@@ -365,7 +365,7 @@ export const commands = {
   }),
   "view.selectComment": command({
     description:
-      "Select a comment, jump to its time and restore its camera and the parts it showed. Null clears the selection.",
+      "Select a comment, jump to its time and restore its camera and the parts it showed, always showing the part that holds its target. Null clears the selection.",
     runsIn: "view",
     input: z.object({ ...assetRef, commentId: commentIdSchema.nullable() }),
     output: z.void(),

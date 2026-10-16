@@ -160,6 +160,9 @@ importers:
       '@arcue/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@arcue/import-blend':
+        specifier: workspace:*
+        version: link:../../packages/import-blend
       '@arcue/import-fbx':
         specifier: workspace:*
         version: link:../../packages/import-fbx
@@ -223,6 +226,25 @@ importers:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@22.20.5)(jsdom@30.1.2)(vite@8.3.3(@types/node@22.20.5)(esbuild@0.28.2))
 
+  packages/import-blend:
+    dependencies:
+      '@arcue/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@arcue/scene':
+        specifier: workspace:*
+        version: link:../scene
+    devDependencies:
+      '@arcue/import-fbx':
+        specifier: workspace:*
+        version: link:../import-fbx
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.20.5
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@22.20.5)(jsdom@30.1.2)(vite@8.3.3(@types/node@22.20.5)(esbuild@0.28.2))
+
   packages/import-fbx:
     dependencies:
       '@arcue/protocol':
@@ -247,6 +269,9 @@ importers:
       '@arcue/core':
         specifier: workspace:*
         version: link:../core
+      '@arcue/import-blend':
+        specifier: workspace:*
+        version: link:../import-blend
       '@arcue/import-fbx':
         specifier: workspace:*
         version: link:../import-fbx

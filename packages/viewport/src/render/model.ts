@@ -1,6 +1,7 @@
 import type { DisplayMode } from "@arcue/protocol";
-import type { Clip, Mesh, SceneDescription } from "@arcue/scene";
-import type { Material, MeshBasicMaterial, MeshStandardMaterial, Side } from "three";
+import type { Clip, MaterialGroup, Mesh, SceneDescription } from "@arcue/scene";
+import { VIEWPORT_UV_SETS } from "@arcue/scene";
+import type { Material, MeshBasicMaterial, MeshStandardMaterial, Side, Texture } from "three";
 import {
   Bone,
   BufferAttribute,
@@ -9,6 +10,7 @@ import {
   FrontSide,
   Group,
   Matrix4,
+  MeshDepthMaterial,
   Object3D,
   SkinnedMesh,
   Mesh as ThreeMesh,
@@ -20,7 +22,16 @@ import type { TriangleAdjacency } from "../math/regions";
 import { triangleAdjacency } from "../math/regions";
 import type { MeshPose, PosedMesh } from "../math/skinning";
 import { jointMatrices, meshSkinMatrices, PosedVertexCache, representativeVertices } from "../math/skinning";
-import { clayMaterial, idMaterial, litMaterial, wireFillMaterial, wireLineMaterial, withRegionTint } from "./materials";
+import {
+  clayMaterial,
+  idMaterial,
+  litMaterial,
+  pickAlphaTest,
+  wireFillMaterial,
+  wireLineMaterial,
+  withRegionTint,
+} from "./materials";
+import { MorphTargets, morphVertexAttribute } from "./morph-targets";
 import type { Palette } from "./palette";
 import { RegionTint } from "./region-tint";
 import type { DecodedImage } from "./textures";
@@ -39,7 +50,7 @@ export interface MeshRuntime {
   triangleCount: number;
   display: DrawMesh;
   pick: DrawMesh;
-  /** The ID pass material under lit display: it cuts out the alpha-mask texels the lit materials cut out. */
+  /** The ID pass material under lit display: it cuts out the texels the lit materials' shadows cut out. */
   pickLit: Material | Material[];
   /** The ID pass material under clay and wireframe display, which draw every triangle solid. */
   pickSolid: Material;
@@ -49,6 +60,8 @@ export interface MeshRuntime {
   wireFill: MeshStandardMaterial;
   wireLines: MeshBasicMaterial;
   tint: RegionTint;
+  /** The mesh's morph targets on the GPU, which every material that draws the mesh reads. */
+  morphs: MorphTargets | null;
   /** The mesh's node has a negative determinant in the current pose, so the GPU flips which winding faces front. */
   mirrored: boolean;
   /** The part view draws the mesh. A hidden mesh is drawn by neither pass. */
@@ -130,21 +143,24 @@ export class Model {
     anisotropy: number,
   ): MeshRuntime {
     const triangleCount = Math.floor(mesh.indices.length / 3);
-    const geometry = deindexedGeometry(mesh);
+    const groups = mesh.groups.length > 0 ? mesh.groups : [{ start: 0, triangleCount, material: -1 }];
+    const colored = groups.some((group) => {
+      const uses = this.scene.materials[group.material]?.vertexColors;
+      return uses?.baseColor === true || uses?.emissive === true;
+    });
+    const geometry = deindexedGeometry(mesh, colored);
     this.geometries.push(geometry);
     const tint = new RegionTint(triangleCount);
-    const slots = new Map<number, number>();
-    const groups = mesh.groups.length > 0 ? mesh.groups : [{ start: 0, triangleCount, material: -1 }];
-    for (const group of groups) {
-      if (!slots.has(group.material)) slots.set(group.material, slots.size);
-      geometry.addGroup(group.start * 3, group.triangleCount * 3, slots.get(group.material) ?? 0);
-    }
-    const lit = [...slots.keys()].map((material) =>
+    const draws = drawGroups(groups);
+    for (const draw of draws.groups) geometry.addGroup(draw.start, draw.count, draw.materialIndex);
+    const used = draws.materials.map((material) => this.scene.materials[material]);
+    const lit = used.map((material) =>
       withRegionTint(
         litMaterial({
-          material: this.scene.materials[material],
+          material,
           images: this.images,
           uvSetCount: mesh.uvs.length,
+          vertexColors: geometry.hasAttribute("color"),
           anisotropy,
           fallbackColor: palette.textMuted,
         }),
@@ -156,24 +172,38 @@ export class Model {
     const wireFill = withRegionTint(wireFillMaterial(palette, side), tint.uniforms);
     const wireLines = wireLineMaterial(palette);
     const pickSolid = idMaterial(index, side);
-    const pickGroups = lit.some((material) => material.alphaTest > 0 || material.side !== side)
+    const pickGroups = lit.some(
+      (material) => pickAlphaTest(material) > 0 || !material.visible || material.side !== side,
+    )
       ? lit.map((material) => idMaterial(index, material.side, material))
       : null;
-    this.materials.push(...lit, clay, wireFill, wireLines, pickSolid, ...(pickGroups ?? []));
+    const drawing = [...lit, clay, wireFill, wireLines, pickSolid, ...(pickGroups ?? [])];
+    for (const material of drawing) this.materials.push(material);
+    const morphs =
+      mesh.morphTargets.length > 0 ? new MorphTargets(mesh.morphTargets, Math.floor(mesh.positions.length / 3)) : null;
+    if (morphs) for (const material of drawing) morphs.patch(material);
+    const shadow = morphs ? morphShadowMaterial(morphs) : null;
+    if (shadow) this.materials.push(shadow.material);
 
     const skeleton = mesh.skeleton === null ? undefined : skeletons[mesh.skeleton];
     const skinned = skeleton !== undefined && mesh.bindMatrix !== null && mesh.joints !== null && mesh.weights !== null;
     const bindMatrix = new Matrix4();
     if (mesh.bindMatrix) bindMatrix.fromArray(mesh.bindMatrix);
+    const posedOnGpu = skinned || morphs !== null;
     const create = (material: Material | Material[]): DrawMesh => {
-      if (!skinned || !skeleton) return new ThreeMesh(geometry, material);
-      const object = new SkinnedMesh(geometry, material);
-      object.bind(skeleton, bindMatrix);
-      object.frustumCulled = false;
+      const object = skinned && skeleton ? new SkinnedMesh(geometry, material) : new ThreeMesh(geometry, material);
+      if (object instanceof SkinnedMesh && skeleton) object.bind(skeleton, bindMatrix);
+      object.frustumCulled = !posedOnGpu;
       return object;
     };
     const display = create(lit);
     display.castShadow = true;
+    if (shadow) {
+      display.customDepthMaterial = shadow.material;
+      display.onBeforeShadow = (_renderer, _scene, _camera, _shadowCamera, _geometry, depth) => {
+        if (depth === shadow.material) shadow.beforeDraw();
+      };
+    }
     const pickLit = pickGroups ?? pickSolid;
     const pick = create(pickLit);
     pick.layers.set(PICK_LAYER);
@@ -207,6 +237,7 @@ export class Model {
       wireFill,
       wireLines,
       tint,
+      morphs,
       mirrored: false,
       visible: true,
       representatives,
@@ -248,12 +279,7 @@ export class Model {
       runtime.pose.skin = skin;
       runtime.mirrored = determinant3(this.worlds, runtime.node * 16) < 0;
       runtime.posed.setPose(runtime.pose);
-      const weights = runtime.pose.morphWeights;
-      for (const object of [runtime.display, runtime.pick, runtime.wire]) {
-        const influences = object.morphTargetInfluences;
-        if (!influences) continue;
-        for (let i = 0; i < influences.length; i++) influences[i] = weights[i] ?? 0;
-      }
+      runtime.morphs?.setWeights(runtime.pose.morphWeights);
     }
     this.root.updateMatrixWorld(true);
   }
@@ -293,6 +319,7 @@ export class Model {
     }
     for (const runtime of this.meshes) {
       runtime.tint.dispose();
+      runtime.morphs?.dispose();
       if (runtime.display instanceof SkinnedMesh) runtime.display.skeleton.dispose();
     }
     for (const image of this.images) image?.close();
@@ -300,10 +327,33 @@ export class Model {
 }
 
 /**
- * Three corners per triangle, none shared, so each triangle can carry its own number for the ID pass and the region
- * tint. Display, wireframe and ID pass all draw this one geometry.
+ * The geometry's draw groups, in corners, and the scene material of each draw material, each used once. A mesh's
+ * groups that follow each other in one material draw as one group; groups of one material apart share its draw
+ * material but draw on their own, since the triangles between them use others. Groups draw by material, so a pass
+ * switches materials once per material, not once per group.
  */
-export function deindexedGeometry(mesh: Mesh): BufferGeometry {
+function drawGroups(groups: readonly MaterialGroup[]) {
+  const drawMaterialOf = new Map<number, number>();
+  const draws: { start: number; count: number; materialIndex: number }[] = [];
+  for (const group of groups) {
+    if (!drawMaterialOf.has(group.material)) drawMaterialOf.set(group.material, drawMaterialOf.size);
+    const materialIndex = drawMaterialOf.get(group.material) ?? 0;
+    const [start, count] = [group.start * 3, group.triangleCount * 3];
+    const last = draws[draws.length - 1];
+    if (last?.materialIndex === materialIndex && last.start + last.count === start) last.count += count;
+    else draws.push({ start, count, materialIndex });
+  }
+  draws.sort((a, b) => a.materialIndex - b.materialIndex);
+  return { groups: draws, materials: [...drawMaterialOf.keys()] };
+}
+
+/**
+ * Three corners per triangle, none shared, so each triangle can carry its own number for the ID pass and the region
+ * tint. Display, wireframe and ID pass all draw this one geometry. With `colors`, it carries the mesh's colors as its
+ * RGB color attribute, for materials that multiply by them. A mesh with morph targets gets each corner's rendered
+ * vertex instead of per-corner offsets: its materials read the offsets from `MorphTargets`.
+ */
+export function deindexedGeometry(mesh: Mesh, colors = false): BufferGeometry {
   const indices = mesh.indices;
   const corners = Math.floor(indices.length / 3) * 3;
   const gather = <T extends Float32Array | Uint16Array>(source: T, size: number, create: (length: number) => T): T => {
@@ -319,9 +369,17 @@ export function deindexedGeometry(mesh: Mesh): BufferGeometry {
   geometry.setAttribute("position", new BufferAttribute(gather(mesh.positions, 3, floats), 3));
   geometry.setAttribute("normal", new BufferAttribute(gather(mesh.normals, 3, floats), 3));
   const uvNames = ["uv", "uv1", "uv2", "uv3"];
-  mesh.uvs.slice(0, uvNames.length).forEach((set, index) => {
+  mesh.uvs.slice(0, VIEWPORT_UV_SETS).forEach((set, index) => {
     geometry.setAttribute(uvNames[index] ?? "uv", new BufferAttribute(gather(set.values, 2, floats), 2));
   });
+  if (colors && mesh.colors) {
+    const rgb = new Float32Array(corners * 3);
+    for (let corner = 0; corner < corners; corner++) {
+      const vertex = indices[corner] ?? 0;
+      for (let k = 0; k < 3; k++) rgb[corner * 3 + k] = mesh.colors[vertex * 4 + k] ?? 0;
+    }
+    geometry.setAttribute("color", new BufferAttribute(rgb, 3));
+  }
   if (mesh.joints && mesh.weights) {
     geometry.setAttribute(
       "skinIndex",
@@ -336,18 +394,36 @@ export function deindexedGeometry(mesh: Mesh): BufferGeometry {
   for (let corner = 0; corner < corners; corner++) triangle[corner] = Math.floor(corner / 3);
   geometry.setAttribute("triangle", new BufferAttribute(triangle, 1));
   if (mesh.morphTargets.length > 0) {
-    geometry.morphTargetsRelative = true;
-    geometry.morphAttributes.position = mesh.morphTargets.map(
-      (target) => new BufferAttribute(gather(target.positions, 3, floats), 3),
-    );
-    const normals = mesh.morphTargets.map((target) => target.normals);
-    if (normals.every((values) => values !== null)) {
-      geometry.morphAttributes.normal = normals.map(
-        (values) => new BufferAttribute(gather(values ?? new Float32Array(), 3, floats), 3),
-      );
-    }
+    geometry.setAttribute("morphVertex", new BufferAttribute(morphVertexAttribute(indices, corners), 1));
   }
   return geometry;
+}
+
+/**
+ * The shadow pass's depth material for a mesh with morph targets, which poses them as the display does. Before each
+ * draw, three.js copies the map and alpha test of the material it draws onto this one material. It uploads them only
+ * when the program or the material changes, and every group of the mesh draws with this material. So `beforeDraw`,
+ * called after the copy, gives each cutout a program of its own, and every draw without an alpha test shares one.
+ */
+function morphShadowMaterial(morphs: MorphTargets) {
+  const material = new MeshDepthMaterial();
+  morphs.patch(material);
+  const cutouts: { map: Texture | null; alphaTest: number }[] = [];
+  let cutout = -1;
+  const key = material.customProgramCacheKey.bind(material);
+  material.customProgramCacheKey = () => `${key()}|cutout-${cutout}`;
+  const beforeDraw = () => {
+    const { map, alphaTest } = material;
+    let next = -1;
+    if (alphaTest > 0) {
+      next = cutouts.findIndex((entry) => entry.map === map && entry.alphaTest === alphaTest);
+      if (next < 0) next = cutouts.push({ map, alphaTest }) - 1;
+    }
+    if (next === cutout) return;
+    cutout = next;
+    material.needsUpdate = true;
+  };
+  return { material, beforeDraw };
 }
 
 function determinant3(m: Float64Array, offset: number): number {

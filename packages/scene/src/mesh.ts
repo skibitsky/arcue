@@ -15,7 +15,7 @@ export interface MaterialGroup {
 
 export interface MorphTarget {
   name: string;
-  /** The target's weight in the rest pose and in clips that do not animate it, from 0 to 1. */
+  /** The target's weight in the rest pose and in clips that do not animate it, usually from 0 to 1. */
   defaultWeight: number;
   /** Position offsets, three values per rendered vertex. */
   positions: Float32Array;
@@ -65,6 +65,7 @@ export interface Mesh {
   weights: Float32Array | null;
   /** Three rendered vertex indices per triangle. */
   indices: Uint32Array;
+  /** Runs of triangles that draw in one material. Several groups may use the same material. */
   groups: MaterialGroup[];
   morphTargets: MorphTarget[];
   sourceVertex: Uint32Array;

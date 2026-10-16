@@ -8,24 +8,28 @@ import type {
   SceneDescription,
   SceneNode,
   TextureRef,
+  TextureResolver,
+  TextureSampling,
   TextureSlot,
 } from "@arcue/scene";
 import {
   buildNodePaths,
   clipNames,
+  createTextureResolver,
   defaultViewBounds,
   describeParts,
   displayNames,
   frameCountFor,
   isKeyedEveryFrame,
+  MAX_NODE_DEPTH,
   mergeKeyTimes,
+  nestsTooDeep,
   topologyFingerprint,
+  unshownUvSetWarnings,
 } from "@arcue/scene";
 import type { ParsedClip, ParsedFbx, WireMaterial, WireTextureRef } from "./decode";
 import { FbxParseError } from "./decode";
 import { parseFbx } from "./parser";
-import type { TextureResolver } from "./textures";
-import { createTextureResolver } from "./textures";
 import { parserWarnings, rootTransformWarnings } from "./warnings";
 
 function buildNodes(parsed: ParsedFbx): SceneNode[] {
@@ -60,20 +64,24 @@ async function buildMaterials(
   const result: Material[] = [];
   for (const [index, material] of materials.entries()) {
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
+    const missingTextureSampling: Partial<Record<TextureSlot, TextureSampling>> = {};
     const ref = async (wire: WireTextureRef | null | undefined, slot?: TextureSlot): Promise<TextureRef | null> => {
       if (!wire) return null;
-      const texture = await textures.resolve(wire.file, material.name, slot);
-      if (texture === null) {
-        if (slot) missingTextures[slot] = textures.storedPath(wire.file);
-        return null;
-      }
-      return {
-        texture,
+      const sampling: TextureSampling = {
         uvSet: uvSetIndex(meshes, index, wire.uvSet),
         wrapU: wire.wrapU,
         wrapV: wire.wrapV,
         transform: wire.transform,
       };
+      const texture = await textures.resolve(wire.file, material.name, slot);
+      if (texture === null) {
+        if (slot) {
+          missingTextures[slot] = textures.storedPath(wire.file);
+          missingTextureSampling[slot] = sampling;
+        }
+        return null;
+      }
+      return { texture, ...sampling };
     };
     const built: Material = {
       name: material.name,
@@ -93,7 +101,10 @@ async function buildMaterials(
       alphaCutoff: 0.5,
       doubleSided: material.doubleSided,
     };
-    if (Object.keys(missingTextures).length > 0) built.missingTextures = missingTextures;
+    if (Object.keys(missingTextures).length > 0) {
+      built.missingTextures = missingTextures;
+      built.missingTextureSampling = missingTextureSampling;
+    }
     result.push(built);
   }
   return result;
@@ -118,10 +129,16 @@ function buildClips(clips: readonly ParsedClip[], fps: number): Clip[] {
 }
 
 async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<SceneDescription> {
+  const nodes = buildNodes(parsed);
+  if (nestsTooDeep(nodes)) {
+    throw new ArcueError(
+      "invalid-input",
+      `${request.fileName} nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show.`,
+    );
+  }
   const meshes: Mesh[] = parsed.meshes.map((mesh) => ({ ...mesh, topology: topologyFingerprint(mesh) }));
   const textures = createTextureResolver(parsed.textureFiles, request.findFile, request.locateFile);
   const materials = await buildMaterials(parsed.materials, meshes, textures);
-  const nodes = buildNodes(parsed);
   const lodGroups = new Set(parsed.nodes.flatMap((node, index) => (node.lodGroup ? [index] : [])));
   const parts = describeParts(nodes, lodGroups);
   return {
@@ -135,6 +152,7 @@ async function buildScene(parsed: ParsedFbx, request: ImportRequest): Promise<Sc
         ...parserWarnings(parsed.warnings, request.fileName),
         ...rootTransformWarnings(parsed.nodes, parsed.originalSpace),
         ...(await textures.warnings()),
+        ...unshownUvSetWarnings(materials),
       ],
     },
     nodes,

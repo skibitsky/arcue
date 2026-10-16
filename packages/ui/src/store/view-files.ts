@@ -1,5 +1,5 @@
-import type { MemberRole } from "@arcue/protocol";
-import { IMAGE_FILE_EXTENSIONS, joinsByName } from "@arcue/protocol";
+import type { FileRole } from "@arcue/protocol";
+import { IMAGE_FILE_EXTENSIONS, joinsByName, MODEL_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { Clip, TextureSlot } from "@arcue/scene";
 import { fileNameOf } from "@arcue/scene";
 
@@ -11,35 +11,57 @@ export type FileKind = "model" | "image";
  * copies picked and dropped files into the core's in-memory workspace beside the asset first.
  */
 export interface FileHost {
-  /** Shows the host's open dialog and returns paths the core can read, or none when it was cancelled. */
-  pick(kind: FileKind, assetPath: string): Promise<string[]>;
+  /** Shows the host's open dialog and returns what was chosen in it. */
+  pick(kind: FileKind, assetPath: string): Promise<PickedFiles>;
   /** Paths the core can read for files dropped on an asset's tab, in their order. */
   place(files: readonly File[], assetPath: string): Promise<string[]>;
   /** Opens dropped files in new tabs, as a drop on an empty tab does. */
   open(files: readonly File[]): void;
-  /** Removes what `place` made for dropped files that neither open nor join the view. */
+  /** Removes what `place` or `pick` made for files that neither open nor join the view. */
   discard?(files: readonly File[]): void | Promise<void>;
 }
 
-/** A model dropped on a tab that shows a model, waiting for "New tab" or "Add to view". */
+/** The files chosen in a host's open dialog. */
+export interface PickedFiles {
+  /** Paths the core can read, in their order; none when the dialog was cancelled. */
+  paths: string[];
+  /** The chosen files, for `discard`, when the host copied them for the core; none when it reads them in place. */
+  files: readonly File[];
+}
+
+/**
+ * Models waiting for "New tab", "Add to view" or "Add as animation": dropped on a tab that shows a model, or picked in
+ * the open dialog when one of them can join the view in another role than its own.
+ */
 export interface DropPrompt {
   assetId: string;
-  /** The drop point, in pixels from the 3D view's top left corner. */
-  x: number;
-  y: number;
+  /** The drop point, in pixels from the 3D view's top left corner, or null for picked models. */
+  at: { x: number; y: number } | null;
+  /** The dropped or picked files, for "New tab" after a drop, and for `discard` when no model joins the view. */
   files: readonly File[];
   models: readonly DroppedModel[];
 }
 
-/** A dropped model as a path the core can read, with the role it takes in a view, when its inspection gave one. */
+/** A dropped or picked model as a path the core can read, with how it joins a view when the core could tell. */
 export interface DroppedModel {
   path: string;
-  role: Exclude<MemberRole, "attach"> | null;
+  /** The role it takes in a view when nobody names one, or null when the core could not tell. */
+  role: FileRole | null;
+  /** Every role the core lets it take, its own first; none when the core could not tell. */
+  roles: readonly FileRole[];
 }
 
-export type DropChoice = "tab" | "view";
+export type DropChoice = "tab" | "view" | "animation";
 
-const MODEL_EXTENSIONS = [".fbx"];
+/** Whether "Add as animation" would add some model as an animation file that "Add to view" adds otherwise. */
+export function offersAnimation(models: readonly DroppedModel[]): boolean {
+  return models.some((model) => model.role !== "animation" && model.roles.includes("animation"));
+}
+
+/** Whether a model can only join a view as an animation file, as one with clips and no meshes does. */
+export function onlyAnimation(model: DroppedModel): boolean {
+  return model.roles.length > 0 && model.roles.every((role) => role === "animation");
+}
 
 function hasExtension(name: string, extensions: readonly string[]): boolean {
   const lower = name.toLowerCase();
@@ -47,7 +69,7 @@ function hasExtension(name: string, extensions: readonly string[]): boolean {
 }
 
 export function isModelFile(name: string): boolean {
-  return hasExtension(name, MODEL_EXTENSIONS);
+  return hasExtension(name, MODEL_FILE_EXTENSIONS);
 }
 
 export function isImageFile(name: string): boolean {
@@ -96,8 +118,9 @@ export interface ClipGroup {
 }
 
 /**
- * Whether removing an added file takes it out of the view. Files named "<model stem>@<clip>.fbx" beside the model join
- * by their name and are not in the composition file, so they cannot be removed. `file` is relative to the model.
+ * Whether removing an added file takes it out of the view. Model files named "<model stem>@<clip>" beside the model,
+ * such as "Hero@Walk.blend", join by their name and are not in the composition file, so they cannot be removed. `file`
+ * is relative to the model.
  */
 export function removableFromView(file: string, modelName: string): boolean {
   return !(file === fileNameOf(file) && joinsByName(modelName, file));

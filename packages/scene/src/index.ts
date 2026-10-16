@@ -14,20 +14,25 @@ export type {
   AlphaMode,
   Material,
   Texture,
+  TextureAlpha,
+  TextureColorSpace,
   TextureOverride,
   TextureRef,
+  TextureRefKey,
+  TextureSampling,
   TextureSlot,
   UvTransform,
+  VertexColorUse,
   WrapMode,
 } from "./material";
-export { TEXTURE_SLOTS } from "./material";
+export { TEXTURE_REF_KEYS, TEXTURE_REF_NAMES, TEXTURE_SLOT_KEYS, TEXTURE_SLOTS } from "./material";
 export type { MaterialSlot, MaterialSlots, SlotState } from "./material-slots";
 export { materialSlots, missingSlots } from "./material-slots";
 export type { Bounds, Quat, Vec3, Vec4 } from "./math";
 export { boundsOfPoints } from "./math";
 export type { MaterialGroup, Mesh, MorphTarget, SkinWeights, UvSet } from "./mesh";
 export type { NamedNode, NodeKind, SceneNode } from "./node";
-export { buildNodePaths, UNNAMED_NODE } from "./node";
+export { buildNodePaths, MAX_NODE_DEPTH, nestsTooDeep, UNNAMED_NODE } from "./node";
 export type { PartLevel, PartNode, PartRole, PartView, ScenePart } from "./parts";
 export {
   defaultPartView,
@@ -69,6 +74,8 @@ export type {
 export { describeTextureUses, importWarning, importWarningSeverity, SCENE_SPACE } from "./source";
 export type { SubjectRef } from "./subject";
 export { subjectMeshes } from "./subject";
+export type { TextureFile, TextureResolver } from "./textures";
+export { createTextureResolver } from "./textures";
 export {
   frameCountFor,
   frameToSeconds,
@@ -77,4 +84,5 @@ export {
   mergeKeyTimes,
   secondsToFrame,
 } from "./time";
+export { unshownUvSetWarnings, VIEWPORT_UV_SETS } from "./uv-sets";
 export { VertexIndex } from "./vertex-index";

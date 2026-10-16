@@ -62,6 +62,16 @@ describe("posedVertex", () => {
     expect(bulged[1]).toBeCloseTo(2, 6);
   });
 
+  it("counts a morph weight that is not finite as 0", () => {
+    const scene = stripScene();
+    const rest = posed(scene, meshPose(scene, null, 0), 5);
+    for (const weight of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const pose = meshPose(scene, null, 0);
+      pose.morphWeights[0] = weight;
+      expect(posed(scene, pose, 5)).toEqual(rest);
+    }
+  });
+
   it("places a rigid mesh with its node's world matrix", () => {
     const scene = stripScene();
     const mesh = scene.meshes[0];

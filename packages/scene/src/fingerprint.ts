@@ -1,7 +1,11 @@
 export interface TopologyFingerprint {
   sourceVertexCount: number;
   triangleCount: number;
-  /** 64-bit hash, as 16 hex digits, of every triangle's corners in source vertex numbers. */
+  /**
+   * 64-bit hash, as 16 hex digits, of every triangle's corners in source vertex numbers. An importer whose split of a
+   * face follows its vertex positions may hash a split of the same faces that does not, triangle for triangle in the
+   * order the mesh draws them, so that moving a vertex keeps the fingerprint.
+   */
   hash: string;
 }
 
