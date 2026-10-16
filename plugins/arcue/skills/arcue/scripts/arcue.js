@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { $ as ArcueError, A as sameTopology, B as COMPOSITION_FILE_NAME, C as countInRanges, D as parseStoredPath, E as rangesWithin, G as viewStateSchema, H as compositionFileSchema, I as isDefaultPartView, J as LAUNCH_INFO_FILE, K as BRIDGE_INFO_FILE, L as knownPartView, M as describeTextureUses, N as importWarning, O as fileNameOf, P as defaultViewBounds, Q as framedChannel, R as shownByDefault, T as encodeRanges, U as joinsByName, V as IMAGE_FILE_EXTENSIONS, W as memberRoleFor, X as connectBridge, Y as bridgeInfoSchema, Z as launchInfoSchema, _ as settingsSchema, a as queries, c as importRequests, d as withTransfer, et as COMMENT_ID_PATTERN, f as callEach, g as isCommandName, h as commands, i as isQueryName, k as imageMimeType, m as reviewFileSchema, n as portEndpoint, o as importFindFileInputSchema, p as reportListenerError, q as HANDSHAKE_MAX_FRAME_BYTES, r as roundDataSchema, s as importReadFileInputSchema, t as jsonFrameCodec, u as createPeer, v as warningId, w as decodeRanges, x as lastFrame, z as screenshotOwner } from "./arcue-BZ6H3Roo.js";
+import { $ as knownPartView, B as fileNameOf, C as animatesModel, D as memberRoles, E as keysModelBones, F as decodeRanges, G as findNode, H as sameTopology, I as encodeRanges, J as describeTextureUses, K as memberPath, L as rangesWithin, M as lastFrame, O as viewStateSchema, P as countInRanges, Q as isDefaultPartView, R as materialSlots, S as MODEL_FILE_EXTENSIONS, T as joinsByName, V as imageMimeType, W as composeScene, Y as importWarning, _ as settingsSchema, a as queries, at as BRIDGE_INFO_FILE, b as COMPOSITION_FILE_NAME, c as importRequests, ct as bridgeInfoSchema, d as withTransfer, dt as framedChannel, et as shownByDefault, f as callEach, ft as ArcueError, g as isCommandName, h as commands, i as isQueryName, lt as connectBridge, m as reviewFileSchema, n as portEndpoint, nt as TEXTURE_REF_NAMES, o as importFindFileInputSchema, ot as HANDSHAKE_MAX_FRAME_BYTES, p as reportListenerError, pt as COMMENT_ID_PATTERN, q as splitMemberPath, r as roundDataSchema, rt as TEXTURE_SLOTS, s as importReadFileInputSchema, st as LAUNCH_INFO_FILE, t as jsonFrameCodec, tt as TEXTURE_REF_KEYS, u as createPeer, ut as launchInfoSchema, v as warningId, w as compositionFileSchema, x as IMAGE_FILE_EXTENSIONS, y as screenshotOwner, z as parseStoredPath } from "./arcue-it0nt9ub.js";
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -9,679 +9,6 @@ import { fileURLToPath } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import { unwatchFile, watch, watchFile } from "node:fs";
-//#region ../../packages/scene/src/material.ts
-var TEXTURE_SLOTS = [
-	"baseColor",
-	"normal",
-	"roughness",
-	"metalness",
-	"emissive"
-];
-//#endregion
-//#region ../../packages/scene/src/transform.ts
-function composeMatrix({ translation, rotation, scale }) {
-	const [x, y, z, w] = rotation;
-	const [sx, sy, sz] = scale;
-	const x2 = x + x;
-	const y2 = y + y;
-	const z2 = z + z;
-	const xx = x * x2;
-	const xy = x * y2;
-	const xz = x * z2;
-	const yy = y * y2;
-	const yz = y * z2;
-	const zz = z * z2;
-	const wx = w * x2;
-	const wy = w * y2;
-	const wz = w * z2;
-	return Float64Array.of((1 - (yy + zz)) * sx, (xy + wz) * sx, (xz - wy) * sx, 0, (xy - wz) * sy, (1 - (xx + zz)) * sy, (yz + wx) * sy, 0, (xz + wy) * sz, (yz - wx) * sz, (1 - (xx + yy)) * sz, 0, translation[0], translation[1], translation[2], 1);
-}
-function multiplyMatrices(a, b) {
-	const out = /* @__PURE__ */ new Float64Array(16);
-	for (let column = 0; column < 4; column++) for (let row = 0; row < 4; row++) {
-		let sum = 0;
-		for (let k = 0; k < 4; k++) sum += (a[k * 4 + row] ?? 0) * (b[column * 4 + k] ?? 0);
-		out[column * 4 + row] = sum;
-	}
-	return out;
-}
-/** The inverse of an affine matrix; a singular one inverts to the identity. */
-function invertAffine(m) {
-	const at = (index) => m[index] ?? 0;
-	const [a, b, c, d, e, f, g, h, i] = [
-		at(0),
-		at(1),
-		at(2),
-		at(4),
-		at(5),
-		at(6),
-		at(8),
-		at(9),
-		at(10)
-	];
-	const det = a * (e * i - f * h) - d * (b * i - c * h) + g * (b * f - c * e);
-	if (Math.abs(det) < 1e-12) return identityMatrix();
-	const r = 1 / det;
-	const out = /* @__PURE__ */ new Float64Array(16);
-	out[0] = (e * i - f * h) * r;
-	out[1] = (c * h - b * i) * r;
-	out[2] = (b * f - c * e) * r;
-	out[4] = (f * g - d * i) * r;
-	out[5] = (a * i - c * g) * r;
-	out[6] = (c * d - a * f) * r;
-	out[8] = (d * h - e * g) * r;
-	out[9] = (b * g - a * h) * r;
-	out[10] = (a * e - b * d) * r;
-	const [tx, ty, tz] = [
-		at(12),
-		at(13),
-		at(14)
-	];
-	out[12] = -((out[0] ?? 0) * tx + (out[4] ?? 0) * ty + (out[8] ?? 0) * tz);
-	out[13] = -((out[1] ?? 0) * tx + (out[5] ?? 0) * ty + (out[9] ?? 0) * tz);
-	out[14] = -((out[2] ?? 0) * tx + (out[6] ?? 0) * ty + (out[10] ?? 0) * tz);
-	out[15] = 1;
-	return out;
-}
-function identityMatrix() {
-	return Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
-}
-/** Splits an affine matrix into translation, rotation and scale. Shear is lost; a mirror flips the x scale. */
-function decomposeMatrix(m) {
-	const at = (index) => m[index] ?? 0;
-	let sx = Math.hypot(at(0), at(1), at(2));
-	const sy = Math.hypot(at(4), at(5), at(6));
-	const sz = Math.hypot(at(8), at(9), at(10));
-	if (at(0) * (at(5) * at(10) - at(6) * at(9)) - at(4) * (at(1) * at(10) - at(2) * at(9)) + at(8) * (at(1) * at(6) - at(2) * at(5)) < 0) sx = -sx;
-	const ix = sx === 0 ? 0 : 1 / sx;
-	const iy = sy === 0 ? 0 : 1 / sy;
-	const iz = sz === 0 ? 0 : 1 / sz;
-	const m00 = at(0) * ix;
-	const m10 = at(1) * ix;
-	const m20 = at(2) * ix;
-	const m01 = at(4) * iy;
-	const m11 = at(5) * iy;
-	const m21 = at(6) * iy;
-	const m02 = at(8) * iz;
-	const m12 = at(9) * iz;
-	const m22 = at(10) * iz;
-	let rotation;
-	const trace = m00 + m11 + m22;
-	if (trace > 0) {
-		const s = .5 / Math.sqrt(trace + 1);
-		rotation = [
-			(m21 - m12) * s,
-			(m02 - m20) * s,
-			(m10 - m01) * s,
-			.25 / s
-		];
-	} else if (m00 > m11 && m00 > m22) {
-		const s = 2 * Math.sqrt(1 + m00 - m11 - m22);
-		rotation = [
-			.25 * s,
-			(m01 + m10) / s,
-			(m02 + m20) / s,
-			(m21 - m12) / s
-		];
-	} else if (m11 > m22) {
-		const s = 2 * Math.sqrt(1 + m11 - m00 - m22);
-		rotation = [
-			(m01 + m10) / s,
-			.25 * s,
-			(m12 + m21) / s,
-			(m02 - m20) / s
-		];
-	} else {
-		const s = 2 * Math.sqrt(1 + m22 - m00 - m11);
-		rotation = [
-			(m02 + m20) / s,
-			(m12 + m21) / s,
-			.25 * s,
-			(m10 - m01) / s
-		];
-	}
-	const length = Math.hypot(...rotation) || 1;
-	return {
-		translation: [
-			at(12),
-			at(13),
-			at(14)
-		],
-		rotation: [
-			rotation[0] / length,
-			rotation[1] / length,
-			rotation[2] / length,
-			rotation[3] / length
-		],
-		scale: [
-			sx,
-			sy,
-			sz
-		]
-	};
-}
-/** Each node's rest transform in scene space. Parents come before their children, as the scene contract requires. */
-function restWorldMatrices(nodes) {
-	const worlds = [];
-	for (const node of nodes) {
-		const local = composeMatrix(node);
-		const parent = node.parent >= 0 ? worlds[node.parent] : void 0;
-		worlds.push(parent ? multiplyMatrices(parent, local) : local);
-	}
-	return worlds;
-}
-/** The node path or part id of something from another file of a composition. */
-function memberPath(file, path) {
-	return `${file}//${path}`;
-}
-/** The file a node path or part id comes from, null for the model's own, and the path inside that file. */
-function splitMemberPath(path) {
-	for (let index = 0; index < path.length; index++) {
-		const char = path[index];
-		if (char === "\\") index++;
-		else if (char === "/" && path[index + 1] === "/") return {
-			file: path.slice(0, index),
-			path: path.slice(index + 2)
-		};
-	}
-	return {
-		file: null,
-		path
-	};
-}
-var LISTED_NAMES = 5;
-/**
-* One scene from a model and the other files of its composition. The model's nodes, meshes and clips keep their
-* indices and paths. Clips from animation files bind to the model's nodes by name, preferring bones, and bones a
-* clip lacks keep the rest pose. Attached nodes keep their rest placement in scene space, as both files were exported
-* in the same rest frame: under a bone they follow it, otherwise they stay in place. A bone in an attached file that
-* matches a model bone by name is that model bone, so skinned meshes and children of those bones follow the model's
-* skeleton, as Unreal's leader pose does. Nodes and clips from other files take the file as a prefix on their paths
-* and names. The inputs are not changed; typed arrays are shared with them.
-*/
-function composeScene(model, composition) {
-	const builder = new SceneBuilder(model, composition.warnings ?? []);
-	for (const attachment of attachOrder(composition.attach)) builder.attach(attachment);
-	builder.addMemberMeshes();
-	builder.addMemberParts();
-	builder.addClips(composition.animations);
-	builder.hide(composition.hidden);
-	builder.overrideTextures(composition.materials);
-	return builder.build();
-}
-function nodeLookup(nodes) {
-	const byPath = /* @__PURE__ */ new Map();
-	const bones = /* @__PURE__ */ new Map();
-	const others = /* @__PURE__ */ new Map();
-	nodes.forEach((node, index) => {
-		byPath.set(node.path, index);
-		const named = node.kind === "bone" ? bones : others;
-		if (!named.has(node.name)) named.set(node.name, index);
-	});
-	const byName = (name, preferBone) => (preferBone ? bones.get(name) ?? others.get(name) : others.get(name) ?? bones.get(name)) ?? null;
-	return {
-		find: (nameOrPath, preferBone) => byPath.get(nameOrPath) ?? byName(nameOrPath, preferBone),
-		byName,
-		bone: (name) => bones.get(name) ?? null
-	};
-}
-/**
-* A node's index by its path, or else by its name, preferring a bone or another node as asked, as a composition
-* names nodes and bones. Null when nothing matches.
-*/
-function findNode(nodes, nameOrPath, preferBone) {
-	return nodeLookup(nodes).find(nameOrPath, preferBone);
-}
-var SceneBuilder = class {
-	#model;
-	#lookup;
-	#nodes;
-	#meshes;
-	#skeletons;
-	#materials;
-	#textures;
-	#parts;
-	#clips;
-	#warnings;
-	#members = /* @__PURE__ */ new Map();
-	#modelWorlds = null;
-	constructor(model, warnings) {
-		this.#model = model;
-		this.#lookup = nodeLookup(model.nodes);
-		this.#nodes = [...model.nodes];
-		this.#meshes = [...model.meshes];
-		this.#skeletons = [...model.skeletons];
-		this.#materials = [...model.materials];
-		this.#textures = [...model.textures];
-		this.#parts = [...model.parts];
-		this.#clips = [...model.clips];
-		this.#warnings = [...model.source.warnings, ...warnings];
-	}
-	#modelWorld(node) {
-		this.#modelWorlds ??= restWorldMatrices(this.#model.nodes);
-		return this.#modelWorlds[node];
-	}
-	#state(member) {
-		let state = this.#members.get(member.file);
-		if (!state) {
-			state = {
-				member,
-				worlds: restWorldMatrices(member.scene.nodes),
-				nodes: /* @__PURE__ */ new Map(),
-				merged: /* @__PURE__ */ new Set(),
-				meshes: /* @__PURE__ */ new Map(),
-				skeletons: /* @__PURE__ */ new Map(),
-				materialOffset: null
-			};
-			this.#members.set(member.file, state);
-		}
-		return state;
-	}
-	#warn(warning) {
-		this.#warnings.push(warning);
-	}
-	attach({ member, node, bone }) {
-		const state = this.#state(member);
-		const source = member.scene.nodes;
-		let roots;
-		if (node === null) roots = source.flatMap((entry, index) => entry.parent === -1 ? [index] : []);
-		else {
-			const found = nodeLookup(source).find(node, false);
-			if (found === null) {
-				this.#warn(importWarning("node-not-found", {
-					kind: "node",
-					name: node
-				}, `Node not found: ${node}`, member.file));
-				return;
-			}
-			roots = [found];
-		}
-		let parent = -1;
-		if (bone !== null) {
-			const found = this.#lookup.find(bone, true);
-			if (found === null) this.#warn(importWarning("node-not-found", {
-				kind: "node",
-				name: bone
-			}, `Model bone not found: ${bone}`, member.file));
-			else parent = found;
-		}
-		const included = subtree(source, roots);
-		source.forEach((entry, index) => {
-			if (!included[index] || state.nodes.has(index)) return;
-			if (entry.kind === "bone") {
-				const match = this.#lookup.bone(entry.name);
-				if (match !== null) {
-					state.nodes.set(index, match);
-					state.merged.add(index);
-					return;
-				}
-			}
-			const memberParent = state.nodes.get(entry.parent);
-			const placed = entry.parent >= 0 && included[entry.parent] && memberParent !== void 0 ? {
-				parent: memberParent,
-				transform: entry
-			} : {
-				parent,
-				transform: this.#placeUnder(parent, state.worlds[index])
-			};
-			state.nodes.set(index, this.#addNode(member.file, entry, placed.parent, placed.transform));
-		});
-	}
-	addMemberMeshes() {
-		for (const state of this.#members.values()) for (const [index, composed] of [...state.nodes]) {
-			const mesh = state.member.scene.nodes[index]?.mesh ?? null;
-			if (mesh === null || state.merged.has(index)) continue;
-			const meshIndex = this.#addMesh(state, mesh);
-			const target = this.#nodes[composed];
-			if (meshIndex !== null && target) this.#nodes[composed] = {
-				...target,
-				mesh: meshIndex
-			};
-		}
-	}
-	/** A transform that keeps a node at its rest placement in scene space once it hangs under `parent`. */
-	#placeUnder(parent, world) {
-		if (!world) return {
-			translation: [
-				0,
-				0,
-				0
-			],
-			rotation: [
-				0,
-				0,
-				0,
-				1
-			],
-			scale: [
-				1,
-				1,
-				1
-			]
-		};
-		const parentWorld = parent >= 0 ? this.#modelWorld(parent) : void 0;
-		return decomposeMatrix(parentWorld ? multiplyMatrices(invertAffine(parentWorld), world) : world);
-	}
-	#addNode(file, node, parent, transform) {
-		this.#nodes.push({
-			...node,
-			path: memberPath(file, node.path),
-			parent,
-			translation: transform.translation,
-			rotation: transform.rotation,
-			scale: transform.scale,
-			mesh: null
-		});
-		return this.#nodes.length - 1;
-	}
-	#addMesh(state, index) {
-		const mesh = state.member.scene.meshes[index];
-		if (!mesh) return null;
-		const existing = state.meshes.get(index);
-		if (existing !== void 0) return existing;
-		const materialOffset = this.#addMaterials(state);
-		this.#meshes.push({
-			...mesh,
-			skeleton: mesh.skeleton === null ? null : this.#addSkeleton(state, mesh.skeleton),
-			groups: mesh.groups.map((group) => ({
-				...group,
-				material: group.material + materialOffset
-			}))
-		});
-		state.meshes.set(index, this.#meshes.length - 1);
-		return this.#meshes.length - 1;
-	}
-	#addMaterials(state) {
-		if (state.materialOffset !== null) return state.materialOffset;
-		const { materials, textures } = state.member.scene;
-		const textureOffset = this.#textures.length;
-		this.#textures.push(...textures);
-		const moved = (ref) => ref ? {
-			...ref,
-			texture: ref.texture + textureOffset
-		} : null;
-		state.materialOffset = this.#materials.length;
-		for (const material of materials) this.#materials.push({
-			...material,
-			baseColorTexture: moved(material.baseColorTexture),
-			metallicRoughnessTexture: moved(material.metallicRoughnessTexture),
-			roughnessTexture: moved(material.roughnessTexture),
-			metalnessTexture: moved(material.metalnessTexture),
-			normalTexture: moved(material.normalTexture),
-			occlusionTexture: moved(material.occlusionTexture),
-			emissiveTexture: moved(material.emissiveTexture)
-		});
-		return state.materialOffset;
-	}
-	/**
-	* The member's skeleton on composed nodes. A joint is the node it became, the model bone of the same name, or else a
-	* new node held at the joint's rest placement.
-	*/
-	#addSkeleton(state, index) {
-		const skeleton = state.member.scene.skeletons[index];
-		if (!skeleton) return null;
-		const existing = state.skeletons.get(index);
-		if (existing !== void 0) return existing;
-		const joints = skeleton.joints.map((joint) => {
-			const known = state.nodes.get(joint);
-			if (known !== void 0) return known;
-			const node = state.member.scene.nodes[joint];
-			if (!node) return 0;
-			const match = this.#lookup.bone(node.name);
-			const composed = match ?? this.#addNode(state.member.file, node, -1, this.#placeUnder(-1, state.worlds[joint]));
-			state.nodes.set(joint, composed);
-			if (match !== null) state.merged.add(joint);
-			return composed;
-		});
-		this.#skeletons.push({
-			joints,
-			inverseBindMatrices: skeleton.inverseBindMatrices
-		});
-		state.skeletons.set(index, this.#skeletons.length - 1);
-		return this.#skeletons.length - 1;
-	}
-	/** Each attached file's parts, for the meshes that came along, with the file as a prefix on their ids. */
-	addMemberParts() {
-		for (const state of this.#members.values()) {
-			const meshNode = /* @__PURE__ */ new Map();
-			for (const [memberNode, composed] of state.nodes) {
-				const mesh = state.member.scene.nodes[memberNode]?.mesh;
-				if (mesh !== null && mesh !== void 0 && !state.merged.has(memberNode)) meshNode.set(mesh, composed);
-			}
-			for (const part of state.member.scene.parts) {
-				const levels = part.levels.map(({ level, meshes }) => ({
-					level,
-					meshes: meshes.flatMap((mesh) => state.meshes.get(mesh) ?? [])
-				})).filter((level) => level.meshes.length > 0);
-				const own = state.merged.has(part.node) ? void 0 : state.nodes.get(part.node);
-				const firstMesh = part.levels.flatMap((level) => level.meshes).find((mesh) => meshNode.has(mesh));
-				const node = own ?? (firstMesh === void 0 ? void 0 : meshNode.get(firstMesh));
-				if (node === void 0 || levels.length === 0 && part.role !== "socket") continue;
-				this.#parts.push({
-					...part,
-					id: memberPath(state.member.file, part.id),
-					node,
-					levels
-				});
-			}
-		}
-	}
-	/**
-	* Binds each animation file's clips to the model. A clip's name is its name in its file with the file as a prefix,
-	* so adding or removing other files never renames it. Its display name stays its own unless another clip shows
-	* the same, which adds " (2)", " (3)" and so on.
-	*/
-	addClips(animations) {
-		const shown = new Set(this.#clips.map((clip) => clip.displayName));
-		for (const member of animations) for (const clip of member.scene.clips) {
-			const missing = /* @__PURE__ */ new Set();
-			const unmatchedMorphs = /* @__PURE__ */ new Set();
-			const tracks = [];
-			for (const track of clip.tracks) {
-				const node = member.scene.nodes[track.node];
-				if (!node) continue;
-				const target = this.#lookup.byName(node.name, node.kind === "bone");
-				if (target !== null) tracks.push(track.property === "weights" ? this.#morphTrack(member.scene, track, target, unmatchedMorphs) : {
-					...track,
-					node: target
-				});
-				else if (node.kind === "bone") missing.add(node.name);
-			}
-			let displayName = clip.displayName;
-			for (let suffix = 2; shown.has(displayName); suffix++) displayName = `${clip.displayName} (${suffix})`;
-			shown.add(displayName);
-			this.#clips.push({
-				...clip,
-				name: memberPath(member.file, clip.name),
-				displayName,
-				tracks,
-				file: member.file
-			});
-			if (missing.size > 0) this.#warnMissingBones(member.file, clip.name, displayName, [...missing]);
-			if (unmatchedMorphs.size > 0) this.#warn(importWarning("invalid-data", {
-				kind: "clip",
-				name: clip.name
-			}, `Morph targets not matched: ${displayName}`, member.file, { detail: `Missing or ambiguous morph targets: ${[...unmatchedMorphs].join(", ")}` }));
-		}
-	}
-	#morphTrack(source, track, node, unmatched) {
-		const sourceMesh = source.meshes[source.nodes[track.node]?.mesh ?? -1];
-		const targetMesh = this.#model.meshes[this.#model.nodes[node]?.mesh ?? -1];
-		const sourceTargets = sourceMesh?.morphTargets ?? [];
-		const targetTargets = targetMesh?.morphTargets ?? [];
-		const sourceNames = uniqueNames(sourceTargets);
-		const targetNames = uniqueNames(targetTargets);
-		for (const target of sourceTargets) if ((sourceNames.get(target.name) ?? -1) < 0 || (targetNames.get(target.name) ?? -1) < 0) unmatched.add(`${source.nodes[track.node]?.name ?? "(unnamed)"}/${target.name || "(unnamed)"}`);
-		const indices = targetTargets.map((target) => (targetNames.get(target.name) ?? -1) < 0 ? -1 : sourceNames.get(target.name) ?? -1);
-		const values = new Float32Array(track.times.length * targetTargets.length);
-		for (let key = 0; key < track.times.length; key++) targetTargets.forEach((target, index) => {
-			const sourceIndex = indices[index] ?? -1;
-			values[key * targetTargets.length + index] = sourceIndex < 0 ? target.defaultWeight : track.values[key * sourceTargets.length + sourceIndex] ?? target.defaultWeight;
-		});
-		return {
-			...track,
-			node,
-			values
-		};
-	}
-	#warnMissingBones(file, clip, displayName, bones) {
-		const listed = bones.slice(0, LISTED_NAMES).join(", ");
-		const more = bones.length > LISTED_NAMES ? ` and ${bones.length - LISTED_NAMES} more` : "";
-		this.#warn(importWarning("animation-bones-missing", {
-			kind: "clip",
-			name: clip
-		}, `Missing bones: ${displayName}`, file, { detail: `Bones the model lacks: ${listed}${more}` }));
-	}
-	hide(ids) {
-		for (const id of ids) {
-			const index = this.#parts.findIndex((part) => part.id === id);
-			const part = this.#parts[index];
-			if (part) {
-				this.#parts[index] = {
-					...part,
-					hiddenByDefault: true
-				};
-				continue;
-			}
-			const { file } = splitMemberPath(id);
-			this.#warn(importWarning("node-not-found", {
-				kind: "node",
-				name: id
-			}, `Part not found: ${id}`, file ?? void 0));
-		}
-	}
-	/** Puts each slot's texture on the materials of its name. A texture several slots share is added once. */
-	overrideTextures(materials) {
-		const added = /* @__PURE__ */ new Map();
-		const indexOf = (texture) => {
-			let index = added.get(texture);
-			if (index === void 0) {
-				index = this.#textures.push(texture) - 1;
-				added.set(texture, index);
-			}
-			return index;
-		};
-		for (const [name, slots] of Object.entries(materials)) {
-			const targets = this.#materials.flatMap((material, index) => material.name === name ? [index] : []);
-			if (targets.length === 0) {
-				this.#warn(importWarning("material-not-found", {
-					kind: "material",
-					name
-				}, `Material not used by any mesh: ${name}`));
-				continue;
-			}
-			for (const slot of TEXTURE_SLOTS) {
-				const entry = slots[slot];
-				if (!entry) continue;
-				const ref = entry.texture ? {
-					texture: indexOf(entry.texture),
-					uvSet: 0,
-					wrapU: "repeat",
-					wrapV: "repeat",
-					transform: null
-				} : null;
-				for (const target of targets) {
-					const material = this.#materials[target];
-					if (!material) continue;
-					const overrides = {
-						...material.textureOverrides,
-						[slot]: {
-							path: entry.path,
-							found: ref !== null
-						}
-					};
-					this.#materials[target] = {
-						...ref ? withTexture$1(material, slot, ref) : material,
-						textureOverrides: overrides
-					};
-				}
-			}
-		}
-	}
-	build() {
-		return {
-			...this.#model,
-			source: {
-				...this.#model.source,
-				warnings: this.#warnings
-			},
-			nodes: this.#nodes,
-			meshes: this.#meshes,
-			skeletons: this.#skeletons,
-			materials: this.#materials,
-			textures: this.#textures,
-			clips: this.#clips,
-			parts: this.#parts,
-			bounds: defaultViewBounds(this.#meshes, this.#parts)
-		};
-	}
-};
-function uniqueNames(items) {
-	const names = /* @__PURE__ */ new Map();
-	items.forEach(({ name }, index) => {
-		names.set(name, name === "" || names.has(name) ? -1 : index);
-	});
-	return names;
-}
-/**
-* The attachments with each file's node entries before its whole-file entries, files in the order they first appear.
-* A whole-file entry takes every node its file has not placed yet, so an entry for one of its nodes must come first.
-*/
-function attachOrder(attach) {
-	const byFile = /* @__PURE__ */ new Map();
-	for (const attachment of attach) {
-		const entries = byFile.get(attachment.member.file) ?? [];
-		entries.push(attachment);
-		byFile.set(attachment.member.file, entries);
-	}
-	return [...byFile.values()].flatMap((entries) => [...entries.filter((entry) => entry.node !== null), ...entries.filter((entry) => entry.node === null)]);
-}
-/** Marks the roots and everything below them. Parents come before their children. */
-function subtree(nodes, roots) {
-	const included = nodes.map(() => false);
-	for (const root of roots) included[root] = true;
-	nodes.forEach((node, index) => {
-		if (node.parent >= 0 && included[node.parent]) included[index] = true;
-	});
-	return included;
-}
-/** The material with a texture in a slot. Its color factor turns white, so the texture shows as it is. */
-function withTexture$1(material, slot, ref) {
-	switch (slot) {
-		case "baseColor": return {
-			...material,
-			baseColorTexture: ref,
-			baseColor: [
-				1,
-				1,
-				1,
-				material.baseColor[3]
-			]
-		};
-		case "normal": return {
-			...material,
-			normalTexture: ref
-		};
-		case "roughness": return {
-			...material,
-			roughnessTexture: ref
-		};
-		case "metalness": return {
-			...material,
-			metalnessTexture: ref
-		};
-		case "emissive": return {
-			...material,
-			emissiveTexture: ref,
-			emissive: material.emissive.every((value) => value === 0) ? [
-				1,
-				1,
-				1
-			] : material.emissive
-		};
-	}
-}
-//#endregion
 //#region ../../packages/scene/src/geometry.ts
 /** A mesh's triangles in source vertex numbers, three per triangle, for queries against `restPositions`. */
 function sourceIndices(indices, sourceVertex) {
@@ -817,76 +144,6 @@ function closestWeights(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz, out) {
 	const v = vb / sum;
 	const w = vc / sum;
 	return assign(out, 1 - v - w, v, w);
-}
-//#endregion
-//#region ../../packages/scene/src/material-slots.ts
-var REF_KEYS = {
-	baseColor: "baseColorTexture",
-	normal: "normalTexture",
-	roughness: "roughnessTexture",
-	metalness: "metalnessTexture",
-	emissive: "emissiveTexture"
-};
-var STATE_ORDER = {
-	set: 0,
-	missing: 1,
-	empty: 2
-};
-function slotOf(scene, material, slot) {
-	const ref = material[REF_KEYS[slot]];
-	const texture = ref ? scene.textures[ref.texture] : void 0;
-	const shown = texture && ref ? ref.texture : null;
-	const override = material.textureOverrides?.[slot];
-	if (override) return {
-		slot,
-		state: override.found ? "set" : "missing",
-		path: override.path,
-		overridden: true,
-		texture: shown
-	};
-	if (texture) return {
-		slot,
-		state: "set",
-		path: texture.storedPath || texture.name,
-		overridden: false,
-		texture: shown
-	};
-	const missing = material.missingTextures?.[slot];
-	if (missing !== void 0) return {
-		slot,
-		state: "missing",
-		path: missing,
-		overridden: false,
-		texture: null
-	};
-	return {
-		slot,
-		state: "empty",
-		path: null,
-		overridden: false,
-		texture: null
-	};
-}
-/**
-* Each named material once with its texture slots that are set or missing, and always its base color slot, which is
-* where a texture usually goes. Materials that share a name share the composition's textures, so a slot shows the
-* most telling state among them: set, then missing, then empty.
-*/
-function materialSlots(scene) {
-	const byName = /* @__PURE__ */ new Map();
-	for (const material of scene.materials) {
-		if (material.name === "") continue;
-		const slots = TEXTURE_SLOTS.map((slot) => slotOf(scene, material, slot));
-		const known = byName.get(material.name);
-		byName.set(material.name, known ? known.map((slot, index) => {
-			const other = slots[index];
-			return other && STATE_ORDER[other.state] < STATE_ORDER[slot.state] ? other : slot;
-		}) : slots);
-	}
-	return [...byName].map(([material, slots]) => ({
-		material,
-		slots: slots.filter((slot) => slot.state !== "empty" || slot.slot === "baseColor")
-	}));
 }
 //#endregion
 //#region ../../packages/scene/src/vertex-index.ts
@@ -1158,7 +415,8 @@ var USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>]
       Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
       files its composition lists.
-      --clip names a clip by its name in the file, such as "Armature|Walk"; --frame is a whole frame number from 0.
+      --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
+      --frame is a whole frame number from 0.
   arcue inspect <file> [--json]
       Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
       composed with the files its composition lists, as opening it would.
@@ -1379,7 +637,7 @@ async function findGitRoot(path, exists) {
 //#region ../../packages/core/src/composition-file.ts
 /** Extensions of the model files a composition may load. */
 var MODEL_EXTENSIONS = [
-	".fbx",
+	...MODEL_FILE_EXTENSIONS,
 	".glb",
 	".gltf"
 ];
@@ -1387,7 +645,10 @@ function hasExtension(path, extensions) {
 	const lower = path.toLowerCase();
 	return extensions.some((extension) => lower.endsWith(extension));
 }
-/** Files named "<model stem>@<anything>.fbx" join the model as animation files, as in Unity. */
+/**
+* Model files named "<model stem>@<anything>", such as "Hero@Walk.fbx" or "Hero@Walk.blend", join the model as
+* animation files, as in Unity.
+*/
 function isConventionAnimation(modelPath, name) {
 	return joinsByName(basename(modelPath), name);
 }
@@ -1823,7 +1084,7 @@ var Limit = class {
 //#region ../../packages/core/src/composition-load.ts
 var encoder$2 = new TextEncoder();
 /**
-* Reads the model, its composition file and every file the composition names, plus the "<stem>@<clip>.fbx" files
+* Reads the model, its composition file and every file the composition names, plus the "<stem>@<clip>" model files
 * beside the model. The composition's paths are relative to the model's folder. Member files must be model files
 * inside `readRoot` reached without symbolic links. Textures are searched for like an importer's stale paths, starting
 * from the path the composition writes, and each image is read once however many slots use it. A missing model
@@ -1992,12 +1253,52 @@ function versionFile(file, id) {
 	if (file.guid !== void 0) entry.guid = file.guid;
 	return entry;
 }
-/** The warnings of an animation file's own parser that matter for its clips; the rest are about meshes and rest poses. */
+/**
+* The warnings of an animation file's own parser that matter for its clips, besides every warning about a clip: why
+* clips are missing or differ from the file. The rest are about meshes and rest poses.
+*/
 var CLIP_WARNINGS = /* @__PURE__ */ new Set([
 	"clip-not-sampled",
 	"invalid-data",
-	"left-handed-axes"
+	"left-handed-axes",
+	"library-not-loaded"
 ]);
+/**
+* The warnings about an object that constraints or drivers move beyond its keys, which matter only where the object
+* reaches the model.
+*/
+var MOTION_WARNINGS = /* @__PURE__ */ new Set(["constraint-not-evaluated", "driver-not-evaluated"]);
+function mattersForClips(warning, member, model) {
+	if (warning.subject.kind === "clip" || CLIP_WARNINGS.has(warning.code)) return true;
+	if (!MOTION_WARNINGS.has(warning.code) || warning.subject.kind !== "node") return false;
+	return reachesModel(member, warning.subject.name, model);
+}
+/**
+* Whether an animation file's object moves something of the model, whose nodes the file's clips bind to by name: it is
+* an armature with a bone the model has, or the model has an object of its name. A mesh with shape keys counts only
+* when the model's mesh of its name has shape keys too, as its warnings may be about drivers of those shape keys.
+*/
+function reachesModel(member, name, model) {
+	const index = findNode(member.nodes, name, false);
+	if (index === null) return false;
+	const modelBones = new Set(model.nodes.flatMap((node) => node.kind === "bone" ? [node.name] : []));
+	if (bonesUnder(member.nodes, index).some((bone) => modelBones.has(bone))) return true;
+	const match = findNode(model.nodes, member.nodes[index]?.name ?? name, false);
+	return match !== null && (!hasShapeKeys(member, index) || hasShapeKeys(model, match));
+}
+function bonesUnder(nodes, root) {
+	const under = /* @__PURE__ */ new Set([root]);
+	const bones = [];
+	nodes.forEach((node, index) => {
+		if (index <= root || !under.has(node.parent)) return;
+		under.add(index);
+		if (node.kind === "bone") bones.push(node.name);
+	});
+	return bones;
+}
+function hasShapeKeys(scene, node) {
+	return (scene.meshes[scene.nodes[node]?.mesh ?? -1]?.morphTargets.length ?? 0) > 0;
+}
 /**
 * The scene of a version: the model's scene alone, or composed with the other files. `importScene` parses one file,
 * at most `MEMBER_IMPORTS_AT_ONCE` at a time; a member that fails to parse becomes a warning, and a member's own
@@ -2055,7 +1356,7 @@ async function buildAssetScene(files, importScene, options = {}) {
 				scene
 			});
 			const animationOnly = !attached.has(file.path);
-			for (const warning of scene.source.warnings) if (!animationOnly || CLIP_WARNINGS.has(warning.code)) warnings.push({
+			for (const warning of scene.source.warnings) if (!animationOnly || mattersForClips(warning, scene, model)) warnings.push({
 				...warning,
 				file: file.label
 			});
@@ -2528,15 +1829,6 @@ function partsOf(scene) {
 }
 //#endregion
 //#region ../../packages/core/src/inspect.ts
-var TEXTURE_KEY_SLOTS = {
-	baseColorTexture: "baseColor",
-	metallicRoughnessTexture: "metallicRoughness",
-	roughnessTexture: "roughness",
-	metalnessTexture: "metalness",
-	normalTexture: "normal",
-	occlusionTexture: "occlusion",
-	emissiveTexture: "emissive"
-};
 function exporterName(scene) {
 	const exporter = scene.source.exporter;
 	if (!exporter) return null;
@@ -2571,7 +1863,7 @@ function inspectScene(scene, file) {
 			name,
 			path
 		}] : []),
-		materials: scene.materials.map((material) => inspectMaterial(scene, material)),
+		materials: inspectMaterials(scene),
 		textures: inspectTextures(scene),
 		clips: scene.clips.map((clip) => ({
 			name: clip.name,
@@ -2585,13 +1877,30 @@ function inspectScene(scene, file) {
 		warnings: source.warnings
 	};
 }
+/**
+* One entry per material name with the textures of all its copies, since an importer makes a copy of a material for
+* each way a mesh reads it, such as another UV map or vertex colors.
+*/
+function inspectMaterials(scene) {
+	const byName = /* @__PURE__ */ new Map();
+	for (const material of scene.materials) {
+		const inspected = inspectMaterial(scene, material);
+		const known = byName.get(inspected.name);
+		if (!known) {
+			byName.set(inspected.name, inspected);
+			continue;
+		}
+		for (const texture of inspected.textures) if (!known.textures.some((entry) => entry.slot === texture.slot && entry.texture === texture.texture)) known.textures.push(texture);
+	}
+	return [...byName.values()];
+}
 function inspectMaterial(scene, material) {
 	const textures = [];
-	for (const [key, slot] of Object.entries(TEXTURE_KEY_SLOTS)) {
+	for (const key of TEXTURE_REF_KEYS) {
 		const ref = material[key];
 		const texture = ref ? scene.textures[ref.texture] : void 0;
 		if (texture) textures.push({
-			slot,
+			slot: TEXTURE_REF_NAMES[key],
 			texture: texture.name
 		});
 	}
@@ -2919,7 +2228,7 @@ async function rebaseComposition(platform, composition, fromFolder, toFolder) {
 	};
 }
 /**
-* The old model's "<stem>@<clip>.fbx" files that the review names and that would no longer join the model by name.
+* The old model's "<stem>@<clip>" model files that the review names and that would no longer join the model by name.
 * Each maps to the new model's file of the same clip when there is one beside it. Otherwise, while it still exists, it
 * joins as an animation file written from the new model's folder, labelled as that path, as any member file is.
 */
@@ -3146,6 +2455,10 @@ var OpenAsset = class {
 	compositionWatchers = /* @__PURE__ */ new Map();
 	/** Parsed files by path with the id of the bytes they came from, so a reload parses only what changed. */
 	imported = /* @__PURE__ */ new Map();
+	/** The model and the files of its composition, by path, as the version on screen loaded them. */
+	loadedFiles = /* @__PURE__ */ new Set();
+	/** The file `composition.fileRoles` read last, whose parse stays until the next question so adding it reads it once. */
+	asked = null;
 	/** Serializes edits of the composition file. */
 	compositionEdits = new Serial();
 	cancelStabilityCheck = () => void 0;
@@ -3366,11 +2679,11 @@ function renderPrompt({ data, assetPath, roundFolder, exportedAt, partNames = /*
 	return [[
 		`3D review · round ${data.round} · ${count} ${count === 1 ? "comment" : "comments"}`,
 		`Asset: ${assetPath}`,
-		`Version ${data.asset.version.slice(0, 7)}, exported ${exportedAt}`,
+		`Version ${data.asset.version.slice(0, 7)}, saved ${exportedAt}`,
 		...compositionLine(data),
 		`Data and screenshots: ${roundFolder.endsWith("/") ? roundFolder : `${roundFolder}/`}`,
 		`Meters, right-handed, ${up}. Frames count from each clip's first frame (0) at ${formatNumber$1(data.asset.fps)} fps.`,
-		"Vertex numbers follow the file's vertex order, which is Blender's order for Blender exports."
+		"Vertex numbers follow the file's vertex order, which is Blender's order for files from Blender."
 	].join("\n"), ...data.comments.map((comment) => renderComment(comment, partNames))].join("\n\n");
 }
 /**
@@ -3409,8 +2722,15 @@ function renderWarningComment(comment, warning) {
 }
 function timeLabel({ time }) {
 	if (time === null) return "Rest pose";
-	if ("frame" in time) return `Clip "${time.clipDisplayName}", frame ${time.frame}`;
-	return `Clip "${time.clipDisplayName}", frames ${time.frames[0]}–${time.frames[1]}`;
+	if ("frame" in time) {
+		const { sourceFrame } = time;
+		const source = sourceFrame === void 0 || sourceFrame === time.frame ? "" : ` (file frame ${formatNumber$1(sourceFrame)})`;
+		return `Clip "${time.clipDisplayName}", frame ${time.frame}${source}`;
+	}
+	const [first, last] = time.sourceFrames ?? [];
+	const same = first === time.frames[0] && last === time.frames[1];
+	const source = first === void 0 || last === void 0 || same ? "" : ` (file frames ${formatNumber$1(first)}–${formatNumber$1(last)})`;
+	return `Clip "${time.clipDisplayName}", frames ${time.frames[0]}–${time.frames[1]}${source}`;
 }
 function targetLabel({ target }) {
 	if (target === null) return "no surface target";
@@ -3463,34 +2783,70 @@ var DETACH_SHARE = .02;
 var INDEX_MIN_QUERIES = 128;
 /**
 * Moves comment anchors onto a new version of the asset. A mesh whose topology fingerprint matches the one in the
-* comment's `anchorVersion` keeps its vertex and triangle numbers exactly. Otherwise the stored rest positions are
-* mapped onto the new rest pose: a pin to the closest surface point, and a region vertex by vertex to the nearest
-* vertices, tinting the new triangles whose corners all mapped, or failing that the triangles that touch them. A target with no surface within `DETACH_SHARE` of the model's size is detached and keeps its old anchor.
-* In a composition a target moves only onto meshes of its own file, so each file re-anchors on its own, and a target
-* on a file the version does not load stays as it is until the file loads again.
+* comment's `anchorVersion` keeps its vertex and triangle numbers exactly. So does a mesh whose path alone changed, as
+* when its parent object was renamed: the one mesh of the same file with the same name and topology at a path the
+* anchor version did not have. Otherwise the stored rest positions are mapped onto the new rest pose: a pin to the
+* closest surface point, and a region vertex by vertex to the nearest vertices, tinting the new triangles whose
+* corners all mapped, or failing that the triangles that touch them. A target with no surface within `DETACH_SHARE`
+* of the model's size is detached and keeps its old anchor. In a composition a target moves only onto meshes of its
+* own file, so each file re-anchors on its own, and a target on a file the version does not load stays as it is until
+* the file loads again. The part ids a comment's parts view stores follow their meshes' paths the same way, and the
+* ids of LOD group nodes and sockets follow an ancestor whose path changed with its meshes.
 */
 var Reanchorer = class {
 	#versions;
+	/** The versions before this one, newest first. */
+	#earlier;
 	#versionId;
 	#meshes;
+	#paths;
+	/** The meshes by file and name, as a renamed mesh is looked up. */
+	#named = /* @__PURE__ */ new Map();
+	#partIds;
 	/** The files that brought meshes to the version, null for the model's own. */
 	#files;
 	#threshold;
 	#triangles = /* @__PURE__ */ new Map();
 	#vertices = /* @__PURE__ */ new Map();
+	#versionPaths = /* @__PURE__ */ new Map();
+	#movedAncestors = /* @__PURE__ */ new Map();
 	constructor(versions, versionId, scene) {
 		this.#versions = new Map(versions.map((version) => [version.id, version]));
+		this.#earlier = versions.filter((version) => version.id !== versionId).reverse();
 		this.#versionId = versionId;
 		this.#meshes = meshesOf(scene);
+		this.#paths = new Set(this.#meshes.map((entry) => entry.path));
+		for (const entry of this.#meshes) {
+			const key = namedKey(entry.path);
+			const named = this.#named.get(key);
+			if (named) named.push(entry);
+			else this.#named.set(key, [entry]);
+		}
+		this.#partIds = new Set(scene.parts.map((part) => part.id));
 		this.#files = new Set(this.#meshes.map((entry) => splitMemberPath(entry.path).file));
 		this.#threshold = DETACH_SHARE * modelSize(scene);
 	}
 	reanchor(comment) {
+		if (comment.anchorVersion === this.#versionId) return comment;
+		const anchored = this.#reanchorTarget(comment);
+		const parts = comment.parts && this.#renamedParts(comment.parts, comment.anchorVersion);
+		return parts === comment.parts ? anchored : {
+			...anchored,
+			parts
+		};
+	}
+	#reanchorTarget(comment) {
 		const target = comment.target;
-		if (target === null || comment.anchorVersion === this.#versionId) return comment;
+		if (target === null) return comment;
 		const samePath = this.#meshes.find((entry) => entry.path === target.mesh) ?? null;
-		const previous = this.#versions.get(comment.anchorVersion)?.meshes.find((mesh) => mesh.mesh === target.mesh);
+		const anchorVersion = this.#versions.get(comment.anchorVersion);
+		const previous = anchorVersion?.meshes.find((mesh) => mesh.mesh === target.mesh);
 		if (samePath && previous && sameTopology(previous.topology, samePath.mesh.topology)) return this.#anchored(comment, samePath, target, "exact");
+		const renamed = anchorVersion ? this.#renamed(target.mesh, anchorVersion) : null;
+		if (renamed) return this.#anchored(comment, renamed, {
+			...target,
+			mesh: renamed.path
+		}, "exact");
 		const file = splitMemberPath(target.mesh).file;
 		if (file !== null && !this.#files.has(file)) return comment;
 		const candidates = samePath ? [samePath] : this.#meshes.filter((entry) => splitMemberPath(entry.path).file === file);
@@ -3500,6 +2856,93 @@ var Reanchorer = class {
 			anchorState: "detached"
 		};
 		return this.#anchored(comment, moved.entry, moved.target, "moved");
+	}
+	/**
+	* The mesh that a mesh of an earlier version became when only its path changed: the one mesh of the same file with
+	* the same name and topology at a path that version did not have. Null while a mesh still has the path.
+	*/
+	#renamed(path, version) {
+		if (this.#paths.has(path)) return null;
+		const before = version.meshes.find((mesh) => mesh.mesh === path);
+		if (!before) return null;
+		const earlier = this.#pathsOf(version);
+		const found = (this.#named.get(namedKey(path)) ?? []).filter((entry) => !earlier.has(entry.path) && sameTopology(before.topology, entry.mesh.topology));
+		return found.length === 1 ? found[0] ?? null : null;
+	}
+	#pathsOf(version) {
+		let paths = this.#versionPaths.get(version.id);
+		if (!paths) {
+			paths = new Set(version.meshes.map((mesh) => mesh.mesh));
+			this.#versionPaths.set(version.id, paths);
+		}
+		return paths;
+	}
+	/**
+	* The ancestors whose path changed since an earlier version, old path to new, as the paths of its renamed meshes
+	* show. An ancestor counts when its meshes agree on its new path, no mesh of that version was under the new path,
+	* and no mesh of this version is under the old one.
+	*/
+	#ancestorsMovedSince(version) {
+		const known = this.#movedAncestors.get(version.id);
+		if (known) return known;
+		const found = /* @__PURE__ */ new Map();
+		for (const { mesh: path } of version.meshes) {
+			const renamed = this.#renamed(path, version);
+			const moved = renamed && movedAncestor(path, renamed.path);
+			if (!moved) continue;
+			const seen = found.get(moved.from);
+			found.set(moved.from, seen === void 0 || seen === moved.to ? moved.to : null);
+		}
+		const under = (paths, ancestor) => [...paths].some((path) => path.startsWith(`${ancestor}/`));
+		const moved = /* @__PURE__ */ new Map();
+		for (const [from, to] of found) if (to !== null && !under(this.#pathsOf(version), to) && !under(this.#paths, from)) moved.set(from, to);
+		this.#movedAncestors.set(version.id, moved);
+		return moved;
+	}
+	/**
+	* The part id an id of an earlier version became: the path its mesh moved to, as a target moves, or else its path
+	* under the new path of an ancestor that moved. Null when the version gives no part of this one.
+	*/
+	#renamedPart(id, version) {
+		const mesh = this.#renamed(id, version)?.path;
+		if (mesh !== void 0 && this.#partIds.has(mesh)) return mesh;
+		let best = null;
+		let longest = -1;
+		for (const [from, to] of this.#ancestorsMovedSince(version)) {
+			if (from.length <= longest || !id.startsWith(`${from}/`)) continue;
+			const renamed = to + id.slice(from.length);
+			if (!this.#partIds.has(renamed)) continue;
+			best = renamed;
+			longest = from.length;
+		}
+		return best;
+	}
+	/**
+	* A stored parts view with each part id this version lacks moved to the part it became, looked up in the anchor
+	* version and then in each earlier version, newest first. The view itself when nothing moved.
+	*/
+	#renamedParts(view, anchorVersion) {
+		const anchor = this.#versions.get(anchorVersion);
+		const versions = anchor ? [anchor, ...this.#earlier.filter((version) => version !== anchor)] : this.#earlier;
+		let changed = false;
+		const rename = (id) => {
+			if (this.#partIds.has(id)) return id;
+			for (const version of versions) {
+				const renamed = this.#renamedPart(id, version);
+				if (renamed === null) continue;
+				changed = true;
+				return renamed;
+			}
+			return id;
+		};
+		const renameAll = (ids) => [...new Set(ids.map(rename))].sort();
+		const next = {
+			...view,
+			hidden: renameAll(view.hidden),
+			shown: renameAll(view.shown),
+			isolated: view.isolated === null ? null : rename(view.isolated)
+		};
+		return changed ? next : view;
 	}
 	#anchored(comment, entry, target, state) {
 		return {
@@ -3595,6 +3038,25 @@ var Reanchorer = class {
 		};
 	}
 };
+var SEPARATOR = /(?<!\\)\//;
+function namedKey(path) {
+	return `${splitMemberPath(path).file ?? ""}\n${nameInPath(path)}`;
+}
+/**
+* The ancestor whose path changed between two paths of one mesh: what is left of each once the segments they end in
+* alike are taken off. Null when they end in nothing alike, or when one has nothing left.
+*/
+function movedAncestor(before, after) {
+	const from = before.split(SEPARATOR);
+	const to = after.split(SEPARATOR);
+	let same = 0;
+	while (same < from.length && same < to.length && from[from.length - 1 - same] === to[to.length - 1 - same]) same++;
+	if (same === 0 || same === from.length || same === to.length) return null;
+	return {
+		from: from.slice(0, -same).join("/"),
+		to: to.slice(0, -same).join("/")
+	};
+}
 //#endregion
 //#region ../../packages/core/src/registry.ts
 var IN_PROCESS = {
@@ -4104,8 +3566,10 @@ function roundComment(comment, number, scene, convention) {
 function roundTime(comment, scene) {
 	const time = comment.time;
 	if (time.kind === "none") return null;
-	const fps = findClip(scene, time.clip)?.fps ?? scene.source.fps;
+	const found = findClip(scene, time.clip);
+	const fps = found?.fps ?? scene.source.fps;
 	const seconds = (frame) => Math.round(frame / fps * 1e3) / 1e3;
+	const start = found?.sourceStartFrame;
 	const clip = {
 		clip: time.clip,
 		clipDisplayName: time.clipDisplayName
@@ -4113,12 +3577,14 @@ function roundTime(comment, scene) {
 	if (time.kind === "frame") return {
 		...clip,
 		frame: time.frame,
-		seconds: seconds(time.frame)
+		seconds: seconds(time.frame),
+		...start === void 0 ? {} : { sourceFrame: start + time.frame }
 	};
 	return {
 		...clip,
 		frames: [time.start, time.end],
-		seconds: [seconds(time.start), seconds(time.end)]
+		seconds: [seconds(time.start), seconds(time.end)],
+		...start === void 0 ? {} : { sourceFrames: [start + time.start, start + time.end] }
 	};
 }
 function mean(points) {
@@ -4382,7 +3848,7 @@ var ArcueCore = class ArcueCore {
 		})) })), registry.handleQuery("settings.get", () => this.#settings.current), registry.handleQuery("warning.list", (args) => ({ warnings: this.#warnings(this.#asset(args.assetId)) })), registry.handleQuery("warning.prompt", (args) => {
 			const asset = this.#asset(args.assetId);
 			return { prompt: warningPrompt(asset.path, this.#warnings(asset)) };
-		}), registry.handleQuery("asset.inspect", (args) => this.#track(this.#inspect(args.path))), registry.handleQuery("comment.screenshot", async (args) => {
+		}), registry.handleQuery("asset.inspect", (args) => this.#track(this.#inspect(args.path))), registry.handleQuery("composition.fileRoles", (args) => this.#compositionFileRoles(args)), registry.handleQuery("comment.screenshot", async (args) => {
 			const asset = this.#asset(args.assetId);
 			await checkReviewPath(this.#platform, asset.location, asset.location.folder);
 			const comment = findComment(asset.session.review, args.commentId);
@@ -4925,6 +4391,7 @@ var ArcueCore = class ArcueCore {
 						asset.error = null;
 						const kept = /* @__PURE__ */ new Set([asset.path, ...files.members.keys()]);
 						for (const path of asset.imported.keys()) if (!kept.has(path)) asset.imported.delete(path);
+						asset.loadedFiles = kept;
 					}
 				};
 			});
@@ -5096,7 +4563,7 @@ var ArcueCore = class ArcueCore {
 			const bone = args.bone;
 			const model = asset.imported.get(asset.path)?.scene;
 			if (bone !== void 0 && model && !model.nodes.some((node) => node.name === bone || node.path === bone)) throw new ArcueError("invalid-input", `${asset.name} has no bone "${bone}".`);
-			const role = args.role ?? await this.#roleOf(asset, path);
+			const role = args.role ?? (await this.#rolesOf(asset, path)).role;
 			return {
 				...await this.#editComposition(asset, (composition, same) => withMember(composition, {
 					file: written,
@@ -5108,8 +4575,21 @@ var ArcueCore = class ArcueCore {
 			};
 		});
 	}
-	/** How a file joins the view when the caller names no role, from what the file holds. */
-	async #roleOf(asset, path) {
+	#compositionFileRoles(args) {
+		const asset = this.#asset(args.assetId);
+		return this.#inCompositionLine(asset, async () => {
+			const { path } = await this.#newCompositionFile(asset, args.file, MODEL_EXTENSIONS);
+			if (path === asset.path) throw new ArcueError("invalid-input", `${asset.name} is the model itself.`);
+			const earlier = asset.asked;
+			if (earlier !== null && earlier !== path && earlier !== asset.path) await asset.loads.run(async () => {
+				if (!asset.loadedFiles.has(earlier)) asset.imported.delete(earlier);
+			});
+			asset.asked = path;
+			return this.#rolesOf(asset, path);
+		});
+	}
+	/** How a file joins the view when the caller names no role, and the roles a caller may name for it. */
+	async #rolesOf(asset, path) {
 		const bytes = await this.#platform.readFile(path);
 		const scene = await this.#importFile(asset, {
 			path,
@@ -5118,12 +4598,19 @@ var ArcueCore = class ArcueCore {
 			id: versionIdOf(bytes),
 			problem: null
 		});
-		const role = memberRoleFor({
+		const model = asset.imported.get(asset.path)?.scene ?? asset.scene ?? {
+			nodes: [],
+			meshes: [],
+			parts: []
+		};
+		const roles = memberRoles({
 			meshes: scene.meshes.length,
-			clips: scene.clips.length
+			clips: scene.clips.length,
+			keysModelBones: keysModelBones(scene, model),
+			animatesModel: animatesModel(scene, model)
 		});
-		if (role === null) throw new ArcueError("invalid-input", `${basename(path)} has no meshes or clips.`);
-		return role;
+		if (roles === null) throw new ArcueError("invalid-input", `${basename(path)} has no meshes or clips.`);
+		return roles;
 	}
 	#removeCompositionFile(args) {
 		const asset = this.#asset(args.assetId);
@@ -6033,6 +5520,7 @@ async function inspectFile(nativePath, options) {
 }
 var FORMAT_NAMES = {
 	fbx: "FBX",
+	blend: ".blend",
 	gltf: "glTF",
 	glb: "GLB"
 };

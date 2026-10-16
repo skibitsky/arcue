@@ -6153,202 +6153,37 @@ function firstMessage(channel, timeout) {
 	});
 }
 //#endregion
-//#region ../../packages/protocol/src/view-state.ts
-var displayModeSchema = _enum([
-	"lit",
-	"clay",
-	"wireframe"
-]);
-/** A part's stable id: the node path of its mesh, LOD group or socket, as `ScenePart.id` gives it. */
-var partIdSchema = string().min(1);
-/**
-* Which parts a view shows. `hidden` and `shown` list only parts whose visibility differs from their default: models
-* show and collision helpers hide by default. An isolated part is the only part shown. `lod` picks the LOD level; a
-* part without that level shows its nearest lower one.
-*/
-var partViewSchema = object({
-	hidden: array(partIdSchema),
-	shown: array(partIdSchema),
-	isolated: partIdSchema.nullable(),
-	lod: indexSchema
-});
-/** What a window shows for one asset. The core keeps the latest report so a window can be rebuilt after a crash. */
-var viewStateSchema = object({
-	camera: cameraAnchorSchema,
-	/** The clip's name in the file, or null for the rest pose. */
-	clip: string().min(1).nullable(),
-	frame: indexSchema,
-	range: frameRangeSchema.nullable(),
-	display: object({
-		mode: displayModeSchema,
-		skeleton: boolean()
-	}),
-	parts: partViewSchema.default(() => ({
-		hidden: [],
-		shown: [],
-		isolated: null,
-		lod: 0
-	})),
-	/** The outline drawer is open. It shows only for models with parts or added files to list. */
-	outlineOpen: boolean().default(false),
-	/** The person dismissed the offer to continue an earlier review, so the tab never offers one again. */
-	relinkOfferDismissed: boolean().optional()
-});
-//#endregion
-//#region ../../packages/protocol/src/composition.ts
-/** The name of a model's composition file, which lives in the model's review folder. */
-var COMPOSITION_FILE_NAME = "composition.json";
-/** Extensions of the images a composition may name and an importer may read beside a model. */
-var IMAGE_FILE_EXTENSIONS = [
-	".png",
-	".jpg",
-	".jpeg",
-	".tga",
-	".tif",
-	".tiff",
-	".bmp",
-	".dds",
-	".exr",
-	".hdr",
-	".webp"
-];
-/** How a file joins a model's view: its clips, its nodes on a bone, or its nodes in place. */
-var memberRoleSchema = _enum([
-	"animation",
-	"attach",
-	"set"
-]);
-/**
-* How a file joins a model's view when nobody names its role: a file with clips and no meshes is an animation file;
-* any other file with meshes comes along in place, its bones merging into the model's bones of the same name, so a
-* skinned mesh binds to the model's rig. Null for a file with neither.
-*/
-function memberRoleFor(content) {
-	if (content.meshes > 0) return "set";
-	return content.clips > 0 ? "animation" : null;
-}
-/** Whether a file beside the model joins it by its name, "<model stem>@<anything>.fbx", rather than through the composition. */
-function joinsByName(modelName, fileName) {
-	const dot = modelName.lastIndexOf(".");
-	const prefix = `${dot > 0 ? modelName.slice(0, dot) : modelName}@`;
-	return fileName.startsWith(prefix) && fileName.length > prefix.length && fileName.toLowerCase().endsWith(".fbx");
-}
-function isRelativeFile(path) {
-	if (path.includes("\\") || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
-	return path.split("/").every((segment) => segment !== "");
-}
-/** A path relative to the model's folder with "/" separators, such as "Shells.fbx" or "../Textures/Rock.png". */
-var relativeFileSchema = string().min(1).refine(isRelativeFile, { message: "Use a path relative to the model's folder, with \"/\" separators." });
-var textureSlotSchema = _enum([
+//#region ../../packages/scene/src/material.ts
+var TEXTURE_SLOTS = [
 	"baseColor",
 	"normal",
 	"roughness",
 	"metalness",
 	"emissive"
-]);
-var compositionAttachSchema = strictObject({
-	file: relativeFileSchema,
-	/** A node's name or path in the file, which brings its children along. Without it the whole file comes along. */
-	node: string().min(1).optional(),
-	/** A bone's name in the model that the nodes follow. Without it they stay in place, as a set piece. */
-	bone: string().min(1).optional()
-});
-/** Textures by slot, relative to the model's folder. They replace what the model's files say. */
-var materialTexturesSchema = strictObject({
-	baseColor: relativeFileSchema.optional(),
-	normal: relativeFileSchema.optional(),
-	roughness: relativeFileSchema.optional(),
-	metalness: relativeFileSchema.optional(),
-	emissive: relativeFileSchema.optional()
-});
+];
 /**
-* A model's composition file: the other files that complete its view, as game pipelines spread one asset over several
-* files. It is `composition.json` in the model's review folder, so its place names the model, and opening the model
-* applies it. Every path is relative to the model's folder. Parts and anchors from the other files carry the file as a
-* prefix on their node paths: "Shells.fbx//Boulder1".
+* Each of Material's texture references with the name of the property it feeds, as `asset.inspect` reports it. Its
+* type requires every key, so a texture reference added to Material without an entry here does not compile.
 */
-var compositionFileSchema = strictObject({
-	version: literal(1),
-	/** Files whose clips bind to the model's bones by name. */
-	animations: array(relativeFileSchema).optional(),
-	/** Files, or nodes in them, that follow a bone of the model or stay in place. */
-	attach: array(compositionAttachSchema).optional(),
-	/** Textures by material slot name. */
-	materials: record(string().min(1), materialTexturesSchema).optional(),
-	/** Part ids hidden until someone shows them, such as the second of two alternative bodies. */
-	hidden: array(partIdSchema).optional()
-}).superRefine((composition, ctx) => {
-	const issue = (message, path) => ctx.addIssue({
-		code: "custom",
-		message,
-		path
-	});
-	const seen = (list, what, key) => {
-		const found = /* @__PURE__ */ new Set();
-		list.forEach((entry, index) => {
-			if (found.has(entry)) issue(`${what} ${entry} is listed twice.`, [key, index]);
-			found.add(entry);
-		});
-	};
-	seen(composition.animations ?? [], "Animation file", "animations");
-	seen((composition.attach ?? []).map((entry) => entry.node === void 0 ? entry.file : `${entry.file}, node ${entry.node},`), "Attached", "attach");
-	seen(composition.hidden ?? [], "Part", "hidden");
-});
-//#endregion
-//#region ../../packages/protocol/src/context.ts
-/**
-* The layouts of a comment's stored screenshot, each named after a comment id, which `screenshotOwner` returns. The
-* comment schema also checks that it is the comment's own id.
-*/
-var SCREENSHOT_PATH = new RegExp(`^(?:screenshots/(${COMMENT_ID_PATTERN})(?:-[1-9]\\d*)?|rounds/round-[1-9]\\d*/(${COMMENT_ID_PATTERN}))\\.png$`);
-/** The comment id a screenshot path is named after, or undefined when the path is not one of the layouts. */
-function screenshotOwner(path) {
-	const match = SCREENSHOT_PATH.exec(path);
-	return match?.[1] ?? match?.[2];
-}
-var boneShareSchema = object({
-	name: string(),
-	/** Share of the target's skin weight, from 0 to 1. */
-	share: number().min(0).max(1)
-});
-/** A joint's world position. `path` is its node path, which stays unique when joint names repeat. */
-var jointPositionSchema = object({
-	name: string(),
-	path: string().min(1),
-	position: vec3Schema
-});
-/**
-* Facts computed when a comment is made and stored with it, so history stays accurate after the file changes.
-* Positions are in scene space. Comments without a surface target have no bones, centroid or vertices.
-* A range comment's posed positions and joints are taken at the range's start frame.
-*/
-var commentContextSchema = object({
-	vertexCount: indexSchema,
-	bones: array(boneShareSchema),
-	centroid: object({
-		rest: vec3Schema,
-		posed: vec3Schema
-	}).nullable(),
-	/** The joints that move the target, at the comment's time. */
-	joints: array(jointPositionSchema),
-	/** Plain words for the camera direction, such as "palm side, slightly below". */
-	viewLabel: string(),
-	/**
-	* Screenshot path relative to the asset's review folder, in one of the layouts the core writes:
-	* `screenshots/<id>.png`, `screenshots/<id>-<k>.png` for a replaced screenshot, or `rounds/round-<r>/<id>.png`.
-	*/
-	screenshot: string().regex(SCREENSHOT_PATH).nullable()
-});
-/** What the 3D view computes; the core adds the screenshot path when it saves the image. */
-var computedContextSchema = commentContextSchema.omit({ screenshot: true });
-//#endregion
-//#region ../../packages/protocol/src/definitions.ts
-function command(definition) {
-	return definition;
-}
-function query(definition) {
-	return definition;
-}
+var TEXTURE_REF_NAMES = {
+	baseColorTexture: "baseColor",
+	metallicRoughnessTexture: "metallicRoughness",
+	roughnessTexture: "roughness",
+	metalnessTexture: "metalness",
+	normalTexture: "normal",
+	occlusionTexture: "occlusion",
+	emissiveTexture: "emissive"
+};
+/** Every key of Material that holds a TextureRef. */
+var TEXTURE_REF_KEYS = Object.keys(TEXTURE_REF_NAMES);
+/** The key of Material that holds each slot's texture. */
+var TEXTURE_SLOT_KEYS = {
+	baseColor: "baseColorTexture",
+	normal: "normalTexture",
+	roughness: "roughnessTexture",
+	metalness: "metalnessTexture",
+	emissive: "emissiveTexture"
+};
 //#endregion
 //#region ../../packages/scene/src/math.ts
 /** Bounds of xyz triples; a zero box at the origin when there are no points. */
@@ -6645,7 +6480,16 @@ var importWarningSeverity = {
 	"model-not-found": "error",
 	"composition-not-loaded": "error",
 	"node-not-found": "error",
-	"material-not-found": "warning"
+	"material-not-found": "warning",
+	"modifier-not-applied": "warning",
+	"constraint-not-evaluated": "warning",
+	"driver-not-evaluated": "warning",
+	"curve-modifier-not-applied": "warning",
+	"action-layer-not-played": "warning",
+	"deform-approximated": "warning",
+	"object-not-shown": "warning",
+	"library-not-loaded": "error",
+	"material-approximated": "warning"
 };
 function importWarning(code, subject, message, file, extra = {}) {
 	const warning = {
@@ -6660,6 +6504,683 @@ function importWarning(code, subject, message, file, extra = {}) {
 	if (extra.foundPath !== void 0) warning.foundPath = extra.foundPath;
 	if (extra.uses !== void 0 && extra.uses.length > 0) warning.uses = extra.uses.map((use) => ({ ...use }));
 	return warning;
+}
+//#endregion
+//#region ../../packages/scene/src/transform.ts
+function composeMatrix({ translation, rotation, scale }) {
+	const [x, y, z, w] = rotation;
+	const [sx, sy, sz] = scale;
+	const x2 = x + x;
+	const y2 = y + y;
+	const z2 = z + z;
+	const xx = x * x2;
+	const xy = x * y2;
+	const xz = x * z2;
+	const yy = y * y2;
+	const yz = y * z2;
+	const zz = z * z2;
+	const wx = w * x2;
+	const wy = w * y2;
+	const wz = w * z2;
+	return Float64Array.of((1 - (yy + zz)) * sx, (xy + wz) * sx, (xz - wy) * sx, 0, (xy - wz) * sy, (1 - (xx + zz)) * sy, (yz + wx) * sy, 0, (xz + wy) * sz, (yz - wx) * sz, (1 - (xx + yy)) * sz, 0, translation[0], translation[1], translation[2], 1);
+}
+function multiplyMatrices(a, b) {
+	const out = /* @__PURE__ */ new Float64Array(16);
+	for (let column = 0; column < 4; column++) for (let row = 0; row < 4; row++) {
+		let sum = 0;
+		for (let k = 0; k < 4; k++) sum += (a[k * 4 + row] ?? 0) * (b[column * 4 + k] ?? 0);
+		out[column * 4 + row] = sum;
+	}
+	return out;
+}
+/** The inverse of an affine matrix; a singular one inverts to the identity. */
+function invertAffine(m) {
+	const at = (index) => m[index] ?? 0;
+	const [a, b, c, d, e, f, g, h, i] = [
+		at(0),
+		at(1),
+		at(2),
+		at(4),
+		at(5),
+		at(6),
+		at(8),
+		at(9),
+		at(10)
+	];
+	const det = a * (e * i - f * h) - d * (b * i - c * h) + g * (b * f - c * e);
+	if (Math.abs(det) < 1e-12) return identityMatrix();
+	const r = 1 / det;
+	const out = /* @__PURE__ */ new Float64Array(16);
+	out[0] = (e * i - f * h) * r;
+	out[1] = (c * h - b * i) * r;
+	out[2] = (b * f - c * e) * r;
+	out[4] = (f * g - d * i) * r;
+	out[5] = (a * i - c * g) * r;
+	out[6] = (c * d - a * f) * r;
+	out[8] = (d * h - e * g) * r;
+	out[9] = (b * g - a * h) * r;
+	out[10] = (a * e - b * d) * r;
+	const [tx, ty, tz] = [
+		at(12),
+		at(13),
+		at(14)
+	];
+	out[12] = -((out[0] ?? 0) * tx + (out[4] ?? 0) * ty + (out[8] ?? 0) * tz);
+	out[13] = -((out[1] ?? 0) * tx + (out[5] ?? 0) * ty + (out[9] ?? 0) * tz);
+	out[14] = -((out[2] ?? 0) * tx + (out[6] ?? 0) * ty + (out[10] ?? 0) * tz);
+	out[15] = 1;
+	return out;
+}
+function identityMatrix() {
+	return Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+}
+/** Splits an affine matrix into translation, rotation and scale. Shear is lost; a mirror flips the x scale. */
+function decomposeMatrix(m) {
+	const at = (index) => m[index] ?? 0;
+	let sx = Math.hypot(at(0), at(1), at(2));
+	const sy = Math.hypot(at(4), at(5), at(6));
+	const sz = Math.hypot(at(8), at(9), at(10));
+	if (at(0) * (at(5) * at(10) - at(6) * at(9)) - at(4) * (at(1) * at(10) - at(2) * at(9)) + at(8) * (at(1) * at(6) - at(2) * at(5)) < 0) sx = -sx;
+	const ix = sx === 0 ? 0 : 1 / sx;
+	const iy = sy === 0 ? 0 : 1 / sy;
+	const iz = sz === 0 ? 0 : 1 / sz;
+	const m00 = at(0) * ix;
+	const m10 = at(1) * ix;
+	const m20 = at(2) * ix;
+	const m01 = at(4) * iy;
+	const m11 = at(5) * iy;
+	const m21 = at(6) * iy;
+	const m02 = at(8) * iz;
+	const m12 = at(9) * iz;
+	const m22 = at(10) * iz;
+	let rotation;
+	const trace = m00 + m11 + m22;
+	if (trace > 0) {
+		const s = .5 / Math.sqrt(trace + 1);
+		rotation = [
+			(m21 - m12) * s,
+			(m02 - m20) * s,
+			(m10 - m01) * s,
+			.25 / s
+		];
+	} else if (m00 > m11 && m00 > m22) {
+		const s = 2 * Math.sqrt(1 + m00 - m11 - m22);
+		rotation = [
+			.25 * s,
+			(m01 + m10) / s,
+			(m02 + m20) / s,
+			(m21 - m12) / s
+		];
+	} else if (m11 > m22) {
+		const s = 2 * Math.sqrt(1 + m11 - m00 - m22);
+		rotation = [
+			(m01 + m10) / s,
+			.25 * s,
+			(m12 + m21) / s,
+			(m02 - m20) / s
+		];
+	} else {
+		const s = 2 * Math.sqrt(1 + m22 - m00 - m11);
+		rotation = [
+			(m02 + m20) / s,
+			(m12 + m21) / s,
+			.25 * s,
+			(m10 - m01) / s
+		];
+	}
+	const length = Math.hypot(...rotation) || 1;
+	return {
+		translation: [
+			at(12),
+			at(13),
+			at(14)
+		],
+		rotation: [
+			rotation[0] / length,
+			rotation[1] / length,
+			rotation[2] / length,
+			rotation[3] / length
+		],
+		scale: [
+			sx,
+			sy,
+			sz
+		]
+	};
+}
+/** Each node's rest transform in scene space. Parents come before their children, as the scene contract requires. */
+function restWorldMatrices(nodes) {
+	const worlds = [];
+	for (const node of nodes) {
+		const local = composeMatrix(node);
+		const parent = node.parent >= 0 ? worlds[node.parent] : void 0;
+		worlds.push(parent ? multiplyMatrices(parent, local) : local);
+	}
+	return worlds;
+}
+/** The node path or part id of something from another file of a composition. */
+function memberPath(file, path) {
+	return `${file}//${path}`;
+}
+/** The file a node path or part id comes from, null for the model's own, and the path inside that file. */
+function splitMemberPath(path) {
+	for (let index = 0; index < path.length; index++) {
+		const char = path[index];
+		if (char === "\\") index++;
+		else if (char === "/" && path[index + 1] === "/") return {
+			file: path.slice(0, index),
+			path: path.slice(index + 2)
+		};
+	}
+	return {
+		file: null,
+		path
+	};
+}
+var LISTED_NAMES = 5;
+/**
+* One scene from a model and the other files of its composition. The model's nodes, meshes and clips keep their
+* indices and paths. Clips from animation files bind to the model's nodes by name, preferring bones, without the
+* tracks that only hold their file's pose, and bones a clip lacks keep the rest pose. Attached nodes keep their rest
+* placement in scene space, as both files were exported in the same rest frame: under a bone they follow it,
+* otherwise they stay in place. A bone in an attached file that matches a model bone by name is that model bone, so
+* skinned meshes and children of those bones follow the model's skeleton, as Unreal's leader pose does. Nodes and
+* clips from other files take the file as a prefix on their paths and names. The inputs are not changed; typed arrays
+* are shared with them.
+*/
+function composeScene(model, composition) {
+	const builder = new SceneBuilder(model, composition.warnings ?? []);
+	for (const attachment of attachOrder(composition.attach)) builder.attach(attachment);
+	builder.addMemberMeshes();
+	builder.addMemberParts();
+	builder.addClips(composition.animations);
+	builder.hide(composition.hidden);
+	builder.overrideTextures(composition.materials);
+	return builder.build();
+}
+function nodeLookup(nodes) {
+	const byPath = /* @__PURE__ */ new Map();
+	const bones = /* @__PURE__ */ new Map();
+	const others = /* @__PURE__ */ new Map();
+	nodes.forEach((node, index) => {
+		byPath.set(node.path, index);
+		const named = node.kind === "bone" ? bones : others;
+		if (!named.has(node.name)) named.set(node.name, index);
+	});
+	const byName = (name, preferBone) => (preferBone ? bones.get(name) ?? others.get(name) : others.get(name) ?? bones.get(name)) ?? null;
+	return {
+		find: (nameOrPath, preferBone) => byPath.get(nameOrPath) ?? byName(nameOrPath, preferBone),
+		byName,
+		bone: (name) => bones.get(name) ?? null
+	};
+}
+/**
+* A node's index by its path, or else by its name, preferring a bone or another node as asked, as a composition
+* names nodes and bones. Null when nothing matches.
+*/
+function findNode(nodes, nameOrPath, preferBone) {
+	return nodeLookup(nodes).find(nameOrPath, preferBone);
+}
+var SceneBuilder = class {
+	#model;
+	#lookup;
+	#nodes;
+	#meshes;
+	#skeletons;
+	#materials;
+	#textures;
+	#parts;
+	#clips;
+	#warnings;
+	#members = /* @__PURE__ */ new Map();
+	#modelWorlds = null;
+	constructor(model, warnings) {
+		this.#model = model;
+		this.#lookup = nodeLookup(model.nodes);
+		this.#nodes = [...model.nodes];
+		this.#meshes = [...model.meshes];
+		this.#skeletons = [...model.skeletons];
+		this.#materials = [...model.materials];
+		this.#textures = [...model.textures];
+		this.#parts = [...model.parts];
+		this.#clips = [...model.clips];
+		this.#warnings = [...model.source.warnings, ...warnings];
+	}
+	#modelWorld(node) {
+		this.#modelWorlds ??= restWorldMatrices(this.#model.nodes);
+		return this.#modelWorlds[node];
+	}
+	#state(member) {
+		let state = this.#members.get(member.file);
+		if (!state) {
+			state = {
+				member,
+				worlds: restWorldMatrices(member.scene.nodes),
+				nodes: /* @__PURE__ */ new Map(),
+				merged: /* @__PURE__ */ new Set(),
+				meshes: /* @__PURE__ */ new Map(),
+				skeletons: /* @__PURE__ */ new Map(),
+				materialOffset: null
+			};
+			this.#members.set(member.file, state);
+		}
+		return state;
+	}
+	#warn(warning) {
+		this.#warnings.push(warning);
+	}
+	attach({ member, node, bone }) {
+		const state = this.#state(member);
+		const source = member.scene.nodes;
+		let roots;
+		if (node === null) roots = source.flatMap((entry, index) => entry.parent === -1 ? [index] : []);
+		else {
+			const found = nodeLookup(source).find(node, false);
+			if (found === null) {
+				this.#warn(importWarning("node-not-found", {
+					kind: "node",
+					name: node
+				}, `Node not found: ${node}`, member.file));
+				return;
+			}
+			roots = [found];
+		}
+		let parent = -1;
+		if (bone !== null) {
+			const found = this.#lookup.find(bone, true);
+			if (found === null) this.#warn(importWarning("node-not-found", {
+				kind: "node",
+				name: bone
+			}, `Model bone not found: ${bone}`, member.file));
+			else parent = found;
+		}
+		const included = subtree(source, roots);
+		source.forEach((entry, index) => {
+			if (!included[index] || state.nodes.has(index)) return;
+			if (entry.kind === "bone") {
+				const match = this.#lookup.bone(entry.name);
+				if (match !== null) {
+					state.nodes.set(index, match);
+					state.merged.add(index);
+					return;
+				}
+			}
+			const memberParent = state.nodes.get(entry.parent);
+			const placed = entry.parent >= 0 && included[entry.parent] && memberParent !== void 0 ? {
+				parent: memberParent,
+				transform: entry
+			} : {
+				parent,
+				transform: this.#placeUnder(parent, state.worlds[index])
+			};
+			state.nodes.set(index, this.#addNode(member.file, entry, placed.parent, placed.transform));
+		});
+	}
+	addMemberMeshes() {
+		for (const state of this.#members.values()) for (const [index, composed] of [...state.nodes]) {
+			const mesh = state.member.scene.nodes[index]?.mesh ?? null;
+			if (mesh === null || state.merged.has(index)) continue;
+			const meshIndex = this.#addMesh(state, mesh);
+			const target = this.#nodes[composed];
+			if (meshIndex !== null && target) this.#nodes[composed] = {
+				...target,
+				mesh: meshIndex
+			};
+		}
+	}
+	/** A transform that keeps a node at its rest placement in scene space once it hangs under `parent`. */
+	#placeUnder(parent, world) {
+		if (!world) return {
+			translation: [
+				0,
+				0,
+				0
+			],
+			rotation: [
+				0,
+				0,
+				0,
+				1
+			],
+			scale: [
+				1,
+				1,
+				1
+			]
+		};
+		const parentWorld = parent >= 0 ? this.#modelWorld(parent) : void 0;
+		return decomposeMatrix(parentWorld ? multiplyMatrices(invertAffine(parentWorld), world) : world);
+	}
+	#addNode(file, node, parent, transform) {
+		this.#nodes.push({
+			...node,
+			path: memberPath(file, node.path),
+			parent,
+			translation: transform.translation,
+			rotation: transform.rotation,
+			scale: transform.scale,
+			mesh: null
+		});
+		return this.#nodes.length - 1;
+	}
+	#addMesh(state, index) {
+		const mesh = state.member.scene.meshes[index];
+		if (!mesh) return null;
+		const existing = state.meshes.get(index);
+		if (existing !== void 0) return existing;
+		const materialOffset = this.#addMaterials(state);
+		this.#meshes.push({
+			...mesh,
+			skeleton: mesh.skeleton === null ? null : this.#addSkeleton(state, mesh.skeleton),
+			groups: mesh.groups.map((group) => ({
+				...group,
+				material: group.material + materialOffset
+			}))
+		});
+		state.meshes.set(index, this.#meshes.length - 1);
+		return this.#meshes.length - 1;
+	}
+	#addMaterials(state) {
+		if (state.materialOffset !== null) return state.materialOffset;
+		const { materials, textures } = state.member.scene;
+		const textureOffset = this.#textures.length;
+		for (const texture of textures) this.#textures.push(texture);
+		state.materialOffset = this.#materials.length;
+		for (const material of materials) {
+			const moved = { ...material };
+			for (const key of TEXTURE_REF_KEYS) {
+				const ref = material[key];
+				moved[key] = ref && {
+					...ref,
+					texture: ref.texture + textureOffset
+				};
+			}
+			this.#materials.push(moved);
+		}
+		return state.materialOffset;
+	}
+	/**
+	* The member's skeleton on composed nodes. A joint is the node it became, the model bone of the same name, or else a
+	* new node held at the joint's rest placement.
+	*/
+	#addSkeleton(state, index) {
+		const skeleton = state.member.scene.skeletons[index];
+		if (!skeleton) return null;
+		const existing = state.skeletons.get(index);
+		if (existing !== void 0) return existing;
+		const joints = skeleton.joints.map((joint) => {
+			const known = state.nodes.get(joint);
+			if (known !== void 0) return known;
+			const node = state.member.scene.nodes[joint];
+			if (!node) return 0;
+			const match = this.#lookup.bone(node.name);
+			const composed = match ?? this.#addNode(state.member.file, node, -1, this.#placeUnder(-1, state.worlds[joint]));
+			state.nodes.set(joint, composed);
+			if (match !== null) state.merged.add(joint);
+			return composed;
+		});
+		this.#skeletons.push({
+			joints,
+			inverseBindMatrices: skeleton.inverseBindMatrices
+		});
+		state.skeletons.set(index, this.#skeletons.length - 1);
+		return this.#skeletons.length - 1;
+	}
+	/** Each attached file's parts, for the meshes that came along, with the file as a prefix on their ids. */
+	addMemberParts() {
+		for (const state of this.#members.values()) {
+			const meshNode = /* @__PURE__ */ new Map();
+			for (const [memberNode, composed] of state.nodes) {
+				const mesh = state.member.scene.nodes[memberNode]?.mesh;
+				if (mesh !== null && mesh !== void 0 && !state.merged.has(memberNode)) meshNode.set(mesh, composed);
+			}
+			for (const part of state.member.scene.parts) {
+				const levels = part.levels.map(({ level, meshes }) => ({
+					level,
+					meshes: meshes.flatMap((mesh) => state.meshes.get(mesh) ?? [])
+				})).filter((level) => level.meshes.length > 0);
+				const own = state.merged.has(part.node) ? void 0 : state.nodes.get(part.node);
+				const firstMesh = part.levels.flatMap((level) => level.meshes).find((mesh) => meshNode.has(mesh));
+				const node = own ?? (firstMesh === void 0 ? void 0 : meshNode.get(firstMesh));
+				if (node === void 0 || levels.length === 0 && part.role !== "socket") continue;
+				this.#parts.push({
+					...part,
+					id: memberPath(state.member.file, part.id),
+					node,
+					levels
+				});
+			}
+		}
+	}
+	/**
+	* Binds each animation file's clips to the model. A clip's name is its name in its file with the file as a prefix,
+	* so adding or removing other files never renames it. Its display name stays its own unless another clip shows
+	* the same, which adds " (2)", " (3)" and so on.
+	*/
+	addClips(animations) {
+		const shown = new Set(this.#clips.map((clip) => clip.displayName));
+		for (const member of animations) for (const clip of member.scene.clips) {
+			const missing = /* @__PURE__ */ new Set();
+			const unmatchedMorphs = /* @__PURE__ */ new Set();
+			const tracks = [];
+			for (const track of clip.tracks) {
+				const node = member.scene.nodes[track.node];
+				if (!node || track.held) continue;
+				const target = this.#lookup.byName(node.name, node.kind === "bone");
+				if (target !== null) tracks.push(track.property === "weights" ? this.#morphTrack(member.scene, track, target, unmatchedMorphs) : {
+					...track,
+					node: target
+				});
+				else if (node.kind === "bone") missing.add(node.name);
+			}
+			let displayName = clip.displayName;
+			for (let suffix = 2; shown.has(displayName); suffix++) displayName = `${clip.displayName} (${suffix})`;
+			shown.add(displayName);
+			this.#clips.push({
+				...clip,
+				name: memberPath(member.file, clip.name),
+				displayName,
+				tracks,
+				file: member.file
+			});
+			if (missing.size > 0) this.#warnMissingBones(member.file, clip.name, displayName, [...missing]);
+			if (unmatchedMorphs.size > 0) this.#warn(importWarning("invalid-data", {
+				kind: "clip",
+				name: clip.name
+			}, `Morph targets not matched: ${displayName}`, member.file, { detail: `Missing or ambiguous morph targets: ${[...unmatchedMorphs].join(", ")}` }));
+		}
+	}
+	#morphTrack(source, track, node, unmatched) {
+		const sourceMesh = source.meshes[source.nodes[track.node]?.mesh ?? -1];
+		const targetMesh = this.#model.meshes[this.#model.nodes[node]?.mesh ?? -1];
+		const sourceTargets = sourceMesh?.morphTargets ?? [];
+		const targetTargets = targetMesh?.morphTargets ?? [];
+		const sourceNames = uniqueNames(sourceTargets);
+		const targetNames = uniqueNames(targetTargets);
+		for (const target of sourceTargets) if ((sourceNames.get(target.name) ?? -1) < 0 || (targetNames.get(target.name) ?? -1) < 0) unmatched.add(`${source.nodes[track.node]?.name ?? "(unnamed)"}/${target.name || "(unnamed)"}`);
+		const indices = targetTargets.map((target) => (targetNames.get(target.name) ?? -1) < 0 ? -1 : sourceNames.get(target.name) ?? -1);
+		const values = new Float32Array(track.times.length * targetTargets.length);
+		for (let key = 0; key < track.times.length; key++) targetTargets.forEach((target, index) => {
+			const sourceIndex = indices[index] ?? -1;
+			values[key * targetTargets.length + index] = sourceIndex < 0 ? target.defaultWeight : track.values[key * sourceTargets.length + sourceIndex] ?? target.defaultWeight;
+		});
+		return {
+			...track,
+			node,
+			values
+		};
+	}
+	#warnMissingBones(file, clip, displayName, bones) {
+		const listed = bones.slice(0, LISTED_NAMES).join(", ");
+		const more = bones.length > LISTED_NAMES ? ` and ${bones.length - LISTED_NAMES} more` : "";
+		this.#warn(importWarning("animation-bones-missing", {
+			kind: "clip",
+			name: clip
+		}, `Missing bones: ${displayName}`, file, { detail: `Bones the model lacks: ${listed}${more}` }));
+	}
+	hide(ids) {
+		for (const id of ids) {
+			const index = this.#parts.findIndex((part) => part.id === id);
+			const part = this.#parts[index];
+			if (part) {
+				this.#parts[index] = {
+					...part,
+					hiddenByDefault: true
+				};
+				continue;
+			}
+			const { file } = splitMemberPath(id);
+			this.#warn(importWarning("node-not-found", {
+				kind: "node",
+				name: id
+			}, `Part not found: ${id}`, file ?? void 0));
+		}
+	}
+	/**
+	* Puts each slot's texture on the materials of its name. A texture several slots share is added once. It samples as
+	* the slot's own texture did, or would have where the file's image was not found.
+	*/
+	overrideTextures(materials) {
+		const added = /* @__PURE__ */ new Map();
+		const indexOf = (texture) => {
+			let index = added.get(texture);
+			if (index === void 0) {
+				index = this.#textures.push(texture) - 1;
+				added.set(texture, index);
+			}
+			return index;
+		};
+		for (const [name, slots] of Object.entries(materials)) {
+			const targets = this.#materials.flatMap((material, index) => material.name === name ? [index] : []);
+			if (targets.length === 0) {
+				this.#warn(importWarning("material-not-found", {
+					kind: "material",
+					name
+				}, `Material not used by any mesh: ${name}`));
+				continue;
+			}
+			for (const slot of TEXTURE_SLOTS) {
+				const entry = slots[slot];
+				if (!entry) continue;
+				const texture = entry.texture ? indexOf(entry.texture) : null;
+				for (const target of targets) {
+					const material = this.#materials[target];
+					if (!material) continue;
+					const overrides = {
+						...material.textureOverrides,
+						[slot]: {
+							path: entry.path,
+							found: texture !== null
+						}
+					};
+					this.#materials[target] = {
+						...texture === null ? material : withTexture(material, slot, {
+							...samplingOf(material, slot),
+							texture
+						}),
+						textureOverrides: overrides
+					};
+				}
+			}
+		}
+	}
+	build() {
+		return {
+			...this.#model,
+			source: {
+				...this.#model.source,
+				warnings: this.#warnings
+			},
+			nodes: this.#nodes,
+			meshes: this.#meshes,
+			skeletons: this.#skeletons,
+			materials: this.#materials,
+			textures: this.#textures,
+			clips: this.#clips,
+			parts: this.#parts,
+			bounds: defaultViewBounds(this.#meshes, this.#parts)
+		};
+	}
+};
+function uniqueNames(items) {
+	const names = /* @__PURE__ */ new Map();
+	items.forEach(({ name }, index) => {
+		names.set(name, name === "" || names.has(name) ? -1 : index);
+	});
+	return names;
+}
+/**
+* The attachments with each file's node entries before its whole-file entries, files in the order they first appear.
+* A whole-file entry takes every node its file has not placed yet, so an entry for one of its nodes must come first.
+*/
+function attachOrder(attach) {
+	const byFile = /* @__PURE__ */ new Map();
+	for (const attachment of attach) {
+		const entries = byFile.get(attachment.member.file) ?? [];
+		entries.push(attachment);
+		byFile.set(attachment.member.file, entries);
+	}
+	return [...byFile.values()].flatMap((entries) => [...entries.filter((entry) => entry.node !== null), ...entries.filter((entry) => entry.node === null)]);
+}
+/** Marks the roots and everything below them. Parents come before their children. */
+function subtree(nodes, roots) {
+	const included = nodes.map(() => false);
+	for (const root of roots) included[root] = true;
+	nodes.forEach((node, index) => {
+		if (node.parent >= 0 && included[node.parent]) included[index] = true;
+	});
+	return included;
+}
+var PLAIN_SAMPLING = {
+	uvSet: 0,
+	wrapU: "repeat",
+	wrapV: "repeat",
+	transform: null
+};
+/** How a slot samples its texture: as its own texture does, else as its missing image would have, else plainly. */
+function samplingOf(material, slot) {
+	const own = material[TEXTURE_SLOT_KEYS[slot]];
+	if (own) {
+		const { texture: _, ...sampling } = own;
+		return sampling;
+	}
+	return material.missingTextureSampling?.[slot] ?? PLAIN_SAMPLING;
+}
+/** The material with a texture in a slot. Its color factor turns white, so the texture shows as it is. */
+function withTexture(material, slot, ref) {
+	switch (slot) {
+		case "baseColor": return {
+			...material,
+			baseColorTexture: ref,
+			baseColor: [
+				1,
+				1,
+				1,
+				material.baseColor[3]
+			]
+		};
+		case "normal": return {
+			...material,
+			normalTexture: ref
+		};
+		case "roughness": return {
+			...material,
+			roughnessTexture: ref
+		};
+		case "metalness": return {
+			...material,
+			metalnessTexture: ref
+		};
+		case "emissive": return {
+			...material,
+			emissiveTexture: ref,
+			emissive: material.emissive.every((value) => value === 0) ? [
+				1,
+				1,
+				1
+			] : material.emissive
+		};
+	}
 }
 //#endregion
 //#region ../../packages/scene/src/fingerprint.ts
@@ -6812,22 +7333,22 @@ var SIGNATURES = [
 		bytes: [66, 77]
 	}
 ];
-var EXTENSIONS = {
-	png: "image/png",
-	jpg: "image/jpeg",
-	jpeg: "image/jpeg",
-	gif: "image/gif",
-	webp: "image/webp",
-	bmp: "image/bmp",
-	tga: "image/x-tga",
-	tif: "image/tiff",
-	tiff: "image/tiff",
-	dds: "image/vnd-ms.dds",
-	ktx2: "image/ktx2",
-	exr: "image/x-exr",
-	hdr: "image/vnd.radiance",
-	psd: "image/vnd.adobe.photoshop"
-};
+var EXTENSIONS = /* @__PURE__ */ new Map([
+	["png", "image/png"],
+	["jpg", "image/jpeg"],
+	["jpeg", "image/jpeg"],
+	["gif", "image/gif"],
+	["webp", "image/webp"],
+	["bmp", "image/bmp"],
+	["tga", "image/x-tga"],
+	["tif", "image/tiff"],
+	["tiff", "image/tiff"],
+	["dds", "image/vnd-ms.dds"],
+	["ktx2", "image/ktx2"],
+	["exr", "image/x-exr"],
+	["hdr", "image/vnd.radiance"],
+	["psd", "image/vnd.adobe.photoshop"]
+]);
 /** The file name at the end of a path written with either separator. */
 function fileNameOf(path) {
 	const slashed = path.replaceAll("\\", "/");
@@ -6839,7 +7360,7 @@ function imageMimeType(bytes, path) {
 	if (signature) return signature.mimeType;
 	const name = fileNameOf(path);
 	const dot = name.lastIndexOf(".");
-	return (dot === -1 ? void 0 : EXTENSIONS[name.slice(dot + 1).toLowerCase()]) ?? "application/octet-stream";
+	return (dot === -1 ? void 0 : EXTENSIONS.get(name.slice(dot + 1).toLowerCase())) ?? "application/octet-stream";
 }
 //#endregion
 //#region ../../packages/scene/src/importer.ts
@@ -6857,6 +7378,69 @@ function parseStoredPath(storedPath) {
 		relative: absolute || slashed === "" ? null : slashed,
 		absolute
 	};
+}
+//#endregion
+//#region ../../packages/scene/src/material-slots.ts
+var STATE_ORDER = {
+	set: 0,
+	missing: 1,
+	empty: 2
+};
+function slotOf(scene, material, slot) {
+	const ref = material[TEXTURE_SLOT_KEYS[slot]];
+	const texture = ref ? scene.textures[ref.texture] : void 0;
+	const shown = texture && ref ? ref.texture : null;
+	const override = material.textureOverrides?.[slot];
+	if (override) return {
+		slot,
+		state: override.found ? "set" : "missing",
+		path: override.path,
+		overridden: true,
+		texture: shown
+	};
+	if (texture) return {
+		slot,
+		state: "set",
+		path: texture.storedPath || texture.name,
+		overridden: false,
+		texture: shown
+	};
+	const missing = material.missingTextures?.[slot];
+	if (missing !== void 0) return {
+		slot,
+		state: "missing",
+		path: missing,
+		overridden: false,
+		texture: null
+	};
+	return {
+		slot,
+		state: "empty",
+		path: null,
+		overridden: false,
+		texture: null
+	};
+}
+/**
+* Each named material once with its texture slots that are set or missing, and always its base color slot, which is
+* where a texture usually goes. Materials that share a name share the composition's textures, so a slot shows the
+* most telling state among them: set, then missing, then empty.
+*/
+function materialSlots(scene) {
+	const byName = /* @__PURE__ */ new Map();
+	for (const material of scene.materials) {
+		if (material.name === "") continue;
+		const slots = TEXTURE_SLOTS.map((slot) => slotOf(scene, material, slot));
+		const known = byName.get(material.name);
+		byName.set(material.name, known ? known.map((slot, index) => {
+			const other = slots[index];
+			return other && STATE_ORDER[other.state] < STATE_ORDER[slot.state] ? other : slot;
+		}) : slots);
+	}
+	return [...byName].map(([material, slots]) => ({
+		material,
+		slots: slots.filter((slot) => slot.state !== "empty" || slot.slot === "baseColor")
+	}));
 }
 //#endregion
 //#region ../../packages/scene/src/ranges.ts
@@ -6974,6 +7558,295 @@ function isKeyedEveryFrame(curveKeyTimes, fps, frameCount) {
 	if (curveKeyTimes.length === 0) return false;
 	const tolerance = .25 / fps;
 	return curveKeyTimes.every((times) => times.length === frameCount && times.every((time, frame) => Math.abs(time - frame / fps) <= tolerance));
+}
+/** One warning for each material whose textures sample UV sets past `VIEWPORT_UV_SETS`. */
+function unshownUvSetWarnings(materials) {
+	const sets = /* @__PURE__ */ new Map();
+	for (const material of materials) for (const key of TEXTURE_REF_KEYS) {
+		const ref = material[key];
+		if (!ref || ref.uvSet < 4) continue;
+		const found = sets.get(material.name) ?? /* @__PURE__ */ new Set();
+		found.add(ref.uvSet);
+		sets.set(material.name, found);
+	}
+	return [...sets].map(([name, unshown]) => {
+		const maps = [...unshown].sort((a, b) => a - b).map((set) => set + 1);
+		const last = maps.pop();
+		const listed = maps.length === 0 ? `UV map ${last}` : `UV maps ${maps.join(", ")} and ${last}`;
+		return importWarning("material-approximated", {
+			kind: "material",
+			name
+		}, `Material approximated: ${name}`, void 0, { detail: `Textures on ${listed} show with the first UV map, since the preview draws only the first 4` });
+	});
+}
+//#endregion
+//#region ../../packages/protocol/src/view-state.ts
+var displayModeSchema = _enum([
+	"lit",
+	"clay",
+	"wireframe"
+]);
+/** A part's stable id: the node path of its mesh, LOD group or socket, as `ScenePart.id` gives it. */
+var partIdSchema = string().min(1);
+/**
+* Which parts a view shows. `hidden` and `shown` list only parts whose visibility differs from their default: models
+* show and collision helpers hide by default. An isolated part is the only part shown. `lod` picks the LOD level; a
+* part without that level shows its nearest lower one.
+*/
+var partViewSchema = object({
+	hidden: array(partIdSchema),
+	shown: array(partIdSchema),
+	isolated: partIdSchema.nullable(),
+	lod: indexSchema
+});
+/** What a window shows for one asset. The core keeps the latest report so a window can be rebuilt after a crash. */
+var viewStateSchema = object({
+	camera: cameraAnchorSchema,
+	/** The clip's name in the file, or null for the rest pose. */
+	clip: string().min(1).nullable(),
+	frame: indexSchema,
+	range: frameRangeSchema.nullable(),
+	display: object({
+		mode: displayModeSchema,
+		skeleton: boolean()
+	}),
+	parts: partViewSchema.default(() => ({
+		hidden: [],
+		shown: [],
+		isolated: null,
+		lod: 0
+	})),
+	/** The outline drawer is open. It shows only for models with parts or added files to list. */
+	outlineOpen: boolean().default(false),
+	/** The person dismissed the offer to continue an earlier review, so the tab never offers one again. */
+	relinkOfferDismissed: boolean().optional()
+});
+//#endregion
+//#region ../../packages/protocol/src/composition.ts
+/** The name of a model's composition file, which lives in the model's review folder. */
+var COMPOSITION_FILE_NAME = "composition.json";
+/** Extensions of the model files Arcue opens: FBX files, and Blender's own .blend files. */
+var MODEL_FILE_EXTENSIONS = [".fbx", ".blend"];
+/** Extensions of the images a composition may name and an importer may read beside a model. */
+var IMAGE_FILE_EXTENSIONS = [
+	".png",
+	".jpg",
+	".jpeg",
+	".tga",
+	".tif",
+	".tiff",
+	".bmp",
+	".dds",
+	".exr",
+	".hdr",
+	".webp"
+];
+/** How a file joins a model's view: its clips, its nodes on a bone, or its nodes in place. */
+var memberRoleSchema = _enum([
+	"animation",
+	"attach",
+	"set"
+]);
+/** The roles a file takes without a bone: its clips bind to the model's bones, or its nodes come along in place. */
+var fileRoleSchema = memberRoleSchema.exclude(["attach"]);
+/**
+* How a file joins a model's view when nobody names its role, and every role it can take, that one first; null for a
+* file with neither meshes nor clips. A file with clips is an animation file when it has no meshes, or when it
+* animates the model, as a Blender animation file that keeps a copy of the character does. Any other file with meshes
+* comes along in place, its bones merging into the model's bones of the same name, so a skinned mesh binds to the
+* model's rig. A file with meshes can always come along in place, and one whose clips key the model's bones can always
+* be an animation file.
+*/
+function memberRoles(content) {
+	const set = content.meshes > 0;
+	const animation = content.clips > 0 && (!set || content.keysModelBones || content.animatesModel);
+	if (!set && !animation) return null;
+	const role = animation && (!set || content.animatesModel) ? "animation" : "set";
+	const roles = [role];
+	if (animation && role !== "animation") roles.push("animation");
+	if (set && role !== "set") roles.push("set");
+	return {
+		role,
+		roles
+	};
+}
+/** The meshes on a file's own nodes, leaving out those that another file of its composition brings. */
+function ownMeshes(scene) {
+	const shown = visibleMeshes(scene.parts);
+	const meshes = [];
+	for (const node of scene.nodes) {
+		if (node.mesh === null || splitMemberPath(node.path).file !== null) continue;
+		const mesh = scene.meshes[node.mesh];
+		if (!mesh) continue;
+		meshes.push({
+			name: node.name,
+			topology: mesh.topology,
+			skinned: mesh.skeleton !== null,
+			shown: shown.has(node.mesh)
+		});
+	}
+	return meshes;
+}
+function hasCopy(mesh, among) {
+	return among.some((other) => other.name === mesh.name || sameTopology(other.topology, mesh.topology));
+}
+/**
+* Whether most bones a file's clips key are the model's own bones by name, which is how a composition binds them.
+* Tracks that only hold the file's pose do not count.
+*/
+function keysModelBones(member, model) {
+	const bones = /* @__PURE__ */ new Set();
+	for (const node of model.nodes) if (node.kind === "bone" && splitMemberPath(node.path).file === null) bones.add(node.name);
+	const keyed = /* @__PURE__ */ new Set();
+	for (const clip of member.clips) for (const track of clip.tracks) {
+		const node = member.nodes[track.node];
+		if (node?.kind === "bone" && track.held !== true) keyed.add(node.name);
+	}
+	let matched = 0;
+	for (const name of keyed) if (bones.has(name)) matched++;
+	return matched * 2 > keyed.size;
+}
+/**
+* Whether a file with clips holds animation for a model rather than more to show with it. Its clips key the model's
+* bones, and its meshes copy the model's, each by name or topology: every mesh it shows is a copy of one of the
+* model's, or it holds a copy of every mesh the model shows and its other meshes are rigid, such as a floor or a prop.
+* Meshes it hides, such as a rig's bone shapes, do not count. An outfit made on the model's rig brings a skinned mesh
+* of its own, so it comes along in place even when the file keeps a copy of the model.
+*/
+function animatesModel(member, model) {
+	if (!keysModelBones(member, model)) return false;
+	const theirs = ownMeshes(member);
+	const ours = ownMeshes(model);
+	const extra = theirs.filter((mesh) => mesh.shown && !hasCopy(mesh, ours));
+	if (extra.length === 0) return true;
+	const shown = ours.filter((mesh) => mesh.shown);
+	return shown.length > 0 && shown.every((mesh) => hasCopy(mesh, theirs)) && extra.every((mesh) => !mesh.skinned);
+}
+/**
+* Whether a file beside the model joins it by its name, "<model stem>@<anything>" with a model file's extension, such
+* as "Hero@Walk.fbx" or "Hero@Walk.blend", rather than through the composition.
+*/
+function joinsByName(modelName, fileName) {
+	const dot = modelName.lastIndexOf(".");
+	const prefix = `${dot > 0 ? modelName.slice(0, dot) : modelName}@`;
+	const lower = fileName.toLowerCase();
+	return fileName.startsWith(prefix) && fileName.length > prefix.length && MODEL_FILE_EXTENSIONS.some((extension) => lower.endsWith(extension));
+}
+function isRelativeFile(path) {
+	if (path.includes("\\") || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
+	return path.split("/").every((segment) => segment !== "");
+}
+/** A path relative to the model's folder with "/" separators, such as "Shells.fbx" or "../Textures/Rock.png". */
+var relativeFileSchema = string().min(1).refine(isRelativeFile, { message: "Use a path relative to the model's folder, with \"/\" separators." });
+var textureSlotSchema = _enum([
+	"baseColor",
+	"normal",
+	"roughness",
+	"metalness",
+	"emissive"
+]);
+var compositionAttachSchema = strictObject({
+	file: relativeFileSchema,
+	/** A node's name or path in the file, which brings its children along. Without it the whole file comes along. */
+	node: string().min(1).optional(),
+	/** A bone's name in the model that the nodes follow. Without it they stay in place, as a set piece. */
+	bone: string().min(1).optional()
+});
+/** Textures by slot, relative to the model's folder. They replace what the model's files say. */
+var materialTexturesSchema = strictObject({
+	baseColor: relativeFileSchema.optional(),
+	normal: relativeFileSchema.optional(),
+	roughness: relativeFileSchema.optional(),
+	metalness: relativeFileSchema.optional(),
+	emissive: relativeFileSchema.optional()
+});
+/**
+* A model's composition file: the other files that complete its view, as game pipelines spread one asset over several
+* files. It is `composition.json` in the model's review folder, so its place names the model, and opening the model
+* applies it. Every path is relative to the model's folder. Parts and anchors from the other files carry the file as a
+* prefix on their node paths: "Shells.fbx//Boulder1".
+*/
+var compositionFileSchema = strictObject({
+	version: literal(1),
+	/** Files whose clips bind to the model's bones by name. */
+	animations: array(relativeFileSchema).optional(),
+	/** Files, or nodes in them, that follow a bone of the model or stay in place. */
+	attach: array(compositionAttachSchema).optional(),
+	/** Textures by material slot name. */
+	materials: record(string().min(1), materialTexturesSchema).optional(),
+	/** Part ids hidden until someone shows them, such as the second of two alternative bodies. */
+	hidden: array(partIdSchema).optional()
+}).superRefine((composition, ctx) => {
+	const issue = (message, path) => ctx.addIssue({
+		code: "custom",
+		message,
+		path
+	});
+	const seen = (list, what, key) => {
+		const found = /* @__PURE__ */ new Set();
+		list.forEach((entry, index) => {
+			if (found.has(entry)) issue(`${what} ${entry} is listed twice.`, [key, index]);
+			found.add(entry);
+		});
+	};
+	seen(composition.animations ?? [], "Animation file", "animations");
+	seen((composition.attach ?? []).map((entry) => entry.node === void 0 ? entry.file : `${entry.file}, node ${entry.node},`), "Attached", "attach");
+	seen(composition.hidden ?? [], "Part", "hidden");
+});
+//#endregion
+//#region ../../packages/protocol/src/context.ts
+/**
+* The layouts of a comment's stored screenshot, each named after a comment id, which `screenshotOwner` returns. The
+* comment schema also checks that it is the comment's own id.
+*/
+var SCREENSHOT_PATH = new RegExp(`^(?:screenshots/(${COMMENT_ID_PATTERN})(?:-[1-9]\\d*)?|rounds/round-[1-9]\\d*/(${COMMENT_ID_PATTERN}))\\.png$`);
+/** The comment id a screenshot path is named after, or undefined when the path is not one of the layouts. */
+function screenshotOwner(path) {
+	const match = SCREENSHOT_PATH.exec(path);
+	return match?.[1] ?? match?.[2];
+}
+var boneShareSchema = object({
+	name: string(),
+	/** Share of the target's skin weight, from 0 to 1. */
+	share: number().min(0).max(1)
+});
+/** A joint's world position. `path` is its node path, which stays unique when joint names repeat. */
+var jointPositionSchema = object({
+	name: string(),
+	path: string().min(1),
+	position: vec3Schema
+});
+/**
+* Facts computed when a comment is made and stored with it, so history stays accurate after the file changes.
+* Positions are in scene space. Comments without a surface target have no bones, centroid or vertices.
+* A range comment's posed positions and joints are taken at the range's start frame.
+*/
+var commentContextSchema = object({
+	vertexCount: indexSchema,
+	bones: array(boneShareSchema),
+	centroid: object({
+		rest: vec3Schema,
+		posed: vec3Schema
+	}).nullable(),
+	/** The joints that move the target, at the comment's time. */
+	joints: array(jointPositionSchema),
+	/** Plain words for the camera direction, such as "palm side, slightly below". */
+	viewLabel: string(),
+	/**
+	* Screenshot path relative to the asset's review folder, in one of the layouts the core writes:
+	* `screenshots/<id>.png`, `screenshots/<id>-<k>.png` for a replaced screenshot, or `rounds/round-<r>/<id>.png`.
+	*/
+	screenshot: string().regex(SCREENSHOT_PATH).nullable()
+});
+/** What the 3D view computes; the core adds the screenshot path when it saves the image. */
+var computedContextSchema = commentContextSchema.omit({ screenshot: true });
+//#endregion
+//#region ../../packages/protocol/src/definitions.ts
+function command(definition) {
+	return definition;
+}
+function query(definition) {
+	return definition;
 }
 var importWarningCodeSchema = _enum(Object.keys(importWarningSeverity));
 /** What a warning is about. `file` names the composition's file it comes from, absent for the model's own file. */
@@ -7152,7 +8025,7 @@ var commands = {
 		output: _void()
 	}),
 	"comment.resolve": command({
-		description: "Mark a sent comment resolved: the new export fixed it.",
+		description: "Mark a sent comment resolved: the new version of the file fixed it.",
 		runsIn: "core",
 		input: object(commentRef),
 		output: _void()
@@ -7201,7 +8074,7 @@ var commands = {
 		})
 	}),
 	"composition.addFile": command({
-		description: "Load another file into the asset's view and save it in the asset's composition file, composition.json in the asset's review folder, which is created on the first edit. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place, and its bones merge into the model's bones of the same name, so a skinned mesh binds to the rig. Without a role the core reads the file: clips and no meshes make an animation file, meshes a set file. Adding a file again with the same node replaces its entry. Undo with review.undo.",
+		description: "Load another file into the asset's view and save it in the asset's composition file, composition.json in the asset's review folder, which is created on the first edit. An animation file's clips bind to the model's bones by name. An attached file, or one node of it, follows a bone of the model. A set file stays in place, and its bones merge into the model's bones of the same name, so a skinned mesh binds to the rig. Without a role the core reads the file: clips make an animation file when the file has no meshes, or when most bones they key are the model's bones by name and its meshes copy the model's, so that each mesh it shows is a copy of one of the model's, or it holds a copy of each mesh the model shows and its other meshes are rigid. Other files with meshes are set files. composition.fileRoles tells the role before adding. Adding a file again with the same node replaces its entry. Undo with review.undo.",
 		runsIn: "core",
 		input: object({
 			...assetRef$1,
@@ -7221,7 +8094,7 @@ var commands = {
 		output: compositionOutput.extend({ role: memberRoleSchema })
 	}),
 	"composition.removeFile": command({
-		description: "Remove a file from the asset's view and from its composition file. Files named \"<model>@<clip>.fbx\" beside the model join by their name and cannot be removed this way. Undo with review.undo.",
+		description: "Remove a file from the asset's view and from its composition file. Files named \"<model>@<clip>.fbx\" or \"<model>@<clip>.blend\" beside the model join by their name and cannot be removed this way. Undo with review.undo.",
 		runsIn: "core",
 		input: object({
 			...assetRef$1,
@@ -7461,7 +8334,7 @@ var commands = {
 		output: _void()
 	}),
 	"view.selectComment": command({
-		description: "Select a comment, jump to its time and restore its camera and the parts it showed. Null clears the selection.",
+		description: "Select a comment, jump to its time and restore its camera and the parts it showed, always showing the part that holds its target. Null clears the selection.",
 		runsIn: "view",
 		input: object({
 			...assetRef$1,
@@ -8120,6 +8993,17 @@ var queries = {
 		input: object(assetRef),
 		output: object({ prompt: string() })
 	}),
+	"composition.fileRoles": query({
+		description: "Tell how a file would join the asset's view: the role composition.addFile gives it without one, then every other role it can take. A file with meshes can be a \"set\" file. A file with clips can be an \"animation\" file when it has no meshes, or when most bones they key are the model's bones by name.",
+		input: object({
+			...assetRef,
+			file: string().min(1)
+		}),
+		output: object({
+			role: fileRoleSchema,
+			roles: array(fileRoleSchema).min(1)
+		})
+	}),
 	"asset.inspect": query({
 		description: "Import a file without opening it and summarize it: format, exporter, axes, height, meshes, parts, bones, materials, textures, clips and warnings. A model is composed with its composition file as opening it would be.",
 		input: object({ path: string().min(1) }),
@@ -8144,15 +9028,22 @@ var clipRef = {
 	clip: string().min(1),
 	clipDisplayName: string().min(1)
 };
+/**
+* `sourceFrame` is the frame number the clip's file itself uses for `frame`, such as Blender's frame; it is absent where
+* Arcue does not know it, as in rounds written before it existed.
+*/
 var frameTimeSchema = object({
 	...clipRef,
 	frame: indexSchema,
-	seconds: number()
+	seconds: number(),
+	sourceFrame: number().optional()
 });
+/** `sourceFrames` are the frame numbers the clip's file itself uses for `frames`, where Arcue knows them. */
 var rangeTimeSchema = object({
 	...clipRef,
 	frames: tuple([indexSchema, indexSchema]),
-	seconds: tuple([number(), number()])
+	seconds: tuple([number(), number()]),
+	sourceFrames: tuple([number(), number()]).optional()
 });
 /** `mesh` is the object's name as the exporting tool shows it; `meshPath` is its node path in the file. */
 var meshRef = {
@@ -8350,4 +9241,4 @@ var jsonFrameCodec = {
 	decode: (bytes) => JSON.parse(new TextDecoder().decode(bytes), reviver)
 };
 //#endregion
-export { ArcueError as $, sameTopology as A, COMPOSITION_FILE_NAME as B, countInRanges as C, parseStoredPath as D, rangesWithin as E, describeParts as F, viewStateSchema as G, compositionFileSchema as H, isDefaultPartView as I, LAUNCH_INFO_FILE as J, BRIDGE_INFO_FILE as K, knownPartView as L, describeTextureUses as M, importWarning as N, fileNameOf as O, defaultViewBounds as P, framedChannel as Q, shownByDefault as R, mergeKeyTimes as S, encodeRanges as T, joinsByName as U, IMAGE_FILE_EXTENSIONS as V, memberRoleFor as W, connectBridge as X, bridgeInfoSchema as Y, launchInfoSchema as Z, settingsSchema as _, queries as a, isKeyedEveryFrame as b, importRequests as c, withTransfer as d, COMMENT_ID_PATTERN as et, callEach as f, isCommandName as g, commands as h, isQueryName as i, topologyFingerprint as j, imageMimeType as k, serveImportWorker as l, reviewFileSchema as m, portEndpoint as n, importFindFileInputSchema as o, reportListenerError as p, HANDSHAKE_MAX_FRAME_BYTES as q, roundDataSchema as r, importReadFileInputSchema as s, jsonFrameCodec as t, createPeer as u, warningId as v, decodeRanges as w, lastFrame as x, frameCountFor as y, screenshotOwner as z };
+export { knownPartView as $, frameCountFor as A, fileNameOf as B, animatesModel as C, memberRoles as D, keysModelBones as E, decodeRanges as F, findNode as G, sameTopology as H, encodeRanges as I, describeTextureUses as J, memberPath as K, rangesWithin as L, lastFrame as M, mergeKeyTimes as N, viewStateSchema as O, countInRanges as P, isDefaultPartView as Q, materialSlots as R, MODEL_FILE_EXTENSIONS as S, joinsByName as T, topologyFingerprint as U, imageMimeType as V, composeScene as W, defaultViewBounds as X, importWarning as Y, describeParts as Z, settingsSchema as _, queries as a, BRIDGE_INFO_FILE as at, COMPOSITION_FILE_NAME as b, importRequests as c, bridgeInfoSchema as ct, withTransfer as d, framedChannel as dt, shownByDefault as et, callEach as f, ArcueError as ft, isCommandName as g, commands as h, isQueryName as i, TEXTURE_SLOT_KEYS as it, isKeyedEveryFrame as j, unshownUvSetWarnings as k, serveImportWorker as l, connectBridge as lt, reviewFileSchema as m, portEndpoint as n, TEXTURE_REF_NAMES as nt, importFindFileInputSchema as o, HANDSHAKE_MAX_FRAME_BYTES as ot, reportListenerError as p, COMMENT_ID_PATTERN as pt, splitMemberPath as q, roundDataSchema as r, TEXTURE_SLOTS as rt, importReadFileInputSchema as s, LAUNCH_INFO_FILE as st, jsonFrameCodec as t, TEXTURE_REF_KEYS as tt, createPeer as u, launchInfoSchema as ut, warningId as v, compositionFileSchema as w, IMAGE_FILE_EXTENSIONS as x, screenshotOwner as y, parseStoredPath as z };
