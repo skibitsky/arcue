@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import type { FileHost } from "../store/view-files";
-import { flush, NOW, setup, TestViewport } from "../test-helpers";
+import { flush, NOW, setup, TestViewport, withPoseClips } from "../test-helpers";
 import { Workspace } from "./Workspace";
 
 async function renderStone(options: Parameters<typeof setup>[0] = {}) {
@@ -138,6 +138,32 @@ describe("Workspace", () => {
     await user.keyboard("{Control>}{Shift>}C{/Shift}{/Control}");
     await act(() => flush());
     expect(client.calls.some((call) => call.name === "round.copy")).toBe(true);
+  });
+
+  it("keeps a clip or range of one or two frames still: steps between frames, with play, loop and speed off", async () => {
+    const { session } = await renderStone({ scene: withPoseClips });
+    const timeline = screen.getByRole("region", { name: "Timeline" });
+    const enabled = (name: string) => !within(timeline).getByRole("button", { name }).hasAttribute("disabled");
+    const controls = () =>
+      ["Previous frame", "Play", "Next frame", "Loop", "Playback speed: 1×"].map((name) => [name, enabled(name)]);
+    expect(controls().every(([, on]) => on)).toBe(true);
+    act(() => session.setClip("Armature|Pose"));
+    expect(controls()).toEqual([
+      ["Previous frame", true],
+      ["Play", false],
+      ["Next frame", true],
+      ["Loop", false],
+      ["Playback speed: 1×", false],
+    ]);
+    await userEvent.setup().keyboard(" ");
+    expect(session.time.get().playing).toBe(false);
+    act(() => session.setClip("Armature|Still"));
+    expect(controls().every(([, on]) => !on)).toBe(true);
+    act(() => session.setClip("Armature|Charge"));
+    act(() => session.setRange({ start: 10, end: 11 }));
+    expect(controls().map(([, on]) => on)).toEqual([true, false, true, false, false]);
+    act(() => session.setRange({ start: 10, end: 12 }));
+    expect(controls().every(([, on]) => on)).toBe(true);
   });
 
   it("selects a comment from its timeline marker", async () => {

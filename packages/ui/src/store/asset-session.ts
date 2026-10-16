@@ -32,7 +32,7 @@ import { currentMessage, lastRound, pendingFollowUp, queuedComments } from "./hi
 import { Store } from "./observable";
 import type { OutlineFile } from "./outline";
 import { hasOutline } from "./outline";
-import { adjacentKey, clampFrame, normalizeRange, stepFrame } from "./timeline";
+import { adjacentKey, clampFrame, isPlayable, normalizeRange, stepFrame } from "./timeline";
 
 export const NEW_COMMENT_OVERLAY = "new";
 export const BRUSH_MIN = 6;
@@ -576,10 +576,19 @@ export class AssetSession {
     this.#scheduleReport();
   }
 
-  /** Starting at the end of the range, or at the clip's end without looping, starts again from the start. */
+  /** False for the rest pose, and for a clip or playback range of one or two frames. */
+  canPlay(): boolean {
+    const clip = this.clipInfo();
+    return clip !== null && isPlayable(clip, this.#playbackRange());
+  }
+
+  /**
+   * Starting at the end of the range, or at the clip's end without looping, starts again from the start. Does not start
+   * when `canPlay` is false.
+   */
   setPlaying(playing: boolean): void {
     const clip = this.clipInfo();
-    if (!clip && playing) return;
+    if (playing && !this.canPlay()) return;
     if (playing && clip) {
       const { loop } = this.state.get();
       const range = this.#playbackRange();
@@ -648,6 +657,7 @@ export class AssetSession {
     this.#viewport?.setPlaybackRange(
       range && clip ? { start: frameToSeconds(range.start, clip.fps), end: frameToSeconds(range.end, clip.fps) } : null,
     );
+    if (this.time.get().playing && !this.canPlay()) this.setPlaying(false);
   }
 
   /** A comment made on the timeline's range takes it over: the range clears, and the comment shows it when selected. */

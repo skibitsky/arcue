@@ -1,8 +1,9 @@
 import { ArcueError, commands } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
-import { flush, openStone, POINT, setup } from "../test-helpers";
+import { flush, openStone, POINT, setup, withPoseClips } from "../test-helpers";
 import { NEW_COMMENT_OVERLAY } from "./asset-session";
+import { currentMessage } from "./history";
 import { VIEW_COMMANDS } from "./workspace-store";
 
 describe("opening assets", () => {
@@ -70,6 +71,71 @@ describe("view commands", () => {
     expect(store.state.get().tabs).toEqual([]);
     expect(store.session(session.assetId)).toBeNull();
     expect(client.calls.slice(before)).toEqual([]);
+  });
+
+  it("does not play a clip of one or two frames", async () => {
+    const { client, session, viewport } = await openStone({ scene: withPoseClips });
+    session.setClip("Armature|Pose", 1);
+    session.togglePlaying();
+    await client.execute("view.setPlaying", { assetId: session.assetId, playing: true });
+    expect(session.time.get().playing).toBe(false);
+    expect(viewport.playing).toBe(false);
+    expect(session.currentFrame()).toBe(1);
+    session.step(1);
+    expect(session.currentFrame()).toBe(0);
+    session.setClip("Armature|Still");
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(false);
+    session.setClip("Armature|Charge");
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(true);
+  });
+
+  it("does not play a range of one or two frames, and pauses when the range shrinks to one", async () => {
+    const { client, session, viewport } = await openStone();
+    session.setRange({ start: 10, end: 11 });
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(false);
+    session.setRange({ start: 10, end: 12 });
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(true);
+    await client.execute("view.setRange", { assetId: session.assetId, range: { start: 20, end: 21 } });
+    expect(session.time.get().playing).toBe(false);
+    expect(viewport.playing).toBe(false);
+  });
+
+  it("pauses when a new export turns the playing clip into a pose", async () => {
+    const { client, session, viewport } = await openStone();
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(true);
+    const scene = session.state.get().scene;
+    if (!scene) throw new Error("No scene.");
+    const clips = scene.clips.map((clip) =>
+      clip.name === "Armature|Charge" ? { ...clip, duration: 1 / clip.fps, frameCount: 2 } : clip,
+    );
+    await client.simulateExport(session.assetId, { scene: { ...scene, clips } });
+    await flush();
+    expect(session.clipInfo()?.frameCount).toBe(2);
+    expect(session.time.get().playing).toBe(false);
+    expect(viewport.playing).toBe(false);
+  });
+
+  it("does not play a selected comment's range of one or two frames", async () => {
+    const { session, viewport } = await openStone();
+    session.setRange({ start: 10, end: 11 });
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("The foot snaps here.");
+    expect(await session.submitBox()).toBe(true);
+    const made = session.state
+      .get()
+      .review?.comments.find((comment) => currentMessage(comment) === "The foot snaps here.");
+    expect(session.selectComment(made?.id ?? null)).toBe("selected");
+    expect(session.state.get().range).toBeNull();
+    expect(session.canPlay()).toBe(false);
+    session.setPlaying(true);
+    expect(viewport.playing).toBe(false);
+    session.deselect();
+    expect(session.canPlay()).toBe(true);
   });
 
   it("refuses commands that do not run in a window, and unknown clips", async () => {

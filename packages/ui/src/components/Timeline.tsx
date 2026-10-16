@@ -29,8 +29,10 @@ export function Timeline({ store, session }: { store: WorkspaceStore; session: A
   const loop = useSelect(session.state, (state) => state.loop);
   const range = useSelect(session.state, (state) => state.range);
   const playing = useSelect(session.time, (state) => state.playing);
+  const playable = useSelect(session.state, () => session.canPlay());
   const clip = useMemo(() => scene?.clips.find((candidate) => candidate.name === clipName) ?? null, [scene, clipName]);
   if (scene && scene.clips.length === 0) return null;
+  const steppable = clip !== null && lastFrame(clip) > 0;
   return (
     <section className="timeline" aria-label="Timeline">
       <div className="tl-bar">
@@ -41,14 +43,14 @@ export function Timeline({ store, session }: { store: WorkspaceStore; session: A
           label="Previous frame"
           shortcut="←"
           className="tl-step"
-          disabled={!clip}
+          disabled={!steppable}
           onClick={() => session.step(-1)}
         />
         <IconButton
           icon={playing ? "pause" : "play"}
           label={playing ? "Pause" : "Play"}
           shortcut="Space"
-          disabled={!clip}
+          disabled={!playable}
           onClick={() => session.togglePlaying()}
         />
         <IconButton
@@ -56,11 +58,17 @@ export function Timeline({ store, session }: { store: WorkspaceStore; session: A
           label="Next frame"
           shortcut="→"
           className="tl-step"
-          disabled={!clip}
+          disabled={!steppable}
           onClick={() => session.step(1)}
         />
-        <IconButton icon="loop" label="Loop" pressed={loop} disabled={!clip} onClick={() => session.setLoop(!loop)} />
-        <SpeedMenu session={session} disabled={!clip} />
+        <IconButton
+          icon="loop"
+          label="Loop"
+          pressed={loop}
+          disabled={!playable}
+          onClick={() => session.setLoop(!loop)}
+        />
+        <SpeedMenu session={session} disabled={!playable} />
         {range ? (
           <span className="chip range-chip">
             <Icon name="range" />

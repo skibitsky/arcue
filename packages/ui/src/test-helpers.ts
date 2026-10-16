@@ -287,6 +287,18 @@ export function lodStone(base: SceneDescription): SceneDescription {
   };
 }
 
+/** Adds "Armature|Pose", two frames long, and "Armature|Still", one frame long. */
+export const withPoseClips: SceneChange = (scene) => {
+  const poses = fakeScene({
+    ...STONE_RESONATOR,
+    clips: [
+      ["Pose", 1 / STONE_RESONATOR.fps],
+      ["Still", 0],
+    ],
+  });
+  return { ...scene, clips: [...scene.clips, ...poses.clips] };
+};
+
 export function stoneCatalog(path: string, change: SceneChange = (scene) => scene) {
   if (path !== STONE_RESONATOR_PATH) return null;
   return { scene: change(fakeScene(STONE_RESONATOR)), review: stoneResonatorReview(NOW), version: STONE_VERSION };
