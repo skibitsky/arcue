@@ -1,6 +1,7 @@
 import type { CameraAnchor, Vec3 } from "@arcue/scene";
 import { MathUtils, MOUSE, PerspectiveCamera, Spherical, TOUCH, Vector3 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { WheelIntentTracker, wheelSample } from "../interaction/wheel";
 
 const TWEEN_MS = 520;
 const INITIAL_DIRECTION = new Vector3(-0.42, 0.3, 0.86).normalize();
@@ -22,18 +23,28 @@ function ease(k: number): number {
 
 /**
  * The camera and its orbit controls. Orbit with the left button (the View tool), the right button, or Alt with the
- * left button; pan with the middle button or Shift with the right; zoom with the wheel or a pinch.
+ * left button; pan with the middle button, Shift with the right, or two fingers on a trackpad; zoom with the wheel, a
+ * pinch, or two fingers with Ctrl or Cmd held.
  */
 export class CameraRig {
   readonly camera = new PerspectiveCamera(30, 1, 0.01, 100);
   readonly controls: OrbitControls;
+  private readonly element: HTMLElement;
   private tween: Tween | null = null;
   private modelSize = 1;
   private readonly onChange: () => void;
   private changes = 0;
+  private readonly wheel = new WheelIntentTracker();
+  private pointer: { x: number; y: number } | null = null;
+  private pinchScale = 1;
 
   constructor(element: HTMLElement, onChange: () => void) {
     this.onChange = onChange;
+    this.element = element;
+    element.addEventListener("wheel", this.onWheel, { capture: true, passive: false });
+    element.addEventListener("pointermove", this.onPointerMove);
+    element.addEventListener("gesturestart", this.onSafariPinchStart);
+    element.addEventListener("gesturechange", this.onSafariPinch);
     this.controls = new OrbitControls(this.camera, element);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.16;
@@ -53,6 +64,56 @@ export class CameraRig {
     this.camera.position.set(-1.6, 1.8, 3.6);
     this.controls.target.set(0, 0.9, 0);
     this.controls.update();
+  }
+
+  private readonly onWheel = (event: WheelEvent): void => {
+    if (this.wheel.classify(wheelSample(event)) !== "pan") return;
+    if (!this.controls.enabled || !this.controls.enablePan) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.panBy(event.deltaX, event.deltaY);
+  };
+
+  private readonly onPointerMove = (event: PointerEvent): void => {
+    this.pointer = { x: event.clientX, y: event.clientY };
+  };
+
+  private readonly onSafariPinchStart = (event: Event): void => {
+    event.preventDefault();
+    this.pinchScale = 1;
+  };
+
+  private readonly onSafariPinch = (event: Event): void => {
+    event.preventDefault();
+    const scale: unknown = Reflect.get(event, "scale");
+    if (typeof scale !== "number" || !(scale > 0)) return;
+    const ratio = scale / this.pinchScale;
+    this.pinchScale = scale;
+    const rect = this.element.getBoundingClientRect();
+    const at = this.pointer ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    this.element.dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaY: -100 * Math.log(ratio),
+        ctrlKey: true,
+        clientX: at.x,
+        clientY: at.y,
+        cancelable: true,
+      }),
+    );
+  };
+
+  private panBy(dx: number, dy: number): void {
+    const height = this.element.clientHeight;
+    if (height === 0) return;
+    const distance = this.camera.position.distanceTo(this.controls.target);
+    const perPixel = (2 * distance * Math.tan(MathUtils.degToRad(this.camera.fov) / 2)) / height;
+    const offset = new Vector3(dx * perPixel, -dy * perPixel, 0).applyQuaternion(this.camera.quaternion);
+    this.tween = null;
+    this.camera.position.add(offset);
+    this.controls.target.add(offset);
+    this.controls.update();
+    this.changes++;
+    this.onChange();
   }
 
   /** Whether the left button orbits for the gesture that starts now: always with the View tool, with Alt otherwise. */
@@ -194,6 +255,10 @@ export class CameraRig {
   }
 
   dispose(): void {
+    this.element.removeEventListener("wheel", this.onWheel, { capture: true });
+    this.element.removeEventListener("pointermove", this.onPointerMove);
+    this.element.removeEventListener("gesturestart", this.onSafariPinchStart);
+    this.element.removeEventListener("gesturechange", this.onSafariPinch);
     this.controls.dispose();
   }
 }
