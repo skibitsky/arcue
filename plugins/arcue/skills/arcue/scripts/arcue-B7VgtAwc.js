@@ -4848,8 +4848,8 @@ var parse = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync(ZodRealError);
-var encode = /* @__PURE__ */ _encode(ZodRealError);
-var decode = /* @__PURE__ */ _decode(ZodRealError);
+var encode$1 = /* @__PURE__ */ _encode(ZodRealError);
+var decode$1 = /* @__PURE__ */ _decode(ZodRealError);
 var encodeAsync = /* @__PURE__ */ _encodeAsync(ZodRealError);
 var decodeAsync = /* @__PURE__ */ _decodeAsync(ZodRealError);
 var safeEncode = /* @__PURE__ */ _safeEncode(ZodRealError);
@@ -5000,10 +5000,10 @@ var ZodType = /*@__PURE__*/ $constructor("ZodType", (inst, def) => {
 		return validateAsync$1(this, data, params);
 	},
 	encode: function _encode(data, params) {
-		return encode(this, data, params, { callee: _encode });
+		return encode$1(this, data, params, { callee: _encode });
 	},
 	decode: function _decode(data, params) {
-		return decode(this, data, params, { callee: _decode });
+		return decode$1(this, data, params, { callee: _decode });
 	},
 	encodeAsync: async function _encodeAsync(data, params) {
 		return await encodeAsync(this, data, params, { callee: _encodeAsync });
@@ -6011,6 +6011,22 @@ var FrameReader = class {
 };
 function framedChannel(stream, codec, limits = {}) {
 	const reader = new FrameReader(limits);
+	return channel(stream, codec, (chunk) => reader.push(chunk), encodeFrame);
+}
+/**
+* Messages over a stream that delivers each write as one chunk, such as a WebSocket, so a frame needs no length
+* prefix. A chunk larger than `MAX_FRAME_BYTES`, or one the codec cannot decode, closes the channel.
+*/
+function messageChannel(stream, codec) {
+	return channel(stream, codec, (chunk) => {
+		if (chunk.byteLength > 1073741824) throw new ArcueError("invalid-input", "A message is too large.");
+		return [chunk];
+	}, (payload) => {
+		if (payload.byteLength > 1073741824) throw new ArcueError("invalid-input", `A message of ${payload.byteLength} bytes is too large to send.`);
+		return payload;
+	});
+}
+function channel(stream, codec, toFrames, toChunk) {
 	const listeners = /* @__PURE__ */ new Set();
 	const waiting = [];
 	const receivers = [];
@@ -6032,7 +6048,7 @@ function framedChannel(stream, codec, limits = {}) {
 		if (closed) return;
 		let frames;
 		try {
-			frames = reader.push(chunk);
+			frames = toFrames(chunk);
 		} catch {
 			close();
 			return;
@@ -6054,7 +6070,7 @@ function framedChannel(stream, codec, limits = {}) {
 	const stopClose = stream.onClose(close);
 	return {
 		send(value) {
-			if (!closed) stream.write(encodeFrame(codec.encode(value)));
+			if (!closed) stream.write(toChunk(codec.encode(value)));
 		},
 		receive() {
 			if (waiting.length > 0) return Promise.resolve(waiting.shift());
@@ -6108,8 +6124,12 @@ var bridgeInfoSchema = object({
 	/** Where a browser shows the core's window, when `arcue serve` runs the core rather than the desktop app. */
 	url: url().optional()
 });
-/** Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket. */
-var SERVE_CORE_PATH = "/core";
+/**
+* Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket that carries one
+* `binaryFrameCodec` frame per message. The path names the format, so a page left open across an update of its server
+* fails to connect rather than misreads.
+*/
+var SERVE_CORE_PATH = "/core/2";
 /** The file in the app's data folder that tells the command line how to start the app when it is not running. */
 var LAUNCH_INFO_FILE = "launch.json";
 var launchInfoSchema = object({
@@ -9180,30 +9200,8 @@ var roundDataSchema = object({
 	comments: array(roundCommentSchema)
 });
 //#endregion
-//#region ../../packages/protocol/src/transport/endpoint.ts
-function eventData(event) {
-	return typeof event === "object" && event !== null && "data" in event ? event.data : void 0;
-}
-/** Listens for the "close" event that MessagePorts fire when either side closes. */
-function portEndpoint(port) {
-	return {
-		post: (message, transfer) => port.postMessage(message, [...transfer]),
-		listen(listener) {
-			const onMessage = (event) => listener(eventData(event));
-			port.addEventListener("message", onMessage);
-			port.start?.();
-			return () => port.removeEventListener("message", onMessage);
-		},
-		onClose(listener) {
-			const onClose = () => listener();
-			port.addEventListener("close", onClose);
-			return () => port.removeEventListener("close", onClose);
-		}
-	};
-}
-//#endregion
 //#region ../../packages/protocol/src/transport/json-codec.ts
-var TAG = "$arcueTypedArray";
+var TAG$1 = "$arcueTypedArray";
 var typedArrays = {
 	Int8Array,
 	Uint8Array,
@@ -9261,13 +9259,13 @@ function replacer(_key, value) {
 	if (!name) return value;
 	const view = value;
 	return {
-		[TAG]: name,
+		[TAG$1]: name,
 		base64: toBase64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength))
 	};
 }
 function reviver(_key, value) {
-	if (typeof value !== "object" || value === null || !(TAG in value)) return value;
-	const { [TAG]: name, base64 } = value;
+	if (typeof value !== "object" || value === null || !(TAG$1 in value)) return value;
+	const { [TAG$1]: name, base64 } = value;
 	if (typeof name !== "string" || !Object.hasOwn(typedArrays, name) || typeof base64 !== "string") throw new Error("Invalid typed array in a message.");
 	const bytes = fromBase64(base64);
 	const Constructor = typedArrays[name];
@@ -9284,4 +9282,119 @@ var jsonFrameCodec = {
 	decode: (bytes) => JSON.parse(new TextDecoder().decode(bytes), reviver)
 };
 //#endregion
-export { isDefaultPartView as $, unshownUvSetWarnings as A, parseStoredPath as B, MODEL_FILE_EXTENSIONS as C, keysModelBones as D, joinsByName as E, countInRanges as F, composeScene as G, imageMimeType as H, decodeRanges as I, splitMemberPath as J, findNode as K, encodeRanges as L, isKeyedEveryFrame as M, lastFrame as N, memberRoles as O, mergeKeyTimes as P, describeParts as Q, rangesWithin as R, IMAGE_FILE_EXTENSIONS as S, compositionFileSchema as T, sameTopology as U, fileNameOf as V, topologyFingerprint as W, importWarning as X, describeTextureUses as Y, defaultViewBounds as Z, isCommandName as _, ArcueError as _t, queries as a, TEXTURE_SLOT_KEYS as at, screenshotOwner as b, importRequests as c, LAUNCH_INFO_FILE as ct, withTransfer as d, bridgeInfoSchema as dt, knownPartView as et, isEnvelope as f, connectBridge as ft, commands as g, framedEndpoint as gt, reviewFileSchema as h, framedChannel as ht, isQueryName as i, TEXTURE_SLOTS as it, frameCountFor as j, viewStateSchema as k, serveImportWorker as l, SERVE_CORE_PATH as lt, reportListenerError as m, MAX_FRAME_BYTES as mt, portEndpoint as n, TEXTURE_REF_KEYS as nt, importFindFileInputSchema as o, BRIDGE_INFO_FILE as ot, callEach as p, launchInfoSchema as pt, memberPath as q, roundDataSchema as r, TEXTURE_REF_NAMES as rt, importReadFileInputSchema as s, HANDSHAKE_MAX_FRAME_BYTES as st, jsonFrameCodec as t, shownByDefault as tt, createPeer as u, acceptBridge as ut, settingsSchema as v, COMMENT_ID_PATTERN as vt, animatesModel as w, COMPOSITION_FILE_NAME as x, warningId as y, materialSlots as z };
+//#region ../../packages/protocol/src/transport/binary-codec.ts
+var TAG = "$arcueTypedArray";
+var LENGTH_BYTES = 4;
+var DATA_ALIGNMENT = 8;
+var LITTLE_ENDIAN = new Uint8Array(Uint16Array.of(1).buffer)[0] === 1;
+var align = (offset, alignment) => Math.ceil(offset / alignment) * alignment;
+var invalid = (reason) => new ArcueError("invalid-input", `A malformed frame arrived: ${reason}.`);
+function encode(value) {
+	if (!LITTLE_ENDIAN) throw new ArcueError("internal", "Binary frames need a little-endian computer.");
+	const references = /* @__PURE__ */ new Map();
+	let dataBytes = 0;
+	const json = JSON.stringify(value, (_key, item) => {
+		if (typeof item !== "object" || item === null) return item;
+		const type = typedArrayName(item);
+		if (!type) return item;
+		const array = item;
+		let reference = references.get(array);
+		if (!reference) {
+			const offset = align(dataBytes, array.BYTES_PER_ELEMENT);
+			reference = {
+				[TAG]: type,
+				offset,
+				length: array.length
+			};
+			references.set(array, reference);
+			dataBytes = offset + array.byteLength;
+		}
+		return reference;
+	});
+	const header = new TextEncoder().encode(json ?? "null");
+	const dataStart = align(LENGTH_BYTES + header.byteLength, DATA_ALIGNMENT);
+	const total = dataStart + dataBytes;
+	if (total > 1073741824) throw new ArcueError("invalid-input", `A message of ${total} bytes is too large to send.`);
+	const frame = new Uint8Array(total);
+	new DataView(frame.buffer).setUint32(0, header.byteLength, true);
+	frame.set(header, LENGTH_BYTES);
+	for (const [array, { offset }] of references) frame.set(new Uint8Array(array.buffer, array.byteOffset, array.byteLength), dataStart + offset);
+	return frame;
+}
+function decode(bytes) {
+	if (!LITTLE_ENDIAN) throw new ArcueError("internal", "Binary frames need a little-endian computer.");
+	if (bytes.byteLength < LENGTH_BYTES) throw invalid("it has no header");
+	if (bytes.byteLength > 1073741824) throw invalid(`its ${bytes.byteLength} bytes are too many`);
+	const headerLength = new DataView(bytes.buffer, bytes.byteOffset, LENGTH_BYTES).getUint32(0, true);
+	const dataStart = align(LENGTH_BYTES + headerLength, DATA_ALIGNMENT);
+	if (dataStart > bytes.byteLength) throw invalid("its header is longer than the frame");
+	let text;
+	try {
+		text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(LENGTH_BYTES, LENGTH_BYTES + headerLength));
+	} catch {
+		throw invalid("its header is not UTF-8");
+	}
+	const data = alignedData(bytes.subarray(dataStart));
+	try {
+		return JSON.parse(text, (_key, value) => revive(value, data));
+	} catch (error) {
+		if (error instanceof ArcueError) throw error;
+		throw invalid("its header is not JSON");
+	}
+}
+/** Views need their element size as alignment in the buffer; a frame that arrived at an odd place is copied once. */
+function alignedData(data) {
+	return data.byteOffset % DATA_ALIGNMENT === 0 ? data : new Uint8Array(data);
+}
+function revive(value, data) {
+	if (typeof value !== "object" || value === null || !Object.hasOwn(value, TAG)) return value;
+	const { [TAG]: type, offset, length, ...rest } = value;
+	if (typeof type !== "string" || !Object.hasOwn(typedArrays, type)) throw invalid("it names an unknown array type");
+	if (Object.keys(rest).length > 0) throw invalid("an array reference has unknown fields");
+	if (!isCount(offset) || !isCount(length)) throw invalid("an array has an invalid offset or length");
+	const Constructor = typedArrays[type];
+	const size = Constructor.BYTES_PER_ELEMENT;
+	if (offset % size !== 0) throw invalid("an array is misaligned");
+	if (offset + length * size > data.byteLength) throw invalid("an array reaches past the frame");
+	return new Constructor(data.buffer, data.byteOffset + offset, length);
+}
+function isCount(value) {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+/**
+* A JSON header followed by the raw bytes of the message's typed arrays, each aligned for its element size. In the
+* header each typed array becomes `{ "$arcueTypedArray": type, offset, length }`, with the offset in bytes from the
+* start of the data and the length in elements. The first 4 bytes are the header's length, little-endian, and the data
+* starts at the next multiple of 8. Decoded arrays are views into the frame, so they share its buffer.
+*
+* Like `jsonFrameCodec`, it depends on no JavaScript engine, but it neither copies arrays into strings nor parses them
+* back, which matters for scenes of several megabytes. A typed array that occurs twice is written once.
+*/
+var binaryFrameCodec = {
+	encode,
+	decode
+};
+//#endregion
+//#region ../../packages/protocol/src/transport/endpoint.ts
+function eventData(event) {
+	return typeof event === "object" && event !== null && "data" in event ? event.data : void 0;
+}
+/** Listens for the "close" event that MessagePorts fire when either side closes. */
+function portEndpoint(port) {
+	return {
+		post: (message, transfer) => port.postMessage(message, [...transfer]),
+		listen(listener) {
+			const onMessage = (event) => listener(eventData(event));
+			port.addEventListener("message", onMessage);
+			port.start?.();
+			return () => port.removeEventListener("message", onMessage);
+		},
+		onClose(listener) {
+			const onClose = () => listener();
+			port.addEventListener("close", onClose);
+			return () => port.removeEventListener("close", onClose);
+		}
+	};
+}
+//#endregion
+export { describeParts as $, viewStateSchema as A, materialSlots as B, IMAGE_FILE_EXTENSIONS as C, joinsByName as D, compositionFileSchema as E, mergeKeyTimes as F, topologyFingerprint as G, fileNameOf as H, countInRanges as I, memberPath as J, composeScene as K, decodeRanges as L, frameCountFor as M, isKeyedEveryFrame as N, keysModelBones as O, lastFrame as P, defaultViewBounds as Q, encodeRanges as R, COMPOSITION_FILE_NAME as S, animatesModel as T, imageMimeType as U, parseStoredPath as V, sameTopology as W, describeTextureUses as X, splitMemberPath as Y, importWarning as Z, commands as _, framedEndpoint as _t, isQueryName as a, TEXTURE_SLOTS as at, warningId as b, COMMENT_ID_PATTERN as bt, importReadFileInputSchema as c, HANDSHAKE_MAX_FRAME_BYTES as ct, createPeer as d, acceptBridge as dt, isDefaultPartView as et, withTransfer as f, bridgeInfoSchema as ft, reviewFileSchema as g, framedChannel as gt, reportListenerError as h, MAX_FRAME_BYTES as ht, roundDataSchema as i, TEXTURE_REF_NAMES as it, unshownUvSetWarnings as j, memberRoles as k, importRequests as l, LAUNCH_INFO_FILE as lt, callEach as m, launchInfoSchema as mt, binaryFrameCodec as n, shownByDefault as nt, queries as o, TEXTURE_SLOT_KEYS as ot, isEnvelope as p, connectBridge as pt, findNode as q, jsonFrameCodec as r, TEXTURE_REF_KEYS as rt, importFindFileInputSchema as s, BRIDGE_INFO_FILE as st, portEndpoint as t, knownPartView as tt, serveImportWorker as u, SERVE_CORE_PATH as ut, isCommandName as v, messageChannel as vt, MODEL_FILE_EXTENSIONS as w, screenshotOwner as x, settingsSchema as y, ArcueError as yt, rangesWithin as z };

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { $ as isDefaultPartView, B as parseStoredPath, C as MODEL_FILE_EXTENSIONS, D as keysModelBones, E as joinsByName, F as countInRanges, G as composeScene, H as imageMimeType, I as decodeRanges, J as splitMemberPath, K as findNode, L as encodeRanges, N as lastFrame, O as memberRoles, R as rangesWithin, S as IMAGE_FILE_EXTENSIONS, T as compositionFileSchema, U as sameTopology, V as fileNameOf, X as importWarning, Y as describeTextureUses, _ as isCommandName, _t as ArcueError, a as queries, b as screenshotOwner, c as importRequests, ct as LAUNCH_INFO_FILE, d as withTransfer, dt as bridgeInfoSchema, et as knownPartView, f as isEnvelope, ft as connectBridge, g as commands, gt as framedEndpoint, h as reviewFileSchema, ht as framedChannel, i as isQueryName, it as TEXTURE_SLOTS, k as viewStateSchema, m as reportListenerError, mt as MAX_FRAME_BYTES, n as portEndpoint, nt as TEXTURE_REF_KEYS, o as importFindFileInputSchema, ot as BRIDGE_INFO_FILE, p as callEach, pt as launchInfoSchema, q as memberPath, r as roundDataSchema, rt as TEXTURE_REF_NAMES, s as importReadFileInputSchema, st as HANDSHAKE_MAX_FRAME_BYTES, t as jsonFrameCodec, tt as shownByDefault, u as createPeer, ut as acceptBridge, v as settingsSchema, vt as COMMENT_ID_PATTERN, w as animatesModel, x as COMPOSITION_FILE_NAME, y as warningId, z as materialSlots } from "./arcue-DICWtoAX.js";
+import { A as viewStateSchema, B as materialSlots, C as IMAGE_FILE_EXTENSIONS, D as joinsByName, E as compositionFileSchema, H as fileNameOf, I as countInRanges, J as memberPath, K as composeScene, L as decodeRanges, O as keysModelBones, P as lastFrame, R as encodeRanges, S as COMPOSITION_FILE_NAME, T as animatesModel, U as imageMimeType, V as parseStoredPath, W as sameTopology, X as describeTextureUses, Y as splitMemberPath, Z as importWarning, _ as commands, _t as framedEndpoint, a as isQueryName, at as TEXTURE_SLOTS, b as warningId, bt as COMMENT_ID_PATTERN, c as importReadFileInputSchema, ct as HANDSHAKE_MAX_FRAME_BYTES, d as createPeer, dt as acceptBridge, et as isDefaultPartView, f as withTransfer, ft as bridgeInfoSchema, g as reviewFileSchema, gt as framedChannel, h as reportListenerError, ht as MAX_FRAME_BYTES, i as roundDataSchema, it as TEXTURE_REF_NAMES, k as memberRoles, l as importRequests, lt as LAUNCH_INFO_FILE, m as callEach, mt as launchInfoSchema, n as binaryFrameCodec, nt as shownByDefault, o as queries, p as isEnvelope, pt as connectBridge, q as findNode, r as jsonFrameCodec, rt as TEXTURE_REF_KEYS, s as importFindFileInputSchema, st as BRIDGE_INFO_FILE, t as portEndpoint, tt as knownPartView, v as isCommandName, vt as messageChannel, w as MODEL_FILE_EXTENSIONS, x as screenshotOwner, y as settingsSchema, yt as ArcueError, z as rangesWithin } from "./arcue-B7VgtAwc.js";
 import { createRequire } from "node:module";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
@@ -9537,11 +9537,11 @@ async function startServer(options) {
 	const started = core;
 	const sockets = new import_websocket_server.default({
 		noServer: true,
-		maxPayload: MAX_FRAME_BYTES + 4
+		maxPayload: MAX_FRAME_BYTES
 	});
 	let next = 1;
 	sockets.on("connection", (socket) => {
-		const channel = framedChannel(webSocketStream(socket), jsonFrameCodec);
+		const channel = messageChannel(webSocketStream(socket), binaryFrameCodec);
 		const peer = started.connect(framedEndpoint(channel), {
 			connection: `browser-${next++}`,
 			caller: "window",
@@ -9565,7 +9565,7 @@ async function startServer(options) {
 		});
 		server.on("upgrade", (request, socket, head) => {
 			const path = URL.parse(request.url ?? "/", url)?.pathname;
-			if (!allowed(request) || path !== "/core" || request.headers.origin !== `http://${request.headers.host}`) {
+			if (!allowed(request) || path !== "/core/2" || request.headers.origin !== `http://${request.headers.host}`) {
 				socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
 				return;
 			}
@@ -9674,7 +9674,7 @@ async function sendFile(webUi, request, response) {
 		stream.pipe(response);
 	});
 }
-/** A WebSocket carries one frame per message; an error ends the stream, as its "close" event follows. */
+/** A WebSocket carries one frame per message, so it keeps message boundaries; an error ends the stream, as its "close" event follows. */
 function webSocketStream(socket) {
 	socket.on("error", () => socket.terminate());
 	return {
