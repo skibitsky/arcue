@@ -16,5 +16,8 @@
     "animation",
     "review",
     "feedback"
-  ]
+  ],
+  "icon": "./assets/icon.png",
+  "documentationUrl": "https://github.com/skibitsky/arcue#readme",
+  "supportUrl": "https://github.com/skibitsky/arcue/issues"
 }

@@ -5211,6 +5211,9 @@ var ZodURL = /*@__PURE__*/ $constructor("ZodURL", (inst, def) => {
 	$ZodURL.init(inst, def);
 	ZodStringFormat.init(inst, def);
 });
+function url(params) {
+	return /* @__PURE__ */ _url(ZodURL, params);
+}
 var ZodEmoji = /*@__PURE__*/ $constructor("ZodEmoji", (inst, def) => {
 	$ZodEmoji.init(inst, def);
 	ZodStringFormat.init(inst, def);
@@ -5972,7 +5975,8 @@ var FrameReader = class {
 		const frames = [];
 		for (;;) {
 			if (this.#buffered < HEADER_BYTES) return frames;
-			const length = new DataView(this.#peek(HEADER_BYTES).buffer).getUint32(0);
+			const header = this.#peek(HEADER_BYTES);
+			const length = new DataView(header.buffer, header.byteOffset, HEADER_BYTES).getUint32(0);
 			if (length > this.#limit) throw new ArcueError("invalid-input", `A frame of ${length} bytes is too large.`);
 			if (this.#buffered < HEADER_BYTES + length) return frames;
 			this.#take(HEADER_BYTES);
@@ -6100,8 +6104,12 @@ var bridgeInfoSchema = object({
 	/** A Unix domain socket path, or a Windows named pipe such as "\\\\.\\pipe\\arcue-…". */
 	socket: string().min(1),
 	token: string().min(32),
-	pid: int().positive()
+	pid: int().positive(),
+	/** Where a browser shows the core's window, when `arcue serve` runs the core rather than the desktop app. */
+	url: url().optional()
 });
+/** Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket. */
+var SERVE_CORE_PATH = "/core";
 /** The file in the app's data folder that tells the command line how to start the app when it is not running. */
 var LAUNCH_INFO_FILE = "launch.json";
 var launchInfoSchema = object({
@@ -6111,7 +6119,7 @@ var launchInfoSchema = object({
 });
 /** The largest hello or reply either side accepts, so an unauthenticated peer cannot make the other buffer much. */
 var HANDSHAKE_MAX_FRAME_BYTES = 4096;
-object({
+var helloSchema = object({
 	type: literal("arcue.hello"),
 	version: literal(1),
 	token: string(),
@@ -6122,6 +6130,30 @@ var replySchema = discriminatedUnion("type", [object({ type: literal("arcue.welc
 	type: literal("arcue.rejected"),
 	message: string()
 })]);
+/**
+* The core's side of a bridge connection: the first message must carry the token. On success the returned endpoint
+* carries envelopes; otherwise the channel is closed and the promise rejects as "forbidden".
+*/
+async function acceptBridge(channel, options) {
+	const hello = helloSchema.safeParse(await firstMessage(channel, options.timeout));
+	const refuse = (message, reason) => {
+		channel.send({
+			type: "arcue.rejected",
+			message
+		});
+		channel.close();
+		return new ArcueError("forbidden", reason);
+	};
+	if (!hello.success || !sameToken(hello.data.token, options.token)) throw refuse("The token does not match the running app.", "A bridge connected without the app's token.");
+	const user = authorSchema.optional().safeParse(hello.data.user);
+	if (!user.success) throw refuse("The user name is not valid.", "A bridge named a user that is not valid.");
+	channel.send({ type: "arcue.welcome" });
+	const endpoint = framedEndpoint(channel);
+	return user.data ? {
+		endpoint,
+		user: user.data
+	} : { endpoint };
+}
 /** The bridge's side: presents the token and resolves once the core accepts it. */
 async function connectBridge(channel, options) {
 	channel.send({
@@ -6151,6 +6183,13 @@ function firstMessage(channel, timeout) {
 			reject(error);
 		});
 	});
+}
+/** Compares in time that depends only on the length, so the token cannot be guessed byte by byte. */
+function sameToken(given, expected) {
+	if (given.length !== expected.length) return false;
+	let difference = 0;
+	for (let index = 0; index < given.length; index++) difference |= given.charCodeAt(index) ^ expected.charCodeAt(index);
+	return difference === 0;
 }
 //#endregion
 //#region ../../packages/scene/src/material.ts
@@ -8186,7 +8225,11 @@ var commands = {
 		description: "Move an asset's tab from the window that shows it to the calling window, with its camera, clip and frame.",
 		runsIn: "core",
 		internal: true,
-		input: object(assetRef$1),
+		input: object({
+			...assetRef$1,
+			/** Leaves the tab where it is when another window shows the asset, as a page that reopens after a reload does. */
+			unlessShown: boolean().optional()
+		}),
 		output: _void()
 	}),
 	"view.releaseAsset": command({
@@ -9241,4 +9284,4 @@ var jsonFrameCodec = {
 	decode: (bytes) => JSON.parse(new TextDecoder().decode(bytes), reviver)
 };
 //#endregion
-export { knownPartView as $, frameCountFor as A, fileNameOf as B, animatesModel as C, memberRoles as D, keysModelBones as E, decodeRanges as F, findNode as G, sameTopology as H, encodeRanges as I, describeTextureUses as J, memberPath as K, rangesWithin as L, lastFrame as M, mergeKeyTimes as N, viewStateSchema as O, countInRanges as P, isDefaultPartView as Q, materialSlots as R, MODEL_FILE_EXTENSIONS as S, joinsByName as T, topologyFingerprint as U, imageMimeType as V, composeScene as W, defaultViewBounds as X, importWarning as Y, describeParts as Z, settingsSchema as _, queries as a, BRIDGE_INFO_FILE as at, COMPOSITION_FILE_NAME as b, importRequests as c, bridgeInfoSchema as ct, withTransfer as d, framedChannel as dt, shownByDefault as et, callEach as f, ArcueError as ft, isCommandName as g, commands as h, isQueryName as i, TEXTURE_SLOT_KEYS as it, isKeyedEveryFrame as j, unshownUvSetWarnings as k, serveImportWorker as l, connectBridge as lt, reviewFileSchema as m, portEndpoint as n, TEXTURE_REF_NAMES as nt, importFindFileInputSchema as o, HANDSHAKE_MAX_FRAME_BYTES as ot, reportListenerError as p, COMMENT_ID_PATTERN as pt, splitMemberPath as q, roundDataSchema as r, TEXTURE_SLOTS as rt, importReadFileInputSchema as s, LAUNCH_INFO_FILE as st, jsonFrameCodec as t, TEXTURE_REF_KEYS as tt, createPeer as u, launchInfoSchema as ut, warningId as v, compositionFileSchema as w, IMAGE_FILE_EXTENSIONS as x, screenshotOwner as y, parseStoredPath as z };
+export { isDefaultPartView as $, unshownUvSetWarnings as A, parseStoredPath as B, MODEL_FILE_EXTENSIONS as C, keysModelBones as D, joinsByName as E, countInRanges as F, composeScene as G, imageMimeType as H, decodeRanges as I, splitMemberPath as J, findNode as K, encodeRanges as L, isKeyedEveryFrame as M, lastFrame as N, memberRoles as O, mergeKeyTimes as P, describeParts as Q, rangesWithin as R, IMAGE_FILE_EXTENSIONS as S, compositionFileSchema as T, sameTopology as U, fileNameOf as V, topologyFingerprint as W, importWarning as X, describeTextureUses as Y, defaultViewBounds as Z, isCommandName as _, ArcueError as _t, queries as a, TEXTURE_SLOT_KEYS as at, screenshotOwner as b, importRequests as c, LAUNCH_INFO_FILE as ct, withTransfer as d, bridgeInfoSchema as dt, knownPartView as et, isEnvelope as f, connectBridge as ft, commands as g, framedEndpoint as gt, reviewFileSchema as h, framedChannel as ht, isQueryName as i, TEXTURE_SLOTS as it, frameCountFor as j, viewStateSchema as k, serveImportWorker as l, SERVE_CORE_PATH as lt, reportListenerError as m, MAX_FRAME_BYTES as mt, portEndpoint as n, TEXTURE_REF_KEYS as nt, importFindFileInputSchema as o, BRIDGE_INFO_FILE as ot, callEach as p, launchInfoSchema as pt, memberPath as q, roundDataSchema as r, TEXTURE_REF_NAMES as rt, importReadFileInputSchema as s, HANDSHAKE_MAX_FRAME_BYTES as st, jsonFrameCodec as t, shownByDefault as tt, createPeer as u, acceptBridge as ut, settingsSchema as v, COMMENT_ID_PATTERN as vt, animatesModel as w, COMPOSITION_FILE_NAME as x, warningId as y, materialSlots as z };

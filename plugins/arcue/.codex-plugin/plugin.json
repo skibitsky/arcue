@@ -11,13 +11,22 @@
   ],
   "interface": {
     "displayName": "Arcue",
-    "shortDescription": "Apply Arcue reviews and open models in Arcue",
+    "shortDescription": "Apply Arcue's 3D reviews",
+    "longDescription": "Pin or paint comments on a 3D model or animation in Arcue, and your agent gets the vertices, bones, frame, camera and screenshots behind each one. The plugin teaches Claude Code and Codex to read these reviews, fix the FBX or Blender files, and show models in Arcue: in the app's built-in browser, or in the Arcue desktop app.",
     "developerName": "Arcue",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
     "websiteUrl": "https://github.com/skibitsky/arcue",
     "defaultPrompt": [
       "Apply the Arcue review I pasted",
       "Show me this model in Arcue"
     ],
-    "brandColor": "#DD653D"
+    "brandColor": "#DD653D",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
   }
 }
