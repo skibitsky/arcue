@@ -861,6 +861,88 @@ async function main(): Promise<void> {
       before: distance(beforeZoom),
       after: distance(afterZoom),
     });
+    const settled = async () => {
+      let last = JSON.stringify(await camera());
+      for (let attempt = 0; attempt < 40; attempt++) {
+        await page.waitForTimeout(250);
+        const next = JSON.stringify(await camera());
+        if (next === last) return;
+        last = next;
+      }
+    };
+    const trackpad = async (deltaX: number, deltaY: number, modifiers: { ctrlKey?: boolean; metaKey?: boolean }) => {
+      await settled();
+      const before = await camera();
+      await page.evaluate(
+        async ({ deltaX, deltaY, modifiers }) => {
+          const canvas = document.querySelector("#view canvas");
+          for (let step = 0; step < 10; step++) {
+            const init = { deltaX, deltaY, wheelDeltaX: -3 * deltaX, wheelDeltaY: -3 * deltaY, ...modifiers };
+            canvas?.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init }));
+            await new Promise((resolve) => setTimeout(resolve, 16));
+          }
+        },
+        { deltaX, deltaY, modifiers },
+      );
+      await page.waitForTimeout(700);
+      return { before, after: await camera() };
+    };
+    const offset = (anchor: typeof beforeZoom) =>
+      [0, 1, 2].map((axis) => (anchor?.position[axis] ?? 0) - (anchor?.target[axis] ?? 0));
+    const swipe = await trackpad(0, 12, {});
+    const startOffset = offset(swipe.before);
+    const endOffset = offset(swipe.after);
+    const startLength = Math.hypot(...startOffset);
+    const endLength = Math.hypot(...endOffset);
+    const dot = startOffset.reduce((sum, value, axis) => sum + value * (endOffset[axis] ?? 0), 0);
+    const turn = (Math.acos(Math.min(1, dot / (startLength * endLength))) * 180) / Math.PI;
+    const stretch = Math.abs(endLength / startLength - 1);
+    check(
+      "two fingers on a trackpad pan, and the model follows them",
+      turn < 0.5 && stretch < 1e-3 && (swipe.after?.target[1] ?? 0) < (swipe.before?.target[1] ?? 0) - 0.01,
+      { turn, stretch, before: swipe.before?.target, after: swipe.after?.target },
+    );
+    const sideways = await trackpad(12, 0, {});
+    check(
+      "a sideways swipe pans sideways",
+      Math.abs((sideways.after?.target[1] ?? 0) - (sideways.before?.target[1] ?? 0)) < 1e-6 &&
+        Math.hypot(
+          (sideways.after?.target[0] ?? 0) - (sideways.before?.target[0] ?? 0),
+          (sideways.after?.target[2] ?? 0) - (sideways.before?.target[2] ?? 0),
+        ) > 1e-4,
+      { before: sideways.before?.target, after: sideways.after?.target },
+    );
+    for (const [name, modifiers] of [
+      ["Ctrl", { ctrlKey: true }],
+      ["Cmd", { metaKey: true }],
+    ] as const) {
+      const zoomed = await trackpad(0, -6, modifiers);
+      check(`two fingers with ${name} zoom`, distance(zoomed.after) < distance(zoomed.before), {
+        before: distance(zoomed.before),
+        after: distance(zoomed.after),
+      });
+    }
+    const beforePinch = await camera();
+    await page.evaluate(async () => {
+      const canvas = document.querySelector("#view canvas");
+      const gesture = (type: string, scale: number) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "scale", { value: scale });
+        canvas?.dispatchEvent(event);
+      };
+      gesture("gesturestart", 1);
+      for (const scale of [1.1, 1.25, 1.4]) {
+        gesture("gesturechange", scale);
+        await new Promise((resolve) => setTimeout(resolve, 16));
+      }
+      gesture("gestureend", 1.4);
+    });
+    await page.waitForTimeout(700);
+    const afterPinch = await camera();
+    check("a pinch in Safari zooms in", distance(afterPinch) < distance(beforePinch), {
+      before: distance(beforePinch),
+      after: distance(afterPinch),
+    });
     await page.evaluate(() => window.harness?.viewport.frame(null, { animate: true }));
     await page.waitForTimeout(800);
     await shot(page, "14-framed");
