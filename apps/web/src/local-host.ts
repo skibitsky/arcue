@@ -30,9 +30,12 @@ export class LocalHost {
     });
   }
 
-  /** Shows the assets the core has open in this page, as after a reload, in the views they had. */
+  /**
+   * Shows the assets the core has open that no other page shows, as after a reload, in the views they had. A page
+   * that is still open keeps its tabs and the drafts in them.
+   */
   async adoptOpenAssets(): Promise<void> {
     const { assets } = await this.client.query("asset.list", {});
-    for (const asset of assets) await this.client.execute("view.moveAsset", { assetId: asset.assetId });
+    for (const { assetId } of assets) await this.client.execute("view.moveAsset", { assetId, unlessShown: true });
   }
 }

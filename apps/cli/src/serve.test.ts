@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { connectToApp } from "./app-connection";
 import type { ArcueServer, ServeOptions } from "./serve";
-import { startServer } from "./serve";
+import { localHosts, startServer } from "./serve";
 
 let temp: string;
 let userData: string;
@@ -162,6 +162,11 @@ describe("arcue serve", () => {
     expect((await get(url, "/", { host: `evil.example:${port}` })).status).toBe(403);
     expect((await get(url, "/", { host: "localhost:1" })).status).toBe(403);
     expect((await get(url, "/", { method: "POST" })).status).toBe(405);
+  });
+
+  it("knows the Host headers of localhost addresses, without the port for port 80", () => {
+    expect([...localHosts(4530)]).toEqual(["localhost:4530", "127.0.0.1:4530", "[::1]:4530"]);
+    expect([...localHosts(80)]).toEqual(["localhost", "127.0.0.1", "[::1]"]);
   });
 
   it("connects a page from its own origin to the core as a window", async () => {

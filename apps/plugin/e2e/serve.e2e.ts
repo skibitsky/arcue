@@ -110,6 +110,17 @@ test("saves a review round beside the model, as the desktop app does", async ({ 
   expect(readdirSync(round).filter((file) => file.endsWith(".png"))).toHaveLength(1);
 });
 
+test("leaves the models to the page that shows them when another page opens", async ({ page, context }) => {
+  await page.goto(ADDRESS);
+  await expect(page.getByRole("tab", { name: "stone-striker.fbx" })).toBeVisible();
+
+  const other = await context.newPage();
+  await other.goto(ADDRESS);
+  await expect(other.getByText("Ask your agent to show you a model")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "stone-striker.fbx" })).toBeVisible();
+  await other.close();
+});
+
 test("refuses a second server while one runs", async () => {
   expect(await arcue("serve", "--port", String(PORT + 1))).toMatchObject({
     code: 1,

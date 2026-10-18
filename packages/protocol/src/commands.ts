@@ -259,7 +259,11 @@ export const commands = {
       "Move an asset's tab from the window that shows it to the calling window, with its camera, clip and frame.",
     runsIn: "core",
     internal: true,
-    input: z.object(assetRef),
+    input: z.object({
+      ...assetRef,
+      /** Leaves the tab where it is when another window shows the asset, as a page that reopens after a reload does. */
+      unlessShown: z.boolean().optional(),
+    }),
     output: z.void(),
   }),
   "view.releaseAsset": command({

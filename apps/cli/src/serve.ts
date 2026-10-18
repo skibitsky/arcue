@@ -80,7 +80,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
 
   const { servers: http, port } = await listenLocally(options.port);
   const url = `http://localhost:${port}`;
-  const hosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
+  const hosts = localHosts(port);
   const allowed = (request: IncomingMessage) => hosts.has(request.headers.host?.toLowerCase() ?? "");
 
   const windows = new WindowPresence({
@@ -159,6 +159,12 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       started.dispose();
     },
   };
+}
+
+/** The Host headers a browser sends for this computer's own addresses, which leave out the default port 80. */
+export function localHosts(port: number): Set<string> {
+  const names = ["localhost", "127.0.0.1", "[::1]"];
+  return new Set(port === 80 ? names : names.map((name) => `${name}:${port}`));
 }
 
 /** Listens on 127.0.0.1 and, where the computer has it, on ::1 too, since "localhost" may resolve to either. */

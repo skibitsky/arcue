@@ -269,7 +269,7 @@ export class ArcueCore {
         if (context.caller === "window" && this.#windows.has(context.connection)) asset.window = context.connection;
       }),
       registry.handleCommand("view.moveAsset", (args, context) =>
-        this.#opening.run(() => this.#move(args.assetId, context)),
+        this.#opening.run(() => this.#move(args.assetId, context, args.unlessShown ?? false)),
       ),
       registry.handleCommand("view.reportFocus", (_args, context) => {
         if (context.caller === "window" && context.connection !== null) this.#windows.focus(context.connection);
@@ -384,7 +384,7 @@ export class ArcueCore {
    * Moves an asset's tab to the calling window. The window that shows it releases the tab first and returns its view
    * state, so the receiving window starts from the same camera, clip and frame.
    */
-  async #move(assetId: string, context: CallContext): Promise<void> {
+  async #move(assetId: string, context: CallContext, unlessShown: boolean): Promise<void> {
     if (context.caller !== "window" || !this.#windows.has(context.connection)) {
       throw new ArcueError("forbidden", "Only a window can take an asset's tab.");
     }
@@ -392,6 +392,7 @@ export class ArcueCore {
     if (asset.closing) throw new ArcueError("conflict", `${asset.name} is closing, so its tab cannot move.`);
     const target = context.connection;
     const source = asset.window;
+    if (unlessShown && source !== target && this.#windows.has(source)) return;
     if (source !== target && this.#windows.has(source)) {
       const released = await this.#windows.request(
         source,

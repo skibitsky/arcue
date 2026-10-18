@@ -170,6 +170,18 @@ describe("moving a tab between windows", () => {
     await expect(test.core.client.query("viewState.get", { assetId: test.assetId })).resolves.toEqual(state);
   });
 
+  it("leaves a tab another window shows, unless the caller takes it from any window", async () => {
+    const test = await setup();
+    const second = new FakeWindow(test.core, "window-2");
+    await second.client.execute("view.moveAsset", { assetId: test.assetId, unlessShown: true });
+    expect([test.window.requests, second.requests]).toEqual([[], []]);
+
+    test.window.close();
+    await flush();
+    await second.client.execute("view.moveAsset", { assetId: test.assetId, unlessShown: true });
+    expect(second.requestNames).toEqual(["view.showAsset"]);
+  });
+
   it("only focuses the tab when it is already in the caller's window", async () => {
     const test = await setup();
     await test.window.client.execute("view.moveAsset", { assetId: test.assetId });
