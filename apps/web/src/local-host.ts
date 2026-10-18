@@ -1,5 +1,5 @@
 import type { CoreClient } from "@arcue/protocol";
-import { createPeer, createRemoteClient, framedChannel, framedEndpoint, jsonFrameCodec } from "@arcue/protocol";
+import { binaryFrameCodec, createPeer, createRemoteClient, framedEndpoint, messageChannel } from "@arcue/protocol";
 import type { WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore } from "@arcue/ui";
 import { webSocketStream } from "./core-socket";
@@ -14,7 +14,7 @@ export class LocalHost {
 
   constructor(socket: WebSocket) {
     let store: WorkspaceStore | null = null;
-    const peer = createPeer(framedEndpoint(framedChannel(webSocketStream(socket), jsonFrameCodec)), {
+    const peer = createPeer(framedEndpoint(messageChannel(webSocketStream(socket), binaryFrameCodec)), {
       handleRequest: (request) => {
         if (!store) throw new Error("The window is not ready.");
         return store.handleRequest(request);

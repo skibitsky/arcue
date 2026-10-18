@@ -153,12 +153,20 @@ export type { RoundComment, RoundData } from "./round";
 export { roundCommentSchema, roundDataSchema } from "./round";
 export type { CoordinateConvention, Settings } from "./settings";
 export { coordinateConventionSchema, settingsSchema } from "./settings";
+export { binaryFrameCodec } from "./transport/binary-codec";
 export type { EmitterPortLike, MessageEndpoint, PortLike, Transfer } from "./transport/endpoint";
 export { emitterEndpoint, portEndpoint } from "./transport/endpoint";
 export type { Envelope, EventEnvelope, RequestEnvelope, RequestKind, ResponseEnvelope } from "./transport/envelope";
 export { isEnvelope } from "./transport/envelope";
 export type { ByteStream, FrameCodec, FramedChannel, FrameLimits } from "./transport/framed";
-export { encodeFrame, FrameReader, framedChannel, framedEndpoint, MAX_FRAME_BYTES } from "./transport/framed";
+export {
+  encodeFrame,
+  FrameReader,
+  framedChannel,
+  framedEndpoint,
+  MAX_FRAME_BYTES,
+  messageChannel,
+} from "./transport/framed";
 export { jsonFrameCodec } from "./transport/json-codec";
 export type { MemoryEndpoint } from "./transport/memory-channel";
 export { createMemoryChannel } from "./transport/memory-channel";

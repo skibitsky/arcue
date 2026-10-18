@@ -25,8 +25,12 @@ export const bridgeInfoSchema = z.object({
 
 export type BridgeInfo = z.output<typeof bridgeInfoSchema>;
 
-/** Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket. */
-export const SERVE_CORE_PATH = "/core";
+/**
+ * Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket that carries one
+ * `binaryFrameCodec` frame per message. The path names the format, so a page left open across an update of its server
+ * fails to connect rather than misreads.
+ */
+export const SERVE_CORE_PATH = "/core/2";
 
 /** The file in the app's data folder that tells the command line how to start the app when it is not running. */
 export const LAUNCH_INFO_FILE = "launch.json";
