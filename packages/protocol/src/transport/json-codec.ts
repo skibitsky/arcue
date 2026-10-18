@@ -2,7 +2,7 @@ import type { FrameCodec } from "./framed";
 
 const TAG = "$arcueTypedArray";
 
-const typedArrays = {
+export const typedArrays = {
   Int8Array,
   Uint8Array,
   Uint8ClampedArray,
@@ -16,7 +16,7 @@ const typedArrays = {
   BigUint64Array,
 } as const;
 
-type TypedArrayName = keyof typeof typedArrays;
+export type TypedArrayName = keyof typeof typedArrays;
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const LOOKUP = new Map([...ALPHABET].map((char, index) => [char, index]));
@@ -54,7 +54,7 @@ function fromBase64(text: string): Uint8Array {
   return bytes;
 }
 
-function typedArrayName(value: object): TypedArrayName | null {
+export function typedArrayName(value: object): TypedArrayName | null {
   if (!ArrayBuffer.isView(value) || value instanceof DataView) return null;
   const name = value.constructor.name;
   return Object.hasOwn(typedArrays, name) ? (name as TypedArrayName) : null;

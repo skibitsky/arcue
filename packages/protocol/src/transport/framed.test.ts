@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { acceptBridge, connectBridge, HANDSHAKE_MAX_FRAME_BYTES } from "../bridge";
+import { binaryFrameCodec } from "./binary-codec";
 import type { ByteStream } from "./framed";
-import { encodeFrame, FrameReader, framedChannel, framedEndpoint, MAX_FRAME_BYTES } from "./framed";
+import { encodeFrame, FrameReader, framedChannel, framedEndpoint, MAX_FRAME_BYTES, messageChannel } from "./framed";
 import { jsonFrameCodec as json } from "./json-codec";
 import { createPeer } from "./peer";
 import { createRemoteClient } from "./remote-client";
 
-/** Two connected streams that deliver every write as one-byte chunks, to exercise reassembly. */
-function streamPair(): [ByteStream, ByteStream] {
+/**
+ * Two connected streams that deliver every write as one-byte chunks, to exercise reassembly, or as one chunk, as a
+ * WebSocket delivers a message.
+ */
+function streamPair(chunking: "bytes" | "messages" = "bytes"): [ByteStream, ByteStream] {
   type Side = { data: Set<(bytes: Uint8Array) => void>; close: Set<() => void> };
   const a: Side = { data: new Set(), close: new Set() };
   const b: Side = { data: new Set(), close: new Set() };
@@ -16,8 +20,10 @@ function streamPair(): [ByteStream, ByteStream] {
     write(bytes) {
       const copy = bytes.slice();
       queueMicrotask(() => {
-        for (let index = 0; index < copy.byteLength; index++)
-          for (const listener of other.data) listener(copy.slice(index, index + 1));
+        if (chunking === "messages") for (const listener of other.data) listener(copy);
+        else
+          for (let index = 0; index < copy.byteLength; index++)
+            for (const listener of other.data) listener(copy.slice(index, index + 1));
       });
     },
     onData(listener) {
@@ -103,6 +109,39 @@ describe("frames", () => {
     createPeer(framedEndpoint(framedChannel(left, json)), { handleRequest: () => ({ assets: [] }) });
     const client = createRemoteClient(createPeer(framedEndpoint(framedChannel(right, json))));
     await expect(client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
+});
+
+describe("message channels", () => {
+  it("carries one frame per message, without a length prefix", async () => {
+    const [left, right] = streamPair("messages");
+    const written: Uint8Array[] = [];
+    const write = left.write.bind(left);
+    left.write = (bytes) => {
+      written.push(bytes);
+      write(bytes);
+    };
+    const sender = messageChannel(left, binaryFrameCodec);
+    const receiver = messageChannel(right, binaryFrameCodec);
+    sender.send({ positions: Float32Array.of(1, 2, 3) });
+    await expect(receiver.receive()).resolves.toEqual({ positions: Float32Array.of(1, 2, 3) });
+    expect(written).toEqual([binaryFrameCodec.encode({ positions: Float32Array.of(1, 2, 3) })]);
+  });
+
+  it("carries envelopes between peers", async () => {
+    const [left, right] = streamPair("messages");
+    createPeer(framedEndpoint(messageChannel(left, binaryFrameCodec)), { handleRequest: () => ({ assets: [] }) });
+    const client = createRemoteClient(createPeer(framedEndpoint(messageChannel(right, binaryFrameCodec))));
+    await expect(client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
+
+  it("closes on a message it cannot decode", async () => {
+    const [left, right] = streamPair("messages");
+    const receiver = messageChannel(right, binaryFrameCodec);
+    const closed = new Promise<void>((resolve) => receiver.onClose(resolve));
+    left.write(Uint8Array.of(1, 2));
+    await closed;
+    await expect(receiver.receive()).rejects.toMatchObject({ code: "disconnected" });
   });
 });
 

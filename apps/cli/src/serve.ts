@@ -17,7 +17,7 @@ import {
   WindowPresence,
 } from "@arcue/platform-node";
 import type { ByteStream, ListenerErrorHandler } from "@arcue/protocol";
-import { framedChannel, framedEndpoint, jsonFrameCodec, MAX_FRAME_BYTES, SERVE_CORE_PATH } from "@arcue/protocol";
+import { binaryFrameCodec, framedEndpoint, MAX_FRAME_BYTES, messageChannel, SERVE_CORE_PATH } from "@arcue/protocol";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 import { connectToApp } from "./app-connection";
@@ -109,10 +109,10 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   }
   const started = core;
 
-  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES + 4 });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   let next = 1;
   sockets.on("connection", (socket: WebSocket) => {
-    const channel = framedChannel(webSocketStream(socket), jsonFrameCodec);
+    const channel = messageChannel(webSocketStream(socket), binaryFrameCodec);
     const peer = started.connect(framedEndpoint(channel), {
       connection: `browser-${next++}`,
       caller: "window",
@@ -248,7 +248,7 @@ async function sendFile(webUi: string, request: IncomingMessage, response: Serve
   });
 }
 
-/** A WebSocket carries one frame per message; an error ends the stream, as its "close" event follows. */
+/** A WebSocket carries one frame per message, so it keeps message boundaries; an error ends the stream, as its "close" event follows. */
 function webSocketStream(socket: WebSocket): ByteStream {
   socket.on("error", () => socket.terminate());
   return {

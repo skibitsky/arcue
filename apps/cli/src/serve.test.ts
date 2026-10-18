@@ -6,12 +6,12 @@ import { join } from "node:path";
 import type { CoreClient } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
+  binaryFrameCodec,
   bridgeInfoSchema,
   createPeer,
   createRemoteClient,
-  framedChannel,
   framedEndpoint,
-  jsonFrameCodec,
+  messageChannel,
   SERVE_CORE_PATH,
 } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -109,7 +109,7 @@ function openSocket(url: string, origin: string, path = SERVE_CORE_PATH): Promis
 
 /** A window's connection to the core over the page's socket. */
 function windowClient(socket: WebSocket): CoreClient {
-  const channel = framedChannel(
+  const channel = messageChannel(
     {
       write: (bytes) => socket.send(bytes),
       onData(listener) {
@@ -123,7 +123,7 @@ function windowClient(socket: WebSocket): CoreClient {
       },
       close: () => socket.close(),
     },
-    jsonFrameCodec,
+    binaryFrameCodec,
   );
   return createRemoteClient(createPeer(framedEndpoint(channel)));
 }
@@ -185,6 +185,22 @@ describe("arcue serve", () => {
     await expect(openSocket(url, "https://evil.example")).rejects.toThrow("403");
     await expect(openSocket(url, "null")).rejects.toThrow("403");
     await expect(openSocket(url, url, "/other")).rejects.toThrow("403");
+  });
+
+  it("refuses a page from a release that sent JSON frames, which connects on the old path", async () => {
+    const { url } = await serve();
+
+    await expect(openSocket(url, url, "/core")).rejects.toThrow("403");
+  });
+
+  it("closes a page's socket when it sends a malformed frame", async () => {
+    const { url } = await serve();
+    const socket = await openSocket(url, url);
+
+    const closed = new Promise((resolve) => socket.once("close", resolve));
+    socket.send(Uint8Array.of(255, 255, 255, 255));
+    await closed;
+    expect(errors).toEqual([]);
   });
 
   it("survives a socket request it cannot parse", async () => {

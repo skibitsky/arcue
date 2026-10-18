@@ -25,8 +25,8 @@ function fakeSocket(): { fake: FakeSocket; socket: WebSocket } {
 
 describe("the core socket", () => {
   it("connects to the core on the server the page came from", () => {
-    expect(coreSocketUrl({ protocol: "http:", host: "localhost:4530" })).toBe("ws://localhost:4530/core");
-    expect(coreSocketUrl({ protocol: "https:", host: "arcue.test" })).toBe("wss://arcue.test/core");
+    expect(coreSocketUrl({ protocol: "http:", host: "localhost:4530" })).toBe("ws://localhost:4530/core/2");
+    expect(coreSocketUrl({ protocol: "https:", host: "arcue.test" })).toBe("wss://arcue.test/core/2");
   });
 
   it("holds frames written before the socket opens, then sends them in order", () => {
