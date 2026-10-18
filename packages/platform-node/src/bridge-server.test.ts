@@ -1,6 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { connect } from "node:net";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { connect, Server } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
@@ -144,6 +154,52 @@ describe("the bridge server", () => {
     ).rejects.toThrow();
     expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "creates a missing user data folder when the socket moves to a temporary folder",
+    async () => {
+      const missing = join(userData, "x".repeat(120), "data");
+      const later = await startBridgeServer({
+        core,
+        userData: missing,
+        ensureWindow: async () => undefined,
+        onError: () => undefined,
+      });
+      try {
+        expect(dirname(later.info.socket).startsWith(missing)).toBe(false);
+        expect(statSync(missing).mode & 0o777).toBe(0o700);
+        expect(existsSync(join(missing, BRIDGE_INFO_FILE))).toBe(true);
+      } finally {
+        await later.close();
+      }
+      expect(existsSync(dirname(later.info.socket))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "stops listening and removes its socket folder when it cannot write bridge.json",
+    async () => {
+      await server.close();
+      server = { info: server.info, close: async () => undefined };
+      const long = join(userData, "x".repeat(120));
+      const temporary = `${BRIDGE_INFO_FILE}.${process.pid}.tmp`;
+      mkdirSync(join(long, temporary), { recursive: true });
+      const folders = () => new Set(readdirSync(process.env.XDG_RUNTIME_DIR || tmpdir()));
+      const before = folders();
+      const listening = vi.spyOn(Server.prototype, "listen");
+
+      await expect(
+        startBridgeServer({ core, userData: long, ensureWindow: async () => undefined, onError: () => undefined }),
+      ).rejects.toMatchObject({ code: "EISDIR" });
+
+      const started = listening.mock.contexts[0];
+      listening.mockRestore();
+      expect(started).toBeInstanceOf(Server);
+      expect((started as Server).listening).toBe(false);
+      expect([...folders()].filter((name) => !before.has(name) && name.startsWith("arcue-"))).toEqual([]);
+      expect(readdirSync(long)).toEqual([temporary]);
+    },
+  );
 });
 
 describe("the bridge address", () => {
