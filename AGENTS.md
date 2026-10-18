@@ -11,7 +11,7 @@ Arcue is a desktop app for reviewing 3D models and animations and handing anchor
 | `packages/import-fbx` | The FBX importer on ufbx compiled to WebAssembly. |
 | `packages/import-blend` | The Blender importer: reads `.blend` files directly and samples their actions into clips. |
 | `packages/core` | `Platform`, the command registry, and all review state. |
-| `packages/platform-node` | `NodePlatform` on Node's file system, and the worker_threads import worker for Node hosts. |
+| `packages/platform-node` | `NodePlatform` on Node's file system, the worker_threads import worker, and the `arcue` socket server, for Node hosts. |
 | `packages/viewport` | The 3D view: three.js rendering, tools, picking, screenshots. |
 | `packages/ui` | Design tokens and fonts, and the panels, timeline and comment box. |
 | `apps/web`, `apps/desktop`, `apps/cli`, `apps/plugin` | The browser host, the Electron app, the `arcue` command, the agent plugin for Claude Code and Codex. |
@@ -19,8 +19,8 @@ Arcue is a desktop app for reviewing 3D models and animations and handing anchor
 ## How it fits together
 
 - The core owns all state. Every action is a command, query or event in `packages/protocol`, handled by the core's registry, and the window, the `arcue` command and any later MCP server all call it through `CoreClient`. Add a feature as a command, never as state in the UI. Commands with `runsIn: "view"` go on to the window that shows the asset, and `internal` commands are refused to bridge callers.
-- The core runs in its own process: an Electron utility process on desktop, a Web Worker on the web. It restarts after a crash and windows reconnect, so a window never holds state the core does not have.
-- Each window and each `arcue` connection gets its own message channel to the core, which answers its requests and sends it every event. The `arcue` socket accepts a caller only with the token from `bridge.json`. Treat every path a bridge caller sends as untrusted: normalize it and keep it inside the folder it belongs to.
+- The core runs in its own process: an Electron utility process on desktop, a Web Worker on the web. It restarts after a crash and windows reconnect, so a window never holds state the core does not have. `arcue serve` runs a core on Node instead of the desktop app and serves its window, built from `apps/web/local`, on localhost; the agent opens it in the built-in browser of the Claude or Codex app.
+- Each window and each `arcue` connection gets its own message channel to the core, which answers its requests and sends it every event. The `arcue` socket accepts a caller only with the token from `bridge.json`. `arcue serve` accepts a window only from its own page on a localhost address. Treat every path a bridge caller sends as untrusted: normalize it and keep it inside the folder it belongs to.
 - Reviews live in `<git root>/.arcue/reviews/<repo-relative model path>/`, or under the app data folder outside a repository, and Arcue writes `.arcue/.gitignore` with `*` when it creates the folder. The model's path is the key. Renames are followed through the hash, size and Unity GUID that `review.json` records, so change the key only together with `relink.ts` and `review-move.ts`.
 - Write `review.json` only through `ReviewSession.run`. Its compute runs again when the file changed on disk, so it must have no side effects: put any other write in `prepare` and undo it in `rollback`.
 - Core work is serialized. Take an asset's `compositionEdits` first, then the core's `#opening` or the asset's `loads`, then its session, and never wait on a window or another lock inside a session compute.

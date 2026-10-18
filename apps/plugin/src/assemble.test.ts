@@ -3,13 +3,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assemblePlugin, mainMarketplaceManifest, PLUGIN, PLUGIN_BRANCH, PLUGIN_PATH } from "./assemble";
+import {
+  assemblePlugin,
+  codexManifest,
+  ICON_PATH,
+  mainMarketplaceManifest,
+  PLUGIN,
+  PLUGIN_BRANCH,
+  PLUGIN_PATH,
+} from "./assemble";
 
 const fromRoot = (path: string) => fileURLToPath(new URL(`../../../${path}`, import.meta.url));
 const skill = fromRoot("skills/arcue");
 
 let temp: string;
 let cli: string;
+let web: string;
 let out: string;
 
 beforeEach(async () => {
@@ -19,6 +28,10 @@ beforeEach(async () => {
   await mkdir(cli);
   await writeFile(join(cli, "arcue.js"), "#!/usr/bin/env node\n");
   await writeFile(join(cli, "import-worker.js"), "");
+  web = join(temp, "web");
+  await mkdir(join(web, "assets"), { recursive: true });
+  await writeFile(join(web, "index.html"), "<!doctype html>");
+  await writeFile(join(web, "assets", "index.js"), "");
 });
 
 afterEach(async () => {
@@ -28,6 +41,8 @@ afterEach(async () => {
 const sources = () => ({
   skill,
   cliBuild: cli,
+  webBuild: web,
+  icon: fromRoot("assets/branding/png/arcue-256.png"),
   readme: fromRoot("apps/plugin/README.md"),
   license: fromRoot("LICENSE"),
 });
@@ -56,7 +71,31 @@ describe("assemblePlugin", () => {
     expect(claude).not.toHaveProperty("version");
   });
 
-  it("copies the skill unchanged and puts the command line in its scripts folder", async () => {
+  it("ships its icon where both manifests point", async () => {
+    await assemblePlugin(sources(), out);
+
+    const claude = await readJson(join(out, PLUGIN_PATH, ".claude-plugin/plugin.json"));
+    const codex = await readJson(join(out, PLUGIN_PATH, ".codex-plugin/plugin.json"));
+    const codexInterface = codex.interface as Record<string, unknown>;
+    expect([claude.icon, codexInterface.composerIcon, codexInterface.logo]).toEqual([
+      `./${ICON_PATH}`,
+      `./${ICON_PATH}`,
+      `./${ICON_PATH}`,
+    ]);
+    expect((await lstat(join(out, PLUGIN_PATH, ICON_PATH))).isFile()).toBe(true);
+  });
+
+  it("keeps Codex's listing within the limits of OpenAI's plugin directory", () => {
+    const { interface: listing } = codexManifest();
+
+    expect(listing.displayName.length).toBeLessThanOrEqual(30);
+    expect(listing.shortDescription.length).toBeLessThanOrEqual(30);
+    expect(listing.longDescription.length).toBeLessThanOrEqual(4000);
+    expect(listing.defaultPrompt.length).toBeLessThanOrEqual(3);
+    for (const prompt of listing.defaultPrompt) expect(prompt.length).toBeLessThanOrEqual(128);
+  });
+
+  it("copies the skill unchanged and puts the command line in its scripts folder, with its web page", async () => {
     await assemblePlugin(sources(), out);
 
     const copied = join(out, PLUGIN_PATH, "skills", PLUGIN.name);
@@ -64,9 +103,14 @@ describe("assemblePlugin", () => {
       const relative = file.slice(skill.length);
       expect(await readFile(join(copied, relative), "utf8"), relative).toBe(await readFile(file, "utf8"));
     }
-    expect(await readdir(join(copied, "scripts"))).toEqual(["arcue.js", "import-worker.js"]);
+    expect((await readdir(join(copied, "scripts"))).sort()).toEqual(["arcue.js", "import-worker.js", "web"]);
+    expect((await readdir(join(copied, "scripts", "web"), { recursive: true })).sort()).toEqual([
+      "assets",
+      "assets/index.js",
+      "index.html",
+    ]);
     expect(await readdir(join(out, PLUGIN_PATH))).toEqual(
-      expect.arrayContaining(["LICENSE", "README.md", "skills", ".claude-plugin", ".codex-plugin"]),
+      expect.arrayContaining(["LICENSE", "README.md", "assets", "skills", ".claude-plugin", ".codex-plugin"]),
     );
   });
 
@@ -89,6 +133,12 @@ describe("assemblePlugin", () => {
     await rm(join(cli, "arcue.js"));
 
     await expect(assemblePlugin(sources(), out)).rejects.toThrow("pnpm --filter @arcue/cli build");
+  });
+
+  it("asks for the web page to be built when it is missing", async () => {
+    await rm(join(web, "index.html"));
+
+    await expect(assemblePlugin(sources(), out)).rejects.toThrow("pnpm --filter @arcue/web build:local");
   });
 });
 

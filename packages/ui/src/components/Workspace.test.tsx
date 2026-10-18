@@ -202,6 +202,21 @@ describe("Workspace", () => {
     expect(client.calls.filter((call) => call.name === "asset.open")).toHaveLength(2);
   });
 
+  it("shows the host's headline in the empty state", () => {
+    render(
+      <Workspace
+        store={setup().store}
+        createViewport={() => new TestViewport()}
+        emptyTitle="Ask your agent to show you a model"
+        dropHint="Or run arcue open <file>."
+      />,
+    );
+
+    expect(screen.getByText("Ask your agent to show you a model")).toBeTruthy();
+    expect(screen.getByText("Or run arcue open <file>.")).toBeTruthy();
+    expect(screen.queryByText("Drop an FBX or Blender file")).toBeNull();
+  });
+
   it("reports dropped files to the host", async () => {
     const context = setup();
     const dropped: string[] = [];

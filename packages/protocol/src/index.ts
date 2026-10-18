@@ -33,6 +33,7 @@ export {
   HANDSHAKE_MAX_FRAME_BYTES,
   LAUNCH_INFO_FILE,
   launchInfoSchema,
+  SERVE_CORE_PATH,
 } from "./bridge";
 export type { ConnectionState, CoreClient, Unsubscribe } from "./client";
 export type { CommandArgs, CommandInput, CommandName, CommandOutput, Commands } from "./commands";

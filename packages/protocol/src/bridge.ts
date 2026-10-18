@@ -19,9 +19,14 @@ export const bridgeInfoSchema = z.object({
   socket: z.string().min(1),
   token: z.string().min(32),
   pid: z.int().positive(),
+  /** Where a browser shows the core's window, when `arcue serve` runs the core rather than the desktop app. */
+  url: z.url().optional(),
 });
 
 export type BridgeInfo = z.output<typeof bridgeInfoSchema>;
+
+/** Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket. */
+export const SERVE_CORE_PATH = "/core";
 
 /** The file in the app's data folder that tells the command line how to start the app when it is not running. */
 export const LAUNCH_INFO_FILE = "launch.json";

@@ -18,12 +18,14 @@ export function EmptyState({
   onOpenFile,
   onDropFiles,
   onOpenSample,
+  title = "Drop an FBX or Blender file",
   dropHint,
   tabId,
 }: {
   store: WorkspaceStore;
   samples: readonly SampleAsset[];
   onOpenSample?: ((sample: SampleAsset) => void) | undefined;
+  title?: string | undefined;
   dropHint?: string | undefined;
   onOpenFile?: (() => void) | undefined;
   onDropFiles?: ((files: File[]) => void) | undefined;
@@ -55,7 +57,7 @@ export function EmptyState({
     >
       <div className="drop">
         <Icon name="upload" />
-        <strong>Drop an FBX or Blender file</strong>
+        <strong>{title}</strong>
         {dropHint ? <span>{dropHint}</span> : null}
         {onOpenFile ? (
           <button type="button" className="btn btn-open" onClick={onOpenFile}>

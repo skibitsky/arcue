@@ -1,6 +1,10 @@
+/** The port `arcue serve` uses without `--port`. */
+export const DEFAULT_SERVE_PORT = 4530;
+
 export type Command =
   | { command: "open"; path: string; clip?: string; frame?: number }
   | { command: "inspect"; path: string; json: boolean }
+  | { command: "serve"; port?: number }
   | { command: "status" }
   | { command: "help" };
 
@@ -14,8 +18,13 @@ export const USAGE = `Usage:
       Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
       composed with the files its composition lists, as opening it would.
       --json prints the full result for scripts and agents. Exits with 1 when the file cannot be read or parsed.
+  arcue serve [--port <number>]
+      Runs Arcue in a browser instead of the desktop app, until stopped: serves its window at
+      http://localhost:${DEFAULT_SERVE_PORT}, or at the given port, to this computer only. "arcue open" then shows models
+      there. Exits with 1 when Arcue already runs.
   arcue status
-      Reports whether Arcue is running and which assets it has open. Exits with 1 when it is not running.
+      Reports whether Arcue is running, where a browser shows it, and which assets it has open. Exits with 1 when it is
+      not running.
   arcue help
       Shows this text.
 
@@ -39,6 +48,7 @@ export function parseArgs(args: readonly string[]): Command {
     return { command: "status" };
   }
   if (command === "inspect") return parseInspect(rest);
+  if (command === "serve") return parseServe(rest);
   if (command !== "open") throw new UsageError(`Unknown command "${command}".`);
   let path: string | undefined;
   let clip: string | undefined;
@@ -74,6 +84,29 @@ function parseInspect(args: readonly string[]): Command {
   }
   if (path === undefined) throw new UsageError('"arcue inspect" needs a file.');
   return { command: "inspect", path, json };
+}
+
+function parseServe(args: readonly string[]): Command {
+  let port: number | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? "";
+    const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, undefined];
+    if (flag !== "--port") {
+      throw new UsageError(
+        arg.startsWith("--") ? `Unknown option "${arg}".` : `"arcue serve" takes no file, got "${arg}".`,
+      );
+    }
+    const value = inline ?? args[++index];
+    if (value === undefined || value === "") throw new UsageError("--port needs a value.");
+    port = parsePort(value);
+  }
+  return { command: "serve", ...(port !== undefined ? { port } : {}) };
+}
+
+function parsePort(value: string): number {
+  const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!(port >= 1 && port <= 65535)) throw new UsageError(`--port takes a port from 1 to 65535, got "${value}".`);
+  return port;
 }
 
 function parseFrame(value: string): number {

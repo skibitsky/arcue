@@ -8,7 +8,7 @@ Arcue is in early development. It opens FBX and Blender files.
 
 ## Use with Claude Code and Codex
 
-The Arcue plugin teaches Claude Code and Codex to read Arcue's reviews and to open models in Arcue, and it includes the `arcue` command line:
+The Arcue plugin teaches Claude Code and Codex to read Arcue's reviews and to open models in Arcue, and it includes the `arcue` command line. In the Claude desktop app and the Codex app, the agent shows Arcue in the app's built-in browser with `arcue serve`; elsewhere it uses the desktop app.
 
 ```sh
 claude plugin marketplace add skibitsky/arcue#plugin && claude plugin install arcue@arcue
@@ -28,10 +28,12 @@ pnpm install
 pnpm dev                           # the web host at http://localhost:5173
 pnpm --filter @arcue/desktop dev   # the desktop app
 pnpm --filter @arcue/plugin build  # the agent plugin and its marketplace, in apps/plugin/dist
+node apps/plugin/dist/plugins/arcue/skills/arcue/scripts/arcue.js serve  # Arcue on this computer's files at http://localhost:4530
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm --filter @arcue/web test:e2e
+pnpm --filter @arcue/plugin test:e2e
 pnpm --filter @arcue/desktop test:e2e
 ```
 
