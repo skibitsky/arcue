@@ -435,6 +435,10 @@ async function privateFolder(path) {
 */
 async function startBridgeServer(options) {
 	const infoPath = join(options.userData, BRIDGE_INFO_FILE);
+	await mkdir(options.userData, {
+		recursive: true,
+		mode: 448
+	});
 	await rm(infoPath, { force: true });
 	const address = await bridgeAddress(options.userData);
 	const token = randomBytes(32).toString("base64url");
@@ -460,6 +464,11 @@ async function startBridgeServer(options) {
 		}, (error) => options.onError(error));
 	});
 	server.on("error", options.onError);
+	const stopListening = async () => {
+		const closed = new Promise((resolve) => server.close(() => resolve()));
+		for (const connection of open) connection.destroy();
+		await closed;
+	};
 	try {
 		await listen$1(server, address.socket);
 	} catch (error) {
@@ -474,14 +483,19 @@ async function startBridgeServer(options) {
 		...options.url !== void 0 ? { url: options.url } : {}
 	};
 	const temporary = `${infoPath}.${process.pid}.tmp`;
-	await writeFile(temporary, `${JSON.stringify(info)}\n`, { mode: 384 });
-	await rename(temporary, infoPath);
+	try {
+		await writeFile(temporary, `${JSON.stringify(info)}\n`, { mode: 384 });
+		await rename(temporary, infoPath);
+	} catch (error) {
+		await stopListening();
+		await address.remove();
+		await rm(temporary, { force: true }).catch(() => void 0);
+		throw error;
+	}
 	return {
 		info,
 		async close() {
-			const closed = new Promise((resolve) => server.close(() => resolve()));
-			for (const connection of open) connection.destroy();
-			await closed;
+			await stopListening();
 			if ((await readBridgeFile(infoPath))?.token === token) await rm(infoPath, { force: true });
 			await address.remove();
 		}
