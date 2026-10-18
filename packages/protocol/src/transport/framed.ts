@@ -54,7 +54,8 @@ export class FrameReader {
     const frames: Uint8Array[] = [];
     for (;;) {
       if (this.#buffered < HEADER_BYTES) return frames;
-      const length = new DataView(this.#peek(HEADER_BYTES).buffer).getUint32(0);
+      const header = this.#peek(HEADER_BYTES);
+      const length = new DataView(header.buffer, header.byteOffset, HEADER_BYTES).getUint32(0);
       if (length > this.#limit) throw new ArcueError("invalid-input", `A frame of ${length} bytes is too large.`);
       if (this.#buffered < HEADER_BYTES + length) return frames;
       this.#take(HEADER_BYTES);

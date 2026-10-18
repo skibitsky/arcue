@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { BridgeInfo, ByteStream, CoreClient, LaunchInfo, Peer } from "@arcue/protocol";
+import { socketStream } from "@arcue/platform-node";
+import type { BridgeInfo, CoreClient, LaunchInfo, Peer } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
   bridgeInfoSchema,
@@ -71,23 +72,9 @@ export async function connectToApp(userData: string, handshakeMs = 5000): Promis
     socket.destroy();
     return null;
   }
-  const stream: ByteStream = {
-    write: (bytes) => {
-      socket.write(bytes);
-    },
-    onData(listener) {
-      socket.on("data", listener);
-      return () => socket.off("data", listener);
-    },
-    onClose(listener) {
-      const once = () => listener();
-      socket.once("close", once);
-      return () => socket.off("close", once);
-    },
-    close: () => socket.destroy(),
-  };
-  socket.on("error", () => socket.destroy());
-  const channel = framedChannel(stream, jsonFrameCodec, { firstFrameMaxBytes: HANDSHAKE_MAX_FRAME_BYTES });
+  const channel = framedChannel(socketStream(socket), jsonFrameCodec, {
+    firstFrameMaxBytes: HANDSHAKE_MAX_FRAME_BYTES,
+  });
   const endpoint = await connectBridge(channel, {
     token: info.token,
     timeout: { ms: handshakeMs, setTimer: timer },
@@ -136,7 +123,9 @@ export async function connectOrLaunch(
   const first = await attempt();
   if (first) return first;
   if (lastError === null && !(await launchApp(userData))) {
-    throw new Error("Arcue is not running, and it has not been started on this computer yet. Start it once first.");
+    throw new Error(
+      'Arcue is not running, and it has not been started on this computer yet. Start it once first, or run "arcue serve" to use it in a browser.',
+    );
   }
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, pollMs));

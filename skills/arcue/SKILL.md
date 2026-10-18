@@ -1,6 +1,6 @@
 ---
 name: arcue
-description: Arcue is a desktop app where people pin or paint comments on 3D models at a frame and copy them to a coding agent. Use this skill when a message contains "3D review · round" or "Fix these import warnings for", or a path under .arcue/, when the user mentions Arcue or asks to see a model, clip or frame in it, or wants an FBX or Blender .blend file checked for its meshes, clips, missing textures or import warnings. It covers `arcue open`, `arcue inspect`, round.json, composition files, and turning Arcue's anchored comments (vertex numbers, bones, frames, screenshots) into exact fixes. Not for working on Arcue's own source code.
+description: Arcue is an app, on the desktop or in a browser, where people pin or paint comments on 3D models at a frame and copy them to a coding agent. Use this skill when a message contains "3D review · round" or "Fix these import warnings for", or a path under .arcue/, when the user mentions Arcue or asks to see a model, clip or frame in it, or wants an FBX or Blender .blend file checked for its meshes, clips, missing textures or import warnings. It covers `arcue open`, `arcue serve`, `arcue inspect`, round.json, composition files, and turning Arcue's anchored comments (vertex numbers, bones, frames, screenshots) into exact fixes. Not for working on Arcue's own source code.
 license: MIT
 ---
 
@@ -12,9 +12,20 @@ Use `arcue`, or `node "<this skill's folder>/scripts/arcue.js"` (Node 22 or late
 
 Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 
-- `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in the user's Arcue window and starts the app if needed. If it says Arcue has not been started on this computer yet, ask the user to start it once.
+- `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in the user's Arcue window: the page `arcue serve` serves while it runs, otherwise the desktop app, which it starts if needed.
+- `arcue serve` runs Arcue in a browser instead of the desktop app, at http://localhost:4530 until it is stopped, on the user's files with their reviews in `.arcue/` as the desktop app keeps them. `--port <number>` picks another port.
 - `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, bones, clips, materials, missing textures, composed files and import warnings.
-- `arcue status` lists the models Arcue has open, and exits with 1 when it isn't running.
+- `arcue status` says whether Arcue runs and at which address a browser shows it, lists the models it has open, and exits with 1 when it isn't running.
+
+## Where Arcue shows models
+
+When the app you run in has a built-in browser, such as the Browser pane in the Claude desktop app or the in-app browser in the Codex app, show Arcue there:
+
+1. Run `arcue status`. When it names an address, open that. When Arcue runs without one, that is the desktop app: use it as it is.
+2. Otherwise start `arcue serve` as a background command that keeps running, and open http://localhost:4530 in the built-in browser. In the Claude desktop app, add `{ "name": "arcue", "url": "http://localhost:4530", "port": 4530 }` to `configurations` in the project's `.claude/launch.json`, creating it with `"version": "0.0.1"` if needed, and start that configuration in the Browser pane. In the Codex app, open the address with its browser tool and keep the tab.
+3. `arcue open` now shows models on that page.
+
+Without a built-in browser, `arcue open` starts the desktop app. If it says Arcue has not been started on this computer yet, run `arcue serve` and give the user the address to open.
 
 Name a clip as the file does, from `inspect` or `time.clip`: `--clip "Armature|Walk"` for an FBX take, `--clip "Walk"` for the action `Walk` in a .blend. Any other name, such as the display name `Walk` of `Armature|Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
 
@@ -28,7 +39,7 @@ A pasted review contains `3D review · round N`, the model on its `Asset:` line 
 4. Show the result at a comment's moment: `arcue open <asset> --clip "<time.clip>" --frame <frame>`, with the first frame of a range, and neither flag when `time` is null.
 5. Report back by comment number; the user resolves or reopens comments in Arcue.
 
-If the round folder isn't on disk (`.arcue/` isn't committed, and Arcue in a browser keeps reviews in its tab), work from the prompt alone, and fix the model at the `Asset:` path or, if that path is from another machine, the same file in this checkout. When the prompt lists other loaded files, it doesn't say which one a comment is on: check with `arcue inspect` which file has its mesh or clip.
+If the round folder isn't on disk (`.arcue/` isn't committed, and Arcue's website keeps reviews in its tab), work from the prompt alone, and fix the model at the `Asset:` path or, if that path is from another machine, the same file in this checkout. When the prompt lists other loaded files, it doesn't say which one a comment is on: check with `arcue inspect` which file has its mesh or clip.
 
 A list that starts `Fix these import warnings for <model>` comes from Arcue's warnings panel. Fix the source and re-export, or save the fixed .blend, or fix the composition file, then check that `arcue inspect <model> --json` no longer reports them. Many of a .blend's warnings only say what Arcue doesn't show, and clearing them can renumber vertices: read [references/blender.md](references/blender.md) before changing the file for one.
 

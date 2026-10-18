@@ -32,7 +32,9 @@ function argumentsOf(command: string): string[] {
   );
   return words
     .slice(1)
-    .map((word, index, all) => (/^<.+>$/.test(word) ? (all[index - 1] === "--frame" ? "12" : "Hero.fbx") : word));
+    .map((word, index, all) =>
+      /^<.+>$/.test(word) ? (["--frame", "--port"].includes(all[index - 1] ?? "") ? "12" : "Hero.fbx") : word,
+    );
 }
 
 describe("the arcue skill", () => {

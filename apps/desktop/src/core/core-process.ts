@@ -1,15 +1,20 @@
 import { fileURLToPath } from "node:url";
 import { ArcueCore } from "@arcue/core";
-import { fromNativePath, NodePlatform, startNodeImportWorker, systemClock } from "@arcue/platform-node";
+import type { BridgeServer } from "@arcue/platform-node";
+import {
+  fromNativePath,
+  NodePlatform,
+  startBridgeServer,
+  startNodeImportWorker,
+  systemClock,
+  WindowPresence,
+} from "@arcue/platform-node";
 import { ArcueError, emitterEndpoint } from "@arcue/protocol";
 import type { MessagePortMain } from "electron";
 import type { FromCore, ToCore } from "../shared/core-messages";
 import { toCoreSchema } from "../shared/core-messages";
 import type { Log } from "../shared/log";
 import { fileLog } from "../shared/log";
-import type { BridgeServer } from "./bridge-server";
-import { startBridgeServer } from "./bridge-server";
-import { WindowPresence } from "./window-presence";
 
 const CLIPBOARD_TIMEOUT_MS = 5000;
 

@@ -5,11 +5,14 @@ export const PLUGIN = {
   name: "arcue",
   displayName: "Arcue",
   description: "Apply Arcue's 3D model reviews and open models in Arcue at a clip and frame.",
-  shortDescription: "Apply Arcue reviews and open models in Arcue",
+  shortDescription: "Apply Arcue's 3D reviews",
+  longDescription:
+    "Pin or paint comments on a 3D model or animation in Arcue, and your agent gets the vertices, bones, frame, camera and screenshots behind each one. The plugin teaches Claude Code and Codex to read these reviews, fix the FBX or Blender files, and show models in Arcue: in the app's built-in browser, or in the Arcue desktop app.",
   homepage: "https://github.com/skibitsky/arcue",
   license: "MIT",
   keywords: ["3d", "fbx", "blender", "animation", "review", "feedback"],
   brandColor: "#DD653D",
+  category: "Developer Tools",
   defaultPrompts: ["Apply the Arcue review I pasted", "Show me this model in Arcue"],
 } as const;
 
@@ -17,9 +20,16 @@ export const PLUGIN_PATH = `plugins/${PLUGIN.name}`;
 
 export const PLUGIN_BRANCH = "plugin";
 
+/** The plugin's icon, relative to its folder. */
+export const ICON_PATH = "assets/icon.png";
+
 export interface PluginSources {
   skill: string;
   cliBuild: string;
+  /** The page `arcue serve` serves. */
+  webBuild: string;
+  /** A square PNG. */
+  icon: string;
   readme: string;
   license: string;
 }
@@ -27,12 +37,17 @@ export interface PluginSources {
 /**
  * Replaces `out` with a marketplace that lists the plugin, and the plugin itself. Claude Code and Codex both read
  * `.claude-plugin/marketplace.json`, and each reads its own plugin manifest. The command line goes into the skill's
- * `scripts` folder, where the skill looks for it.
+ * `scripts` folder, where the skill looks for it, with the page `arcue serve` serves in its `web` folder.
  */
 export async function assemblePlugin(sources: PluginSources, out: string): Promise<void> {
   await access(join(sources.cliBuild, "arcue.js")).catch(() => {
     throw new Error(
       `${sources.cliBuild} has no arcue.js. Build the command line first: pnpm --filter @arcue/cli build`,
+    );
+  });
+  await access(join(sources.webBuild, "index.html")).catch(() => {
+    throw new Error(
+      `${sources.webBuild} has no index.html. Build the page first: pnpm --filter @arcue/web build:local`,
     );
   });
   await rm(out, { recursive: true, force: true });
@@ -43,6 +58,9 @@ export async function assemblePlugin(sources: PluginSources, out: string): Promi
   await writeJson(join(plugin, ".codex-plugin", "plugin.json"), codexManifest());
   await cp(sources.skill, skill, { recursive: true, dereference: true });
   await cp(sources.cliBuild, join(skill, "scripts"), { recursive: true, dereference: true });
+  await cp(sources.webBuild, join(skill, "scripts", "web"), { recursive: true, dereference: true });
+  await mkdir(join(plugin, dirname(ICON_PATH)), { recursive: true });
+  await copyFile(sources.icon, join(plugin, ICON_PATH));
   await copyFile(sources.readme, join(plugin, "README.md"));
   await copyFile(sources.license, join(plugin, "LICENSE"));
   await writeFile(join(out, "README.md"), BRANCH_README);
@@ -88,6 +106,9 @@ export function claudeManifest() {
     repository: PLUGIN.homepage,
     license: PLUGIN.license,
     keywords: [...PLUGIN.keywords],
+    icon: `./${ICON_PATH}`,
+    documentationUrl: `${PLUGIN.homepage}#readme`,
+    supportUrl: `${PLUGIN.homepage}/issues`,
   };
 }
 
@@ -99,10 +120,15 @@ export function codexManifest() {
     interface: {
       displayName: PLUGIN.displayName,
       shortDescription: PLUGIN.shortDescription,
+      longDescription: PLUGIN.longDescription,
       developerName: PLUGIN.displayName,
+      category: PLUGIN.category,
+      capabilities: ["Interactive", "Read", "Write"],
       websiteUrl: PLUGIN.homepage,
       defaultPrompt: [...PLUGIN.defaultPrompts],
       brandColor: PLUGIN.brandColor,
+      composerIcon: `./${ICON_PATH}`,
+      logo: `./${ICON_PATH}`,
     },
   };
 }

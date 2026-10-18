@@ -58,6 +58,19 @@ describe("frames", () => {
     expect(reader.push(joined.subarray(9))).toEqual([Uint8Array.of(4)]);
   });
 
+  it("reads a frame from a chunk that views part of a larger buffer, as Node's pooled buffers do", () => {
+    class PooledBytes extends Uint8Array {
+      override slice(start?: number, end?: number): Uint8Array<ArrayBuffer> {
+        return this.subarray(start, end);
+      }
+    }
+    const pool = new Uint8Array(64).fill(255);
+    const frame = encodeFrame(Uint8Array.of(7, 8));
+    pool.set(frame, 10);
+    const frames = new FrameReader().push(new PooledBytes(pool.buffer, 10, frame.byteLength));
+    expect(frames.map((bytes) => [...bytes])).toEqual([[7, 8]]);
+  });
+
   it("refuses a frame larger than the limit", () => {
     const header = new Uint8Array(4);
     new DataView(header.buffer).setUint32(0, MAX_FRAME_BYTES + 1);

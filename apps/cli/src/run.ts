@@ -1,9 +1,11 @@
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { ArcueError } from "@arcue/protocol";
 import { connectOrLaunch, connectToApp, userDataDir } from "./app-connection";
 import type { Command } from "./args";
-import { parseArgs, USAGE, UsageError } from "./args";
+import { DEFAULT_SERVE_PORT, parseArgs, USAGE, UsageError } from "./args";
 import { bundledImportWorker, formatInspection, inspectFile } from "./inspect";
+import { bundledWebUi, startServer } from "./serve";
 
 export interface Output {
   out(text: string): void;
@@ -13,6 +15,10 @@ export interface Output {
 export interface RunOptions {
   /** Defaults to the import worker bundled beside `arcue.js`. */
   importWorkerEntry?: string;
+  /** The web UI `arcue serve` serves. Defaults to the one bundled beside `arcue.js`. */
+  webUi?: string;
+  /** Resolves when `arcue serve` should stop. Defaults to the process receiving SIGINT, SIGTERM or SIGHUP. */
+  stop?: Promise<void>;
 }
 
 /** Runs the command line and returns its exit code: 0 on success, 1 on failure, 2 for a usage error. */
@@ -41,6 +47,8 @@ export async function run(
         return await open(command, cwd, output);
       case "inspect":
         return await inspect(command, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
+      case "serve":
+        return await serve(command, output, options);
     }
   } catch (error) {
     output.err(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -56,7 +64,10 @@ async function status(output: Output): Promise<number> {
   }
   try {
     const { assets } = await connection.client.query("asset.list", {});
-    const lines = [`Arcue is running (process ${connection.info.pid}).`];
+    const { url, pid } = connection.info;
+    const lines = [
+      url ? `Arcue is running in a browser at ${url} (process ${pid}).` : `Arcue is running (process ${pid}).`,
+    ];
     if (assets.length === 0) lines.push("No assets are open.");
     else
       lines.push(
@@ -109,7 +120,43 @@ async function open(command: Extract<Command, { command: "open" }>, cwd: string,
     });
     output.out(`Opened ${path} in Arcue as ${assetId}.\n`);
     return 0;
+  } catch (error) {
+    const { url } = connection.info;
+    if (url && error instanceof ArcueError && error.code === "unavailable") {
+      throw new Error(`${error.message} Arcue runs in a browser: open ${url} first.`);
+    }
+    throw error;
   } finally {
     connection.close();
   }
+}
+
+async function serve(
+  command: Extract<Command, { command: "serve" }>,
+  output: Output,
+  options: RunOptions,
+): Promise<number> {
+  const server = await startServer({
+    userData: userDataDir(),
+    importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
+    webUi: options.webUi ?? bundledWebUi,
+    port: command.port ?? DEFAULT_SERVE_PORT,
+    onError: (error) => output.err(`${error instanceof Error ? error.message : String(error)}\n`),
+    onWaitingForWindow: () => output.err(`Waiting for a browser to open ${server.url}.\n`),
+  });
+  output.out(`Arcue runs at ${server.url}. Open it in a browser; "arcue open" shows models there.\n`);
+  await (options.stop ?? signalled());
+  await server.close();
+  return 0;
+}
+
+function signalled(): Promise<void> {
+  return new Promise((resolve) => {
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const stop = () => {
+      for (const signal of signals) process.off(signal, stop);
+      resolve();
+    };
+    for (const signal of signals) process.on(signal, stop);
+  });
 }

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { Server, Socket } from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ import type { BridgeInfo, ListenerErrorHandler, MessageEndpoint } from "@arcue/p
 import {
   acceptBridge,
   BRIDGE_INFO_FILE,
+  bridgeInfoSchema,
   framedChannel,
   HANDSHAKE_MAX_FRAME_BYTES,
   isEnvelope,
@@ -23,6 +24,8 @@ export interface BridgeServerOptions {
   ensureWindow: () => Promise<void>;
   onError: ListenerErrorHandler;
   handshakeTimeoutMs?: number;
+  /** Where a browser shows this core's window, for `bridge.json`. */
+  url?: string;
 }
 
 export interface BridgeServer {
@@ -32,7 +35,7 @@ export interface BridgeServer {
 
 /** macOS limits a Unix socket path to 104 bytes, Linux to 108. */
 const MAX_SOCKET_PATH = 100;
-const SOCKET_NAME = "arcue.sock";
+const SOCKET_NAME = /^arcue-(\d+)-[0-9a-f]+\.sock$/;
 
 export interface BridgeAddress {
   socket: string;
@@ -43,23 +46,46 @@ export interface BridgeAddress {
 /**
  * Where the core listens, reachable only by this user: a Unix domain socket in a folder only the user can enter, or a
  * named pipe with a new random name on each start, since any user can see pipe names. `bridge.json` names it.
+ *
+ * Each server gets its own socket, since a closing server removes its socket by path: a core that stops after another
+ * one took over `bridge.json`, as `arcue serve` does when the desktop app starts beside it, removes only its own.
+ * Sockets of processes that have ended are removed.
  */
 export async function bridgeAddress(
   userData: string,
   platform: NodeJS.Platform = process.platform,
+  pid: number = process.pid,
 ): Promise<BridgeAddress> {
   if (platform === "win32") {
     return { socket: `\\\\.\\pipe\\arcue-${randomBytes(16).toString("hex")}`, remove: async () => undefined };
   }
+  const name = `arcue-${pid}-${randomBytes(3).toString("hex")}.sock`;
   const inside = join(userData, "bridge");
-  if (Buffer.byteLength(join(inside, SOCKET_NAME)) <= MAX_SOCKET_PATH) {
+  if (Buffer.byteLength(join(inside, name)) <= MAX_SOCKET_PATH) {
     await privateFolder(inside);
-    const socket = join(inside, SOCKET_NAME);
+    await removeEndedSockets(inside);
+    const socket = join(inside, name);
     await rm(socket, { force: true });
     return { socket, remove: () => rm(socket, { force: true }) };
   }
   const folder = await mkdtemp(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "arcue-"));
-  return { socket: join(folder, SOCKET_NAME), remove: () => rm(folder, { recursive: true, force: true }) };
+  return { socket: join(folder, name), remove: () => rm(folder, { recursive: true, force: true }) };
+}
+
+async function removeEndedSockets(folder: string): Promise<void> {
+  for (const entry of await readdir(folder)) {
+    const pid = Number(SOCKET_NAME.exec(entry)?.[1]);
+    if (pid > 0 && !isRunning(pid)) await rm(join(folder, entry), { force: true });
+  }
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 async function privateFolder(path: string): Promise<void> {
@@ -111,7 +137,13 @@ export async function startBridgeServer(options: BridgeServerOptions): Promise<B
     await address.remove();
     throw error;
   }
-  const info: BridgeInfo = { version: 1, socket: address.socket, token, pid: process.pid };
+  const info: BridgeInfo = {
+    version: 1,
+    socket: address.socket,
+    token,
+    pid: process.pid,
+    ...(options.url !== undefined ? { url: options.url } : {}),
+  };
   const temporary = `${infoPath}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(info)}\n`, { mode: 0o600 });
   await rename(temporary, infoPath);
@@ -121,10 +153,20 @@ export async function startBridgeServer(options: BridgeServerOptions): Promise<B
       const closed = new Promise<void>((resolve) => server.close(() => resolve()));
       for (const connection of open) connection.destroy();
       await closed;
-      await rm(infoPath, { force: true });
+      if ((await readBridgeFile(infoPath))?.token === token) await rm(infoPath, { force: true });
       await address.remove();
     },
   };
+}
+
+/** What `bridge.json` holds now. Another core may have written it since. */
+async function readBridgeFile(path: string): Promise<BridgeInfo | null> {
+  try {
+    const parsed = bridgeInfoSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 function listen(server: Server, path: string): Promise<void> {

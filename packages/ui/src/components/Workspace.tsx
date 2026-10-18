@@ -29,7 +29,9 @@ export interface WorkspaceProps extends TabDragHandlers {
   onDropFiles?: (files: File[]) => void;
   /** Replaces opening a sample by its path, as when the host must fetch the file first. */
   onOpenSample?: (sample: SampleAsset) => void;
-  /** The line under "Drop an FBX or Blender file". */
+  /** The empty state's headline, "Drop an FBX or Blender file" unless given. */
+  emptyTitle?: string;
+  /** The line under the empty state's headline. */
   dropHint?: string;
   /** Replaces the "+" button's default, which adds an empty tab. */
   onNewTab?: () => void;
@@ -103,6 +105,7 @@ export function Workspace(props: WorkspaceProps) {
             onOpenFile={onOpenFile}
             onDropFiles={onDropFiles}
             onOpenSample={props.onOpenSample}
+            title={props.emptyTitle}
             dropHint={props.dropHint}
             tabId={activeTab?.id ?? null}
           />

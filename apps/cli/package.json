@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/ws": "^8.18.2",
     "vite": "catalog:",
     "vitest": "catalog:"
   },
@@ -20,6 +21,7 @@
     "@arcue/core": "workspace:*",
     "@arcue/import-fbx": "workspace:*",
     "@arcue/platform-node": "workspace:*",
-    "@arcue/protocol": "workspace:*"
+    "@arcue/protocol": "workspace:*",
+    "ws": "^8.22.0"
   }
 }

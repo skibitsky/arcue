@@ -71,10 +71,16 @@ importers:
       '@arcue/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      ws:
+        specifier: ^8.22.0
+        version: 8.22.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.5
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
       vite:
         specifier: 'catalog:'
         version: 8.3.3(@types/node@22.20.5)(esbuild@0.28.2)
@@ -148,6 +154,9 @@ importers:
       '@arcue/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.5
@@ -1840,6 +1849,9 @@ packages:
   '@types/webxr@0.5.24':
     resolution: {integrity: sha512-h8fgEd/DpoS9CBrjEQXR+dIDraopAEfu4wYVNY2tEPwk60stPWhvZMf4Foo5FakuQ7HFZoa8WceaWFervK2Ovg==}
 
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
+
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
     engines: {node: '>=16.20.0'}
@@ -2699,6 +2711,18 @@ packages:
 
   ws@8.21.0:
     resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -4043,6 +4067,10 @@ snapshots:
 
   '@types/webxr@0.5.24': {}
 
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 22.20.5
+
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
 
@@ -4818,6 +4846,8 @@ snapshots:
       - utf-8-validate
 
   ws@8.21.0: {}
+
+  ws@8.22.0: {}
 
   xml-name-validator@5.0.0: {}
 

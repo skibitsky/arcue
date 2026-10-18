@@ -30,6 +30,12 @@ describe("parseArgs", () => {
     });
   });
 
+  it("parses serve with and without a port", () => {
+    expect(parseArgs(["serve"])).toEqual({ command: "serve" });
+    expect(parseArgs(["serve", "--port", "8123"])).toEqual({ command: "serve", port: 8123 });
+    expect(parseArgs(["serve", "--port=1"])).toEqual({ command: "serve", port: 1 });
+  });
+
   it("parses status and help", () => {
     expect(parseArgs(["status"])).toEqual({ command: "status" });
     expect(parseArgs([])).toEqual({ command: "help" });
@@ -49,5 +55,11 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["inspect", "--json"])).toThrow("needs a file");
     expect(() => parseArgs(["inspect", "a.fbx", "b.fbx"])).toThrow("takes one file");
     expect(() => parseArgs(["inspect", "a.fbx", "--frame", "1"])).toThrow('Unknown option "--frame"');
+    expect(() => parseArgs(["serve", "--port"])).toThrow("needs a value");
+    expect(() => parseArgs(["serve", "--port", "0"])).toThrow("from 1 to 65535");
+    expect(() => parseArgs(["serve", "--port", "65536"])).toThrow("from 1 to 65535");
+    expect(() => parseArgs(["serve", "--port", "80a"])).toThrow("from 1 to 65535");
+    expect(() => parseArgs(["serve", "Hero.fbx"])).toThrow("takes no file");
+    expect(() => parseArgs(["serve", "--open"])).toThrow('Unknown option "--open"');
   });
 });
