@@ -102,6 +102,19 @@ describe("binaryFrameCodec", () => {
     expect(binaryFrameCodec.decode(shifted.subarray(3))).toEqual({ values: Float64Array.of(1, 2, 3) });
   });
 
+  it("reads an unaligned Node Buffer, whose slice is a view, as a WebSocket server receives one", () => {
+    class BufferLike extends Uint8Array {
+      override slice(start?: number, end?: number): BufferLike {
+        return this.subarray(start, end) as BufferLike;
+      }
+    }
+    const encoded = binaryFrameCodec.encode({ values: Float64Array.of(1, 2, 3) });
+    const shifted = new BufferLike(encoded.byteLength + 3);
+    shifted.set(encoded, 3);
+
+    expect(binaryFrameCodec.decode(shifted.subarray(3))).toEqual({ values: Float64Array.of(1, 2, 3) });
+  });
+
   it("refuses to send a message larger than a frame may be", () => {
     const huge = new Uint8Array(new ArrayBuffer(8), 0, 8);
     Object.defineProperty(huge, "byteLength", { value: MAX_FRAME_BYTES + 1 });

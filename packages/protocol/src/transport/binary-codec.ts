@@ -77,7 +77,7 @@ function decode(bytes: Uint8Array): unknown {
 
 /** Views need their element size as alignment in the buffer; a frame that arrived at an odd place is copied once. */
 function alignedData(data: Uint8Array): Uint8Array {
-  return data.byteOffset % DATA_ALIGNMENT === 0 ? data : data.slice();
+  return data.byteOffset % DATA_ALIGNMENT === 0 ? data : new Uint8Array(data);
 }
 
 function revive(value: unknown, data: Uint8Array): unknown {
