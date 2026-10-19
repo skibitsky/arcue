@@ -1,60 +1,112 @@
-# Arcue
+<h1><img src="assets/branding/png/arcue-128.png" width="40" align="center" alt=""> Arcue</h1>
 
-Arcue is a desktop app for reviewing 3D models and animations and handing the feedback to an AI coding agent.
+<!-- Demo video goes here. -->
 
-Feedback on a model is usually a sentence such as "the right thumb in Charge around frame 35 bends the wrong way," and the agent has to guess which vertices, bones and frames that means. In Arcue you click or paint on the model at the moment that looks wrong and write one line. Arcue adds the mesh, vertex numbers, bones, frame, camera and a screenshot, and copies everything as one prompt.
+**Review, test and polish your 3D game assets together with your AI agent.**
+
+Arcue is where you and your agent work on models and animations side by side. Play through clips, check LODs and import warnings, and leave comments right on the model. Your agent gets the exact vertices, bones, frame, camera and a screenshot. When it changes the model, Arcue reloads it with your comments still in place.
+
+[Try it in your browser](https://arcue-web.skibitsky.workers.dev) · [Add it to your agent app](#use-it-with-agent-apps)
 
 Arcue is in early development. It opens FBX and Blender files.
 
-## Use with Claude Code and Codex
+## How it works
 
-The Arcue plugin teaches Claude Code and Codex to read Arcue's reviews and to open models in Arcue, and it includes the `arcue` command line. In the Claude desktop app and the Codex app, the agent shows Arcue in the app's built-in browser with `arcue serve`; elsewhere it uses the desktop app.
+1. Open an FBX or `.blend` file, or ask your agent to open it.
+2. Click or paint on the model, at any frame of any clip, and write a comment.
+3. Hand the comments to your agent. Arcue adds the vertices, bones, frame, camera and a screenshot.
+4. The agent makes the changes and can show you the result at the same frame. Resolve each comment, or reply with a follow-up.
 
-```sh
-claude plugin marketplace add skibitsky/arcue#plugin && claude plugin install arcue@arcue
-codex plugin marketplace add skibitsky/arcue@plugin && codex plugin add arcue@arcue
+## What it's for
+
+- Building characters, rigs and animations with an agent that works in Blender.
+- Reviewing props and characters on their way into your game, including models an AI generated.
+- Checking a file's LODs, textures, clips and import warnings before it reaches the engine.
+
+## Made for game assets
+
+- **LODs.** Switch between `_LOD` levels or LOD groups. Each comment remembers the LOD it was made on.
+- **Engine conventions.** Collision meshes named `UCX_`, `UBX_`, `USP_` or `UCP_` start hidden, and `SOCKET_` nodes are recognized.
+- **Modular characters.** Load animation-only files, props attached to bones and alternative parts into one view.
+- **Animation.** Play and scrub clips, shape key animation included, and comment on a single frame or a range.
+- **Your pipeline.** Every export reloads, and comments move onto the new version of the mesh. They follow a renamed model too, including in a Unity project through its GUID.
+
+## Ways to use it
+
+| Where | How |
+|---|---|
+| Claude and Codex apps | [Install the plugin](#use-it-with-agent-apps). Arcue opens in the app's built-in browser, right next to the conversation. |
+| Other agents and terminals | Use the desktop app. It reloads a model every time you export it, and keeps reviews in `.arcue/` in your repository. Until releases are ready, [build it from source](#run-from-source). |
+| Just trying it | Open the [web version](https://arcue-web.skibitsky.workers.dev) and drop in a file or pick a sample. Comments stay in the tab until you reload. |
+
+## Use it with agent apps
+
+The quickest way is to ask your agent:
+
+```text
+Set up Arcue for me: https://github.com/skibitsky/arcue/blob/main/INSTALL.md
 ```
 
-The Code tab of the Claude desktop app uses the plugins that `claude` installs, so run the first line in a terminal.
+The Arcue plugin teaches your agent to open models in Arcue, read your comments and check its own changes. In the Claude and Codex apps, Arcue opens in the built-in browser. Everywhere else, it opens in the desktop app.
 
-The skill alone installs with `npx skills add skibitsky/arcue`, but it then needs `arcue` on your PATH and works only in bash, zsh or Git Bash; in PowerShell, install the plugin.
+### Claude Code
 
-## Develop
+```sh
+claude plugin marketplace add skibitsky/arcue#plugin
+claude plugin install arcue@arcue
+```
 
-Arcue needs Node 22.12 or later and pnpm.
+Run these in a terminal. The Code tab of the Claude desktop app uses the same plugins.
+
+### Codex
+
+```sh
+codex plugin marketplace add skibitsky/arcue@plugin
+codex plugin add arcue@arcue
+```
+
+### Other agents
+
+Use the desktop app, and paste each round of comments into your agent. Add the Arcue skill so the agent can read the full review data and screenshots:
+
+```sh
+npx skills add skibitsky/arcue
+```
+
+Desktop app releases will put the `arcue` command on your PATH, so the agent can also open models and inspect files from a bash, zsh or Git Bash shell. Until then, it works from the comments you paste.
+
+## Build it into your own workflow
+
+- **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve` runs Arcue in any browser on your own files, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. Call it from scripts, CI or your own tools.
+- **Review files.** Every copied prompt is also saved as [`round.json`](skills/arcue/references/round-json.md) with its screenshots in `.arcue/reviews/`, so any script can read the feedback.
+- **Composition files.** A [`composition.json`](skills/arcue/references/composition.md) loads animation files, attachments and textures together with a model.
+- **Commands.** Every action in Arcue is a typed command with a JSON Schema in [`packages/protocol`](packages/protocol). The window and the `arcue` command call the same commands, and the planned MCP server will too.
+
+## Roadmap
+
+- Desktop app releases, ready to download and install, that put the `arcue` command on your PATH.
+- glTF and GLB files, then OBJ and USD.
+- Feedback that arrives in your running agent session, without copy and paste.
+- An MCP server, so the agent can read comments with their screenshots, reply to them and mark them fixed.
+- Two versions side by side, with a synced camera and timeline and a heatmap of what moved.
+- Onion skinning for animation.
+- Lighting presets and custom environments.
+- A pose tool: rotate a bone to show the pose you want.
+- Blender, Unity and Tripo integrations.
+- Several reviewers on one model.
+
+## Run from source
+
+You need Node 22.12 or later and pnpm.
 
 ```sh
 pnpm install
-pnpm dev                           # the web host at http://localhost:5173
-pnpm --filter @arcue/desktop dev   # the desktop app
-pnpm --filter @arcue/plugin build  # the agent plugin and its marketplace, in apps/plugin/dist
-node apps/plugin/dist/plugins/arcue/skills/arcue/scripts/arcue.js serve  # Arcue on this computer's files at http://localhost:4530
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm --filter @arcue/web test:e2e
-pnpm --filter @arcue/plugin test:e2e
-pnpm --filter @arcue/desktop test:e2e
+pnpm dev                              # web version at http://localhost:5173
+pnpm --filter @arcue/desktop dev      # desktop app
+pnpm --filter @arcue/desktop package  # desktop app build, in apps/desktop/out
 ```
 
-The browser and desktop tests render with SwiftShader software rendering everywhere but macOS, and CI runs the browser tests that way on Linux. To use the same renderer on macOS:
-
-```sh
-ARCUE_E2E_SOFTWARE=1 pnpm --filter @arcue/web test:e2e --workers=1
-ARCUE_E2E_SOFTWARE=1 pnpm --filter @arcue/desktop test:e2e
-```
-
-Software rendering has a longer test budget because shader compilation and screenshots can block for several seconds. The same assertions run with either renderer; failures retain traces and screenshots, which CI uploads as artifacts.
-
-On Linux without a display, run the desktop app and its tests under `xvfb-run -a`. Without a GPU, start the app with `--use-angle=swiftshader --enable-unsafe-swiftshader` so the 3D view renders.
-
-## Build the desktop app
-
-```sh
-pnpm --filter @arcue/desktop package
-```
-
-This builds an app for the current platform and architecture in `apps/desktop/out/`. On Apple Silicon, open `apps/desktop/out/Arcue-darwin-arm64/Arcue.app`. macOS builds use local ad-hoc signing and do not need an Apple developer certificate. It uses the app icon in `assets/branding/`; `pnpm icons` regenerates the icon formats from the approved master image.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers tests and the rest of the development setup.
 
 ## License
 
