@@ -23,9 +23,9 @@ describe("history", () => {
   it("lists rounds newest first with their counts", () => {
     const rounds = historyRounds(stoneResonatorReview(NOW));
     expect(rounds.map((round) => round.number)).toEqual([3, 2]);
-    expect(rounds[0]?.items.map((item) => [item.comment.id, item.status, item.action])).toEqual([
-      ["c4", "resolved", "reopen"],
-      ["c5", "resolved", "reopen"],
+    expect(rounds[0]?.items.map((item) => [item.comment.id, item.status, item.actions])).toEqual([
+      ["c4", "resolved", ["reopen"]],
+      ["c5", "resolved", ["reopen"]],
     ]);
     expect(roundSummaryText(rounds[0]?.counts ?? { sent: 0, resolved: 0, reopened: 0 })).toBe("2 resolved");
   });
@@ -43,18 +43,36 @@ describe("history", () => {
         : comment,
     );
     const roundThree = historyRounds({ ...review, queue: [...review.queue, "c4"] })[0];
-    expect(roundThree?.items[0]).toMatchObject({ status: "reopened", action: null });
+    expect(roundThree?.items[0]).toMatchObject({ status: "reopened", actions: [] });
     const reopened = review.comments.find((comment) => comment.id === "c4");
     if (!reopened) throw new Error("c4 is missing");
     expect(pendingFollowUp(reopened)?.afterRound).toBe(3);
     expect(currentMessage(reopened)).toBe("Still slides at frame 26.");
   });
 
-  it("offers Mark resolved on a sent comment", () => {
+  it("offers Mark resolved and a follow-up on a sent comment", () => {
     const review = withComments(stoneResonatorReview(NOW), (comment) =>
       comment.id === "c5" ? { ...comment, status: "sent" } : comment,
     );
-    expect(historyRounds(review)[0]?.items[1]).toMatchObject({ status: "sent", action: "resolve" });
+    expect(historyRounds(review)[0]?.items[1]).toMatchObject({ status: "sent", actions: ["resolve", "reopen"] });
+  });
+
+  it("counts a sent comment followed up without resolving it as reopened", () => {
+    const review = withComments(stoneResonatorReview(NOW), (comment) =>
+      comment.id === "c5"
+        ? {
+            ...comment,
+            status: "draft",
+            reopenedFrom: "sent",
+            followUps: [{ text: "The shoulder still dips.", createdAt: NOW.toISOString(), afterRound: 3 }],
+          }
+        : comment,
+    );
+    const roundThree = historyRounds({ ...review, queue: [...review.queue, "c5"] })[0];
+    expect(roundThree?.items[1]).toMatchObject({ status: "reopened", actions: [] });
+    expect(roundSummaryText(roundThree?.counts ?? { sent: 0, resolved: 0, reopened: 0 })).toBe(
+      "1 resolved · 1 reopened",
+    );
   });
 });
 

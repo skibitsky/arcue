@@ -5,7 +5,7 @@ import { formatClock, formatCount, formatHeight, plural, sceneStats } from "../f
 import type { AssetSession } from "../store/asset-session";
 import { useSelect } from "../store/observable";
 import type { WorkspaceStore } from "../store/workspace-store";
-import { Tip } from "./controls";
+import { Tip, useQuietFocusReturn } from "./controls";
 import { Icon } from "./Icon";
 import { WarningsStatus } from "./Warnings";
 
@@ -46,20 +46,32 @@ const conventions: { value: CoordinateConvention; short: string; long: string }[
 
 function CoordinatesMenu({ store }: { store: WorkspaceStore }) {
   const settings = useSelect(store.state, (state) => state.settings);
+  const quietReturn = useQuietFocusReturn();
   if (!settings) return null;
   const current = conventions.find((option) => option.value === settings.coordinates) ?? conventions[0];
   return (
     <DropdownMenu.Root modal={false}>
       <Tip label="Coordinates in copied prompts">
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="sb-menu" aria-label={`Prompt coordinates: ${current?.long ?? ""}`}>
+          <button
+            type="button"
+            className="sb-menu"
+            aria-label={`Prompt coordinates: ${current?.long ?? ""}`}
+            onFocus={quietReturn.onFocus}
+          >
             {current?.short}
             <Icon name="chevronDown" />
           </button>
         </DropdownMenu.Trigger>
       </Tip>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className="menu" side="top" align="end" sideOffset={6}>
+        <DropdownMenu.Content
+          className="menu"
+          side="top"
+          align="end"
+          sideOffset={6}
+          onCloseAutoFocus={quietReturn.onCloseAutoFocus}
+        >
           <DropdownMenu.Label className="menu-label">Coordinates in prompts</DropdownMenu.Label>
           <DropdownMenu.RadioGroup
             value={settings.coordinates}

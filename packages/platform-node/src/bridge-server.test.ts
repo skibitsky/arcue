@@ -34,13 +34,16 @@ let core: ArcueCore;
 let server: BridgeServer;
 const errors: unknown[] = [];
 
+/** macOS's temporary folder is too long for the socket to fit inside the user data folder, so tests use /tmp. */
+const userDataRoot = process.platform === "win32" ? tmpdir() : "/tmp";
+
 const timer = (delayMs: number, callback: () => void) => {
   const handle = setTimeout(callback, delayMs);
   return () => clearTimeout(handle);
 };
 
 beforeEach(async () => {
-  userData = realpathSync(mkdtempSync(join(tmpdir(), "arcue-bridge-")));
+  userData = realpathSync(mkdtempSync(join(userDataRoot, "arcue-bridge-")));
   core = await ArcueCore.start({ platform: new MemoryPlatform({ clock: new ManualClock() }) });
   server = await startBridgeServer({
     core,
@@ -51,6 +54,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await server.close();
   core.dispose();
   rmSync(userData, { recursive: true, force: true });
@@ -184,8 +188,9 @@ describe("the bridge server", () => {
       const long = join(userData, "x".repeat(120));
       const temporary = `${BRIDGE_INFO_FILE}.${process.pid}.tmp`;
       mkdirSync(join(long, temporary), { recursive: true });
-      const folders = () => new Set(readdirSync(process.env.XDG_RUNTIME_DIR || tmpdir()));
-      const before = folders();
+      const runtime = join(userData, "runtime");
+      mkdirSync(runtime);
+      vi.stubEnv("XDG_RUNTIME_DIR", runtime);
       const listening = vi.spyOn(Server.prototype, "listen");
 
       await expect(
@@ -193,10 +198,12 @@ describe("the bridge server", () => {
       ).rejects.toMatchObject({ code: "EISDIR" });
 
       const started = listening.mock.contexts[0];
+      const socket = listening.mock.calls[0]?.[0];
       listening.mockRestore();
       expect(started).toBeInstanceOf(Server);
       expect((started as Server).listening).toBe(false);
-      expect([...folders()].filter((name) => !before.has(name) && name.startsWith("arcue-"))).toEqual([]);
+      expect(dirname(dirname(String(socket)))).toBe(runtime);
+      expect(readdirSync(runtime)).toEqual([]);
       expect(readdirSync(long)).toEqual([temporary]);
     },
   );

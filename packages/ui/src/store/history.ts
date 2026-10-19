@@ -2,13 +2,21 @@ import type { Comment, FollowUp, ReviewFile } from "@arcue/protocol";
 
 export type HistoryStatus = "sent" | "resolved" | "reopened";
 
+export type HistoryAction = "resolve" | "reopen";
+
 export interface HistoryItem {
   comment: Comment;
   status: HistoryStatus;
   /** The message sent in this round: the comment's text, or the follow-up it was reopened with. */
   text: string;
-  action: "resolve" | "reopen" | null;
+  actions: readonly HistoryAction[];
 }
+
+const actionsByStatus: Record<HistoryStatus, readonly HistoryAction[]> = {
+  sent: ["resolve", "reopen"],
+  resolved: ["reopen"],
+  reopened: [],
+};
 
 export interface HistoryRound {
   number: number;
@@ -62,8 +70,7 @@ export function historyRounds(review: ReviewFile): HistoryRound[] {
         if (!comment) return [];
         const status = statusInRound(comment, round.number);
         counts[status] += 1;
-        const action = status === "sent" ? "resolve" : status === "resolved" ? "reopen" : null;
-        return [{ comment, status, text: messageForRound(comment, round.number), action }];
+        return [{ comment, status, text: messageForRound(comment, round.number), actions: actionsByStatus[status] }];
       });
       return { number: round.number, createdAt: round.createdAt, items, counts };
     });
