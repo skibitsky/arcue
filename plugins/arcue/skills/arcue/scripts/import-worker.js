@@ -50,9 +50,9 @@ function displayNames(names) {
 * The most levels of nodes a scene may nest, far more than real scenes and rigs have. The viewport makes an object for
 * each node and walks them with one nested call per level, so importers refuse a deeper scene.
 */
-var MAX_NODE_DEPTH = 1024;
+var MAX_NODE_DEPTH$1 = 1024;
 /** Whether a node nests more than `MAX_NODE_DEPTH` levels deep, a root being the first level. */
-function nestsTooDeep(nodes) {
+function nestsTooDeep$1(nodes) {
 	const levels = new Int32Array(nodes.length);
 	for (let index = 0; index < nodes.length; index++) {
 		const parent = nodes[index]?.parent ?? -1;
@@ -212,7 +212,33 @@ function createTextureResolver(files, findFile, locateFile) {
 	};
 }
 //#endregion
-//#region ../../packages/import-blend/src/blend/ids.ts
+//#region ../../packages/blend/src/blend/errors.ts
+/** The bytes are not a .blend file this reader understands; the message says why. */
+var BlendParseError = class extends Error {
+	name = "BlendParseError";
+};
+/** The file is valid but nests deeper than the reader follows; the message says how deep. */
+var BlendLimitError = class extends Error {
+	name = "BlendLimitError";
+};
+/** A .blend file that `readBlend` cannot read. */
+var BlendReadError = class extends Error {
+	name = "BlendReadError";
+	reason;
+	/**
+	* The particular case: why the file is unreadable, such as "its file header is damaged", the version of Blender that
+	* saved a file that is too old, such as "2.79", how deep a scene nests, or the message of the error that reading the
+	* scene failed with, which `cause` holds.
+	*/
+	detail;
+	constructor(reason, message, detail, options) {
+		super(message, options);
+		this.reason = reason;
+		this.detail = detail;
+	}
+};
+//#endregion
+//#region ../../packages/blend/src/blend/ids.ts
 /** `Library.flag`: the library holds data-blocks packed into this file, as Blender 5 packs linked data. */
 var LIBRARY_ARCHIVE = 1;
 /** `ID.flag`: the linked data-block is packed into this file. */
@@ -239,7 +265,7 @@ function isLinked(datablock) {
 }
 /**
 * Whether a linked datablock's library is a whole .blend file packed into this one, as Pack Linked Libraries leaves it.
-* Arcue does not read such a file.
+* The reader does not read such a file.
 */
 function isInPackedLibrary(datablock) {
 	return (idOf(datablock)?.deref("lib")?.pointer("packedfile") ?? 0n) !== 0n;
@@ -252,7 +278,7 @@ function datablocks(file, code) {
 	});
 }
 //#endregion
-//#region ../../packages/import-blend/src/blend/lists.ts
+//#region ../../packages/blend/src/blend/lists.ts
 /**
 * The structs of a ListBase member that `seen` does not hold, by struct offset, each added to it. The walk stops at the
 * first struct `seen` holds: Blender writes each struct in one list only, so lists that share structs take no longer
@@ -304,7 +330,7 @@ function ownedList(owner, name) {
 	return listOf(owner);
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/fcurve.ts
+//#region ../../packages/blend/src/anim/fcurve.ts
 var Interpolation = {
 	constant: 0,
 	linear: 1,
@@ -1251,7 +1277,7 @@ function jumpFrames(curve, start, end, limit) {
 	return [...frames];
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/actions.ts
+//#region ../../packages/blend/src/anim/actions.ts
 /** Blender's two-letter ID codes as the `idtype` and `idroot` members store them. */
 var IdCode = {
 	object: 16975,
@@ -1504,7 +1530,7 @@ function parseShapeKeyPath(path) {
 	return match?.[1] ? match[1].replace(/\\(.)/g, "$1") : null;
 }
 //#endregion
-//#region ../../packages/import-blend/src/math.ts
+//#region ../../packages/blend/src/math.ts
 function identity() {
 	return Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
 }
@@ -1875,7 +1901,7 @@ function toSceneAxes(m, unitScale, out = /* @__PURE__ */ new Float64Array(16)) {
 	return out;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/transforms.ts
+//#region ../../packages/blend/src/scene/transforms.ts
 function three(values, fallback) {
 	return [
 		values[0] ?? fallback,
@@ -2036,7 +2062,7 @@ function setTransformProperty(values, property, index, value) {
 	return true;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/armature.ts
+//#region ../../packages/blend/src/scene/armature.ts
 var BoneFlag = {
 	connected: 16,
 	hinge: 512,
@@ -2322,7 +2348,7 @@ function poseMatrices(bones, channels) {
 	return result;
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/nla.ts
+//#region ../../packages/blend/src/anim/nla.ts
 var StripFlag = {
 	userInfluence: 32,
 	userTime: 64,
@@ -3008,14 +3034,14 @@ var DELTAS = /* @__PURE__ */ new Map([
 	["delta_rotation_quaternion", QUATERNION],
 	["delta_scale", SCALE]
 ]);
-/** The animated properties Arcue reads: an object's transform, a pose bone's channel and a shape key's value. */
+/** The animated properties the reader reads: an object's transform, a pose bone's channel and a shape key's value. */
 function propertyOf(path) {
 	const pose = parsePosePath(path);
 	if (pose) return TRANSFORMS.get(pose.property) ?? null;
 	if (parseShapeKeyPath(path) !== null) return SHAPE_KEY_VALUE;
 	return TRANSFORMS.get(path) ?? DELTAS.get(path) ?? null;
 }
-/** What the NLA writes for one value of a property that no strip plays, 0 for a property Arcue does not read. */
+/** What the NLA writes for one value of a property that no strip plays, 0 for a property the reader does not read. */
 function nlaDefault(path, index) {
 	return propertyOf(path)?.defaults[index] ?? 0;
 }
@@ -3029,7 +3055,7 @@ function blendedInfluence(strip, frame) {
 }
 /**
 * Blender's `nlastrip_evaluate_controls`: the strip's influence and action frame, from its curves where it animates
-* them; null where such a curve has a modifier Arcue does not apply.
+* them; null where such a curve has a modifier the reader does not apply.
 */
 function controls(strip, frame) {
 	let influence = strip.influence;
@@ -3056,7 +3082,7 @@ function controls(strip, frame) {
 /**
 * The strip of a list that Blender plays at a frame, as `stripAt` finds it, with its influence and action frame.
 * Undefined where none plays, and null where a meta or transition strip plays, or a curve that animates the strip has
-* a modifier Arcue does not apply.
+* a modifier the reader does not apply.
 */
 function playingStrip(list, frame) {
 	const found = stripAt(list, frame);
@@ -3143,7 +3169,7 @@ function blendInto(lower, upper, mode, influence) {
 		lower.set(path, result);
 	}
 }
-/** The curves of an action's slot that Blender plays, on properties Arcue reads, with the value each one sets. */
+/** The curves of an action's slot that Blender plays, on properties the reader reads, with the value each one sets. */
 function playedCurves(action, slot) {
 	return (slotFor(action, slot)?.curves ?? []).flatMap((curve) => {
 		const property = curve.muted || curve.empty ? null : propertyOf(curve.path);
@@ -3163,7 +3189,7 @@ function playedCurves(action, slot) {
 /**
 * Blender's `nlasnapshot_from_action`: the values a strip's action plays at its frame. A quaternion's strip sets all
 * four values, the identity's where its action keys fewer. A value is null where its curve, or the strip, has a
-* modifier Arcue does not apply.
+* modifier the reader does not apply.
 */
 function stripValues(action, playing) {
 	const modified = playing.strip.struct !== null && hasActiveModifiers(playing.strip.struct);
@@ -3187,7 +3213,7 @@ function stripValues(action, playing) {
 }
 /**
 * Blender's `animsys_create_tweak_strip`: the tweaked strip as Blender plays it in NLA tweak mode, given `action`, the
-* strip's action, or undefined where Arcue has not read it.
+* strip's action, or undefined where the reader has not read it.
 */
 function tweakStrip(adt, action) {
 	const found = adt.deref("actstrip");
@@ -3280,9 +3306,9 @@ function nlaValues(adt, frame, actions) {
 }
 /**
 * Blender's `BKE_animsys_evaluate_animdata` at a frame without drivers: the values that an ID's active action and NLA
-* write over the ones the file saves, in the order Blender writes them. It leaves out each value whose source Arcue
-* does not play: one a driver overrides, one from a curve or strip with a modifier Arcue does not apply, and every
-* value of an ID that plays an action linked from another file, a meta or transition strip.
+* write over the ones the file saves, in the order Blender writes them. It leaves out each value whose source the
+* reader does not play: one a driver overrides, one from a curve or strip with a modifier the reader does not apply,
+* and every value of an ID that plays an action linked from another file, a meta or transition strip.
 */
 function animatedValues(id, frame, actions) {
 	const adt = id.deref("adt");
@@ -3309,7 +3335,7 @@ function animatedValues(id, frame, actions) {
 	return written.filter(({ path, index }) => !driven.has(`${path}[${index}]`));
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/timeline.ts
+//#region ../../packages/blend/src/anim/timeline.ts
 /** The scene's time remapping, which scales every frame Blender evaluates: its `framelen`, or 1 where that is unusable. */
 function frameLength(render) {
 	const length = render?.number("framelen") ?? 1;
@@ -3326,7 +3352,7 @@ function sceneTimeline(scene) {
 	};
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/opening.ts
+//#region ../../packages/blend/src/anim/opening.ts
 /** The scene's start frame through its time remapping, as Blender evaluates it after going to that frame. */
 function startFrame(scene) {
 	const { start, frameLength } = sceneTimeline(scene);
@@ -3383,17 +3409,7 @@ function startPoses(scene, actions) {
 	};
 }
 //#endregion
-//#region ../../packages/import-blend/src/blend/errors.ts
-/** The bytes are not a .blend file this reader understands; the message says why. */
-var BlendParseError = class extends Error {
-	name = "BlendParseError";
-};
-/** The file is valid but holds more than Arcue can show; the message says what, after the file's name. */
-var BlendLimitError = class extends Error {
-	name = "BlendLimitError";
-};
-//#endregion
-//#region ../../packages/import-blend/src/scene/modifiers.ts
+//#region ../../packages/blend/src/scene/modifiers.ts
 /** Blender's `eModifierType` values this importer acts on. */
 var ModifierType = {
 	armature: 8,
@@ -3436,7 +3452,7 @@ function changesPreview(modifier) {
 	return !PREVIEW_NEUTRAL.has(modifierType(modifier));
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/shader-graph.ts
+//#region ../../packages/blend/src/scene/shader-graph.ts
 /** Blender's `eNodeSocketDatatype`. */
 var SocketType = {
 	float: 0,
@@ -3779,7 +3795,7 @@ function upstreamNode(graph, socket, type) {
 	return found.get(start.offset) ?? null;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/normals.ts
+//#region ../../packages/blend/src/scene/normals.ts
 var PI2 = Math.PI * 2;
 /** Blender's `LNOR_SPACE_TRIGO_THRESHOLD`. */
 var TRIGO_THRESHOLD = .9999;
@@ -4189,7 +4205,7 @@ function freeCornerNormals(mesh, domain, values) {
 	return result;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/smooth-by-angle.ts
+//#region ../../packages/blend/src/scene/smooth-by-angle.ts
 var PROPERTY_INT = 1;
 var PROPERTY_FLOAT = 2;
 var PROPERTY_DOUBLE = 8;
@@ -4452,7 +4468,7 @@ function edgeAngle(normals, a, b) {
 	return ax * bx + ay * by + az * bz >= 0 ? half : Math.PI - half;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/objects.ts
+//#region ../../packages/blend/src/scene/objects.ts
 var ObjectType = {
 	empty: 0,
 	mesh: 1,
@@ -4472,7 +4488,7 @@ var ObjectType = {
 	volume: 29,
 	greasePencil: 30
 };
-/** Object types whose geometry Arcue does not show; their objects come along as empty nodes. */
+/** Object types whose geometry the reader does not show; their objects come along as empty nodes. */
 var UNSHOWN_GEOMETRY = /* @__PURE__ */ new Map([
 	[ObjectType.curve, "curve"],
 	[ObjectType.surface, "surface"],
@@ -4993,7 +5009,7 @@ function parentsFirst(objects) {
 	return result;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/envelopes.ts
+//#region ../../packages/blend/src/scene/envelopes.ts
 var BONE_MULTIPLY_ENVELOPE = 2048;
 /** Blender leaves a vertex in place when the weights that reach it add up to no more than this. */
 var MIN_CONTRIBUTION = 1e-4;
@@ -5130,7 +5146,7 @@ function envelopeUse(data, deform, bones, toArmature) {
 	};
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/mapping.ts
+//#region ../../packages/blend/src/scene/mapping.ts
 /** Blender's Mapping node types, `node.vector_type`. */
 var MappingType = {
 	point: 0,
@@ -6743,7 +6759,7 @@ function applySurfaceAlpha(graph, draft, surface) {
 	draft.alphaMode = "blend";
 }
 //#endregion
-//#region ../../packages/import-blend/src/blend/sdna.ts
+//#region ../../packages/blend/src/blend/sdna.ts
 /** The longest member or type name the reader takes; Blender's own are under 64 bytes. */
 var MAX_NAME_BYTES = 1024;
 /**
@@ -6898,7 +6914,7 @@ function parseSdna(bytes, little, pointerSize) {
 	};
 }
 //#endregion
-//#region ../../packages/import-blend/src/blend/file.ts
+//#region ../../packages/blend/src/blend/file.ts
 /** The bytes every uncompressed .blend file starts with. */
 var HEADER_MAGIC = "BLENDER";
 var textDecoder = new TextDecoder("utf-8");
@@ -7391,7 +7407,7 @@ function readBlendFile(bytes) {
 	return new BlendFile(bytes);
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/mesh-data.ts
+//#region ../../packages/blend/src/scene/mesh-data.ts
 /** Blender 5's attribute types, in the order of its `AttrType` enum. */
 var STORAGE_TYPES = [
 	"bool",
@@ -8143,7 +8159,7 @@ function linkCornerEdges(topology, sizes) {
 	}
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/shape-keys.ts
+//#region ../../packages/blend/src/scene/shape-keys.ts
 var OBJECT_SHAPE_LOCK = 1;
 /** The mesh's vertex group a shape key's offsets are limited to, or -1 for none or one the mesh lacks. */
 function keyGroup(mesh, key) {
@@ -8289,7 +8305,7 @@ function groupWeight(mesh, group, vertex) {
 	return found;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/triangulate.ts
+//#region ../../packages/blend/src/scene/triangulate.ts
 var CONCAVE = -1;
 var TANGENTIAL = 0;
 var CONVEX = 1;
@@ -8745,7 +8761,7 @@ function triangulate(mesh, blenderVersion) {
 	};
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/mesh-build.ts
+//#region ../../packages/blend/src/scene/mesh-build.ts
 var MAX_JOINTS = 65534;
 /** Blender's armature deform leaves a vertex in place unless its weights add up to more than this. */
 var MIN_DEFORM_WEIGHT = 1e-4;
@@ -8923,7 +8939,7 @@ function cornerNormalsOf(source, smoothing) {
 }
 /**
 * The triangles in the file's face order, with a group for each run of faces in one slot, so that assigning a face
-* another material keeps every triangle's number and the fingerprint. A mesh with more runs than
+* another material keeps every triangle's number and face. A mesh with more runs than
 * `MAX_MATERIAL_GROUPS` gets its triangles sorted by slot instead.
 */
 function drawOrder(mesh, faceTriangles, slotCount) {
@@ -8990,24 +9006,6 @@ function sortBySlot(mesh, faceTriangles, slotOf, slotCount) {
 		faceAt,
 		groups
 	};
-}
-/** The fingerprint of each face fanned from its first corner, triangle by triangle in the order the mesh draws them. */
-function fanFingerprint(mesh, faceTriangles, drawn) {
-	const { order, faceAt } = drawn;
-	const indices = new Uint32Array(order.length * 3);
-	for (let position = 0; position < order.length; position++) {
-		const face = faceAt[position] ?? 0;
-		const start = mesh.faceOffsets[face] ?? 0;
-		const fan = (order[position] ?? 0) - (faceTriangles[face] ?? 0);
-		indices[position * 3] = mesh.cornerVerts[start] ?? 0;
-		indices[position * 3 + 1] = mesh.cornerVerts[start + fan + 1] ?? 0;
-		indices[position * 3 + 2] = mesh.cornerVerts[start + fan + 2] ?? 0;
-	}
-	return topologyFingerprint({
-		indices,
-		sourceVertex: Uint32Array.from({ length: mesh.vertexCount }, (_, vertex) => vertex),
-		sourceVertexCount: mesh.vertexCount
-	});
 }
 /** The bits of 32-bit floats, for hashing them. */
 function floatBits(values) {
@@ -9145,11 +9143,11 @@ function tableSize(count) {
 	return size;
 }
 /**
-* Turns mesh data into Arcue's triangle mesh: corners become rendered vertices, shared where the vertex, normal, UVs
+* Turns mesh data into a triangle mesh: corners become rendered vertices, shared where the vertex, normal, UVs
 * and color all match, and where every shape key shades them alike, and triangles keep the file's face order in a group
 * for each run of faces in one material slot. Positions and normals go through `conversion`.
 */
-function buildMesh(mesh, options) {
+function buildMesh$1(mesh, options) {
 	const normals = cornerNormalsOf(mesh, options.smoothing);
 	const { corners, faceTriangles } = triangulate(mesh, options.blenderVersion);
 	const drawn = drawOrder(mesh, faceTriangles, Math.max(options.slotCount, 1));
@@ -9256,9 +9254,11 @@ function buildMesh(mesh, options) {
 			const from = shading && r * 3 >= shading.length ? splitFrom.get(r) : void 0;
 			if (from !== void 0) normalOffsets.copyWithin(r * 3, from * 3, from * 3 + 3);
 		}
+		const [min, max] = target.range;
 		return {
 			name: target.name,
 			defaultWeight: target.defaultWeight,
+			range: [min, max],
 			positions: values,
 			normals: normalOffsets
 		};
@@ -9298,7 +9298,11 @@ function buildMesh(mesh, options) {
 		indices,
 		sourceVertex: source,
 		sourceVertexCount: mesh.vertexCount,
-		topology: fanFingerprint(mesh, faceTriangles, drawn),
+		faces: {
+			offsets: Uint32Array.from(mesh.faceOffsets),
+			vertices: Uint32Array.from(mesh.cornerVerts)
+		},
+		triangleFaces: drawn.faceAt,
 		groups,
 		morphTargets,
 		morphKeys: morphs.map((target) => target.name),
@@ -9308,7 +9312,7 @@ function buildMesh(mesh, options) {
 	};
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/parents.ts
+//#region ../../packages/blend/src/scene/parents.ts
 function headTailFactor(object) {
 	return object.has("parent_bone_head_tail_factor") ? object.number("parent_bone_head_tail_factor") : 1;
 }
@@ -9338,21 +9342,22 @@ function isVertexParented(object) {
 	const type = parentTypeOf(object);
 	return type === ParentType.vertex || type === ParentType.vertices;
 }
-/** Parent types whose points Blender's vertex parenting follows, of which Arcue reads only a mesh's. */
+/** Parent types whose points Blender's vertex parenting follows, of which the reader reads only a mesh's. */
 var HAS_POINTS = /* @__PURE__ */ new Set([
 	ObjectType.mesh,
 	ObjectType.curve,
 	ObjectType.surface,
 	ObjectType.lattice
 ]);
-/** Whether Blender places a vertex-parented child by points of the parent that Arcue does not read. */
+/** Whether Blender places a vertex-parented child by points of the parent that the reader does not read. */
 function readsNoParentPoints(parent) {
 	const type = parent.number("type");
 	return HAS_POINTS.has(type) && type !== ObjectType.mesh;
 }
 /**
 * The points a vertex-parented object follows, as Blender's `give_parvert` finds them in a mesh it shows: each vertex's
-* local position, or the origin for a vertex the mesh does not have. Null for a parent whose points Arcue does not know.
+* local position, or the origin for a vertex the mesh does not have. Null for a parent whose points the reader does
+* not know.
 */
 function parentPoints(object, parent, vertices) {
 	if (parent.number("type") !== ObjectType.mesh) return null;
@@ -9536,7 +9541,7 @@ function parentOf(object) {
 	return parent && !isLinked(parent) ? parent : null;
 }
 //#endregion
-//#region ../../packages/import-blend/src/scene/build.ts
+//#region ../../packages/blend/src/scene/build.ts
 var CONSTRAINT_DISABLE = 4;
 var CONSTRAINT_OFF = 512;
 function sceneSettings(scene) {
@@ -9726,17 +9731,17 @@ function objectNodes(contents, poses, warn, vertices) {
 		if (object.type === ObjectType.armature && object.data) addArmature(record, object.data, nodes, warn, startPose);
 		if (object.shown && UNSHOWN_GEOMETRY.has(object.type)) {
 			const kind = UNSHOWN_GEOMETRY.get(object.type);
-			warn("object-not-shown", object.name, `Not shown: ${object.name}`, `Arcue shows meshes; this is ${kind} data`);
+			warn("object-not-shown", object.name, `Not shown: ${object.name}`, `Only meshes are read; this is ${kind} data`);
 		}
 		const instanced = object.shown ? instancedCollection(object.struct) : null;
 		if (instanced) {
-			const detail = `Arcue does not expand instances of ${idName(instanced)}`;
+			const detail = `Instances of ${idName(instanced)} are not expanded`;
 			warn("object-not-shown", object.name, `Collection instance not shown: ${object.name}`, detail);
 		}
 		const instancing = object.shown && !object.hidden && ancestors.has(object.struct.offset) ? childInstancing(object.struct) : null;
 		if (instancing) {
 			const kind = instancing === "vertex" ? "Vertex" : "Face";
-			const detail = `Arcue shows its children once instead of at each ${instancing}`;
+			const detail = `Its children are shown once instead of at each ${instancing}`;
 			warn("object-not-shown", object.name, `${kind} instances not shown: ${object.name}`, detail);
 		}
 		if (object.parent && isVertexParented(object.struct)) vertexParentWarning(object, object.parent, parentNode >= 0 && parentNode === parentRecord?.node, warn);
@@ -9774,7 +9779,7 @@ function vertexParentPlace(object, parent, below, nodeWorlds, vertices) {
 function vertexParentWarning(object, parent, underParent, warn) {
 	const name = idName(parent);
 	let detail;
-	if (readsNoParentPoints(parent)) detail = `Arcue does not read the points of ${name}, so it is placed by the origin of ${name} and ${underParent ? "follows it as a whole" : "does not follow it"}`;
+	if (readsNoParentPoints(parent)) detail = `The points of ${name} are not read, so it is placed by the origin of ${name} and ${underParent ? "follows it as a whole" : "does not follow it"}`;
 	else detail = underParent ? `It keeps its rest offset from ${name} instead of following its vertices` : `It stays where it is at rest instead of following the vertices of ${name}`;
 	warn("deform-approximated", object.name, `Vertex parent not followed: ${object.name}`, detail);
 }
@@ -9852,6 +9857,22 @@ var MaterialTable = class {
 		return this.drafts.length - 1;
 	}
 };
+/**
+* The most levels of objects and bones a scene may nest, far more than real scenes and rigs have. Deeper scenes are
+* refused, since walking them takes a nested call per level.
+*/
+var MAX_NODE_DEPTH = 1024;
+/** Whether a node nests more than `MAX_NODE_DEPTH` levels deep, a root being the first level. */
+function nestsTooDeep(nodes) {
+	const levels = new Int32Array(nodes.length);
+	for (let index = 0; index < nodes.length; index++) {
+		const parent = nodes[index]?.parent ?? -1;
+		const level = (parent >= 0 && parent < index ? levels[parent] ?? 0 : 0) + 1;
+		if (level > 1024) return true;
+		levels[index] = level;
+	}
+	return false;
+}
 /** Blender's `MAXMAT`: the most material slots it gives an object or a mesh. */
 var MAX_MATERIAL_SLOTS = 32767;
 /**
@@ -10064,12 +10085,12 @@ var MeshCache = class {
 		const entries = this.#entriesOf(read.mesh);
 		let built = entries.built.get(key);
 		if (!built) {
-			built = buildMesh(read.data, options);
+			built = buildMesh$1(read.data, options);
 			entries.built.set(key, built);
 		}
 		return built;
 	}
-	/** A mesh object's vertices as Arcue shows them at rest, or null for a mesh Arcue cannot read. */
+	/** A mesh object's vertices as the reader shows them at rest, or null for a mesh the reader cannot read. */
 	vertices(object, poses) {
 		const known = this.#vertices.get(object.offset);
 		if (known !== void 0) return known;
@@ -10209,13 +10230,19 @@ var SceneMeshes = class {
 		const toScene = invert(conversion);
 		const sceneWorld = (node) => multiplyAll(conversion, restWorld[node] ?? identity(), toScene);
 		const bind = sceneWorld(record.node);
-		let skeleton = null;
+		let skin = null;
 		if (built.skin) {
 			const inverseBind = new Float32Array(built.skin.joints.length * 16);
 			built.skin.joints.forEach((joint, index) => {
 				inverseBind.set(invert(sceneWorld(joint)), index * 16);
 			});
-			skeleton = this.#skeletonIndex(built.skin.joints, inverseBind);
+			skin = {
+				skeleton: this.#skeletonIndex(built.skin.joints, inverseBind),
+				bindMatrix: Float32Array.from(bind),
+				joints: built.skin.rendered.joints,
+				weights: built.skin.rendered.weights,
+				sourceWeights: built.skin.source
+			};
 		}
 		envelopeWarnings(object, record.node, data, byOffset, restWorld, warn);
 		const restPositions = new Float32Array(data.vertexCount * 3);
@@ -10248,23 +10275,20 @@ var SceneMeshes = class {
 		}
 		this.meshes.push({
 			name: object.name,
-			geometryName: data.name,
+			dataName: data.name,
 			positions: built.positions,
 			normals: built.normals,
 			uvs: built.uvs,
 			colors: built.colors,
-			skeleton,
-			bindMatrix: built.skin ? Float32Array.from(bind) : null,
-			joints: built.skin?.rendered.joints ?? null,
-			weights: built.skin?.rendered.weights ?? null,
 			indices: built.indices,
 			groups,
 			morphTargets: morphs.targets,
+			skin,
 			sourceVertex: built.sourceVertex,
 			sourceVertexCount: built.sourceVertexCount,
-			topology: built.topology,
 			restPositions,
-			skinWeights: built.skin?.source ?? null
+			faces: built.faces,
+			triangleFaces: built.triangleFaces
 		});
 		this.records.push({
 			node: record.node,
@@ -10312,7 +10336,8 @@ function linkedNames(contents, materials) {
 	];
 }
 /**
-* The warning about data that the scene links from other .blend files, which Arcue does not load, or null for none.
+* The warning about data that the scene links from other .blend files, which the reader does not load, or null for
+* none.
 * Files that Pack Linked Libraries packed into this one are named apart: the data is in the file, unread.
 */
 function linkedDataWarning(linked) {
@@ -10322,7 +10347,7 @@ function linkedDataWarning(linked) {
 	}).join("; ");
 	const external = listed(false);
 	const packed = listed(true);
-	const detail = [external === "" ? "" : `From other .blend files: ${external}`, packed === "" ? "" : `From .blend files packed in this one, which Arcue does not read: ${packed}`].filter((part) => part !== "").join(". ");
+	const detail = [external === "" ? "" : `From other .blend files: ${external}`, packed === "" ? "" : `From .blend files packed in this one, which are not read: ${packed}`].filter((part) => part !== "").join(". ");
 	if (detail === "") return null;
 	return {
 		code: "library-not-loaded",
@@ -10363,7 +10388,7 @@ function buildScene$1(file, isGray = () => null, contents = collectSceneObjects(
 	const cache = new MeshCache(file, shown);
 	const poses = startPoses(contents.scene, actions);
 	const { nodes, nodeWorlds, objects, byOffset } = objectNodes(contents, poses, warn, (parent) => cache.vertices(parent, poses));
-	if (nestsTooDeep(nodes)) throw new BlendLimitError(`nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show`);
+	if (nestsTooDeep(nodes)) throw new BlendLimitError(`nests objects and bones more than ${MAX_NODE_DEPTH} levels deep`);
 	const restWorld = nodes.map((_, index) => nodeWorlds.of(index));
 	const materials = new MaterialTable(file.version, isGray, imageFrame(contents.scene));
 	const meshes = new SceneMeshes({
@@ -10407,7 +10432,7 @@ function uvSetFor(mesh, uvMap) {
 	return found >= 0 ? found : 0;
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/rest-position.ts
+//#region ../../packages/blend/src/anim/rest-position.ts
 var ARMATURE_REST_POSITION = 1;
 /** Whether an armature is set to Blender's rest position, which shows it at rest whatever its pose. */
 function inRestPosition(record) {
@@ -10436,7 +10461,7 @@ function restPositionWarnings(scene, clips) {
 	});
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/clips.ts
+//#region ../../packages/blend/src/anim/clips.ts
 var SNAP_FRAMES = .001;
 /** The most whole frames a clip spans, and the most it samples with the frames between them where a curve jumps. */
 var MAX_FRAMES = 1e5;
@@ -10714,7 +10739,7 @@ function assignTargets(actions, scene) {
 }
 /**
 * The property paths that animation plays on each object: those Blender plays now, as `animatedPaths` finds them, and
-* the unmuted curves of the slots that `clipped`, the assignments of the clips Arcue makes, give the object.
+* the unmuted curves of the slots that `clipped`, the assignments of the clips the reader makes, give the object.
 */
 function playedPaths(scene, actions, clipped) {
 	const byOffset = new Map(actions.map((action) => [action.struct.offset, action]));
@@ -11752,7 +11777,7 @@ function buildClips$1(scene, actions, warnings, limits = {}) {
 	if (clip) clips.push(clip);
 	return clips;
 }
-/** Warnings for drivers that move what Arcue shows: object and bone transforms and shape key values. */
+/** Warnings for drivers that move what the scene shows: object and bone transforms and shape key values. */
 function driverWarnings(scene) {
 	const warnings = [];
 	for (const record of scene.objects) {
@@ -11784,7 +11809,7 @@ function driverWarnings(scene) {
 	return warnings;
 }
 //#endregion
-//#region ../../packages/import-blend/src/anim/skin-motion.ts
+//#region ../../packages/blend/src/anim/skin-motion.ts
 var TOLERANCE = 1e-4;
 /** Float32 rounding relative to a value's size, which far from the origin exceeds `TOLERANCE`. */
 var FLOAT32_ROUNDING = 2 ** -23;
@@ -11928,7 +11953,7 @@ function skinMotionWarnings(scene, clips) {
 		return times;
 	};
 	const skinned = scene.meshes.flatMap((mesh, index) => {
-		const skeleton = mesh.skeleton === null ? void 0 : scene.skeletons[mesh.skeleton];
+		const skeleton = mesh.skin ? scene.skeletons[mesh.skin.skeleton] : void 0;
 		const meshNode = scene.meshRecords[index]?.node;
 		const armature = skeleton ? armatureNode(scene, skeleton.joints) : null;
 		if (meshNode === void 0 || armature === null) return [];
@@ -11982,7 +12007,7 @@ function skinMotionWarnings(scene, clips) {
 	});
 }
 //#endregion
-//#region ../../packages/import-blend/vendor/fzstd/index.js
+//#region ../../packages/blend/vendor/fzstd/index.js
 var ab = ArrayBuffer;
 var u8 = Uint8Array;
 var u16 = Uint16Array;
@@ -12649,7 +12674,7 @@ var Decompress = /* @__PURE__ */ function() {
 	return Decompress;
 }();
 //#endregion
-//#region ../../packages/import-blend/src/blend/decompress.ts
+//#region ../../packages/blend/src/blend/decompress.ts
 var ZSTD_MAGIC = 4247762216;
 var ZSTD_SKIPPABLE_MAGIC = 407710288;
 var ZSTD_BLOCK_RLE = 1;
@@ -12661,9 +12686,8 @@ var GZIP_MAGIC = [31, 139];
 /** Deflate codes at most 258 bytes in 2 bits, so data expands at most this many times. */
 var DEFLATE_MAX_RATIO = 1032;
 /**
-* The most a compressed file may expand to: as much memory as the FBX importer lets its parser use. Data that declares
-* more is refused before its bytes are allocated. Its ratio to the file's size is no guide: Multires data that was
-* never sculpted compresses over 600 times.
+* The most a compressed file may expand to. Data that declares more is refused before its bytes are allocated. Its
+* ratio to the file's size is no guide: Multires data that was never sculpted compresses over 600 times.
 */
 var MAX_EXPANDED_BYTES = 2 ** 30;
 /** Compressed data goes to a decompressor in slices this large, as a browser expands each slice it is given at once. */
@@ -12911,7 +12935,7 @@ async function decompressBlend(bytes, limit = MAX_EXPANDED_BYTES) {
 	return bytes;
 }
 //#endregion
-//#region ../../packages/import-blend/src/gray-images.ts
+//#region ../../packages/blend/src/gray-images.ts
 var PNG_GRAY = 0;
 var PNG_RGB = 2;
 var PNG_PALETTE = 3;
@@ -13136,6 +13160,21 @@ function jpegComponents(bytes) {
 	}
 	return null;
 }
+var PNG_SIGNATURE = [
+	137,
+	80,
+	78,
+	71,
+	13,
+	10,
+	26,
+	10
+];
+var JPEG_SIGNATURE = [
+	255,
+	216,
+	255
+];
 /**
 * Whether every pixel of an image is gray, so that each of its color channels and its brightness equal its color:
 * false where a pixel is known not to be, and null where the check cannot tell. A PNG is read to its last pixel, or to
@@ -13144,12 +13183,11 @@ function jpegComponents(bytes) {
 * component, and other formats are not read.
 */
 async function isGrayImage(bytes, budget = { bytes: GRAY_CHECK_BYTES }, limit = Number.POSITIVE_INFINITY) {
-	const type = imageMimeType(bytes, "");
-	if (type === "image/png") return isGrayPng(bytes, budget, limit);
-	return type === "image/jpeg" && jpegComponents(bytes) === 1 ? true : null;
+	if (startsWith(bytes, PNG_SIGNATURE)) return isGrayPng(bytes, budget, limit);
+	return startsWith(bytes, JPEG_SIGNATURE) && jpegComponents(bytes) === 1 ? true : null;
 }
 //#endregion
-//#region ../../packages/import-blend/src/image-paths.ts
+//#region ../../packages/blend/src/image-paths.ts
 /**
 * The path of one tile of a UDIM image, from the <UDIM> or <UVTILE> token that Blender keeps in the image's path. A
 * path without a token is the tile's own.
@@ -13176,6 +13214,311 @@ function sequencePath(path, frame) {
 	if (!digits || number === void 0) return `${path.slice(0, end)}${shown === 0 ? "" : shown}${path.slice(end)}`;
 	const from = start + digits.index;
 	return `${path.slice(0, from)}${String(shown).padStart(number.length, "0")}${path.slice(from + number.length)}`;
+}
+//#endregion
+//#region ../../packages/blend/src/read-blend.ts
+/** Blender 2.80 brought collections and view layers, which the scene is read from. */
+var OLDEST_VERSION = 280;
+/** Blender's object display types that draw no surface: Bounds, a box around the object, and Wire, its edges. */
+var DISPLAY_BOUNDS = 1;
+var DISPLAY_WIRE = 2;
+/**
+* Whether Blender hides the object or draws no surface for it: hidden with the eye in the view layer, an instancer that
+* shows only its instances, or an object displayed as bounds or wire, as cages and cutters often are.
+*/
+function hiddenInBlender(object) {
+	const display = object.struct.number("dt");
+	return object.hidden || object.instancerHidden || display === DISPLAY_BOUNDS || display === DISPLAY_WIRE;
+}
+function buildNodes$2(scene) {
+	const fromScene = invert(scene.conversion);
+	const hidden = /* @__PURE__ */ new Set();
+	for (const record of [...scene.objects, ...scene.meshRecords]) if (hiddenInBlender(record.object)) hidden.add(record.node);
+	return scene.nodes.map((node, index) => {
+		const trs = decompose(multiplyAll(scene.conversion, node.rest, fromScene));
+		return {
+			name: node.name,
+			parent: node.parent,
+			kind: node.kind,
+			translation: trs.translation,
+			rotation: trs.rotation,
+			scale: trs.scale,
+			mesh: node.mesh,
+			hidden: hidden.has(index)
+		};
+	});
+}
+/** The folder a "//" path of the datablock starts at: this file's, or for data packed from a library, the library's. */
+function relativePathFolder(datablock) {
+	const library = idOf(datablock)?.deref("lib");
+	const path = library ? library.string("name") || library.string("filepath") : "";
+	return path.slice(0, path.replaceAll("\\", "/").lastIndexOf("/") + 1) || "//";
+}
+/**
+* Whether the scene shows the file an image stores, rather than its packed bytes or nothing: an image file's, a UDIM
+* image's first tile, or the frame `frame` of a sequence.
+*/
+function readsFile(image, frame) {
+	const source = imageSource(image);
+	return source === 1 || source === 6 || source === 2 && frame !== null;
+}
+/** The file Blender reads for an image at `path`: a UDIM image's first tile, or the frame `frame` of a sequence. */
+function shownFile(image, path, frame) {
+	if (packedFile(image)) return path;
+	const source = imageSource(image);
+	if (source === 6) return tilePath(path, image.list("tiles")[0]?.number("tile_number") ?? 1001);
+	if (source === 2 && frame !== null) return sequencePath(path, frame);
+	return path;
+}
+/**
+* The stored path of the file the scene shows for an image, at `frame` for a sequence, with Blender's "//" relative
+* prefix removed, or the image's name when it has no path.
+*/
+function imagePath(image, frame) {
+	const own = image.string("name") || image.string("filepath");
+	const stored = shownFile(image, own.startsWith("//") ? `${relativePathFolder(image)}${own.slice(2)}` : own, frame);
+	if (stored.startsWith("//")) return {
+		path: stored.slice(2),
+		relative: true
+	};
+	if (stored === "") return {
+		path: idName(image),
+		relative: true
+	};
+	return {
+		path: stored,
+		relative: false
+	};
+}
+/** The bytes of the file packed into an image, as a view of the file's bytes, and the block that holds them. */
+function packedData(file, image) {
+	const packed = packedFile(image);
+	if (!packed) return null;
+	const block = packed.target("data");
+	if (!block) return null;
+	const size = Math.min(Math.max(packed.number("size"), 0), block.size);
+	return {
+		block,
+		bytes: file.bytes.subarray(block.offset, block.offset + size)
+	};
+}
+/**
+* An image's bytes: packed in the file, or read by the paths it stores, its first tile's for a UDIM image. Null for an
+* image that is not one file, such as a sequence, whose frame each Image Texture node picks.
+*/
+async function imageBytes(file, image, readImage) {
+	if (image.typeName !== "Image") return null;
+	const packed = packedData(file, image);
+	if (packed) return packed.bytes;
+	if (!readsFile(image, null)) return null;
+	const { path } = imagePath(image, null);
+	return path === "" ? null : readImage(path);
+}
+/**
+* Whether every pixel of each image is gray, by the image's offset, for the images the check can tell. The images read
+* whole come first, so that samples never take the budget they need.
+*/
+async function grayImages(file, candidates, readImage) {
+	const gray = /* @__PURE__ */ new Map();
+	const budget = { bytes: GRAY_CHECK_BYTES };
+	const whole = candidates.filter((candidate) => candidate.read === "whole");
+	const sampled = candidates.filter((candidate) => candidate.read === "sample");
+	for (const { image, read } of [...whole, ...sampled]) {
+		const bytes = await imageBytes(file, image, readImage);
+		const known = bytes ? await isGrayImage(bytes, budget, read === "sample" ? GRAY_SAMPLE_BYTES : void 0) : null;
+		if (known !== null) gray.set(image.offset, known);
+	}
+	return gray;
+}
+/**
+* The images the materials sample: one for each block of packed bytes, however many Image datablocks point at it, one
+* for each stored path, and one for each image no file holds. An image linked from another .blend file has no file,
+* since this file holds only its name, unless the image was packed with its library.
+*/
+var SceneImages = class {
+	images = [];
+	#index = /* @__PURE__ */ new Map();
+	#file;
+	constructor(file) {
+		this.#file = file;
+	}
+	indexOf({ image, frame }) {
+		const name = idName(image);
+		if (image.typeName !== "Image") return this.#add(`none ${image.offset}`, () => none(name));
+		const packed = packedFile(image);
+		if (!packed && !readsFile(image, frame)) return this.#add(`none ${image.offset}`, () => none(name));
+		const path = imagePath(image, frame);
+		if (packed) {
+			const data = packedData(this.#file, image);
+			const key = data ? `packed block ${data.block.index}` : `packed image ${image.offset}`;
+			return this.#add(key, () => ({
+				name,
+				source: "packed",
+				...path,
+				packed: data?.bytes.slice() ?? null
+			}));
+		}
+		return this.#add(JSON.stringify([path.path, path.relative]), () => ({
+			name,
+			source: "file",
+			...path,
+			packed: null
+		}));
+	}
+	#add(key, image) {
+		const known = this.#index.get(key);
+		if (known !== void 0) return known;
+		this.images.push(image());
+		this.#index.set(key, this.images.length - 1);
+		return this.images.length - 1;
+	}
+};
+function none(name) {
+	return {
+		name,
+		source: "none",
+		path: "",
+		relative: true,
+		packed: null
+	};
+}
+/** The color space a texture slot decodes its image in when the material does not say. */
+function slotColorSpace(slot) {
+	return slot === "color" ? "srgb" : "linear";
+}
+function vertexColorUse(shown) {
+	if (shown === "colors") return "multiply";
+	return shown === "black" ? "black" : "none";
+}
+function buildMaterials$2(scene, images) {
+	return scene.materials.map((draft, index) => {
+		const uvMaps = scene.materialUvs[index];
+		const ref = (use, slot) => use ? {
+			image: images.indexOf(use),
+			uvSet: uvSetFor(uvMaps, use.uvMap),
+			wrapU: use.wrap,
+			wrapV: use.wrap,
+			transform: use.transform,
+			alpha: use.alpha,
+			colorSpace: use.colorSpace ?? slotColorSpace(slot)
+		} : null;
+		const baseColorTexture = ref(draft.baseColorImage, "color");
+		const metallicRoughnessTexture = ref(draft.metallicRoughnessImage, "data");
+		const emissiveTexture = ref(draft.emissiveImage, "color");
+		const colors = scene.materialColors[index];
+		const baseColorUse = vertexColorUse(colors?.baseColor ?? null);
+		const emissiveUse = vertexColorUse(colors?.emissive ?? null);
+		const [red, green, blue, alpha] = draft.baseColor;
+		return {
+			name: draft.name,
+			baseColor: baseColorUse === "black" ? [
+				0,
+				0,
+				0,
+				alpha
+			] : [
+				red,
+				green,
+				blue,
+				alpha
+			],
+			baseColorTexture,
+			metallic: draft.metallic,
+			roughness: draft.roughness,
+			metallicRoughnessTexture,
+			roughnessTexture: ref(draft.roughnessImage, "data"),
+			metalnessTexture: ref(draft.metalnessImage, "data"),
+			normalTexture: ref(draft.normalImage, "data"),
+			normalScale: draft.normalScale,
+			emissive: emissiveUse === "black" ? [
+				0,
+				0,
+				0
+			] : draft.emissive,
+			emissiveTexture,
+			alphaMode: draft.alphaMode,
+			alphaCutoff: draft.alphaCutoff,
+			doubleSided: draft.doubleSided,
+			vertexColors: {
+				baseColor: baseColorUse,
+				emissive: emissiveUse
+			}
+		};
+	});
+}
+function buildClipList$1(clips) {
+	return clips.map((clip) => ({
+		name: clip.name,
+		duration: clip.duration,
+		tracks: clip.tracks,
+		curveKeyTimes: clip.curveTimes,
+		fileFrames: clip.fileFrames
+	}));
+}
+function versionOf(file) {
+	return `${Math.floor(file.version / 100)}.${file.version % 100}`;
+}
+function unreadable(error) {
+	return new BlendReadError("unreadable", `Not a readable Blender file: ${error.message}`, error.message, { cause: error });
+}
+async function parse(bytes) {
+	try {
+		return readBlendFile(await decompressBlend(bytes));
+	} catch (error) {
+		if (error instanceof BlendParseError) throw unreadable(error);
+		throw error;
+	}
+}
+/** What `read` gives, with the errors of reading the file's scene as read errors. */
+function readingScene(read) {
+	try {
+		return read();
+	} catch (error) {
+		if (error instanceof BlendParseError) throw unreadable(error);
+		if (error instanceof BlendLimitError) throw new BlendReadError("too-deep", `The scene ${error.message}`, error.message, { cause: error });
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new BlendReadError("failed", `Could not read the scene: ${reason}`, reason, { cause: error });
+	}
+}
+function readScene$1(file, contents, isGray) {
+	const actions = readActions(file);
+	const scene = buildScene$1(file, isGray, contents, actions);
+	return {
+		scene,
+		clips: buildClips$1(scene, actions, scene.warnings)
+	};
+}
+/**
+* Reads the scene of a .blend file: its meshes, armatures, materials and actions, as Blender shows them at the scene's
+* start frame. Throws a `BlendReadError` for a file it cannot read.
+*/
+async function readBlend(bytes, options = {}) {
+	const file = await parse(bytes);
+	const blenderVersion = versionOf(file);
+	if (file.version < OLDEST_VERSION) throw new BlendReadError("too-old", `Saved by Blender ${blenderVersion}; files from Blender 2.80 on can be read`, blenderVersion);
+	const readImage = options.readImage ?? (() => Promise.resolve(null));
+	const contents = readingScene(() => collectSceneObjects(file));
+	const gray = await grayImages(file, readingScene(() => grayCandidates(file, contents)), readImage);
+	const { scene, clips } = readingScene(() => readScene$1(file, contents, (image) => gray.get(image.offset) ?? null));
+	const images = new SceneImages(file);
+	const materials = buildMaterials$2(scene, images);
+	return {
+		blenderVersion,
+		fps: scene.fps,
+		unitScale: scene.unitScale,
+		nodes: buildNodes$2(scene),
+		meshes: scene.meshes,
+		skeletons: scene.skeletons,
+		materials,
+		images: images.images,
+		clips: buildClipList$1(clips),
+		warnings: [
+			...scene.warnings,
+			...skinMotionWarnings(scene, clips),
+			...restPositionWarnings(scene, clips),
+			...driverWarnings(scene)
+		]
+	};
 }
 //#endregion
 //#region ../../packages/import-blend/src/texture-files.ts
@@ -13246,6 +13589,30 @@ function joinWarningsById(warnings) {
 	return [...joined.values()];
 }
 //#endregion
+//#region ../../packages/import-blend/src/topology.ts
+/**
+* The fingerprint of a mesh's faces: each face fanned from its first corner, in the triangles' order, so that it does
+* not change with the positions that pick Blender's split, and triangle n stays in the face it is in.
+*/
+function fanFingerprint(mesh) {
+	const { offsets, vertices } = mesh.faces;
+	const indices = new Uint32Array(mesh.triangleFaces.length * 3);
+	let fan = 0;
+	for (let position = 0; position < mesh.triangleFaces.length; position++) {
+		const face = mesh.triangleFaces[position] ?? 0;
+		fan = position > 0 && mesh.triangleFaces[position - 1] === face ? fan + 1 : 0;
+		const start = offsets[face] ?? 0;
+		indices[position * 3] = vertices[start] ?? 0;
+		indices[position * 3 + 1] = vertices[start + fan + 1] ?? 0;
+		indices[position * 3 + 2] = vertices[start + fan + 2] ?? 0;
+	}
+	return topologyFingerprint({
+		indices,
+		sourceVertex: Uint32Array.from({ length: mesh.sourceVertexCount }, (_, vertex) => vertex),
+		sourceVertexCount: mesh.sourceVertexCount
+	});
+}
+//#endregion
 //#region ../../packages/import-blend/src/importer.ts
 /** Blender's own rotation for Z-up content in a Y-up scene: −90° about X. */
 var MINUS_90_ABOUT_X$1 = [
@@ -13260,73 +13627,42 @@ var UNTEXTURED = .8;
 var UNTEXTURED_ROUGHNESS = .5;
 function buildNodes$1(scene) {
 	const paths = buildNodePaths(scene.nodes);
-	const fromScene = invert(scene.conversion);
-	return scene.nodes.map((node, index) => {
-		const trs = decompose(multiplyAll(scene.conversion, node.rest, fromScene));
-		return {
-			name: node.name,
-			path: paths[index] ?? node.name,
-			parent: node.parent,
-			kind: node.kind,
-			translation: trs.translation,
-			rotation: trs.rotation,
-			scale: trs.scale,
-			mesh: node.mesh
-		};
-	});
+	return scene.nodes.map((node, index) => ({
+		name: node.name,
+		path: paths[index] ?? node.name,
+		parent: node.parent,
+		kind: node.kind,
+		translation: node.translation,
+		rotation: node.rotation,
+		scale: node.scale,
+		mesh: node.mesh
+	}));
 }
-/** The folder a "//" path of the datablock starts at: this file's, or for data packed from a library, the library's. */
-function relativePathFolder(datablock) {
-	const library = idOf(datablock)?.deref("lib");
-	const path = library ? library.string("name") || library.string("filepath") : "";
-	return path.slice(0, path.replaceAll("\\", "/").lastIndexOf("/") + 1) || "//";
-}
-/**
-* Whether the preview reads the file an image stores, rather than its packed bytes or nothing: an image file's, a
-* UDIM image's first tile, or the frame `frame` of a sequence.
-*/
-function readsFile(image, frame) {
-	const source = imageSource(image);
-	return source === 1 || source === 6 || source === 2 && frame !== null;
-}
-/** The file Blender reads for an image at `path`: a UDIM image's first tile, or the frame `frame` of a sequence. */
-function shownFile(image, path, frame) {
-	if (packedFile(image)) return path;
-	const source = imageSource(image);
-	if (source === 6) return tilePath(path, image.list("tiles")[0]?.number("tile_number") ?? 1001);
-	if (source === 2 && frame !== null) return sequencePath(path, frame);
-	return path;
-}
-/**
-* The stored path of the file the preview reads for an image, at `frame` for a sequence, with Blender's "//" relative
-* prefix removed, or the image's name when it has no path.
-*/
-function imagePaths(image, frame) {
-	const own = image.string("name") || image.string("filepath");
-	const stored = shownFile(image, own.startsWith("//") ? `${relativePathFolder(image)}${own.slice(2)}` : own, frame);
-	if (stored.startsWith("//")) return {
-		relative: stored.slice(2),
-		absolute: ""
-	};
-	if (stored === "") return {
-		relative: idName(image),
-		absolute: ""
-	};
+function buildMesh(mesh) {
 	return {
-		relative: stored,
-		absolute: stored
-	};
-}
-/** The bytes of the file packed into an image, as a view of the file's bytes, and the block that holds them. */
-function packedData(file, image) {
-	const packed = packedFile(image);
-	if (!packed) return null;
-	const block = packed.target("data");
-	if (!block) return null;
-	const size = Math.min(Math.max(packed.number("size"), 0), block.size);
-	return {
-		block,
-		bytes: file.bytes.subarray(block.offset, block.offset + size)
+		name: mesh.name,
+		geometryName: mesh.dataName,
+		positions: mesh.positions,
+		normals: mesh.normals,
+		uvs: mesh.uvs,
+		colors: mesh.colors,
+		skeleton: mesh.skin?.skeleton ?? null,
+		bindMatrix: mesh.skin?.bindMatrix ?? null,
+		joints: mesh.skin?.joints ?? null,
+		weights: mesh.skin?.weights ?? null,
+		indices: mesh.indices,
+		groups: mesh.groups,
+		morphTargets: mesh.morphTargets.map(({ name, defaultWeight, positions, normals }) => ({
+			name,
+			defaultWeight,
+			positions,
+			normals
+		})),
+		sourceVertex: mesh.sourceVertex,
+		sourceVertexCount: mesh.sourceVertexCount,
+		topology: fanFingerprint(mesh),
+		restPositions: mesh.restPositions,
+		skinWeights: mesh.skin?.sourceWeights ?? null
 	};
 }
 function cached(cache, key, load) {
@@ -13355,71 +13691,38 @@ function searchingOnce(request) {
 		locateFile
 	};
 }
-/**
-* An image's bytes: packed in the file, or found by the paths it stores, its first tile's for a UDIM image. Null for an
-* image that is not one file, such as a sequence, whose frame each Image Texture node picks.
-*/
-async function imageBytes(file, image, findFile) {
-	if (image.typeName !== "Image") return null;
-	const packed = packedData(file, image);
-	if (packed) return packed.bytes;
-	if (!readsFile(image, null)) return null;
-	const { relative, absolute } = imagePaths(image, null);
-	for (const path of /* @__PURE__ */ new Set([relative, absolute])) {
-		const found = path === "" ? null : await findFile(path);
-		if (found) return found.bytes;
-	}
-	return null;
+function storedPaths(image) {
+	return {
+		relative: image.path,
+		absolute: image.relative ? "" : image.path
+	};
 }
 /**
-* Whether every pixel of each image is gray, by the image's offset, for the images the check can tell. The images read
-* whole come first, so that samples never take the budget they need.
-*/
-async function grayImages(file, candidates, findFile) {
-	const gray = /* @__PURE__ */ new Map();
-	const budget = { bytes: GRAY_CHECK_BYTES };
-	const whole = candidates.filter((candidate) => candidate.read === "whole");
-	const sampled = candidates.filter((candidate) => candidate.read === "sample");
-	for (const { image, read } of [...whole, ...sampled]) {
-		const bytes = await imageBytes(file, image, findFile);
-		const known = bytes ? await isGrayImage(bytes, budget, read === "sample" ? GRAY_SAMPLE_BYTES : void 0) : null;
-		if (known !== null) gray.set(image.offset, known);
-	}
-	return gray;
-}
-/**
-* The texture files the materials use: one for each image file found through a relative path, however many Image
-* datablocks store a path to it and however they spell it, one for each other stored path, however it is spelled, and
-* one for each block of packed bytes, however many Image datablocks point at it. Absolute paths keep their own texture
-* files, so the textures note each of them. An image linked from another .blend file has none, since this file holds
-* only its name, unless the image was packed with its library.
+* The texture files the materials use: one for each image file found through a relative path, however many images
+* store a path to it and however they spell it, one for each other stored path, however it is spelled, and one for each
+* image of packed bytes. Absolute paths keep their own texture files, so the textures note each of them.
 */
 var ImageFiles = class {
 	files = [];
 	#index = /* @__PURE__ */ new Map();
-	#file;
+	#images;
 	#locateFile;
-	constructor(file, locateFile) {
-		this.#file = file;
+	constructor(images, locateFile) {
+		this.#images = images;
 		this.#locateFile = locateFile;
 	}
-	async indexOf({ image, frame }) {
-		if (image.typeName !== "Image") return null;
-		const packed = packedFile(image);
-		if (!packed && !readsFile(image, frame)) return null;
-		const paths = imagePaths(image, frame);
-		if (packed) {
-			const data = packedData(this.#file, image);
-			const key = data ? `packed block ${data.block.index}` : `packed image ${image.offset}`;
-			return this.#add(key, paths, () => data?.bytes.slice() ?? null);
-		}
+	async indexOf(index) {
+		const image = this.#images[index];
+		if (!image || image.source === "none") return null;
+		const paths = storedPaths(image);
+		if (image.source === "packed") return this.#add(`packed image ${index}`, paths, image.packed);
 		const spelled = `path ${normalizedPath(paths.relative)}`;
 		const known = this.#index.get(spelled);
 		if (known !== void 0) return known;
 		const located = parseStoredPath(paths.relative).relative === null ? null : await this.#locateFile(paths.relative);
-		const index = this.#add(located === null ? spelled : `found ${located}`, paths, () => null);
-		this.#index.set(spelled, index);
-		return index;
+		const file = this.#add(located === null ? spelled : `found ${located}`, paths, null);
+		this.#index.set(spelled, file);
+		return file;
 	}
 	#add(key, paths, content) {
 		const known = this.#index.get(key);
@@ -13427,7 +13730,7 @@ var ImageFiles = class {
 		this.files.push({
 			...paths,
 			linked: true,
-			content: content()
+			content
 		});
 		this.#index.set(key, this.files.length - 1);
 		return this.files.length - 1;
@@ -13441,31 +13744,30 @@ function unsetSampling(key) {
 	};
 }
 /** How a material samples an image for a key: its UV set and wrap, with its alpha and color space where not the key's. */
-function samplingOf(use, key, uvMaps) {
+function samplingOf(ref, key) {
 	const sampling = {
-		uvSet: uvSetFor(uvMaps, use.uvMap),
-		wrapU: use.wrap,
-		wrapV: use.wrap,
-		transform: use.transform
+		uvSet: ref.uvSet,
+		wrapU: ref.wrapU,
+		wrapV: ref.wrapV,
+		transform: ref.transform
 	};
 	const unset = unsetSampling(key);
-	if (use.alpha !== unset.alpha) sampling.alpha = use.alpha;
-	if (use.colorSpace !== null && use.colorSpace !== unset.colorSpace) sampling.colorSpace = use.colorSpace;
+	if (ref.alpha !== unset.alpha) sampling.alpha = ref.alpha;
+	if (ref.colorSpace !== unset.colorSpace) sampling.colorSpace = ref.colorSpace;
 	return sampling;
 }
-async function buildMaterials$1(scene, images, textures) {
+async function buildMaterials$1(materials, images, textures) {
 	const result = [];
-	for (const [index, draft] of scene.materials.entries()) {
-		const uvMaps = scene.materialUvs[index];
+	for (const source of materials) {
 		const missingTextures = {};
 		const missingTextureSampling = {};
-		const ref = async (use, key) => {
-			if (!use) return null;
-			const file = await images.indexOf(use);
+		const ref = async (blendRef, key) => {
+			if (!blendRef) return null;
+			const file = await images.indexOf(blendRef.image);
 			if (file === null) return null;
 			const slot = TEXTURE_SLOTS.find((candidate) => TEXTURE_SLOT_KEYS[candidate] === key);
-			const sampling = samplingOf(use, key, uvMaps);
-			const texture = await textures.resolve(file, draft.name, slot);
+			const sampling = samplingOf(blendRef, key);
+			const texture = await textures.resolve(file, source.name, slot);
 			if (texture !== null) return {
 				texture,
 				...sampling
@@ -13476,52 +13778,47 @@ async function buildMaterials$1(scene, images, textures) {
 			}
 			return null;
 		};
-		const baseColorTexture = await ref(draft.baseColorImage, "baseColorTexture");
-		const metallicRoughnessTexture = await ref(draft.metallicRoughnessImage, "metallicRoughnessTexture");
-		const emissiveTexture = await ref(draft.emissiveImage, "emissiveTexture");
-		const missingPacked = draft.metallicRoughnessImage !== null && !metallicRoughnessTexture;
-		const colors = scene.materialColors[index];
-		const [red, green, blue, alpha] = draft.baseColor;
+		const baseColorTexture = await ref(source.baseColorTexture, "baseColorTexture");
+		const metallicRoughnessTexture = await ref(source.metallicRoughnessTexture, "metallicRoughnessTexture");
+		const emissiveTexture = await ref(source.emissiveTexture, "emissiveTexture");
+		const missingPacked = source.metallicRoughnessTexture !== null && !metallicRoughnessTexture;
+		const { baseColor: baseColorUse, emissive: emissiveUse } = source.vertexColors;
+		const [red, green, blue, alpha] = source.baseColor;
 		const material = {
-			name: draft.name,
-			baseColor: colors?.baseColor === "black" ? [
-				0,
-				0,
-				0,
-				alpha
-			] : baseColorTexture ? [
+			name: source.name,
+			baseColor: baseColorUse === "black" || baseColorTexture || !source.baseColorTexture ? [
 				red,
 				green,
 				blue,
 				alpha
-			] : draft.baseColorImage ? [
+			] : [
 				UNTEXTURED,
 				UNTEXTURED,
 				UNTEXTURED,
 				alpha
-			] : draft.baseColor,
+			],
 			baseColorTexture,
-			metallic: missingPacked ? 0 : draft.metallic,
-			roughness: missingPacked ? UNTEXTURED_ROUGHNESS : draft.roughness,
+			metallic: missingPacked ? 0 : source.metallic,
+			roughness: missingPacked ? UNTEXTURED_ROUGHNESS : source.roughness,
 			metallicRoughnessTexture,
-			roughnessTexture: await ref(draft.roughnessImage, "roughnessTexture"),
-			metalnessTexture: await ref(draft.metalnessImage, "metalnessTexture"),
-			normalTexture: await ref(draft.normalImage, "normalTexture"),
-			normalScale: draft.normalScale,
+			roughnessTexture: await ref(source.roughnessTexture, "roughnessTexture"),
+			metalnessTexture: await ref(source.metalnessTexture, "metalnessTexture"),
+			normalTexture: await ref(source.normalTexture, "normalTexture"),
+			normalScale: source.normalScale,
 			occlusionTexture: null,
-			emissive: !emissiveTexture && draft.emissiveImage || colors?.emissive === "black" ? [
+			emissive: !emissiveTexture && source.emissiveTexture ? [
 				0,
 				0,
 				0
-			] : draft.emissive,
+			] : source.emissive,
 			emissiveTexture,
-			alphaMode: draft.alphaMode,
-			alphaCutoff: draft.alphaCutoff,
-			doubleSided: draft.doubleSided
+			alphaMode: source.alphaMode,
+			alphaCutoff: source.alphaCutoff,
+			doubleSided: source.doubleSided
 		};
-		if (colors?.baseColor === "colors" || colors?.emissive === "colors") material.vertexColors = {
-			baseColor: colors.baseColor === "colors",
-			emissive: colors.emissive === "colors"
+		if (baseColorUse === "multiply" || emissiveUse === "multiply") material.vertexColors = {
+			baseColor: baseColorUse === "multiply",
+			emissive: emissiveUse === "multiply"
 		};
 		if (Object.keys(missingTextures).length > 0) {
 			material.missingTextures = missingTextures;
@@ -13545,8 +13842,8 @@ function buildClipList(clips, fps) {
 			duration: clip.duration,
 			frameCount,
 			tracks: clip.tracks,
-			keyTimes: mergeKeyTimes(clip.curveTimes),
-			keyedEveryFrame: isKeyedEveryFrame(clip.curveTimes, fps, frameCount),
+			keyTimes: mergeKeyTimes(clip.curveKeyTimes),
+			keyedEveryFrame: isKeyedEveryFrame(clip.curveKeyTimes, fps, frameCount),
 			...step === 1 ? { sourceStartFrame: start } : {}
 		};
 	});
@@ -13589,94 +13886,54 @@ function toImportWarning(warning, fileName) {
 	const message = warning.subject.kind === "file" && warning.subject.name === "" ? `${warning.message}: ${fileName}` : warning.message;
 	return importWarning(warning.code, subject, message, void 0, warning.detail === void 0 ? {} : { detail: warning.detail });
 }
-function exporterOf(file) {
-	return {
-		name: "Blender",
-		version: `${Math.floor(file.version / 100)}.${file.version % 100}`
-	};
+/** Arcue's error for a file the reader refuses. */
+function arcueError(request, error) {
+	const { fileName } = request;
+	const cause = error.cause ?? error;
+	switch (error.reason) {
+		case "unreadable": return new ArcueError("invalid-input", `${fileName} is not a readable Blender file: ${error.detail}`, { cause });
+		case "too-old": return new ArcueError("invalid-input", `${fileName} was saved by Blender ${error.detail}. Arcue opens files from Blender 2.80 on; save it in a newer Blender.`);
+		case "too-deep": return new ArcueError("invalid-input", `${fileName} ${error.detail}, more than Arcue can show.`, { cause });
+		case "failed": return new ArcueError("internal", `Arcue could not read the scene in ${fileName}: ${error.detail}`, { cause });
+	}
 }
-function unreadable(request, error) {
-	return new ArcueError("invalid-input", `${request.fileName} is not a readable Blender file: ${error.message}`, { cause: error });
-}
-async function parse(request) {
+async function readScene(request, findFile) {
 	try {
-		return readBlendFile(await decompressBlend(request.bytes));
+		return await readBlend(request.bytes, { readImage: async (path) => (await findFile(path))?.bytes ?? null });
 	} catch (error) {
-		if (error instanceof BlendParseError) throw unreadable(request, error);
+		if (error instanceof BlendReadError) throw arcueError(request, error);
 		throw error;
 	}
 }
-/** Blender's object display types that draw no surface: Bounds, a box around the object, and Wire, its edges. */
-var DISPLAY_BOUNDS = 1;
-var DISPLAY_WIRE = 2;
-/**
-* Whether Blender hides the mesh or draws no surface for it: hidden with the eye in the view layer, an instancer that
-* shows only its instances, or an object displayed as bounds or wire, as cages and cutters often are.
-*/
-function hiddenInBlender(scene, mesh) {
-	const object = scene.meshRecords[mesh]?.object;
-	if (object === void 0) return false;
-	const display = object.struct.number("dt");
-	return object.hidden || object.instancerHidden || display === DISPLAY_BOUNDS || display === DISPLAY_WIRE;
-}
 /** Parts whose every mesh Blender hides start hidden, so the view matches Blender's. */
 function hideBlenderHiddenParts(parts, scene) {
+	const hiddenMeshes = new Set(scene.nodes.flatMap((node) => node.hidden && node.mesh !== null ? [node.mesh] : []));
 	return parts.map((part) => {
 		const meshes = part.levels.flatMap((level) => level.meshes);
-		return meshes.length > 0 && meshes.every((mesh) => hiddenInBlender(scene, mesh)) ? {
+		return meshes.length > 0 && meshes.every((mesh) => hiddenMeshes.has(mesh)) ? {
 			...part,
 			hiddenByDefault: true
 		} : part;
 	});
 }
-/** Blender 2.80 brought collections and view layers, which the scene is read from. */
-var OLDEST_VERSION = 280;
-/** What `read` gives, with the errors of reading the file's scene as Arcue's errors. */
-function readingScene(request, read) {
-	try {
-		return read();
-	} catch (error) {
-		if (error instanceof BlendParseError) throw unreadable(request, error);
-		if (error instanceof BlendLimitError) throw new ArcueError("invalid-input", `${request.fileName} ${error.message}.`, { cause: error });
-		const reason = error instanceof Error ? error.message : String(error);
-		throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, { cause: error });
-	}
-}
-function readScene(file, contents, isGray) {
-	const actions = readActions(file);
-	const scene = buildScene$1(file, isGray, contents, actions);
-	return {
-		scene,
-		clips: buildClips$1(scene, actions, scene.warnings)
-	};
-}
 async function importBlend(request) {
-	const file = await parse(request);
-	if (file.version < OLDEST_VERSION) {
-		const saved = exporterOf(file)?.version ?? "an old version";
-		throw new ArcueError("invalid-input", `${request.fileName} was saved by Blender ${saved}. Arcue opens files from Blender 2.80 on; save it in a newer Blender.`);
-	}
 	const { findFile, locateFile } = searchingOnce(request);
-	const contents = readingScene(request, () => collectSceneObjects(file));
-	const gray = await grayImages(file, readingScene(request, () => grayCandidates(file, contents)), findFile);
-	const { scene, clips } = readingScene(request, () => readScene(file, contents, (image) => gray.get(image.offset) ?? null));
-	const images = new ImageFiles(file, locateFile);
+	const scene = await readScene(request, findFile);
+	const images = new ImageFiles(scene.images, locateFile);
 	const textures = createTextureResolver(images.files, findFile, locateFile);
-	const materials = await buildMaterials$1(scene, images, textures);
+	const materials = await buildMaterials$1(scene.materials, images, textures);
 	const nodes = buildNodes$1(scene);
+	const meshes = scene.meshes.map(buildMesh);
 	const parts = hideBlenderHiddenParts(describeParts(nodes), scene);
-	const warnings = mergeWarnings([
-		...scene.warnings,
-		...skinMotionWarnings(scene, clips),
-		...restPositionWarnings(scene, clips),
-		...driverWarnings(scene),
-		...unshownUvSetWarnings(materials)
-	]).map((warning) => toImportWarning(warning, request.fileName));
+	const warnings = mergeWarnings([...scene.warnings, ...unshownUvSetWarnings(materials)]).map((warning) => toImportWarning(warning, request.fileName));
 	const shared = shareFoundTextures(textures.textures, materials);
 	return {
 		source: {
 			format: "blend",
-			exporter: exporterOf(file),
+			exporter: {
+				name: "Blender",
+				version: scene.blenderVersion
+			},
 			fps: scene.fps,
 			originalSpace: {
 				axes: {
@@ -13693,13 +13950,13 @@ async function importBlend(request) {
 			warnings: [...warnings, ...joinWarningsById(await textures.warnings())]
 		},
 		nodes,
-		meshes: scene.meshes,
+		meshes,
 		skeletons: scene.skeletons,
 		materials: shared.materials,
 		textures: shared.textures,
-		clips: buildClipList(clips, scene.fps),
+		clips: buildClipList(scene.clips, scene.fps),
 		parts,
-		bounds: defaultViewBounds(scene.meshes, parts)
+		bounds: defaultViewBounds(meshes, parts)
 	};
 }
 var blendImporter = {
@@ -14249,7 +14506,7 @@ function buildClips(clips, fps) {
 }
 async function buildScene(parsed, request) {
 	const nodes = buildNodes(parsed);
-	if (nestsTooDeep(nodes)) throw new ArcueError("invalid-input", `${request.fileName} nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show.`);
+	if (nestsTooDeep$1(nodes)) throw new ArcueError("invalid-input", `${request.fileName} nests objects and bones more than ${MAX_NODE_DEPTH$1} levels deep, more than Arcue can show.`);
 	const meshes = parsed.meshes.map((mesh) => ({
 		...mesh,
 		topology: topologyFingerprint(mesh)
