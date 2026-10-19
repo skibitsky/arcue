@@ -11,7 +11,12 @@
         "noRestrictedImports": {
           "level": "error",
           "options": {
-            "patterns": [{ "group": ["@arcue/*"], "message": "The public Blender reader imports nothing from Arcue." }]
+            "patterns": [
+              {
+                "group": ["@arcue/*"],
+                "message": "The public Blender reader imports nothing from Arcue."
+              }
+            ]
           }
         }
       }
