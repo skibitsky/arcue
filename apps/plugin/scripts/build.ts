@@ -12,6 +12,7 @@ await assemblePlugin(
     icon: fromRoot("assets/branding/png/arcue-256.png"),
     readme: fromRoot("apps/plugin/README.md"),
     license: fromRoot("LICENSE"),
+    launcher: fromRoot("apps/plugin/launcher"),
   },
   out,
 );

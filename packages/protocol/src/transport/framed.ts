@@ -104,6 +104,36 @@ export interface FramedChannel {
 
 export function framedChannel(stream: ByteStream, codec: FrameCodec, limits: FrameLimits = {}): FramedChannel {
   const reader = new FrameReader(limits);
+  return channel(stream, codec, (chunk) => reader.push(chunk), encodeFrame);
+}
+
+/**
+ * Messages over a stream that delivers each write as one chunk, such as a WebSocket, so a frame needs no length
+ * prefix. A chunk larger than `MAX_FRAME_BYTES`, or one the codec cannot decode, closes the channel.
+ */
+export function messageChannel(stream: ByteStream, codec: FrameCodec): FramedChannel {
+  return channel(
+    stream,
+    codec,
+    (chunk) => {
+      if (chunk.byteLength > MAX_FRAME_BYTES) throw new ArcueError("invalid-input", "A message is too large.");
+      return [chunk];
+    },
+    (payload) => {
+      if (payload.byteLength > MAX_FRAME_BYTES) {
+        throw new ArcueError("invalid-input", `A message of ${payload.byteLength} bytes is too large to send.`);
+      }
+      return payload;
+    },
+  );
+}
+
+function channel(
+  stream: ByteStream,
+  codec: FrameCodec,
+  toFrames: (chunk: Uint8Array) => Uint8Array[],
+  toChunk: (payload: Uint8Array) => Uint8Array,
+): FramedChannel {
   const listeners = new Set<(value: unknown) => void>();
   const waiting: unknown[] = [];
   const receivers: { resolve(value: unknown): void; reject(error: unknown): void }[] = [];
@@ -127,7 +157,7 @@ export function framedChannel(stream: ByteStream, codec: FrameCodec, limits: Fra
     if (closed) return;
     let frames: Uint8Array[];
     try {
-      frames = reader.push(chunk);
+      frames = toFrames(chunk);
     } catch {
       close();
       return;
@@ -150,7 +180,7 @@ export function framedChannel(stream: ByteStream, codec: FrameCodec, limits: Fra
 
   return {
     send(value) {
-      if (!closed) stream.write(encodeFrame(codec.encode(value)));
+      if (!closed) stream.write(toChunk(codec.encode(value)));
     },
     receive() {
       if (waiting.length > 0) return Promise.resolve(waiting.shift());

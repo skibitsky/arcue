@@ -38,6 +38,7 @@ describe("parseArgs", () => {
 
   it("parses status and help", () => {
     expect(parseArgs(["status"])).toEqual({ command: "status" });
+    expect(parseArgs(["setup"])).toEqual({ command: "setup" });
     expect(parseArgs([])).toEqual({ command: "help" });
     expect(parseArgs(["--help"])).toEqual({ command: "help" });
   });
@@ -51,6 +52,7 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["open", "a.fbx", "--speed", "2"])).toThrow('Unknown option "--speed"');
     expect(() => parseArgs(["close"])).toThrow('Unknown command "close"');
     expect(() => parseArgs(["status", "now"])).toThrow("takes no arguments");
+    expect(() => parseArgs(["setup", "now"])).toThrow('"arcue setup" takes no arguments, got "now".');
     expect(() => parseArgs(["inspect"])).toThrow("needs a file");
     expect(() => parseArgs(["inspect", "--json"])).toThrow("needs a file");
     expect(() => parseArgs(["inspect", "a.fbx", "b.fbx"])).toThrow("takes one file");

@@ -6,7 +6,7 @@ declare class TextEncoder {
 }
 
 declare class TextDecoder {
-  constructor(label?: string);
+  constructor(label?: string, options?: { fatal?: boolean });
   decode(input?: Uint8Array): string;
 }
 

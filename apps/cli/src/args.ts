@@ -6,6 +6,7 @@ export type Command =
   | { command: "inspect"; path: string; json: boolean }
   | { command: "serve"; port?: number }
   | { command: "status" }
+  | { command: "setup" }
   | { command: "help" };
 
 export const USAGE = `Usage:
@@ -25,6 +26,10 @@ export const USAGE = `Usage:
   arcue status
       Reports whether Arcue is running, where a browser shows it, and which assets it has open. Exits with 1 when it is
       not running.
+  arcue setup
+      Through the agent plugin's launcher, on a computer without Node 24 or later: downloads the Node build the
+      plugin pins from nodejs.org once, checks its SHA-256 checksum, and keeps it in this user's cache. No other
+      command downloads anything. Exits with 3 when arcue runs on a Node older than 24.
   arcue help
       Shows this text.
 
@@ -46,6 +51,10 @@ export function parseArgs(args: readonly string[]): Command {
   if (command === "status") {
     if (rest.length > 0) throw new UsageError(`"arcue status" takes no arguments, got "${rest.join(" ")}".`);
     return { command: "status" };
+  }
+  if (command === "setup") {
+    if (rest.length > 0) throw new UsageError(`"arcue setup" takes no arguments, got "${rest.join(" ")}".`);
+    return { command: "setup" };
   }
   if (command === "inspect") return parseInspect(rest);
   if (command === "serve") return parseServe(rest);

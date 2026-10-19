@@ -17,6 +17,13 @@ for (const size of sizes) {
   await writeFile(join(png, `arcue-${size}.png`), image);
 }
 await writeFile(join(branding, "arcue.png"), images.get(1024));
+
+const corner = Math.round(128 * 0.225);
+const roundedMask = Buffer.from(`<svg width="128" height="128"><rect width="128" height="128" rx="${corner}"/></svg>`);
+await sharp(images.get(128))
+  .composite([{ input: roundedMask, blend: "dest-in" }])
+  .png()
+  .toFile(join(png, "arcue-rounded-128.png"));
 await sharp(source).resize(1024, 1024).webp({ lossless: true }).toFile(join(branding, "arcue.webp"));
 
 function ico(iconSizes) {
