@@ -6,6 +6,8 @@
 
 Arcue is where you and your agent work on models and animations side by side. Play through clips, check LODs and import warnings, and leave comments right on the model. Your agent gets the exact vertices, bones, frame, camera and a screenshot. When it changes the model, Arcue reloads it with your comments still in place.
 
+https://github.com/user-attachments/assets/cbef69b8-c7e6-4593-bdf7-054b418fe986
+
 [Try it in your browser](https://arcue-web.skibitsky.workers.dev) · [Add it to your agent app](#use-it-with-agent-apps)
 
 Arcue is in early development. It opens FBX and Blender files.
