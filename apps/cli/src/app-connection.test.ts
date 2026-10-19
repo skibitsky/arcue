@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { Server, Socket } from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -14,7 +14,7 @@ import {
   LAUNCH_INFO_FILE,
 } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectOrLaunch, connectToApp, userDataDir } from "./app-connection";
+import { appEnvironment, bundledApp, connectOrLaunch, connectToApp, userDataDir } from "./app-connection";
 import { run } from "./run";
 
 const TOKEN = "t".repeat(43);
@@ -148,6 +148,30 @@ describe("starting the app", () => {
     connection.close();
   });
 
+  it("starts the given app rather than launch.json's, and never as Node", async () => {
+    const recorded = join(userData, "recorded");
+    const started = join(userData, "started");
+    writeLaunchInfo(`require("node:fs").writeFileSync(${JSON.stringify(recorded)}, "")`);
+    const script = `require("node:fs").writeFileSync(${JSON.stringify(started)}, process.env.ELECTRON_RUN_AS_NODE ?? "unset")`;
+    const previous = process.env.ELECTRON_RUN_AS_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    try {
+      const connecting = connectOrLaunch(userData, {
+        timeoutMs: 10_000,
+        pollMs: 20,
+        app: { version: 1, command: process.execPath, args: ["-e", script] },
+      });
+      await vi.waitFor(() => expect(existsSync(started)).toBe(true), { timeout: 5000 });
+      await startFakeCore();
+      (await connecting).close();
+    } finally {
+      if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = previous;
+    }
+    expect(readFileSync(started, "utf8")).toBe("unset");
+    expect(existsSync(recorded)).toBe(false);
+  });
+
   it("gives up when the started app never listens", async () => {
     writeLaunchInfo("");
     await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(/did not start within/);
@@ -225,6 +249,75 @@ describe("the arcue command", () => {
     const { lines, output } = capture();
     await expect(run(["open"], output)).resolves.toBe(2);
     expect(lines.err).toContain("Usage:");
+  });
+});
+
+describe("bundledApp", () => {
+  it("is the Electron that runs the command line from its own resources", () => {
+    expect(
+      bundledApp({
+        execPath: "/Applications/Arcue.app/Contents/MacOS/Arcue",
+        electron: "44.6.0",
+        scriptDir: "/Applications/Arcue.app/Contents/Resources/cli",
+        platform: "darwin",
+      }),
+    ).toEqual({ version: 1, command: "/Applications/Arcue.app/Contents/MacOS/Arcue", args: [] });
+    expect(
+      bundledApp({
+        execPath: "/usr/lib/arcue/Arcue",
+        electron: "44.6.0",
+        scriptDir: "/usr/lib/arcue/resources/cli",
+        platform: "linux",
+      }),
+    ).toEqual({ version: 1, command: "/usr/lib/arcue/Arcue", args: [] });
+    expect(
+      bundledApp({
+        execPath: "C:\\Users\\Me\\AppData\\Local\\Programs\\Arcue\\Arcue.exe",
+        electron: "44.6.0",
+        scriptDir: "c:\\users\\me\\appdata\\local\\programs\\arcue\\resources\\cli",
+        platform: "win32",
+      }),
+    ).toEqual({ version: 1, command: "C:\\Users\\Me\\AppData\\Local\\Programs\\Arcue\\Arcue.exe", args: [] });
+  });
+
+  it("is nothing on Node, or for a command line outside the Electron app", () => {
+    expect(
+      bundledApp({
+        execPath: "/usr/bin/node",
+        electron: undefined,
+        scriptDir: "/usr/bin/resources/cli",
+        platform: "linux",
+      }),
+    ).toBeNull();
+    expect(
+      bundledApp({
+        execPath: "/work/node_modules/electron/dist/electron",
+        electron: "44.6.0",
+        scriptDir: "/work/apps/cli/dist",
+        platform: "linux",
+      }),
+    ).toBeNull();
+    expect(
+      bundledApp({
+        execPath: "/Applications/Arcue.app/Contents/MacOS/Arcue",
+        electron: "44.6.0",
+        scriptDir: "/Applications/Arcue.app/Contents/Resources/cli/web",
+        platform: "darwin",
+      }),
+    ).toBeNull();
+  });
+
+  it("is nothing for the command line under test", () => {
+    expect(bundledApp()).toBeNull();
+  });
+});
+
+describe("appEnvironment", () => {
+  it("keeps everything but ELECTRON_RUN_AS_NODE, in any letter case", () => {
+    expect(appEnvironment({ PATH: "/bin", ELECTRON_RUN_AS_NODE: "1", Electron_Run_As_Node: "1", HOME: "/h" })).toEqual({
+      PATH: "/bin",
+      HOME: "/h",
+    });
   });
 });
 

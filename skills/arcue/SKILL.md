@@ -8,10 +8,12 @@ license: MIT
 
 ## The arcue command
 
-In bash, zsh or Git Bash, use `arcue` when it is on PATH. Otherwise, and always in PowerShell, run the launcher in this skill's `scripts` folder in its place:
+Use `arcue` when it is on PATH, where the Arcue desktop app installs it; in PowerShell, only when `(Get-Command arcue).Source` ends in `arcue.exe`. Otherwise run the launcher in this skill's `scripts` folder in its place:
 
 - bash, zsh or Git Bash: `sh "<this skill's folder>/scripts/arcue" <arguments>`
 - PowerShell: `& (& "<this skill's folder>\scripts\arcue-node.cmd") "<this skill's folder>\scripts\arcue.js" <arguments>`. Never give a `.cmd` file arguments: cmd.exe would run a `|` or `&` in them as a command.
+
+When there is neither, as when only this skill is installed, ask the user to install the desktop app as https://github.com/skibitsky/arcue/blob/main/INSTALL.md#desktop-app describes.
 
 The launcher runs Arcue on Node 24 or later from PATH, or on the Node that setup downloaded. When it says Arcue needs Node 24 or later, ask the user before you run `arcue setup` through it, which in PowerShell is `& "<this skill's folder>\scripts\arcue-setup.cmd"`. Setup downloads Node from nodejs.org once, about 30 MB; it needs network access, so allow it in a sandbox, and can take a few minutes.
 
