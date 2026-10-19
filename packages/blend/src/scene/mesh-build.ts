@@ -267,7 +267,7 @@ interface DrawOrder {
 
 /**
  * The triangles in the file's face order, with a group for each run of faces in one slot, so that assigning a face
- * another material keeps every triangle's number and the fingerprint. A mesh with more runs than
+ * another material keeps every triangle's number and face. A mesh with more runs than
  * `MAX_MATERIAL_GROUPS` gets its triangles sorted by slot instead.
  */
 function drawOrder(mesh: MeshData, faceTriangles: Uint32Array, slotCount: number): DrawOrder {

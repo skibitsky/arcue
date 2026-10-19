@@ -7,8 +7,9 @@ export type Quat = [x: number, y: number, z: number, w: number];
 /**
  * A .blend file's scene, ready to render. Positions, transforms and tracks are in glTF's space: meters, right-handed,
  * +Y up and +Z front, turned from Blender's +Z up by −90° about X and scaled by `unitScale`, as Blender's glTF exporter
- * does. Matrices are column-major 4×4, quaternions are xyzw, and large arrays are typed arrays of their own, so the
- * scene can be posted between workers and its buffers transferred.
+ * does. Matrices are column-major 4×4 and quaternions are xyzw. Large arrays are typed arrays that never view the
+ * file's bytes, so the scene can be posted between workers and its buffers transferred. Arrays may share a buffer, as
+ * the meshes of linked duplicates do, so list each buffer once when transferring them.
  */
 export interface BlendScene {
   /** The version of Blender that saved the file, such as "4.2". */
@@ -28,9 +29,9 @@ export interface BlendScene {
 export interface ReadBlendOptions {
   /**
    * Reads an image file that the .blend file names but does not pack, for the materials whose colors depend on whether
-   * the image is gray. It is called with each path the file stores for the image, relative paths relative to the .blend
-   * file's folder, and with the image's name where it stores none. Resolves to null when there is no such file.
-   * Without it, those images are not known to be gray.
+   * the image is gray. It is called once for each such image with the path the file stores for it, relative to the
+   * .blend file's folder or absolute, or with the image's name where it stores none. Resolves to null when there is no
+   * such file. Without it, those images are not known to be gray.
    */
   readImage?(path: string): Promise<Uint8Array | null>;
 }
@@ -302,7 +303,7 @@ export interface BlendWarningSubject {
   name: string;
 }
 
-/** Something the scene shows differently from Blender, or leaves out. */
+/** Something the scene shows differently from Blender, or leaves out. Its text calls the scene the preview. */
 export interface BlendWarning {
   /** Stable across versions, for tools to match on. */
   code: BlendWarningCode;

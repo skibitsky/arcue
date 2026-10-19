@@ -26,7 +26,7 @@ export interface Action {
   slots: ActionSlot[];
   /** The manual frame range, when the action sets one. */
   manualRange: [number, number] | null;
-  /** The layers of a layered action. the reader plays the first; Blender 5.2 makes no more than one. */
+  /** The layers of a layered action. The reader plays the first; Blender 5.2 makes no more than one. */
   layers: number;
 }
 

@@ -3,6 +3,10 @@ name: Publish blend
 # A blend-v<version> tag publishes packages/blend to npm as @arcue/blend. It uses npm's trusted publishing, so no npm
 # token is stored: npm accepts the publish because this workflow runs it. The tag must name the version in
 # packages/blend/package.json, and the package's tests and checks must pass first.
+#
+# npm sets up a trusted publisher only for a package that exists, so the first version was published by hand with
+# `pnpm publish` from packages/blend, which applies publishConfig, unlike `npm publish`. The package's trusted publisher
+# on npmjs.com names this repository and this file, publish-blend.yml.
 
 on:
   push:

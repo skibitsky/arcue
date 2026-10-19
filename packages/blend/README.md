@@ -16,13 +16,13 @@ Reads Blender `.blend` files in JavaScript, without Blender: meshes, armatures, 
 
 ```js
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, resolve } from "node:path";
 import { BlendReadError, readBlend } from "@arcue/blend";
 
 const path = "assets/character.blend";
 try {
   const scene = await readBlend(new Uint8Array(await readFile(path)), {
-    readImage: (stored) => readFile(join(dirname(path), stored)).then((bytes) => new Uint8Array(bytes), () => null),
+    readImage: (stored) => readFile(resolve(dirname(path), stored)).then((bytes) => new Uint8Array(bytes), () => null),
   });
   console.log(scene.meshes.map((mesh) => mesh.name), scene.clips.map((clip) => clip.name));
 } catch (error) {
@@ -35,7 +35,7 @@ try {
 
 ## The scene
 
-Positions, transforms and tracks are in glTF's space: meters, right-handed, +Y up and +Z front. The reader turns Blender's +Z up by −90° about X and scales by the scene's unit scale, as Blender's glTF exporter does. Matrices are column-major 4×4 and quaternions are xyzw. Large arrays are typed arrays of their own, so a scene can be posted from a worker with its buffers transferred.
+Positions, transforms and tracks are in glTF's space: meters, right-handed, +Y up and +Z front. The reader turns Blender's +Z up by −90° about X and scales by the scene's unit scale, as Blender's glTF exporter does. Matrices are column-major 4×4 and quaternions are xyzw. Large arrays are typed arrays that never view the file's bytes, so a scene can be posted from a worker with its buffers transferred. Arrays may share a buffer, as the meshes of linked duplicates do, so list each buffer once in the transfer list.
 
 | Field | Holds |
 |---|---|
@@ -45,7 +45,7 @@ Positions, transforms and tracks are in glTF's space: meters, right-handed, +Y u
 | `materials` | Metallic-roughness approximations of Blender's materials. |
 | `images` | The images the materials sample: packed bytes, or the path the file stores. |
 | `clips` | One clip per action, sampled over the scene's nodes into translation, rotation, scale and shape key weight tracks. |
-| `warnings` | What the scene shows differently from Blender, or leaves out, each with a stable `code`. |
+| `warnings` | What the scene shows differently from Blender, or leaves out, each with a stable `code`. Their text calls the scene the preview. |
 
 Some details that matter when using the scene:
 

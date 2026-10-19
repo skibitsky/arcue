@@ -14,9 +14,8 @@ const GZIP_MAGIC = [0x1f, 0x8b];
 const DEFLATE_MAX_RATIO = 1032;
 
 /**
- * The most a compressed file may expand to: as much memory as the FBX importer lets its parser use. Data that declares
- * more is refused before its bytes are allocated. Its ratio to the file's size is no guide: Multires data that was
- * never sculpted compresses over 600 times.
+ * The most a compressed file may expand to. Data that declares more is refused before its bytes are allocated. Its
+ * ratio to the file's size is no guide: Multires data that was never sculpted compresses over 600 times.
  */
 export const MAX_EXPANDED_BYTES = 2 ** 30;
 /** Compressed data goes to a decompressor in slices this large, as a browser expands each slice it is given at once. */

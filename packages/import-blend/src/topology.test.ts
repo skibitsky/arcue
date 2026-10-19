@@ -1,5 +1,6 @@
 import { topologyFingerprint } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
+import { importFixture, VERSIONS } from "../test/fixtures";
 import { fanFingerprint } from "./topology";
 
 /** A row of two quads, faces 0 1 4 3 and 1 2 5 4, each split into two triangles. */
@@ -24,5 +25,15 @@ describe("fanFingerprint", () => {
       fanFingerprint({ faces, triangleFaces: Uint32Array.of(0, 0, 1, 1), sourceVertexCount: 6 }),
     );
     expect(drawn.triangleCount).toBe(4);
+  });
+});
+
+describe("the fingerprints of the rig fixture", () => {
+  it.each(VERSIONS)("stay what saved reviews of its file from Blender %s know", async (version) => {
+    const scene = await importFixture("rig", version);
+    expect(scene.meshes.map((mesh) => [mesh.name, mesh.topology])).toEqual([
+      ["Body", { sourceVertexCount: 96, triangleCount: 168, hash: "210c730ab3c7eedf" }],
+      ["Prop", { sourceVertexCount: 8, triangleCount: 12, hash: "098afaa399151c6c" }],
+    ]);
   });
 });

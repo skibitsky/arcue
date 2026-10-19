@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { readFixture, readFixtureScene, reference, VERSIONS } from "../test/fixtures.js";
+import { fixturesDir, readFixture, readFixtureScene, reference, VERSIONS } from "../test/fixtures.js";
 import { matrixError, pointsError, transformPoint, worldMatrices } from "../test/poses.js";
 import { decompressBlend } from "./blend/decompress.js";
 import { BlendReadError } from "./blend/errors.js";
@@ -129,6 +130,42 @@ describe.each(VERSIONS)("readBlend on a file from Blender %s", (version) => {
         }
       }
     });
+  });
+});
+
+describe.each(VERSIONS)("readBlend on the helpers and images of a file from Blender %s", (version) => {
+  it("marks the objects Blender draws as wire or bounds as hidden", async () => {
+    const scene = await readFixtureScene("helpers", version);
+    const helpers: Record<string, { drawsSurface: boolean }> = JSON.parse(
+      readFileSync(`${fixturesDir}helpers-${version}.json`, "utf8"),
+    ).helpers;
+    for (const [name, helper] of Object.entries(helpers)) {
+      const node = scene.nodes.find((candidate) => candidate.name === name && candidate.kind === "mesh");
+      expect(node?.hidden, name).toBe(!helper.drawsSurface);
+    }
+  });
+
+  it("gives each image its packed bytes or the path the file stores, and none to an image linked from elsewhere", async () => {
+    const scene = await readFixtureScene("images", version);
+    const images: Record<string, { file: string | null; linked: boolean; packedSize: number }> = JSON.parse(
+      readFileSync(`${fixturesDir}images-${version}.json`, "utf8"),
+    ).images;
+    const imageOf = (material: string) => {
+      const ref = scene.materials.find((candidate) => candidate.name === material)?.baseColorTexture;
+      return ref ? scene.images[ref.image] : undefined;
+    };
+    for (const [material, expected] of Object.entries(images)) {
+      if (expected.linked) continue;
+      const image = imageOf(material);
+      if (expected.packedSize > 0) {
+        expect(image?.source, material).toBe("packed");
+        expect(image?.packed?.length, material).toBeGreaterThan(0);
+      } else {
+        expect(image, material).toMatchObject({ source: "file", path: expected.file, relative: true, packed: null });
+      }
+    }
+    expect(imageOf("CheckerB")).toBe(imageOf("CheckerA"));
+    expect(imageOf("Borrowed")?.source).toBe("none");
   });
 });
 

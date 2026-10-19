@@ -3,7 +3,7 @@ export class BlendParseError extends Error {
   override readonly name = "BlendParseError";
 }
 
-/** The file is valid but nests deeper than the reader follows; the message says what, after the file's name. */
+/** The file is valid but nests deeper than the reader follows; the message says how deep. */
 export class BlendLimitError extends Error {
   override readonly name = "BlendLimitError";
 }
@@ -19,8 +19,9 @@ export class BlendReadError extends Error {
   override readonly name = "BlendReadError";
   readonly reason: BlendReadErrorReason;
   /**
-   * What the message says after its opening words: why the file is unreadable, such as "its file header is damaged",
-   * the version of Blender that saved a file that is too old, such as "2.79", or how deep a scene nests.
+   * The particular case: why the file is unreadable, such as "its file header is damaged", the version of Blender that
+   * saved a file that is too old, such as "2.79", how deep a scene nests, or the message of the error that reading the
+   * scene failed with, which `cause` holds.
    */
   readonly detail: string;
 
