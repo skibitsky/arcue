@@ -579,9 +579,7 @@ describe("buildScene", () => {
           })),
         ),
       );
-    const tooDeep = new BlendLimitError(
-      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep`,
-    );
+    const tooDeep = new BlendLimitError(`nests objects and bones more than ${MAX_NODE_DEPTH} levels deep`);
     for (const cycle of [false, true]) {
       const nodes = buildScene(parentChain(MAX_NODE_DEPTH, cycle)).nodes;
       expect(nodes.map((node) => node.parent)).toEqual(nodes.map((_, index) => index - 1));

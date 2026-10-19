@@ -1,4 +1,5 @@
-import type { BlendWarning, BuiltScene, ObjectRecord } from "../scene/build";
+import type { BuiltScene, ObjectRecord } from "../scene/build";
+import type { BlendWarning } from "../types";
 import type { ParsedClip } from "./clips";
 
 const ARMATURE_REST_POSITION = 1 << 0;

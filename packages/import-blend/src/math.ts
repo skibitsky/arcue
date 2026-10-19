@@ -1,4 +1,4 @@
-import type { Quat, Vec3 } from "@arcue/scene";
+import type { Quat, Vec3 } from "./types";
 
 /** A column-major 4×4 matrix, the layout Blender stores `float[4][4]` in: three axes, then the translation. */
 export type Mat4 = Float64Array;

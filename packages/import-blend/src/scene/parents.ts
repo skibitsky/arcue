@@ -1,4 +1,3 @@
-import type { Quat, Vec3 } from "@arcue/scene";
 import type { BlendStruct } from "../blend/file";
 import { isLinked } from "../blend/ids";
 import type { Mat4 } from "../math";
@@ -14,6 +13,7 @@ import {
   transformPoint,
   translation,
 } from "../math";
+import type { Quat, Vec3 } from "../types";
 import type { Bone } from "./armature";
 import { ArmatureReadError, BoneFlag, readBones } from "./armature";
 import { ObjectType, ParentType, parentTypeOf } from "./objects";

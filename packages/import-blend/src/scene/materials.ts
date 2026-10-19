@@ -1,6 +1,6 @@
-import type { AlphaMode, TextureAlpha, TextureColorSpace, UvTransform, Vec3, Vec4, WrapMode } from "@arcue/scene";
 import type { BlendStruct } from "../blend/file";
 import { idName } from "../blend/ids";
+import type { AlphaMode, TextureAlpha, TextureColorSpace, UvTransform, Vec3, Vec4, WrapMode } from "../types";
 import type { Affine } from "./mapping";
 import { composeAffine, IDENTITY, mappingAffine, uvTransformOf } from "./mapping";
 import type { ShaderGraph } from "./shader-graph";

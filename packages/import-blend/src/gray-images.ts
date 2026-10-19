@@ -1,5 +1,4 @@
-import { imageMimeType } from "@arcue/scene";
-import { decompressor, writeInSlices } from "./blend/decompress";
+import { decompressor, startsWith, writeInSlices } from "./blend/decompress";
 
 const PNG_GRAY = 0;
 const PNG_RGB = 2;
@@ -217,6 +216,9 @@ function jpegComponents(bytes: Uint8Array): number | null {
   return null;
 }
 
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
+
 /**
  * Whether every pixel of an image is gray, so that each of its color channels and its brightness equal its color:
  * false where a pixel is known not to be, and null where the check cannot tell. A PNG is read to its last pixel, or to
@@ -229,7 +231,6 @@ export async function isGrayImage(
   budget: GrayCheckBudget = { bytes: GRAY_CHECK_BYTES },
   limit = Number.POSITIVE_INFINITY,
 ): Promise<boolean | null> {
-  const type = imageMimeType(bytes, "");
-  if (type === "image/png") return isGrayPng(bytes, budget, limit);
-  return type === "image/jpeg" && jpegComponents(bytes) === 1 ? true : null;
+  if (startsWith(bytes, PNG_SIGNATURE)) return isGrayPng(bytes, budget, limit);
+  return startsWith(bytes, JPEG_SIGNATURE) && jpegComponents(bytes) === 1 ? true : null;
 }

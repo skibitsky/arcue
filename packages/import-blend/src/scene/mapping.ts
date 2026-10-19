@@ -1,4 +1,4 @@
-import type { UvTransform } from "@arcue/scene";
+import type { UvTransform } from "../types";
 
 /** Blender's Mapping node types, `node.vector_type`. */
 export const MappingType = { point: 0, texture: 1, vector: 2, normal: 3 } as const;

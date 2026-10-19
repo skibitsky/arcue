@@ -1,7 +1,7 @@
-import type { Quat, Track, Vec3 } from "@arcue/scene";
 import type { Mat4, Trs } from "../math";
 import { compose, decompose, identity, invert, multiply, toSceneAxes } from "../math";
-import type { BlendWarning, BuiltScene } from "../scene/build";
+import type { BuiltScene } from "../scene/build";
+import type { BlendWarning, Quat, Track, Vec3 } from "../types";
 import type { ParsedClip } from "./clips";
 
 const TOLERANCE = 1e-4;
@@ -172,7 +172,7 @@ export function skinMotionWarnings(scene: BuiltScene, clips: readonly ParsedClip
     return times;
   };
   const skinned = scene.meshes.flatMap((mesh, index) => {
-    const skeleton = mesh.skeleton === null ? undefined : scene.skeletons[mesh.skeleton];
+    const skeleton = mesh.skin ? scene.skeletons[mesh.skin.skeleton] : undefined;
     const meshNode = scene.meshRecords[index]?.node;
     const armature = skeleton ? armatureNode(scene, skeleton.joints) : null;
     if (meshNode === undefined || armature === null) return [];

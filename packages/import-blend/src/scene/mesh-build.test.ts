@@ -1,4 +1,4 @@
-import { type SceneDescription, topologyFingerprint } from "@arcue/scene";
+import type { SceneDescription } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
 import { importFixture, type Reference, reference, VERSIONS } from "../../test/fixtures";
 import {
@@ -263,45 +263,30 @@ function facesOf(data: MeshData, mesh: BuiltMesh): number[] {
   );
 }
 
-/** The fingerprint of the quads in `faces` order, each fanned from its first corner. */
-function fanTopology(data: MeshData, faces: readonly number[]) {
-  const indices = faces.flatMap((face) => {
-    const [a = 0, b = 0, c = 0, d = 0] = Array.from(data.cornerVerts.subarray(face * 4, face * 4 + 4));
-    return [a, b, c, a, c, d];
-  });
-  return topologyFingerprint({
-    indices: Uint32Array.from(indices),
-    sourceVertex: Uint32Array.from({ length: data.vertexCount }, (_, vertex) => vertex),
-    sourceVertexCount: data.vertexCount,
-  });
-}
-
-describe("the topology fingerprint", () => {
+describe("the faces of a mesh", () => {
   const options = buildOptions(2);
 
-  it("stays when a moved vertex makes Blender split a quad along its other diagonal", () => {
+  it("stay with each triangle's face when a moved vertex makes Blender split a quad along its other diagonal", () => {
     const flat = buildMesh(grid([0, 0]), options);
     const concave = buildMesh(grid([0.8, -0.8]), options);
     expect(triangles(concave)).not.toEqual(triangles(flat));
-    expect(concave.topology).toEqual(flat.topology);
+    expect(concave.faces).toEqual(flat.faces);
+    expect(concave.triangleFaces).toEqual(flat.triangleFaces);
   });
 
-  it("fans each face from its first corner in the order the mesh draws its triangles", () => {
+  it("are the file's faces, with the face of each triangle in the order the mesh draws them", () => {
     const mesh = buildMesh(grid([0.8, -0.8]), options);
-    const fans = [
-      [0, 1, 4, 0, 4, 3],
-      [1, 2, 5, 1, 5, 4],
-      [3, 4, 7, 3, 7, 6],
-      [4, 5, 8, 4, 8, 7],
+    const quads = [
+      [0, 1, 4, 3],
+      [1, 2, 5, 4],
+      [3, 4, 7, 6],
+      [4, 5, 8, 7],
     ];
-    const expected = topologyFingerprint({
-      indices: Uint32Array.from(fans.flat()),
-      sourceVertex: Uint32Array.from({ length: 9 }, (_, vertex) => vertex),
-      sourceVertexCount: 9,
-    });
-    expect(mesh.topology).toEqual(expected);
+    expect(Array.from(mesh.faces.offsets)).toEqual([0, 4, 8, 12, 16]);
+    expect(Array.from(mesh.faces.vertices)).toEqual(quads.flat());
+    expect(Array.from(mesh.triangleFaces)).toEqual([0, 0, 1, 1, 2, 2, 3, 3]);
     triangles(mesh).forEach((corners, triangle) => {
-      const face = fans[Math.floor(triangle / 2)] ?? [];
+      const face = quads[Math.floor(triangle / 2)] ?? [];
       expect(
         corners.every((vertex) => face.includes(vertex)),
         `triangle ${triangle}`,
@@ -321,7 +306,7 @@ describe("the draw order", () => {
       { start: 6, triangleCount: 6, material: 1 },
       { start: 12, triangleCount: 2, material: 0 },
     ]);
-    expect(mesh.topology).toEqual(fanTopology(data, [0, 1, 2, 3, 4, 5, 6]));
+    expect(Array.from(mesh.triangleFaces)).toEqual(facesOf(data, mesh));
   });
 
   it("leaves faces without triangles out of the runs", () => {
@@ -341,12 +326,12 @@ describe("the draw order", () => {
     }
   });
 
-  it("keeps the fingerprint and every triangle's source vertices when one face changes material", () => {
+  it("keeps every triangle's face and source vertices when one face changes material", () => {
     const before = buildMesh(row([0, 0, 1, 1, 0]), buildOptions(2));
     const after = buildMesh(row([0, 1, 1, 1, 0]), buildOptions(2));
     expect(after.groups).not.toEqual(before.groups);
     expect(triangles(after)).toEqual(triangles(before));
-    expect(after.topology).toEqual(before.topology);
+    expect(after.triangleFaces).toEqual(before.triangleFaces);
   });
 
   it("sorts the triangles by slot when the faces change slot more often than a mesh has groups", () => {
@@ -366,7 +351,7 @@ describe("the draw order", () => {
       { start: 0, triangleCount: evens, material: 0 },
       { start: evens, triangleCount: data.faceCount * 2 - evens, material: 1 },
     ]);
-    expect(mesh.topology).toEqual(fanTopology(data, sorted));
+    expect(Array.from(mesh.triangleFaces)).toEqual(sorted.flatMap((face) => [face, face]));
   });
 });
 

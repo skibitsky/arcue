@@ -1,5 +1,5 @@
-import type { Vec3 } from "@arcue/scene";
 import type { BlendStruct } from "../blend/file";
+import type { Vec3 } from "../types";
 import type { MeshData, ShapeKey } from "./mesh-data";
 
 const OBJECT_SHAPE_LOCK = 1 << 0;

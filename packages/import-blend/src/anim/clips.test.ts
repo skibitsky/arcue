@@ -7,8 +7,9 @@ import { matrixError, morphWeights, sampleTrack, worldMatrices } from "../../tes
 import { decompressBlend } from "../blend/decompress";
 import { readBlendFile } from "../blend/file";
 import { datablocks, idName } from "../blend/ids";
-import type { BlendWarning, BuiltScene } from "../scene/build";
+import type { BuiltScene } from "../scene/build";
 import { buildScene } from "../scene/build";
+import type { BlendWarning } from "../types";
 import type { Action } from "./actions";
 import { IdCode, readActions, slotFor, usedActions } from "./actions";
 import type { ClipLimits } from "./clips";

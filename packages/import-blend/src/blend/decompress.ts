@@ -55,7 +55,7 @@ export async function writeInSlices(writer: ChunkWriter, data: readonly Uint8Arr
   await writer.close();
 }
 
-function startsWith(bytes: Uint8Array, magic: readonly number[]): boolean {
+export function startsWith(bytes: Uint8Array, magic: readonly number[]): boolean {
   return magic.every((byte, index) => bytes[index] === byte);
 }
 

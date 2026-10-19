@@ -1,11 +1,10 @@
-import type { Track } from "@arcue/scene";
 import type { BlendFile, BlendStruct } from "../blend/file";
 import { datablocks, idName } from "../blend/ids";
 import type { Mat4, Trs } from "../math";
 import { decompose, identity, invert, multiply, SHEAR_TOLERANCE, shearOf, toSceneAxes } from "../math";
 import type { Bone } from "../scene/armature";
 import { BoneFlag, inheritsFully, poseMatrices } from "../scene/armature";
-import type { ArmatureRecord, BlendWarning, BuiltScene, MeshRecord, ObjectRecord } from "../scene/build";
+import type { ArmatureRecord, BuiltScene, MeshRecord, ObjectRecord } from "../scene/build";
 import { constraintWarnings } from "../scene/build";
 import { ObjectType } from "../scene/objects";
 import type { TransformValues } from "../scene/transforms";
@@ -17,6 +16,7 @@ import {
   restChannel,
   setTransformProperty,
 } from "../scene/transforms";
+import type { BlendWarning, Track } from "../types";
 import type { Action, ActionSlot } from "./actions";
 import {
   actionRange,

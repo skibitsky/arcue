@@ -1,5 +1,3 @@
-import type { ImportWarningCode, ImportWarningSubject, Mesh, MorphTarget, NodeKind, Skeleton } from "@arcue/scene";
-import { MAX_NODE_DEPTH, nestsTooDeep } from "@arcue/scene";
 import type { Action } from "../anim/actions";
 import { readActions, usedActions } from "../anim/actions";
 import type { StartPose, StartPoses } from "../anim/opening";
@@ -22,6 +20,16 @@ import {
   transformPoint,
   translation,
 } from "../math";
+import type {
+  BlendMesh,
+  BlendWarning,
+  BlendWarningCode,
+  BlendWarningSubject,
+  MorphTarget,
+  NodeKind,
+  Skeleton,
+  Skin,
+} from "../types";
 import type { Bone } from "./armature";
 import { ArmatureReadError, readBones } from "./armature";
 import { envelopeUse } from "./envelopes";
@@ -61,13 +69,6 @@ import type { SmoothByAngle } from "./smooth-by-angle";
 import { smoothByAngle } from "./smooth-by-angle";
 import type { ObjectValues, TransformValues } from "./transforms";
 import { channelValues, objectBasis, objectValues, restChannel } from "./transforms";
-
-export interface BlendWarning {
-  code: ImportWarningCode;
-  subject: ImportWarningSubject;
-  message: string;
-  detail?: string;
-}
 
 export interface NodeDraft {
   name: string;
@@ -140,7 +141,7 @@ export interface MaterialColors {
 
 export interface BuiltScene {
   nodes: NodeDraft[];
-  meshes: Mesh[];
+  meshes: BlendMesh[];
   skeletons: Skeleton[];
   materials: MaterialDraft[];
   /** For each material, the UV maps of the meshes it is drawn on, which all resolve its textures' UV maps alike. */
@@ -157,7 +158,7 @@ export interface BuiltScene {
   warnings: BlendWarning[];
 }
 
-type Warn = (code: ImportWarningCode, name: string, message: string, detail?: string) => void;
+type Warn = (code: BlendWarningCode, name: string, message: string, detail?: string) => void;
 
 const CONSTRAINT_DISABLE = 1 << 2;
 const CONSTRAINT_OFF = 1 << 9;
@@ -210,7 +211,7 @@ export function constraintWarnings(
   for (const record of objects) {
     const { object } = record;
     const paths = animated.get(record) ?? new Set<string>();
-    const subject: ImportWarningSubject = { kind: "node", name: object.name };
+    const subject: BlendWarningSubject = { kind: "node", name: object.name };
     const channels = new Map(
       object.struct
         .deref("pose")
@@ -503,6 +504,24 @@ class MaterialTable {
     this.colors.push(colors);
     return this.drafts.length - 1;
   }
+}
+
+/**
+ * The most levels of objects and bones a scene may nest, far more than real scenes and rigs have. Deeper scenes are
+ * refused, since walking them takes a nested call per level.
+ */
+export const MAX_NODE_DEPTH = 1024;
+
+/** Whether a node nests more than `MAX_NODE_DEPTH` levels deep, a root being the first level. */
+function nestsTooDeep(nodes: readonly NodeDraft[]): boolean {
+  const levels = new Int32Array(nodes.length);
+  for (let index = 0; index < nodes.length; index++) {
+    const parent = nodes[index]?.parent ?? -1;
+    const level = (parent >= 0 && parent < index ? (levels[parent] ?? 0) : 0) + 1;
+    if (level > MAX_NODE_DEPTH) return true;
+    levels[index] = level;
+  }
+  return false;
 }
 
 /** Blender's `MAXMAT`: the most material slots it gives an object or a mesh. */
@@ -912,7 +931,7 @@ interface MeshContext {
 
 /** The meshes of the scene's shown mesh objects, with their skeletons and what animation needs to move them. */
 class SceneMeshes {
-  readonly meshes: Mesh[] = [];
+  readonly meshes: BlendMesh[] = [];
   readonly skeletons: Skeleton[] = [];
   readonly records: MeshRecord[] = [];
   readonly #context: MeshContext;
@@ -976,13 +995,19 @@ class SceneMeshes {
     const toScene = invert(conversion);
     const sceneWorld = (node: number) => multiplyAll(conversion, restWorld[node] ?? identity(), toScene);
     const bind = sceneWorld(record.node);
-    let skeleton: number | null = null;
+    let skin: Skin | null = null;
     if (built.skin) {
       const inverseBind = new Float32Array(built.skin.joints.length * 16);
       built.skin.joints.forEach((joint, index) => {
         inverseBind.set(invert(sceneWorld(joint)), index * 16);
       });
-      skeleton = this.#skeletonIndex(built.skin.joints, inverseBind);
+      skin = {
+        skeleton: this.#skeletonIndex(built.skin.joints, inverseBind),
+        bindMatrix: Float32Array.from(bind),
+        joints: built.skin.rendered.joints,
+        weights: built.skin.rendered.weights,
+        sourceWeights: built.skin.source,
+      };
     }
     envelopeWarnings(object, record.node, data, byOffset, restWorld, warn);
     const restPositions = new Float32Array(data.vertexCount * 3);
@@ -1015,23 +1040,20 @@ class SceneMeshes {
     }
     this.meshes.push({
       name: object.name,
-      geometryName: data.name,
+      dataName: data.name,
       positions: built.positions,
       normals: built.normals,
       uvs: built.uvs,
       colors: built.colors,
-      skeleton,
-      bindMatrix: built.skin ? Float32Array.from(bind) : null,
-      joints: built.skin?.rendered.joints ?? null,
-      weights: built.skin?.rendered.weights ?? null,
       indices: built.indices,
       groups,
       morphTargets: morphs.targets,
+      skin,
       sourceVertex: built.sourceVertex,
       sourceVertexCount: built.sourceVertexCount,
-      topology: built.topology,
       restPositions,
-      skinWeights: built.skin?.source ?? null,
+      faces: built.faces,
+      triangleFaces: built.triangleFaces,
     });
     this.records.push({
       node: record.node,
@@ -1122,7 +1144,7 @@ export function buildScene(
 ): BuiltScene {
   const warnings: BlendWarning[] = [];
   const warn: Warn = (code, name, message, detail) => {
-    const subject: ImportWarningSubject = { kind: "node", name };
+    const subject: BlendWarningSubject = { kind: "node", name };
     warnings.push(detail === undefined ? { code, subject, message } : { code, subject, message, detail });
   };
   const { fps, unitScale } = sceneSettings(contents.scene);
@@ -1134,9 +1156,7 @@ export function buildScene(
     cache.vertices(parent, poses),
   );
   if (nestsTooDeep(nodes)) {
-    throw new BlendLimitError(
-      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep`,
-    );
+    throw new BlendLimitError(`nests objects and bones more than ${MAX_NODE_DEPTH} levels deep`);
   }
   const restWorld = nodes.map((_, index) => nodeWorlds.of(index));
   const materials = new MaterialTable(file.version, isGray, imageFrame(contents.scene));

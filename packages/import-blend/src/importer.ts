@@ -6,6 +6,7 @@ import type {
   ImportRequest,
   ImportWarning,
   Material,
+  Mesh,
   SceneDescription,
   SceneNode,
   ScenePart,
@@ -17,6 +18,7 @@ import type {
   TextureResolver,
   TextureSampling,
   TextureSlot,
+  TopologyFingerprint,
 } from "@arcue/scene";
 import {
   buildNodePaths,
@@ -32,34 +34,20 @@ import {
   parseStoredPath,
   TEXTURE_SLOT_KEYS,
   TEXTURE_SLOTS,
+  topologyFingerprint,
   unshownUvSetWarnings,
 } from "@arcue/scene";
-import { readActions } from "./anim/actions";
-import type { ParsedClip } from "./anim/clips";
-import { buildClips, driverWarnings } from "./anim/clips";
-import { restPositionWarnings } from "./anim/rest-position";
-import { skinMotionWarnings } from "./anim/skin-motion";
-import { decompressBlend } from "./blend/decompress";
-import { BlendLimitError, BlendParseError } from "./blend/errors";
-import type { BlendBlock, BlendFile, BlendStruct } from "./blend/file";
-import { readBlendFile } from "./blend/file";
-import { idName, idOf } from "./blend/ids";
-import { GRAY_CHECK_BYTES, GRAY_SAMPLE_BYTES, isGrayImage } from "./gray-images";
-import { sequencePath, tilePath } from "./image-paths";
-import { decompose, invert, multiplyAll } from "./math";
-import type { BlendWarning, BuiltScene, GrayCandidate, MaterialUvMaps } from "./scene/build";
-import { buildScene, grayCandidates, uvSetFor } from "./scene/build";
-import type { GrayCheck, ImageUse } from "./scene/materials";
-import {
-  IMAGE_SOURCE_FILE,
-  IMAGE_SOURCE_SEQUENCE,
-  IMAGE_SOURCE_TILED,
-  imageSource,
-  packedFile,
-} from "./scene/materials";
-import type { SceneContents } from "./scene/objects";
-import { collectSceneObjects } from "./scene/objects";
+import { BlendReadError } from "./blend/errors";
+import { readBlend } from "./read-blend";
 import { joinWarningsById, normalizedPath, shareFoundTextures } from "./texture-files";
+import type {
+  BlendClip,
+  BlendImage,
+  BlendMaterial,
+  BlendMesh,
+  BlendScene,
+  TextureRef as BlendTextureRef,
+} from "./types";
 
 /** Blender's own rotation for Z-up content in a Y-up scene: −90° about X. */
 const MINUS_90_ABOUT_X: [number, number, number, number] = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
@@ -68,77 +56,69 @@ const UNTEXTURED = 0.8;
 /** The roughness Blender's default material shows, for a packed metallic-roughness image that is missing. */
 const UNTEXTURED_ROUGHNESS = 0.5;
 
-function buildNodes(scene: BuiltScene): SceneNode[] {
+function buildNodes(scene: BlendScene): SceneNode[] {
   const paths = buildNodePaths(scene.nodes);
-  const fromScene = invert(scene.conversion);
-  return scene.nodes.map((node, index) => {
-    const trs = decompose(multiplyAll(scene.conversion, node.rest, fromScene));
-    return {
-      name: node.name,
-      path: paths[index] ?? node.name,
-      parent: node.parent,
-      kind: node.kind,
-      translation: trs.translation,
-      rotation: trs.rotation,
-      scale: trs.scale,
-      mesh: node.mesh,
-    };
+  return scene.nodes.map((node, index) => ({
+    name: node.name,
+    path: paths[index] ?? node.name,
+    parent: node.parent,
+    kind: node.kind,
+    translation: node.translation,
+    rotation: node.rotation,
+    scale: node.scale,
+    mesh: node.mesh,
+  }));
+}
+
+/**
+ * The fingerprint of a mesh's faces: each face fanned from its first corner, in the triangles' order, so that it does
+ * not change with the positions that pick Blender's split, and triangle n stays in the face it is in.
+ */
+function fanFingerprint(mesh: BlendMesh): TopologyFingerprint {
+  const { offsets, vertices } = mesh.faces;
+  const indices = new Uint32Array(mesh.triangleFaces.length * 3);
+  let fan = 0;
+  for (let position = 0; position < mesh.triangleFaces.length; position++) {
+    const face = mesh.triangleFaces[position] ?? 0;
+    fan = position > 0 && mesh.triangleFaces[position - 1] === face ? fan + 1 : 0;
+    const start = offsets[face] ?? 0;
+    indices[position * 3] = vertices[start] ?? 0;
+    indices[position * 3 + 1] = vertices[start + fan + 1] ?? 0;
+    indices[position * 3 + 2] = vertices[start + fan + 2] ?? 0;
+  }
+  return topologyFingerprint({
+    indices,
+    sourceVertex: Uint32Array.from({ length: mesh.sourceVertexCount }, (_, vertex) => vertex),
+    sourceVertexCount: mesh.sourceVertexCount,
   });
 }
 
-/** The folder a "//" path of the datablock starts at: this file's, or for data packed from a library, the library's. */
-function relativePathFolder(datablock: BlendStruct): string {
-  const library = idOf(datablock)?.deref("lib");
-  const path = library ? library.string("name") || library.string("filepath") : "";
-  return path.slice(0, path.replaceAll("\\", "/").lastIndexOf("/") + 1) || "//";
-}
-
-/**
- * Whether the preview reads the file an image stores, rather than its packed bytes or nothing: an image file's, a
- * UDIM image's first tile, or the frame `frame` of a sequence.
- */
-function readsFile(image: BlendStruct, frame: number | null): boolean {
-  const source = imageSource(image);
-  return (
-    source === IMAGE_SOURCE_FILE ||
-    source === IMAGE_SOURCE_TILED ||
-    (source === IMAGE_SOURCE_SEQUENCE && frame !== null)
-  );
-}
-
-/** The file Blender reads for an image at `path`: a UDIM image's first tile, or the frame `frame` of a sequence. */
-function shownFile(image: BlendStruct, path: string, frame: number | null): string {
-  if (packedFile(image)) return path;
-  const source = imageSource(image);
-  if (source === IMAGE_SOURCE_TILED) return tilePath(path, image.list("tiles")[0]?.number("tile_number") ?? 1001);
-  if (source === IMAGE_SOURCE_SEQUENCE && frame !== null) return sequencePath(path, frame);
-  return path;
-}
-
-/** The paths an image stores for one file, as a texture file holds them. */
-type StoredPaths = Pick<TextureFile, "relative" | "absolute">;
-
-/**
- * The stored path of the file the preview reads for an image, at `frame` for a sequence, with Blender's "//" relative
- * prefix removed, or the image's name when it has no path.
- */
-function imagePaths(image: BlendStruct, frame: number | null): StoredPaths {
-  const own = image.string("name") || image.string("filepath");
-  const folder = own.startsWith("//") ? `${relativePathFolder(image)}${own.slice(2)}` : own;
-  const stored = shownFile(image, folder, frame);
-  if (stored.startsWith("//")) return { relative: stored.slice(2), absolute: "" };
-  if (stored === "") return { relative: idName(image), absolute: "" };
-  return { relative: stored, absolute: stored };
-}
-
-/** The bytes of the file packed into an image, as a view of the file's bytes, and the block that holds them. */
-function packedData(file: BlendFile, image: BlendStruct): { block: BlendBlock; bytes: Uint8Array } | null {
-  const packed = packedFile(image);
-  if (!packed) return null;
-  const block = packed.target("data");
-  if (!block) return null;
-  const size = Math.min(Math.max(packed.number("size"), 0), block.size);
-  return { block, bytes: file.bytes.subarray(block.offset, block.offset + size) };
+function buildMesh(mesh: BlendMesh): Mesh {
+  return {
+    name: mesh.name,
+    geometryName: mesh.dataName,
+    positions: mesh.positions,
+    normals: mesh.normals,
+    uvs: mesh.uvs,
+    colors: mesh.colors,
+    skeleton: mesh.skin?.skeleton ?? null,
+    bindMatrix: mesh.skin?.bindMatrix ?? null,
+    joints: mesh.skin?.joints ?? null,
+    weights: mesh.skin?.weights ?? null,
+    indices: mesh.indices,
+    groups: mesh.groups,
+    morphTargets: mesh.morphTargets.map(({ name, defaultWeight, positions, normals }) => ({
+      name,
+      defaultWeight,
+      positions,
+      normals,
+    })),
+    sourceVertex: mesh.sourceVertex,
+    sourceVertexCount: mesh.sourceVertexCount,
+    topology: fanFingerprint(mesh),
+    restPositions: mesh.restPositions,
+    skinWeights: mesh.skin?.sourceWeights ?? null,
+  };
 }
 
 type FindFile = ImportRequest["findFile"];
@@ -169,86 +149,47 @@ function searchingOnce(request: ImportRequest): { findFile: FindFile; locateFile
   return { findFile, locateFile };
 }
 
-/**
- * An image's bytes: packed in the file, or found by the paths it stores, its first tile's for a UDIM image. Null for an
- * image that is not one file, such as a sequence, whose frame each Image Texture node picks.
- */
-async function imageBytes(file: BlendFile, image: BlendStruct, findFile: FindFile): Promise<Uint8Array | null> {
-  if (image.typeName !== "Image") return null;
-  const packed = packedData(file, image);
-  if (packed) return packed.bytes;
-  if (!readsFile(image, null)) return null;
-  const { relative, absolute } = imagePaths(image, null);
-  for (const path of new Set([relative, absolute])) {
-    const found = path === "" ? null : await findFile(path);
-    if (found) return found.bytes;
-  }
-  return null;
+/** The paths an image stores for one file, as a texture file holds them. */
+type StoredPaths = Pick<TextureFile, "relative" | "absolute">;
+
+function storedPaths(image: BlendImage): StoredPaths {
+  return { relative: image.path, absolute: image.relative ? "" : image.path };
 }
 
 /**
- * Whether every pixel of each image is gray, by the image's offset, for the images the check can tell. The images read
- * whole come first, so that samples never take the budget they need.
- */
-async function grayImages(
-  file: BlendFile,
-  candidates: readonly GrayCandidate[],
-  findFile: FindFile,
-): Promise<Map<number, boolean>> {
-  const gray = new Map<number, boolean>();
-  const budget = { bytes: GRAY_CHECK_BYTES };
-  const whole = candidates.filter((candidate) => candidate.read === "whole");
-  const sampled = candidates.filter((candidate) => candidate.read === "sample");
-  for (const { image, read } of [...whole, ...sampled]) {
-    const bytes = await imageBytes(file, image, findFile);
-    const limit = read === "sample" ? GRAY_SAMPLE_BYTES : undefined;
-    const known = bytes ? await isGrayImage(bytes, budget, limit) : null;
-    if (known !== null) gray.set(image.offset, known);
-  }
-  return gray;
-}
-
-/**
- * The texture files the materials use: one for each image file found through a relative path, however many Image
- * datablocks store a path to it and however they spell it, one for each other stored path, however it is spelled, and
- * one for each block of packed bytes, however many Image datablocks point at it. Absolute paths keep their own texture
- * files, so the textures note each of them. An image linked from another .blend file has none, since this file holds
- * only its name, unless the image was packed with its library.
+ * The texture files the materials use: one for each image file found through a relative path, however many images
+ * store a path to it and however they spell it, one for each other stored path, however it is spelled, and one for each
+ * image of packed bytes. Absolute paths keep their own texture files, so the textures note each of them.
  */
 class ImageFiles {
   readonly files: TextureFile[] = [];
   readonly #index = new Map<string, number>();
-  readonly #file: BlendFile;
+  readonly #images: readonly BlendImage[];
   readonly #locateFile: LocateFile;
 
-  constructor(file: BlendFile, locateFile: LocateFile) {
-    this.#file = file;
+  constructor(images: readonly BlendImage[], locateFile: LocateFile) {
+    this.#images = images;
     this.#locateFile = locateFile;
   }
 
-  async indexOf({ image, frame }: ImageUse): Promise<number | null> {
-    if (image.typeName !== "Image") return null;
-    const packed = packedFile(image);
-    if (!packed && !readsFile(image, frame)) return null;
-    const paths = imagePaths(image, frame);
-    if (packed) {
-      const data = packedData(this.#file, image);
-      const key = data ? `packed block ${data.block.index}` : `packed image ${image.offset}`;
-      return this.#add(key, paths, () => data?.bytes.slice() ?? null);
-    }
+  async indexOf(index: number): Promise<number | null> {
+    const image = this.#images[index];
+    if (!image || image.source === "none") return null;
+    const paths = storedPaths(image);
+    if (image.source === "packed") return this.#add(`packed image ${index}`, paths, image.packed);
     const spelled = `path ${normalizedPath(paths.relative)}`;
     const known = this.#index.get(spelled);
     if (known !== undefined) return known;
     const located = parseStoredPath(paths.relative).relative === null ? null : await this.#locateFile(paths.relative);
-    const index = this.#add(located === null ? spelled : `found ${located}`, paths, () => null);
-    this.#index.set(spelled, index);
-    return index;
+    const file = this.#add(located === null ? spelled : `found ${located}`, paths, null);
+    this.#index.set(spelled, file);
+    return file;
   }
 
-  #add(key: string, paths: StoredPaths, content: () => Uint8Array | null): number {
+  #add(key: string, paths: StoredPaths, content: Uint8Array | null): number {
     const known = this.#index.get(key);
     if (known !== undefined) return known;
-    this.files.push({ ...paths, linked: true, content: content() });
+    this.files.push({ ...paths, linked: true, content });
     this.#index.set(key, this.files.length - 1);
     return this.files.length - 1;
   }
@@ -261,32 +202,30 @@ function unsetSampling(key: TextureRefKey): { alpha: TextureAlpha; colorSpace: T
 }
 
 /** How a material samples an image for a key: its UV set and wrap, with its alpha and color space where not the key's. */
-function samplingOf(use: ImageUse, key: TextureRefKey, uvMaps: MaterialUvMaps | undefined): TextureSampling {
-  const sampling: TextureSampling = {
-    uvSet: uvSetFor(uvMaps, use.uvMap),
-    wrapU: use.wrap,
-    wrapV: use.wrap,
-    transform: use.transform,
-  };
+function samplingOf(ref: BlendTextureRef, key: TextureRefKey): TextureSampling {
+  const sampling: TextureSampling = { uvSet: ref.uvSet, wrapU: ref.wrapU, wrapV: ref.wrapV, transform: ref.transform };
   const unset = unsetSampling(key);
-  if (use.alpha !== unset.alpha) sampling.alpha = use.alpha;
-  if (use.colorSpace !== null && use.colorSpace !== unset.colorSpace) sampling.colorSpace = use.colorSpace;
+  if (ref.alpha !== unset.alpha) sampling.alpha = ref.alpha;
+  if (ref.colorSpace !== unset.colorSpace) sampling.colorSpace = ref.colorSpace;
   return sampling;
 }
 
-async function buildMaterials(scene: BuiltScene, images: ImageFiles, textures: TextureResolver): Promise<Material[]> {
+async function buildMaterials(
+  materials: readonly BlendMaterial[],
+  images: ImageFiles,
+  textures: TextureResolver,
+): Promise<Material[]> {
   const result: Material[] = [];
-  for (const [index, draft] of scene.materials.entries()) {
-    const uvMaps = scene.materialUvs[index];
+  for (const source of materials) {
     const missingTextures: Partial<Record<TextureSlot, string>> = {};
     const missingTextureSampling: Partial<Record<TextureSlot, TextureSampling>> = {};
-    const ref = async (use: ImageUse | null, key: TextureRefKey): Promise<TextureRef | null> => {
-      if (!use) return null;
-      const file = await images.indexOf(use);
+    const ref = async (blendRef: BlendTextureRef | null, key: TextureRefKey): Promise<TextureRef | null> => {
+      if (!blendRef) return null;
+      const file = await images.indexOf(blendRef.image);
       if (file === null) return null;
       const slot = TEXTURE_SLOTS.find((candidate) => TEXTURE_SLOT_KEYS[candidate] === key);
-      const sampling = samplingOf(use, key, uvMaps);
-      const texture = await textures.resolve(file, draft.name, slot);
+      const sampling = samplingOf(blendRef, key);
+      const texture = await textures.resolve(file, source.name, slot);
       if (texture !== null) return { texture, ...sampling };
       if (slot) {
         missingTextures[slot] = textures.storedPath(file);
@@ -294,39 +233,35 @@ async function buildMaterials(scene: BuiltScene, images: ImageFiles, textures: T
       }
       return null;
     };
-    const baseColorTexture = await ref(draft.baseColorImage, "baseColorTexture");
-    const metallicRoughnessTexture = await ref(draft.metallicRoughnessImage, "metallicRoughnessTexture");
-    const emissiveTexture = await ref(draft.emissiveImage, "emissiveTexture");
-    const missingPacked = draft.metallicRoughnessImage !== null && !metallicRoughnessTexture;
-    const colors = scene.materialColors[index];
-    const [red, green, blue, alpha] = draft.baseColor;
+    const baseColorTexture = await ref(source.baseColorTexture, "baseColorTexture");
+    const metallicRoughnessTexture = await ref(source.metallicRoughnessTexture, "metallicRoughnessTexture");
+    const emissiveTexture = await ref(source.emissiveTexture, "emissiveTexture");
+    const missingPacked = source.metallicRoughnessTexture !== null && !metallicRoughnessTexture;
+    const { baseColor: baseColorUse, emissive: emissiveUse } = source.vertexColors;
+    const [red, green, blue, alpha] = source.baseColor;
     const material: Material = {
-      name: draft.name,
+      name: source.name,
       baseColor:
-        colors?.baseColor === "black"
-          ? [0, 0, 0, alpha]
-          : baseColorTexture
-            ? [red, green, blue, alpha]
-            : draft.baseColorImage
-              ? [UNTEXTURED, UNTEXTURED, UNTEXTURED, alpha]
-              : draft.baseColor,
+        baseColorUse === "black" || baseColorTexture || !source.baseColorTexture
+          ? [red, green, blue, alpha]
+          : [UNTEXTURED, UNTEXTURED, UNTEXTURED, alpha],
       baseColorTexture,
-      metallic: missingPacked ? 0 : draft.metallic,
-      roughness: missingPacked ? UNTEXTURED_ROUGHNESS : draft.roughness,
+      metallic: missingPacked ? 0 : source.metallic,
+      roughness: missingPacked ? UNTEXTURED_ROUGHNESS : source.roughness,
       metallicRoughnessTexture,
-      roughnessTexture: await ref(draft.roughnessImage, "roughnessTexture"),
-      metalnessTexture: await ref(draft.metalnessImage, "metalnessTexture"),
-      normalTexture: await ref(draft.normalImage, "normalTexture"),
-      normalScale: draft.normalScale,
+      roughnessTexture: await ref(source.roughnessTexture, "roughnessTexture"),
+      metalnessTexture: await ref(source.metalnessTexture, "metalnessTexture"),
+      normalTexture: await ref(source.normalTexture, "normalTexture"),
+      normalScale: source.normalScale,
       occlusionTexture: null,
-      emissive: (!emissiveTexture && draft.emissiveImage) || colors?.emissive === "black" ? [0, 0, 0] : draft.emissive,
+      emissive: !emissiveTexture && source.emissiveTexture ? [0, 0, 0] : source.emissive,
       emissiveTexture,
-      alphaMode: draft.alphaMode,
-      alphaCutoff: draft.alphaCutoff,
-      doubleSided: draft.doubleSided,
+      alphaMode: source.alphaMode,
+      alphaCutoff: source.alphaCutoff,
+      doubleSided: source.doubleSided,
     };
-    if (colors?.baseColor === "colors" || colors?.emissive === "colors") {
-      material.vertexColors = { baseColor: colors.baseColor === "colors", emissive: colors.emissive === "colors" };
+    if (baseColorUse === "multiply" || emissiveUse === "multiply") {
+      material.vertexColors = { baseColor: baseColorUse === "multiply", emissive: emissiveUse === "multiply" };
     }
     if (Object.keys(missingTextures).length > 0) {
       material.missingTextures = missingTextures;
@@ -338,7 +273,7 @@ async function buildMaterials(scene: BuiltScene, images: ImageFiles, textures: T
 }
 
 /** The scene's clips, each with the file's frame at its frame 0 where the file's frames step one to a clip frame. */
-function buildClipList(clips: readonly ParsedClip[], fps: number): Clip[] {
+function buildClipList(clips: readonly BlendClip[], fps: number): Clip[] {
   const names = clipNames(clips.map((clip) => clip.name));
   const display = displayNames(names);
   return clips.map((clip, index) => {
@@ -351,12 +286,14 @@ function buildClipList(clips: readonly ParsedClip[], fps: number): Clip[] {
       duration: clip.duration,
       frameCount,
       tracks: clip.tracks,
-      keyTimes: mergeKeyTimes(clip.curveTimes),
-      keyedEveryFrame: isKeyedEveryFrame(clip.curveTimes, fps, frameCount),
+      keyTimes: mergeKeyTimes(clip.curveKeyTimes),
+      keyedEveryFrame: isKeyedEveryFrame(clip.curveKeyTimes, fps, frameCount),
       ...(step === 1 ? { sourceStartFrame: start } : {}),
     };
   });
 }
+
+type DraftWarning = Pick<ImportWarning, "code" | "subject" | "message" | "detail">;
 
 function unique(texts: readonly string[]): string[] {
   return [...new Set(texts)];
@@ -366,8 +303,8 @@ function unique(texts: readonly string[]): string[] {
  * One warning for each code and subject, since a review keeps one warning per id: several, such as two ways a mesh
  * deforms differently, join their distinct messages and details.
  */
-function mergeWarnings(warnings: readonly BlendWarning[]): BlendWarning[] {
-  const groups = new Map<string, BlendWarning[]>();
+function mergeWarnings(warnings: readonly DraftWarning[]): DraftWarning[] {
+  const groups = new Map<string, DraftWarning[]>();
   for (const warning of warnings) {
     const key = JSON.stringify([warning.code, warning.subject.kind, warning.subject.name]);
     groups.set(key, [...(groups.get(key) ?? []), warning]);
@@ -377,13 +314,13 @@ function mergeWarnings(warnings: readonly BlendWarning[]): BlendWarning[] {
     if (!first) return [];
     if (rest.length === 0) return [first];
     const details = group.flatMap((warning) => (warning.detail === undefined ? [] : [warning.detail]));
-    const merged: BlendWarning = { ...first, message: unique(group.map((warning) => warning.message)).join("; ") };
+    const merged: DraftWarning = { ...first, message: unique(group.map((warning) => warning.message)).join("; ") };
     if (details.length > 0) merged.detail = unique(details).join("; ");
     return [merged];
   });
 }
 
-function toImportWarning(warning: BlendWarning, fileName: string): ImportWarning {
+function toImportWarning(warning: DraftWarning, fileName: string): ImportWarning {
   const subject =
     warning.subject.kind === "file" && warning.subject.name === ""
       ? { kind: "file" as const, name: fileName }
@@ -401,126 +338,74 @@ function toImportWarning(warning: BlendWarning, fileName: string): ImportWarning
   );
 }
 
-function exporterOf(file: BlendFile): SceneDescription["source"]["exporter"] {
-  return { name: "Blender", version: `${Math.floor(file.version / 100)}.${file.version % 100}` };
+/** Arcue's error for a file the reader refuses. */
+function arcueError(request: ImportRequest, error: BlendReadError): ArcueError {
+  const { fileName } = request;
+  const cause = error.cause ?? error;
+  switch (error.reason) {
+    case "unreadable":
+      return new ArcueError("invalid-input", `${fileName} is not a readable Blender file: ${error.detail}`, { cause });
+    case "too-old":
+      return new ArcueError(
+        "invalid-input",
+        `${fileName} was saved by Blender ${error.detail}. Arcue opens files from Blender 2.80 on; save it in a newer Blender.`,
+      );
+    case "too-deep":
+      return new ArcueError("invalid-input", `${fileName} ${error.detail}, more than Arcue can show.`, { cause });
+    case "failed":
+      return new ArcueError("internal", `Arcue could not read the scene in ${fileName}: ${error.detail}`, { cause });
+  }
 }
 
-function unreadable(request: ImportRequest, error: BlendParseError): ArcueError {
-  return new ArcueError("invalid-input", `${request.fileName} is not a readable Blender file: ${error.message}`, {
-    cause: error,
-  });
-}
-
-async function parse(request: ImportRequest): Promise<BlendFile> {
+async function readScene(request: ImportRequest, findFile: FindFile): Promise<BlendScene> {
   try {
-    return readBlendFile(await decompressBlend(request.bytes));
+    return await readBlend(request.bytes, { readImage: async (path) => (await findFile(path))?.bytes ?? null });
   } catch (error) {
-    if (error instanceof BlendParseError) throw unreadable(request, error);
+    if (error instanceof BlendReadError) throw arcueError(request, error);
     throw error;
   }
 }
 
-/** Blender's object display types that draw no surface: Bounds, a box around the object, and Wire, its edges. */
-const DISPLAY_BOUNDS = 1;
-const DISPLAY_WIRE = 2;
-
-/**
- * Whether Blender hides the mesh or draws no surface for it: hidden with the eye in the view layer, an instancer that
- * shows only its instances, or an object displayed as bounds or wire, as cages and cutters often are.
- */
-function hiddenInBlender(scene: BuiltScene, mesh: number): boolean {
-  const object = scene.meshRecords[mesh]?.object;
-  if (object === undefined) return false;
-  const display = object.struct.number("dt");
-  return object.hidden || object.instancerHidden || display === DISPLAY_BOUNDS || display === DISPLAY_WIRE;
-}
-
 /** Parts whose every mesh Blender hides start hidden, so the view matches Blender's. */
-function hideBlenderHiddenParts(parts: ScenePart[], scene: BuiltScene): ScenePart[] {
+function hideBlenderHiddenParts(parts: ScenePart[], scene: BlendScene): ScenePart[] {
+  const hiddenMeshes = new Set(scene.nodes.flatMap((node) => (node.hidden && node.mesh !== null ? [node.mesh] : [])));
   return parts.map((part) => {
     const meshes = part.levels.flatMap((level) => level.meshes);
-    const hidden = meshes.length > 0 && meshes.every((mesh) => hiddenInBlender(scene, mesh));
+    const hidden = meshes.length > 0 && meshes.every((mesh) => hiddenMeshes.has(mesh));
     return hidden ? { ...part, hiddenByDefault: true } : part;
   });
 }
 
-/** Blender 2.80 brought collections and view layers, which the scene is read from. */
-const OLDEST_VERSION = 280;
-
-/** What `read` gives, with the errors of reading the file's scene as Arcue's errors. */
-function readingScene<T>(request: ImportRequest, read: () => T): T {
-  try {
-    return read();
-  } catch (error) {
-    if (error instanceof BlendParseError) throw unreadable(request, error);
-    if (error instanceof BlendLimitError) {
-      throw new ArcueError("invalid-input", `${request.fileName} ${error.message}, more than Arcue can show.`, {
-        cause: error,
-      });
-    }
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, {
-      cause: error,
-    });
-  }
-}
-
-function readScene(
-  file: BlendFile,
-  contents: SceneContents,
-  isGray: GrayCheck,
-): { scene: BuiltScene; clips: ParsedClip[] } {
-  const actions = readActions(file);
-  const scene = buildScene(file, isGray, contents, actions);
-  return { scene, clips: buildClips(scene, actions, scene.warnings) };
-}
-
 async function importBlend(request: ImportRequest): Promise<SceneDescription> {
-  const file = await parse(request);
-  if (file.version < OLDEST_VERSION) {
-    const saved = exporterOf(file)?.version ?? "an old version";
-    throw new ArcueError(
-      "invalid-input",
-      `${request.fileName} was saved by Blender ${saved}. Arcue opens files from Blender 2.80 on; save it in a newer Blender.`,
-    );
-  }
   const { findFile, locateFile } = searchingOnce(request);
-  const contents = readingScene(request, () => collectSceneObjects(file));
-  const candidates = readingScene(request, () => grayCandidates(file, contents));
-  const gray = await grayImages(file, candidates, findFile);
-  const { scene, clips } = readingScene(request, () =>
-    readScene(file, contents, (image) => gray.get(image.offset) ?? null),
-  );
-  const images = new ImageFiles(file, locateFile);
+  const scene = await readScene(request, findFile);
+  const images = new ImageFiles(scene.images, locateFile);
   const textures = createTextureResolver(images.files, findFile, locateFile);
-  const materials = await buildMaterials(scene, images, textures);
+  const materials = await buildMaterials(scene.materials, images, textures);
   const nodes = buildNodes(scene);
+  const meshes = scene.meshes.map(buildMesh);
   const parts = hideBlenderHiddenParts(describeParts(nodes), scene);
-  const warnings = mergeWarnings([
-    ...scene.warnings,
-    ...skinMotionWarnings(scene, clips),
-    ...restPositionWarnings(scene, clips),
-    ...driverWarnings(scene),
-    ...unshownUvSetWarnings(materials),
-  ]).map((warning) => toImportWarning(warning, request.fileName));
+  const warnings = mergeWarnings([...scene.warnings, ...unshownUvSetWarnings(materials)]).map((warning) =>
+    toImportWarning(warning, request.fileName),
+  );
   const shared = shareFoundTextures(textures.textures, materials);
   return {
     source: {
       format: "blend",
-      exporter: exporterOf(file),
+      exporter: { name: "Blender", version: scene.blenderVersion },
       fps: scene.fps,
       originalSpace: { axes: { right: "+X", up: "+Z", front: "-Y" }, unitMeters: scene.unitScale },
       conversion: { scale: scene.unitScale, rotation: MINUS_90_ABOUT_X },
       warnings: [...warnings, ...joinWarningsById(await textures.warnings())],
     },
     nodes,
-    meshes: scene.meshes,
+    meshes,
     skeletons: scene.skeletons,
     materials: shared.materials,
     textures: shared.textures,
-    clips: buildClipList(clips, scene.fps),
+    clips: buildClipList(scene.clips, scene.fps),
     parts,
-    bounds: defaultViewBounds(scene.meshes, parts),
+    bounds: defaultViewBounds(meshes, parts),
   };
 }
 

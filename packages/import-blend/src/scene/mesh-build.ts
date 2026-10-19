@@ -1,8 +1,7 @@
-import type { MaterialGroup, MorphTarget, SkinWeights, TopologyFingerprint, UvSet } from "@arcue/scene";
-import { topologyFingerprint } from "@arcue/scene";
 import { mix, randomKey } from "../blend/file";
 import type { Mat4 } from "../math";
 import { transformDirection } from "../math";
+import type { MaterialGroup, MorphTarget, SkinWeights, UvSet } from "../types";
 import { MAX_UV_SETS, type MeshData } from "./mesh-data";
 import { cornerNormals, freeCornerNormals } from "./normals";
 import { shapeOffsets } from "./shape-keys";
@@ -28,11 +27,10 @@ export interface BuiltMesh {
   indices: Uint32Array;
   sourceVertex: Uint32Array;
   sourceVertexCount: number;
-  /**
-   * The fingerprint of the mesh's faces: each face fanned from its first corner, in the triangles' order, so that it
-   * does not change with the positions that pick Blender's split, and triangle n stays in the face it is in.
-   */
-  topology: TopologyFingerprint;
+  /** The file's faces as runs of file vertex numbers. */
+  faces: { offsets: Uint32Array; vertices: Uint32Array };
+  /** The face each triangle comes from; a face's triangles are consecutive, in the order Blender splits it. */
+  triangleFaces: Uint32Array;
   /** Groups with the material slot each uses, before slots become scene materials. */
   groups: MaterialGroup[];
   morphTargets: MorphTarget[];
@@ -328,25 +326,6 @@ function sortBySlot(
   return { order, faceAt, groups };
 }
 
-/** The fingerprint of each face fanned from its first corner, triangle by triangle in the order the mesh draws them. */
-function fanFingerprint(mesh: MeshData, faceTriangles: Uint32Array, drawn: DrawOrder): TopologyFingerprint {
-  const { order, faceAt } = drawn;
-  const indices = new Uint32Array(order.length * 3);
-  for (let position = 0; position < order.length; position++) {
-    const face = faceAt[position] ?? 0;
-    const start = mesh.faceOffsets[face] ?? 0;
-    const fan = (order[position] ?? 0) - (faceTriangles[face] ?? 0);
-    indices[position * 3] = mesh.cornerVerts[start] ?? 0;
-    indices[position * 3 + 1] = mesh.cornerVerts[start + fan + 1] ?? 0;
-    indices[position * 3 + 2] = mesh.cornerVerts[start + fan + 2] ?? 0;
-  }
-  return topologyFingerprint({
-    indices,
-    sourceVertex: Uint32Array.from({ length: mesh.vertexCount }, (_, vertex) => vertex),
-    sourceVertexCount: mesh.vertexCount,
-  });
-}
-
 /** The bits of 32-bit floats, for hashing them. */
 function floatBits(values: Float32Array): Uint32Array {
   return new Uint32Array(values.buffer, values.byteOffset, values.length);
@@ -609,7 +588,7 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     for (let k = 0; k < 3; k++) indices[position * 3 + k] = renderedOfCorner[corners[triangle * 3 + k] ?? 0] ?? 0;
   }
 
-  const morphTargets = morphs.map((target, index) => {
+  const morphTargets = morphs.map((target, index): MorphTarget => {
     const values = new Float32Array(count * 3);
     const normalOffsets = new Float32Array(count * 3);
     const shading = shapedNormalOffsets[index];
@@ -622,7 +601,14 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
       const from = shading && r * 3 >= shading.length ? splitFrom.get(r) : undefined;
       if (from !== undefined) normalOffsets.copyWithin(r * 3, from * 3, from * 3 + 3);
     }
-    return { name: target.name, defaultWeight: target.defaultWeight, positions: values, normals: normalOffsets };
+    const [min, max] = target.range;
+    return {
+      name: target.name,
+      defaultWeight: target.defaultWeight,
+      range: [min, max],
+      positions: values,
+      normals: normalOffsets,
+    };
   });
 
   let skin: BuiltMesh["skin"] = null;
@@ -655,7 +641,8 @@ export function buildMesh(mesh: MeshData, options: BuildOptions): BuiltMesh {
     indices,
     sourceVertex: source,
     sourceVertexCount: mesh.vertexCount,
-    topology: fanFingerprint(mesh, faceTriangles, drawn),
+    faces: { offsets: Uint32Array.from(mesh.faceOffsets), vertices: Uint32Array.from(mesh.cornerVerts) },
+    triangleFaces: drawn.faceAt,
     groups,
     morphTargets,
     morphKeys: morphs.map((target) => target.name),
