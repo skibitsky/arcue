@@ -1,3 +1,12 @@
+import type {
+  BlendClip,
+  BlendImage,
+  BlendMaterial,
+  BlendMesh,
+  BlendScene,
+  TextureRef as BlendTextureRef,
+} from "@arcue/blend";
+import { BlendReadError, readBlend } from "@arcue/blend";
 import { ArcueError } from "@arcue/protocol";
 import type {
   Clip,
@@ -18,7 +27,6 @@ import type {
   TextureResolver,
   TextureSampling,
   TextureSlot,
-  TopologyFingerprint,
 } from "@arcue/scene";
 import {
   buildNodePaths,
@@ -34,20 +42,10 @@ import {
   parseStoredPath,
   TEXTURE_SLOT_KEYS,
   TEXTURE_SLOTS,
-  topologyFingerprint,
   unshownUvSetWarnings,
 } from "@arcue/scene";
-import { BlendReadError } from "./blend/errors";
-import { readBlend } from "./read-blend";
 import { joinWarningsById, normalizedPath, shareFoundTextures } from "./texture-files";
-import type {
-  BlendClip,
-  BlendImage,
-  BlendMaterial,
-  BlendMesh,
-  BlendScene,
-  TextureRef as BlendTextureRef,
-} from "./types";
+import { fanFingerprint } from "./topology";
 
 /** Blender's own rotation for Z-up content in a Y-up scene: −90° about X. */
 const MINUS_90_ABOUT_X: [number, number, number, number] = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
@@ -68,29 +66,6 @@ function buildNodes(scene: BlendScene): SceneNode[] {
     scale: node.scale,
     mesh: node.mesh,
   }));
-}
-
-/**
- * The fingerprint of a mesh's faces: each face fanned from its first corner, in the triangles' order, so that it does
- * not change with the positions that pick Blender's split, and triangle n stays in the face it is in.
- */
-function fanFingerprint(mesh: BlendMesh): TopologyFingerprint {
-  const { offsets, vertices } = mesh.faces;
-  const indices = new Uint32Array(mesh.triangleFaces.length * 3);
-  let fan = 0;
-  for (let position = 0; position < mesh.triangleFaces.length; position++) {
-    const face = mesh.triangleFaces[position] ?? 0;
-    fan = position > 0 && mesh.triangleFaces[position - 1] === face ? fan + 1 : 0;
-    const start = offsets[face] ?? 0;
-    indices[position * 3] = vertices[start] ?? 0;
-    indices[position * 3 + 1] = vertices[start + fan + 1] ?? 0;
-    indices[position * 3 + 2] = vertices[start + fan + 2] ?? 0;
-  }
-  return topologyFingerprint({
-    indices,
-    sourceVertex: Uint32Array.from({ length: mesh.sourceVertexCount }, (_, vertex) => vertex),
-    sourceVertexCount: mesh.sourceVertexCount,
-  });
 }
 
 function buildMesh(mesh: BlendMesh): Mesh {

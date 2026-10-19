@@ -1,5 +1,14 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
+import { parsePosePath, readActions } from "@arcue/blend/internal/anim/actions";
+import { evaluateFCurve } from "@arcue/blend/internal/anim/fcurve";
+import { decompressBlend } from "@arcue/blend/internal/blend/decompress";
+import { readBlendFile } from "@arcue/blend/internal/blend/file";
+import { datablocks, idName } from "@arcue/blend/internal/blend/ids";
+import { toSceneAxes } from "@arcue/blend/internal/math";
+import { poseMatrices } from "@arcue/blend/internal/scene/armature";
+import { buildScene } from "@arcue/blend/internal/scene/build";
+import { cloneValues, setTransformProperty } from "@arcue/blend/internal/scene/transforms";
 import { fbxImporter } from "@arcue/import-fbx";
 import type { Clip, Mesh, SceneDescription } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
@@ -28,16 +37,7 @@ import {
   strongestInfluences,
   worldMatrices,
 } from "../test/geometry";
-import { parsePosePath, readActions } from "./anim/actions";
-import { evaluateFCurve } from "./anim/fcurve";
-import { decompressBlend } from "./blend/decompress";
-import { readBlendFile } from "./blend/file";
-import { datablocks, idName } from "./blend/ids";
 import { blendImporter } from "./importer";
-import { toSceneAxes } from "./math";
-import { poseMatrices } from "./scene/armature";
-import { buildScene } from "./scene/build";
-import { cloneValues, setTransformProperty } from "./scene/transforms";
 
 const TOLERANCE = 1e-4;
 /**

@@ -1,12 +1,12 @@
+import { IdCode, NLASTRIP_MUTED } from "@arcue/blend/internal/anim/actions";
+import { Interpolation } from "@arcue/blend/internal/anim/fcurve";
+import { CustomDataType } from "@arcue/blend/internal/scene/mesh-data";
+import { ModifierType } from "@arcue/blend/internal/scene/modifiers";
+import { ArmatureDeformFlag, ObjectType } from "@arcue/blend/internal/scene/objects";
+import type { BlockDefinition, FieldValue, FileDefinition } from "@arcue/blend/test/synthetic";
+import { writeBlend } from "@arcue/blend/test/synthetic";
 import { describe, expect, it } from "vitest";
 import { importBytes } from "../test/fixtures";
-import type { BlockDefinition, FieldValue, FileDefinition } from "../test/synthetic";
-import { writeBlend } from "../test/synthetic";
-import { IdCode, NLASTRIP_MUTED } from "./anim/actions";
-import { Interpolation } from "./anim/fcurve";
-import { CustomDataType } from "./scene/mesh-data";
-import { ModifierType } from "./scene/modifiers";
-import { ArmatureDeformFlag, ObjectType } from "./scene/objects";
 
 const STRUCTS: FileDefinition["structs"] = [
   {

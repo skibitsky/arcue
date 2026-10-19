@@ -5,7 +5,7 @@ import { litMaterial } from "./materials";
 
 /**
  * Where Blender's Point Mapping node with location (0.25, 0.1), Z rotation 0.3 and scale (2, 3) sends UVs, as Cycles
- * bakes them for the import-blend shading fixture's MappingPoint material: [u, v, x, y].
+ * bakes them for the MappingPoint material of the Blender reader's shading fixture: [u, v, x, y].
  */
 const BLENDER_POINT_MAPPING: readonly [number, number, number, number][] = [
   [0.12525, 0.1255, 0.378048, 0.533712],
