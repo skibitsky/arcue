@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import {
   assemblePlugin,
   codexManifest,
   ICON_PATH,
+  lf,
   mainMarketplaceManifest,
   PLUGIN,
   PLUGIN_BRANCH,
@@ -15,6 +16,7 @@ import {
 
 const fromRoot = (path: string) => fileURLToPath(new URL(`../../../${path}`, import.meta.url));
 const skill = fromRoot("skills/arcue");
+const launcher = fromRoot("apps/plugin/launcher");
 
 let temp: string;
 let cli: string;
@@ -45,6 +47,7 @@ const sources = () => ({
   icon: fromRoot("assets/branding/png/arcue-256.png"),
   readme: fromRoot("apps/plugin/README.md"),
   license: fromRoot("LICENSE"),
+  launcher,
 });
 
 async function readJson(path: string): Promise<Record<string, unknown>> {
@@ -103,15 +106,53 @@ describe("assemblePlugin", () => {
       const relative = file.slice(skill.length);
       expect(await readFile(join(copied, relative), "utf8"), relative).toBe(await readFile(file, "utf8"));
     }
-    expect((await readdir(join(copied, "scripts"))).sort()).toEqual(["arcue.js", "import-worker.js", "web"]);
+    expect((await readdir(join(copied, "scripts"))).sort()).toEqual([
+      "arcue",
+      "arcue-node.cmd",
+      "arcue-setup.cmd",
+      "arcue.js",
+      "import-worker.js",
+      "node-sha256sums.txt",
+      "web",
+    ]);
     expect((await readdir(join(copied, "scripts", "web"), { recursive: true })).sort()).toEqual([
       "assets",
       "assets/index.js",
       "index.html",
     ]);
     expect(await readdir(join(out, PLUGIN_PATH))).toEqual(
-      expect.arrayContaining(["LICENSE", "README.md", "assets", "skills", ".claude-plugin", ".codex-plugin"]),
+      expect.arrayContaining([
+        "LICENSE",
+        "README.md",
+        "assets",
+        "skills",
+        ".claude-plugin",
+        ".codex-plugin",
+        ".gitattributes",
+      ]),
     );
+  });
+
+  it("ships the shell launcher executable with LF endings and the Windows launchers with CRLF", async () => {
+    await assemblePlugin(sources(), out);
+
+    const scripts = join(out, PLUGIN_PATH, "skills", PLUGIN.name, "scripts");
+    expect((await stat(join(scripts, "arcue"))).mode & 0o111).not.toBe(0);
+    const shell = await readFile(join(scripts, "arcue"), "utf8");
+    expect(shell).not.toContain("\r");
+    expect(shell).toBe(lf(await readFile(join(launcher, "arcue"), "utf8")));
+    expect(await readFile(join(scripts, "node-sha256sums.txt"), "utf8")).not.toContain("\r");
+    const node = await readFile(join(scripts, "arcue-node.cmd"));
+    const setup = await readFile(join(scripts, "arcue-setup.cmd"));
+    expect(node.toString("latin1")).not.toMatch(/[^\r]\n|^\n/);
+    expect(node.includes("\r\n")).toBe(true);
+    expect(setup.equals(node)).toBe(true);
+  });
+
+  it("keeps the plugin's bytes when hosts check the branch out", async () => {
+    await assemblePlugin(sources(), out);
+
+    expect(await readFile(join(out, PLUGIN_PATH, ".gitattributes"), "utf8")).toBe("* -text\n");
   });
 
   it("writes only regular files, as Anthropic's plugin directory requires", async () => {
@@ -139,6 +180,43 @@ describe("assemblePlugin", () => {
     await rm(join(web, "index.html"));
 
     await expect(assemblePlugin(sources(), out)).rejects.toThrow("pnpm --filter @arcue/web build:local");
+  });
+
+  it("asks for the launcher when it is missing", async () => {
+    const copy = join(temp, "launcher");
+    await cp(launcher, copy, { recursive: true });
+    await rm(join(copy, "arcue"));
+
+    await expect(assemblePlugin({ ...sources(), launcher: copy }, out)).rejects.toThrow(`${copy} has no arcue.`);
+  });
+
+  it("refuses Node pins that do not parse", async () => {
+    const copy = join(temp, "launcher");
+    await cp(launcher, copy, { recursive: true });
+    const pins = join(copy, "node-sha256sums.txt");
+    await writeFile(pins, (await readFile(pins, "utf8")).slice(1));
+
+    await expect(assemblePlugin({ ...sources(), launcher: copy }, out)).rejects.toThrow("pin-node");
+  });
+
+  it("refuses an arcue-node.cmd that is not ASCII", async () => {
+    const copy = join(temp, "launcher");
+    await cp(launcher, copy, { recursive: true });
+    const cmd = join(copy, "arcue-node.cmd");
+    await writeFile(cmd, `${await readFile(cmd, "utf8")}rem caf\u00e9\r\n`);
+
+    await expect(assemblePlugin({ ...sources(), launcher: copy }, out)).rejects.toThrow("arcue-node.cmd must be ASCII");
+  });
+
+  it("refuses a command line build that holds a file named like a launcher or node", async () => {
+    for (const name of ["arcue", "node", "node.exe"]) {
+      await writeFile(join(cli, name), "");
+
+      await expect(assemblePlugin(sources(), out), name).rejects.toThrow(
+        `${cli} has ${name}, which the plugin's scripts folder must not hold.`,
+      );
+      await rm(join(cli, name));
+    }
   });
 });
 

@@ -7,7 +7,8 @@
   "scripts": {
     "build": "pnpm --filter @arcue/cli build && pnpm --filter @arcue/web build:local && node scripts/build.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test:e2e": "pnpm build && playwright test"
+    "test:e2e": "pnpm build && playwright test",
+    "pin-node": "node scripts/pin-node.ts"
   },
   "devDependencies": {
     "@arcue/protocol": "workspace:*",

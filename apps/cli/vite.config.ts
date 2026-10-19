@@ -9,7 +9,7 @@ export default defineConfig({
   build: {
     ssr: true,
     outDir: "dist",
-    target: "node22",
+    target: "node24",
     rolldownOptions: {
       input: {
         arcue: "src/bin.ts",
