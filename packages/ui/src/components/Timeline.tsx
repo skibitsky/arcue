@@ -18,7 +18,7 @@ import {
 } from "../store/timeline";
 import { clipGroups } from "../store/view-files";
 import type { WorkspaceStore } from "../store/workspace-store";
-import { IconButton, Tip } from "./controls";
+import { IconButton, Tip, useQuietFocusReturn } from "./controls";
 import { Icon } from "./Icon";
 
 const REST_VALUE = "";
@@ -106,11 +106,18 @@ function ClipPicker({ store, session, clip }: { store: WorkspaceStore; session: 
   const restCount = counts.get(null) ?? 0;
   const name = clip?.displayName ?? "Rest pose";
   const grouped = groups.length > 1 || groups.some((group) => group.removable);
+  const quietReturn = useQuietFocusReturn();
   return (
     <DropdownMenu.Root modal={false}>
       <Tip label="Clip">
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="clip-btn" aria-label={`Clip: ${name}`} disabled={!scene}>
+          <button
+            type="button"
+            className="clip-btn"
+            aria-label={`Clip: ${name}`}
+            disabled={!scene}
+            onFocus={quietReturn.onFocus}
+          >
             <Icon name="film" />
             <span className="clip-name">{name}</span>
             {clip ? <span className="clip-len">{lastFrame(clip)} f</span> : null}
@@ -119,7 +126,14 @@ function ClipPicker({ store, session, clip }: { store: WorkspaceStore; session: 
         </DropdownMenu.Trigger>
       </Tip>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className="menu" side="top" align="start" sideOffset={6} collisionPadding={8}>
+        <DropdownMenu.Content
+          className="menu"
+          side="top"
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+          onCloseAutoFocus={quietReturn.onCloseAutoFocus}
+        >
           <DropdownMenu.RadioGroup
             value={clip?.name ?? REST_VALUE}
             onValueChange={(value) => session.setClip(value === REST_VALUE ? null : value)}
@@ -195,17 +209,30 @@ function MenuItem({ value, label, count, detail }: { value: string; label: strin
 
 function SpeedMenu({ session, disabled }: { session: AssetSession; disabled: boolean }) {
   const speed = useSelect(session.state, (state) => state.speed);
+  const quietReturn = useQuietFocusReturn();
   return (
     <DropdownMenu.Root modal={false}>
       <Tip label="Playback speed">
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="speed" aria-label={`Playback speed: ${speed}×`} disabled={disabled}>
+          <button
+            type="button"
+            className="speed"
+            aria-label={`Playback speed: ${speed}×`}
+            disabled={disabled}
+            onFocus={quietReturn.onFocus}
+          >
             {speed}×
           </button>
         </DropdownMenu.Trigger>
       </Tip>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className="menu menu-narrow" side="top" align="start" sideOffset={6}>
+        <DropdownMenu.Content
+          className="menu menu-narrow"
+          side="top"
+          align="start"
+          sideOffset={6}
+          onCloseAutoFocus={quietReturn.onCloseAutoFocus}
+        >
           <DropdownMenu.RadioGroup value={String(speed)} onValueChange={(value) => session.setSpeed(Number(value))}>
             {SPEEDS.map((option) => (
               <MenuItem key={option} value={String(option)} label={`${option}×`} />

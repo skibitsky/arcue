@@ -191,6 +191,71 @@ describe("Workspace", () => {
     expect(screen.getByText("Copied 3 comments as round 4")).toBeTruthy();
   });
 
+  it("follows up on a sent comment from History without marking it resolved", async () => {
+    const { session, client } = await renderStone();
+    await act(async () => {
+      await session.copyPrompt();
+      await flush();
+    });
+    const user = userEvent.setup();
+    const panel = screen.getByRole("complementary", { name: "Comments" });
+    const row = within(panel)
+      .getByRole("button", { name: /^Round 4: The thumb tip/ })
+      .closest("li");
+    if (!row) throw new Error("The sent comment has no History row.");
+    const actions = within(row).getAllByRole("button").slice(1);
+    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Mark resolved",
+      "Reopen with a follow-up",
+    ]);
+
+    await user.click(within(row).getByRole("button", { name: "Reopen with a follow-up" }));
+    const text = () =>
+      within(screen.getByRole("form", { name: /^Comment/ })).getByRole("textbox", { name: "Comment text" });
+    await user.type(text(), "{Escape}");
+    expect(screen.queryByRole("form", { name: /^Comment/ })).toBeNull();
+    expect(within(row).getByRole("img", { name: "Sent" })).toBeTruthy();
+    expect(screen.getByText("3 sent")).toBeTruthy();
+
+    await user.click(within(row).getByRole("button", { name: "Reopen with a follow-up" }));
+    await user.type(text(), "Fold it further.{Enter}");
+    await act(() => flush());
+    expect(client.calls.find((call) => call.name === "comment.reopen")?.input).toMatchObject({
+      commentId: "c7",
+      text: "Fold it further.",
+    });
+    expect(client.calls.some((call) => call.name === "comment.resolve")).toBe(false);
+    expect(screen.getByText("2 sent · 1 reopened")).toBeTruthy();
+  });
+
+  it("moves keyboard focus to the follow-up button once Mark resolved is pressed with the keyboard", async () => {
+    const { session } = await renderStone();
+    await act(async () => {
+      await session.copyPrompt();
+      await flush();
+    });
+    const user = userEvent.setup();
+    const panel = screen.getByRole("complementary", { name: "Comments" });
+    const rowOf = (text: RegExp) => {
+      const row = within(panel).getByRole("button", { name: text }).closest("li");
+      if (!row) throw new Error(`No History row for ${text}.`);
+      return row;
+    };
+
+    const clicked = rowOf(/^Round 4: The thumb tip/);
+    await user.click(within(clicked).getByRole("button", { name: "Mark resolved" }));
+    await act(() => flush());
+    expect(within(clicked).getByRole("img", { name: "Resolved" })).toBeTruthy();
+    expect(document.activeElement).not.toBe(within(clicked).getByRole("button", { name: "Reopen with a follow-up" }));
+
+    const pressed = rowOf(/^Round 4: The torso bobs/);
+    act(() => within(pressed).getByRole("button", { name: "Mark resolved" }).focus());
+    await user.keyboard("{Enter}");
+    await act(() => flush());
+    expect(within(pressed).getByRole("img", { name: "Resolved" })).toBeTruthy();
+    expect(document.activeElement).toBe(within(pressed).getByRole("button", { name: "Reopen with a follow-up" }));
+  });
+
   it("shows the empty state with samples on a new tab", async () => {
     const { store, client } = await renderStone();
     const user = userEvent.setup();
@@ -318,6 +383,41 @@ describe("Workspace", () => {
     expect(client.calls.find((call) => call.name === "composition.removeFile")?.input).toMatchObject({
       file: STONE_RESONATOR_PATH.replace("StoneResonator.fbx", "Turns.fbx"),
     });
+  });
+
+  it("keeps a menu's tooltip closed when the menu focuses its button again, but shows it on keyboard focus", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Clip: Charge" }));
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: /^Walk/ }));
+    await act(() => flush());
+    const clip = screen.getByRole("button", { name: "Clip: Walk" });
+    expect(document.activeElement).toBe(clip);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    await user.tab();
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(clip);
+    expect(screen.getByRole("tooltip").textContent).toBe("Clip");
+
+    await user.click(screen.getByRole("button", { name: "Playback speed: 1×" }));
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: "2×" }));
+    await act(() => flush());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Playback speed: 2×" }));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("shows a menu's tooltip on a later focus after the menu closed from a click outside", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    const clip = screen.getByRole("button", { name: "Clip: Charge" });
+    await user.click(clip);
+    await user.click(screen.getByRole("complementary", { name: "Comments" }));
+    await act(() => flush());
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).not.toBe(clip);
+    act(() => clip.focus());
+    expect(screen.getByRole("tooltip").textContent).toBe("Clip");
   });
 
   it("reaches a group's trash button with the arrow keys, even for the only file that brings clips", async () => {

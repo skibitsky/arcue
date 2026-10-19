@@ -1786,6 +1786,11 @@ button.slot-pick:hover .nm {
   color: var(--alert);
 }
 
+.hi-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .hi .ibtn {
   opacity: 0;
   margin: -3px 0;
@@ -1793,7 +1798,7 @@ button.slot-pick:hover .nm {
 
 .hi:hover .ibtn,
 .hi.is-selected .ibtn,
-.hi .ibtn:focus-visible {
+.hi-actions:focus-within .ibtn {
   opacity: 1;
 }
 

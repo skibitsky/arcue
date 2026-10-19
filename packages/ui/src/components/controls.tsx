@@ -1,5 +1,6 @@
 import { Tooltip } from "radix-ui";
-import type { ComponentProps, ReactElement, ReactNode } from "react";
+import type { ComponentProps, FocusEvent, ReactElement, ReactNode } from "react";
+import { useRef } from "react";
 import type { IconName } from "./Icon";
 import { Icon } from "./Icon";
 
@@ -28,6 +29,26 @@ export function Tip({
       </Tooltip.Portal>
     </Tooltip.Root>
   );
+}
+
+/**
+ * Keeps the tooltip of a menu's trigger closed when the menu closes and focuses the trigger again, so it opens only on
+ * hover and keyboard focus. Pass `onFocus` to the trigger and `onCloseAutoFocus` to the menu's content. The tooltip
+ * does not open on a focus event whose default was prevented.
+ */
+export function useQuietFocusReturn() {
+  const returning = useRef(false);
+  return {
+    onFocus: (event: FocusEvent) => {
+      if (returning.current) event.preventDefault();
+    },
+    onCloseAutoFocus: () => {
+      returning.current = true;
+      queueMicrotask(() => {
+        returning.current = false;
+      });
+    },
+  };
 }
 
 interface IconButtonProps extends Omit<ComponentProps<"button">, "children"> {

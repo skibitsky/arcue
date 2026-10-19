@@ -14,7 +14,7 @@ export type {
   ToastKind,
 } from "./store/asset-session";
 export { AssetSession, NEW_COMMENT_OVERLAY } from "./store/asset-session";
-export type { HistoryItem, HistoryRound, HistoryStatus } from "./store/history";
+export type { HistoryAction, HistoryItem, HistoryRound, HistoryStatus } from "./store/history";
 export type { Readable } from "./store/observable";
 export { Store, useSelect } from "./store/observable";
 export type { ClipGroup, DropChoice, DropPrompt, FileHost, FileKind, PickedFiles } from "./store/view-files";

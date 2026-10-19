@@ -177,6 +177,7 @@ function HistoryList({
 
 function HistoryRow({ session, item, round }: { session: AssetSession; item: HistoryItem; round: number }) {
   const selected = useSelect(session.state, (state) => state.selection === item.comment.id);
+  const reopenRef = useRef<HTMLButtonElement>(null);
   const note = statusNotes[item.status];
   return (
     <li className={`hi is-${item.status}${selected ? " is-selected" : ""}`}>
@@ -203,18 +204,31 @@ function HistoryRow({ session, item, round }: { session: AssetSession; item: His
           </span>
         ) : null}
       </button>
-      {item.action === "resolve" ? (
-        <IconButton small icon="check" label="Mark resolved" onClick={() => void session.resolve(item.comment.id)} />
-      ) : item.action === "reopen" ? (
-        <IconButton
-          small
-          icon="reopen"
-          label="Reopen with a follow-up"
-          onClick={() => session.reopen(item.comment.id)}
-        />
-      ) : (
-        <span />
-      )}
+      <span className="hi-actions">
+        {item.actions.map((action) =>
+          action === "resolve" ? (
+            <IconButton
+              key={action}
+              small
+              icon="check"
+              label="Mark resolved"
+              onClick={(event) => {
+                if (event.detail === 0) reopenRef.current?.focus();
+                void session.resolve(item.comment.id);
+              }}
+            />
+          ) : (
+            <IconButton
+              key={action}
+              ref={reopenRef}
+              small
+              icon="reopen"
+              label="Reopen with a follow-up"
+              onClick={() => session.reopen(item.comment.id)}
+            />
+          ),
+        )}
+      </span>
     </li>
   );
 }
