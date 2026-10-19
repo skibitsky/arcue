@@ -1,115 +1,18 @@
-import type { Clip, Mesh, SceneDescription, Track } from "@arcue/scene";
+import type { Matrix } from "@arcue/blend/test/poses";
+import { identity, multiply, sampleTrack, transformPoint } from "@arcue/blend/test/poses";
+import type { Clip, Mesh, SceneDescription } from "@arcue/scene";
 
-export type Matrix = Float64Array;
-
-export function identity(): Matrix {
-  return Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
-}
-
-export function multiply(a: ArrayLike<number>, b: ArrayLike<number>): Matrix {
-  const out = new Float64Array(16);
-  for (let column = 0; column < 4; column++) {
-    for (let row = 0; row < 4; row++) {
-      let sum = 0;
-      for (let k = 0; k < 4; k++) sum += (a[k * 4 + row] ?? 0) * (b[column * 4 + k] ?? 0);
-      out[column * 4 + row] = sum;
-    }
-  }
-  return out;
-}
-
-export function transformPoint(m: ArrayLike<number>, x: number, y: number, z: number): [number, number, number] {
-  const at = (index: number) => m[index] ?? 0;
-  return [
-    at(0) * x + at(4) * y + at(8) * z + at(12),
-    at(1) * x + at(5) * y + at(9) * z + at(13),
-    at(2) * x + at(6) * y + at(10) * z + at(14),
-  ];
-}
-
-export function composeTrs(t: readonly number[], q: readonly number[], s: readonly number[]): Matrix {
-  const [qx = 0, qy = 0, qz = 0, qw = 1] = q;
-  const [sx = 1, sy = 1, sz = 1] = s;
-  const xx = qx * qx;
-  const yy = qy * qy;
-  const zz = qz * qz;
-  const xy = qx * qy;
-  const xz = qx * qz;
-  const yz = qy * qz;
-  const wx = qw * qx;
-  const wy = qw * qy;
-  const wz = qw * qz;
-  return Float64Array.of(
-    (1 - 2 * (yy + zz)) * sx,
-    2 * (xy + wz) * sx,
-    2 * (xz - wy) * sx,
-    0,
-    2 * (xy - wz) * sy,
-    (1 - 2 * (xx + zz)) * sy,
-    2 * (yz + wx) * sy,
-    0,
-    2 * (xz + wy) * sz,
-    2 * (yz - wx) * sz,
-    (1 - 2 * (xx + yy)) * sz,
-    0,
-    t[0] ?? 0,
-    t[1] ?? 0,
-    t[2] ?? 0,
-    1,
-  );
-}
-
-/** The largest difference between two matrices' elements. */
-export function matrixError(a: ArrayLike<number>, b: ArrayLike<number>): number {
-  let worst = 0;
-  for (let i = 0; i < 16; i++) worst = Math.max(worst, Math.abs((a[i] ?? 0) - (b[i] ?? 0)));
-  return worst;
-}
-
-/**
- * The track's value at `time`: linear between keys, spherical for rotations, held for step tracks. A key counts as
- * reached at or before the float32 rounding of `time`, within 1e-6 seconds, and the track interpolates at that
- * rounding, as the viewport's `sampleTrack` does.
- */
-export function sampleTrack(track: Track, time: number): number[] {
-  const width = track.values.length / track.times.length;
-  const reached = Math.max(time, Math.fround(time)) + 1e-6;
-  let key = 0;
-  while (key + 1 < track.times.length && (track.times[key + 1] ?? 0) <= reached) key++;
-  const before = Array.from(track.values.subarray(key * width, key * width + width));
-  const after = Array.from(track.values.subarray((key + 1) * width, (key + 2) * width));
-  const t0 = track.times[key] ?? 0;
-  const t1 = track.times[key + 1] ?? t0;
-  if (after.length < width || track.interpolation === "step" || t1 <= t0) return before;
-  const f = Math.min(Math.max((Math.fround(time) - t0) / (t1 - t0), 0), 1);
-  if (track.property !== "rotation") return before.map((value, i) => value + f * ((after[i] ?? 0) - value));
-  const dot = before.reduce((sum, value, i) => sum + value * (after[i] ?? 0), 0);
-  const sign = dot < 0 ? -1 : 1;
-  const angle = Math.acos(Math.min(1, Math.abs(dot)));
-  const a = angle < 1e-6 ? 1 - f : Math.sin((1 - f) * angle) / Math.sin(angle);
-  const b = angle < 1e-6 ? f : Math.sin(f * angle) / Math.sin(angle);
-  return before.map((value, i) => a * value + b * sign * (after[i] ?? 0));
-}
-
-/** World matrices of every node at `time` in the clip, or in the rest pose without a clip. */
-export function worldMatrices(scene: SceneDescription, clip: Clip | null = null, time = 0): Matrix[] {
-  const worlds: Matrix[] = [];
-  for (const [index, node] of scene.nodes.entries()) {
-    let translation: readonly number[] = node.translation;
-    let rotation: readonly number[] = node.rotation;
-    let scale: readonly number[] = node.scale;
-    for (const track of clip?.tracks ?? []) {
-      if (track.node !== index) continue;
-      if (track.property === "translation") translation = sampleTrack(track, time);
-      if (track.property === "rotation") rotation = sampleTrack(track, time);
-      if (track.property === "scale") scale = sampleTrack(track, time);
-    }
-    const local = composeTrs(translation, rotation, scale);
-    const parent = node.parent === -1 ? undefined : worlds[node.parent];
-    worlds.push(parent ? multiply(parent, local) : local);
-  }
-  return worlds;
-}
+export type { Matrix, PosedScene } from "@arcue/blend/test/poses";
+export {
+  composeTrs,
+  identity,
+  matrixError,
+  multiply,
+  pointsError,
+  sampleTrack,
+  transformPoint,
+  worldMatrices,
+} from "@arcue/blend/test/poses";
 
 /** Morph weights of a mesh at `time` in the clip, or its default weights. */
 export function morphWeights(scene: SceneDescription, meshIndex: number, clip: Clip | null, time: number): number[] {
@@ -236,21 +139,6 @@ export function placedRenderedVertices(
   return result;
 }
 
-/** The largest distance between matching points of two xyz arrays, which must hold the same number of points. */
-export function pointsError(a: ArrayLike<number>, b: ArrayLike<number>): number {
-  if (a.length !== b.length || a.length % 3 !== 0) {
-    throw new RangeError(`Comparing ${a.length} values with ${b.length}, not two lists of the same points.`);
-  }
-  let worst = 0;
-  for (let i = 0; i < a.length; i += 3) {
-    worst = Math.max(
-      worst,
-      Math.hypot((a[i] ?? 0) - (b[i] ?? 0), (a[i + 1] ?? 0) - (b[i + 1] ?? 0), (a[i + 2] ?? 0) - (b[i + 2] ?? 0)),
-    );
-  }
-  return worst;
-}
-
 /** The inverse of an affine matrix. */
 export function invertAffine(m: ArrayLike<number>): Matrix {
   const at = (index: number) => m[index] ?? 0;
@@ -286,81 +174,5 @@ export function shear(m: ArrayLike<number>): number {
   return Math.max(cosine(x, y), cosine(y, z), cosine(x, z));
 }
 
-/** What Blender draws at each loop of a mesh: its loop triangles and the values of each loop. */
-export interface LoopReference {
-  /** Each loop triangle as its three loops, in Blender's order. */
-  loopTriangles: readonly (readonly number[])[];
-  /** The vertex of each loop. */
-  loopVertices: readonly number[];
-  /** The normal of each loop, in scene axes. */
-  normals?: readonly (readonly number[])[];
-  /** Two values per loop for each UV map, by name. */
-  uvs?: Readonly<Record<string, readonly number[]>>;
-  /** Four values per loop of the color attribute the mesh draws. */
-  colors?: readonly number[];
-}
-
-type DrawnMesh = Pick<Mesh, "indices" | "sourceVertex" | "normals" | "uvs" | "colors">;
-
-const CORNER_TOLERANCE = { normal: 1e-3, uv: 1e-5, color: 2e-3 };
-
-/** How the rendered vertex `rendered` differs from the loop `loop`, or null when it draws what Blender draws there. */
-function cornerDifference(mesh: DrawnMesh, reference: LoopReference, rendered: number, loop: number): string | null {
-  const differs = (got: ArrayLike<number>, expected: readonly number[] | undefined, tolerance: number) =>
-    expected === undefined ||
-    got.length !== expected.length ||
-    Array.from(got).some((value, k) => !(Math.abs(value - (expected[k] ?? Number.NaN)) <= tolerance));
-  const normal = reference.normals?.[loop];
-  if (normal && differs(mesh.normals.subarray(rendered * 3, rendered * 3 + 3), normal, CORNER_TOLERANCE.normal)) {
-    return `normal ${Array.from(mesh.normals.subarray(rendered * 3, rendered * 3 + 3))}, Blender ${normal}`;
-  }
-  for (const [name, values] of Object.entries(reference.uvs ?? {})) {
-    const uv = mesh.uvs.find((set) => set.name === name)?.values.subarray(rendered * 2, rendered * 2 + 2) ?? [];
-    if (differs(uv, values.slice(loop * 2, loop * 2 + 2), CORNER_TOLERANCE.uv)) {
-      return `UV map ${name} ${Array.from(uv)}, Blender ${values.slice(loop * 2, loop * 2 + 2)}`;
-    }
-  }
-  if (reference.colors) {
-    const color = mesh.colors?.subarray(rendered * 4, rendered * 4 + 4) ?? [];
-    const expected = reference.colors.slice(loop * 4, loop * 4 + 4);
-    if (differs(color, expected, CORNER_TOLERANCE.color)) return `color ${Array.from(color)}, Blender ${expected}`;
-  }
-  return null;
-}
-
-/**
- * Compares what each triangle corner draws with the loop Blender draws there. Each triangle is matched with Blender's
- * loop triangles of the same source vertices in the same order, and its rendered vertices' normals, UVs and colors
- * with those of the matching loops. Returns a description of each triangle that no loop triangle matches.
- */
-export function cornerMismatches(mesh: DrawnMesh, reference: LoopReference): string[] {
-  const byVertices = new Map<string, (readonly number[])[]>();
-  for (const loops of reference.loopTriangles) {
-    const key = loops.map((loop) => reference.loopVertices[loop] ?? -1).join(" ");
-    byVertices.set(key, [...(byVertices.get(key) ?? []), loops]);
-  }
-  const mismatches: string[] = [];
-  const triangleCount = mesh.indices.length / 3;
-  if (triangleCount !== reference.loopTriangles.length) {
-    mismatches.push(`${triangleCount} triangles, Blender ${reference.loopTriangles.length}`);
-  }
-  for (let triangle = 0; triangle < triangleCount; triangle++) {
-    const rendered = Array.from(mesh.indices.subarray(triangle * 3, triangle * 3 + 3));
-    const key = rendered.map((index) => mesh.sourceVertex[index] ?? -1).join(" ");
-    const candidates = byVertices.get(key) ?? [];
-    const differences = candidates.map((loops) =>
-      rendered.flatMap((index, k) => cornerDifference(mesh, reference, index, loops[k] ?? -1) ?? []),
-    );
-    if (differences.some((found) => found.length === 0)) continue;
-    const reason = differences[0]?.join("; ") ?? "Blender has no triangle of these vertices";
-    mismatches.push(`triangle ${triangle} of vertices ${key}: ${reason}`);
-  }
-  return mismatches;
-}
-
-/** A mesh's faces as Blender stores them: the loops of face f run from `faceOffsets[f]` up to `faceOffsets[f + 1]`. */
-export interface Faces {
-  faceOffsets: ArrayLike<number>;
-  /** The vertex of each loop. */
-  cornerVerts: ArrayLike<number>;
-}
+export type { Faces, LoopReference } from "@arcue/blend/test/loops";
+export { cornerMismatches } from "@arcue/blend/test/loops";

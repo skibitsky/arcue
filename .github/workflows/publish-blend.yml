@@ -1,0 +1,58 @@
+name: Publish blend
+
+# A blend-v<version> tag publishes packages/blend to npm as @arcue/blend. It uses npm's trusted publishing, so no npm
+# token is stored: npm accepts the publish because this workflow runs it. The tag must name the version in
+# packages/blend/package.json, and the package's tests and checks must pass first.
+#
+# npm sets up a trusted publisher only for a package that exists, so the first version was published by hand with
+# `pnpm publish` from packages/blend, which applies publishConfig, unlike `npm publish`. The package's trusted publisher
+# on npmjs.com names this repository and this file, publish-blend.yml.
+
+on:
+  push:
+    tags: ["blend-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-blend
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: Check that the tag names the package's version
+        run: |
+          version=$(node -p "require('./packages/blend/package.json').version")
+          if [ "$GITHUB_REF_NAME" != "blend-v$version" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not name @arcue/blend $version."
+            exit 1
+          fi
+      - run: pnpm --filter @arcue/blend --filter @arcue/import-blend typecheck
+      - run: pnpm vitest run --project @arcue/blend --project @arcue/import-blend
+      - run: pnpm --filter @arcue/blend build
+      - run: pnpm --filter @arcue/blend check:package
+      - name: Check the package's exports and types
+        working-directory: packages/blend
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP/package"
+          pnpm dlx publint@0.3.25 --pack pnpm
+          pnpm dlx @arethetypeswrong/cli@0.18.5 --profile esm-only "$RUNNER_TEMP"/package/arcue-blend-*.tgz
+      - name: Publish
+        run: npm publish "$RUNNER_TEMP"/package/arcue-blend-*.tgz --access public

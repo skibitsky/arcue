@@ -1,5 +1,14 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
+import { parsePosePath, readActions } from "@arcue/blend/internal/anim/actions";
+import { evaluateFCurve } from "@arcue/blend/internal/anim/fcurve";
+import { decompressBlend } from "@arcue/blend/internal/blend/decompress";
+import { readBlendFile } from "@arcue/blend/internal/blend/file";
+import { datablocks, idName } from "@arcue/blend/internal/blend/ids";
+import { toSceneAxes } from "@arcue/blend/internal/math";
+import { poseMatrices } from "@arcue/blend/internal/scene/armature";
+import { buildScene } from "@arcue/blend/internal/scene/build";
+import { cloneValues, setTransformProperty } from "@arcue/blend/internal/scene/transforms";
 import { fbxImporter } from "@arcue/import-fbx";
 import type { Clip, Mesh, SceneDescription } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
@@ -28,16 +37,7 @@ import {
   strongestInfluences,
   worldMatrices,
 } from "../test/geometry";
-import { parsePosePath, readActions } from "./anim/actions";
-import { evaluateFCurve } from "./anim/fcurve";
-import { decompressBlend } from "./blend/decompress";
-import { readBlendFile } from "./blend/file";
-import { datablocks, idName } from "./blend/ids";
 import { blendImporter } from "./importer";
-import { toSceneAxes } from "./math";
-import { poseMatrices } from "./scene/armature";
-import { buildScene } from "./scene/build";
-import { cloneValues, setTransformProperty } from "./scene/transforms";
 
 const TOLERANCE = 1e-4;
 /**
@@ -568,7 +568,7 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
 
   it("warns about what the preview leaves out, down to data linked from other files that shown objects need", () => {
     expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
-      ["object-not-shown", "KitInstance", "Arcue does not expand instances of Kit"],
+      ["object-not-shown", "KitInstance", "Instances of Kit are not expanded"],
       ["deform-approximated", "RelChild", "It stays with RelRig at rest instead of following bone Holder"],
       ["deform-approximated", "Skewed", "Its parent's scale shears it, which the preview drops"],
       [
@@ -659,7 +659,7 @@ describe.each(VERSIONS)("the libraries fixture from Blender %s", async (version)
     expect(linked.map((warning) => [warning.message, warning.detail])).toEqual([
       [
         `Linked data not shown: libraries-${version}.blend`,
-        "From other .blend files: collections Kit. From .blend files packed in this one, which Arcue does not read: collections Char",
+        "From other .blend files: collections Kit. From .blend files packed in this one, which are not read: collections Char",
       ],
     ]);
   });

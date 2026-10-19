@@ -1,3 +1,9 @@
+import { decompressBlend } from "@arcue/blend/internal/blend/decompress";
+import type { BlendFile, BlendStruct } from "@arcue/blend/internal/blend/file";
+import { readBlendFile } from "@arcue/blend/internal/blend/file";
+import { datablocks, idName } from "@arcue/blend/internal/blend/ids";
+import { sequencePath } from "@arcue/blend/internal/image-paths";
+import { sequenceFrame } from "@arcue/blend/internal/scene/materials";
 import type { FoundFile, Material, SceneDescription } from "@arcue/scene";
 import { parseStoredPath } from "@arcue/scene";
 import { describe, expect, it } from "vitest";
@@ -12,13 +18,7 @@ import {
   reference,
   VERSIONS,
 } from "../test/fixtures";
-import { decompressBlend } from "./blend/decompress";
-import type { BlendFile, BlendStruct } from "./blend/file";
-import { readBlendFile } from "./blend/file";
-import { datablocks, idName } from "./blend/ids";
-import { sequencePath } from "./image-paths";
 import { blendImporter } from "./importer";
-import { sequenceFrame } from "./scene/materials";
 
 interface ImageReference {
   image: string;

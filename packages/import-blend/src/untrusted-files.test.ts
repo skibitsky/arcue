@@ -1,9 +1,9 @@
+import type { BlendFile, BlendStruct } from "@arcue/blend/internal/blend/file";
+import { readBlendFile } from "@arcue/blend/internal/blend/file";
+import { datablocks, idName } from "@arcue/blend/internal/blend/ids";
 import { describe, expect, it } from "vitest";
 import type { Version } from "../test/fixtures";
 import { importBytes, readFixture, VERSIONS } from "../test/fixtures";
-import type { BlendFile, BlendStruct } from "./blend/file";
-import { readBlendFile } from "./blend/file";
-import { datablocks, idName } from "./blend/ids";
 
 function setPointer(file: BlendFile, struct: BlendStruct, member: string, address: bigint): void {
   const field = struct.field(member);

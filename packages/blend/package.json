@@ -1,0 +1,51 @@
+{
+  "name": "@arcue/blend",
+  "version": "0.1.0",
+  "description": "Reads Blender .blend files in JavaScript: meshes, armatures, skin weights, shape keys, materials and sampled animation.",
+  "keywords": [
+    "blender",
+    "blend",
+    "3d",
+    "mesh",
+    "skinning",
+    "animation",
+    "importer"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skibitsky/arcue.git",
+    "directory": "packages/blend"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./internal/*": "./src/*.ts",
+    "./test/*": "./test/*.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/src/index.d.ts",
+        "default": "./dist/src/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && node scripts/copy-vendor.mjs",
+    "check:package": "node scripts/check-package.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vitest": "catalog:"
+  }
+}

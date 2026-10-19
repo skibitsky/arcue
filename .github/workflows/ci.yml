@@ -29,6 +29,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: shellcheck --shell=sh apps/plugin/launcher/arcue && shellcheck apps/plugin/scripts/launcher-smoke.sh
+      - name: Check the packed @arcue/blend package
+        run: pnpm --filter @arcue/blend build && pnpm --filter @arcue/blend check:package
 
   plugin:
     name: Build the plugin
