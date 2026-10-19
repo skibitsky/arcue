@@ -568,7 +568,7 @@ describe.each(VERSIONS)("the scenes fixture from Blender %s", async (version) =>
 
   it("warns about what the preview leaves out, down to data linked from other files that shown objects need", () => {
     expect(scene.source.warnings.map((warning) => [warning.code, warning.subject.name, warning.detail])).toEqual([
-      ["object-not-shown", "KitInstance", "Arcue does not expand instances of Kit"],
+      ["object-not-shown", "KitInstance", "Instances of Kit are not expanded"],
       ["deform-approximated", "RelChild", "It stays with RelRig at rest instead of following bone Holder"],
       ["deform-approximated", "Skewed", "Its parent's scale shears it, which the preview drops"],
       [
@@ -659,7 +659,7 @@ describe.each(VERSIONS)("the libraries fixture from Blender %s", async (version)
     expect(linked.map((warning) => [warning.message, warning.detail])).toEqual([
       [
         `Linked data not shown: libraries-${version}.blend`,
-        "From other .blend files: collections Kit. From .blend files packed in this one, which Arcue does not read: collections Char",
+        "From other .blend files: collections Kit. From .blend files packed in this one, which are not read: collections Char",
       ],
     ]);
   });

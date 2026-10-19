@@ -454,7 +454,9 @@ function readingScene<T>(request: ImportRequest, read: () => T): T {
   } catch (error) {
     if (error instanceof BlendParseError) throw unreadable(request, error);
     if (error instanceof BlendLimitError) {
-      throw new ArcueError("invalid-input", `${request.fileName} ${error.message}.`, { cause: error });
+      throw new ArcueError("invalid-input", `${request.fileName} ${error.message}, more than Arcue can show.`, {
+        cause: error,
+      });
     }
     const reason = error instanceof Error ? error.message : String(error);
     throw new ArcueError("internal", `Arcue could not read the scene in ${request.fileName}: ${reason}`, {

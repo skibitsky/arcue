@@ -365,18 +365,18 @@ function objectNodes(contents: SceneContents, poses: StartPoses, warn: Warn, ver
     }
     if (object.shown && UNSHOWN_GEOMETRY.has(object.type)) {
       const kind = UNSHOWN_GEOMETRY.get(object.type);
-      warn("object-not-shown", object.name, `Not shown: ${object.name}`, `Arcue shows meshes; this is ${kind} data`);
+      warn("object-not-shown", object.name, `Not shown: ${object.name}`, `Only meshes are read; this is ${kind} data`);
     }
     const instanced = object.shown ? instancedCollection(object.struct) : null;
     if (instanced) {
-      const detail = `Arcue does not expand instances of ${idName(instanced)}`;
+      const detail = `Instances of ${idName(instanced)} are not expanded`;
       warn("object-not-shown", object.name, `Collection instance not shown: ${object.name}`, detail);
     }
     const drawsInstances = object.shown && !object.hidden && ancestors.has(object.struct.offset);
     const instancing = drawsInstances ? childInstancing(object.struct) : null;
     if (instancing) {
       const kind = instancing === "vertex" ? "Vertex" : "Face";
-      const detail = `Arcue shows its children once instead of at each ${instancing}`;
+      const detail = `Its children are shown once instead of at each ${instancing}`;
       warn("object-not-shown", object.name, `${kind} instances not shown: ${object.name}`, detail);
     }
     if (object.parent && isVertexParented(object.struct)) {
@@ -415,7 +415,7 @@ function vertexParentWarning(object: SceneObject, parent: BlendStruct, underPare
   let detail: string;
   if (readsNoParentPoints(parent)) {
     const follows = underParent ? "follows it as a whole" : "does not follow it";
-    detail = `Arcue does not read the points of ${name}, so it is placed by the origin of ${name} and ${follows}`;
+    detail = `The points of ${name} are not read, so it is placed by the origin of ${name} and ${follows}`;
   } else {
     detail = underParent
       ? `It keeps its rest offset from ${name} instead of following its vertices`
@@ -1101,7 +1101,7 @@ export function linkedDataWarning(linked: readonly LinkedName[]): BlendWarning |
   const packed = listed(true);
   const detail = [
     external === "" ? "" : `From other .blend files: ${external}`,
-    packed === "" ? "" : `From .blend files packed in this one, which Arcue does not read: ${packed}`,
+    packed === "" ? "" : `From .blend files packed in this one, which are not read: ${packed}`,
   ]
     .filter((part) => part !== "")
     .join(". ");
@@ -1135,7 +1135,7 @@ export function buildScene(
   );
   if (nestsTooDeep(nodes)) {
     throw new BlendLimitError(
-      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show`,
+      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep`,
     );
   }
   const restWorld = nodes.map((_, index) => nodeWorlds.of(index));

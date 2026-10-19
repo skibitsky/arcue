@@ -580,7 +580,7 @@ describe("buildScene", () => {
         ),
       );
     const tooDeep = new BlendLimitError(
-      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep, more than Arcue can show`,
+      `nests objects and bones more than ${MAX_NODE_DEPTH} levels deep`,
     );
     for (const cycle of [false, true]) {
       const nodes = buildScene(parentChain(MAX_NODE_DEPTH, cycle)).nodes;
@@ -865,7 +865,7 @@ describe("linkedDataWarning", () => {
       subject: { kind: "file", name: "" },
       message: "Linked data not shown",
       detail:
-        "From other .blend files: collections Kit; objects Rock. From .blend files packed in this one, which Arcue does not read: collections Char",
+        "From other .blend files: collections Kit; objects Rock. From .blend files packed in this one, which are not read: collections Char",
     });
   });
 });
