@@ -1,7 +1,5 @@
 <h1><img src="assets/branding/png/arcue-rounded-128.png" width="40" align="top" alt=""> Arcue</h1>
 
-<!-- Demo video goes here. -->
-
 **Review, test and polish your 3D game assets together with your AI agent.**
 
 Arcue is where you and your agent work on models and animations side by side. Play through clips, check LODs and import warnings, and leave comments right on the model. Your agent gets the exact vertices, bones, frame, camera and a screenshot. When it changes the model, Arcue reloads it with your comments still in place.
@@ -25,13 +23,19 @@ Arcue is in early development. It opens FBX and Blender files.
 - Reviewing props and characters on their way into your game, including models an AI generated.
 - Checking a file's LODs, textures, clips and import warnings before it reaches the engine.
 
-## Made for game assets
+## Features
 
-- **LODs.** Switch between `_LOD` levels or LOD groups. Each comment remembers the LOD it was made on.
-- **Engine conventions.** Collision meshes named `UCX_`, `UBX_`, `USP_` or `UCP_` start hidden, and `SOCKET_` nodes are recognized.
-- **Modular characters.** Load animation-only files, props attached to bones and alternative parts into one view.
-- **Animation.** Play and scrub clips, shape key animation included, and comment on a single frame or a range.
-- **Your pipeline.** Every export reloads, and comments move onto the new version of the mesh. They follow a renamed model too, including in a Unity project through its GUID.
+- **Comments on the model itself.** Pin a point or paint a region, on one frame, a range or the whole model.
+- **All the context, automatically.** Each comment carries the vertices, bones, frame, camera and a screenshot.
+- **Comments that survive re-exports.** Change the mesh, and your comments stay pinned to the same spot.
+- **Many files, one view.** Combine a mesh with its animation files, props on bones and alternative parts. `model@clip.fbx` files join on their own.
+- **The whole hierarchy.** See every part and file in the outline. Hide, isolate, or drag a prop onto a bone.
+- **LODs, collision and sockets.** Switch LODs with their triangle counts. `UCX_` collision meshes start hidden, and `SOCKET_` parts are recognized.
+- **Animation.** Clips, shape keys, 0.25× to 2× speed, frame stepping and looping ranges.
+- **FBX and Blender files.** Open `.blend` files directly, with no export step.
+- **Live reload.** Every export shows up on its own, and reviews follow renamed files, even through Unity GUIDs.
+- **Warnings your agent can fix.** Copy missing textures and import problems as a prompt in one click.
+- **Inspection views.** Lit, clay and wireframe, a skeleton overlay, and triangle and bone counts.
 
 ## Ways to use it
 
