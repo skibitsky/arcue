@@ -8,7 +8,12 @@ license: MIT
 
 ## The arcue command
 
-Use `arcue`, or `node "<this skill's folder>/scripts/arcue.js"` (Node 22 or later) when only that exists.
+In bash, zsh or Git Bash, use `arcue` when it is on PATH. Otherwise, and always in PowerShell, run the launcher in this skill's `scripts` folder in its place:
+
+- bash, zsh or Git Bash: `sh "<this skill's folder>/scripts/arcue" <arguments>`
+- PowerShell: `& (& "<this skill's folder>\scripts\arcue-node.cmd") "<this skill's folder>\scripts\arcue.js" <arguments>`. Never give a `.cmd` file arguments: cmd.exe would run a `|` or `&` in them as a command.
+
+The launcher runs Arcue on Node 24 or later from PATH, or on the Node that setup downloaded. When it says Arcue needs Node 24 or later, ask the user before you run `arcue setup` through it, which in PowerShell is `& "<this skill's folder>\scripts\arcue-setup.cmd"`. Setup downloads Node from nodejs.org once, about 30 MB; it needs network access, so allow it in a sandbox, and can take a few minutes.
 
 Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 
@@ -27,7 +32,7 @@ When the app you run in has a built-in browser, such as the Browser pane in the 
 
 Without a built-in browser, `arcue open` starts the desktop app. If it says Arcue has not been started on this computer yet, run `arcue serve` and give the user the address to open.
 
-Name a clip as the file does, from `inspect` or `time.clip`: `--clip "Armature|Walk"` for an FBX take, `--clip "Walk"` for the action `Walk` in a .blend. Any other name, such as the display name `Walk` of `Armature|Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
+Name a clip as the file does, from `inspect` or `time.clip`: `--clip 'Armature|Walk'` for an FBX take, `--clip 'Walk'` for the action `Walk` in a .blend. The name comes from the file, so keep it literal: in single quotes, with each `'` in it written as `'\''` in sh, or in PowerShell with each `'`, `‘`, `’`, `‚` and `‛` doubled. Quote file paths the same way. Any other name, such as the display name `Walk` of `Armature|Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
 
 ## Applying a review
 
@@ -36,7 +41,7 @@ A pasted review contains `3D review · round N`, the model on its `Asset:` line 
 1. Read `round.json` in the round folder for each comment's exact vertices, positions, bones and camera, using [references/round-json.md](references/round-json.md), and look at the screenshots beside it.
 2. A comment's file is the `Asset:` path, or, for a comment whose `meshPath` or `time.clip` starts with `<file>//`, that file in the model's folder. Read [references/blender.md](references/blender.md) first when that file is a .blend or an FBX that Blender exported. `asset.exporter` names the exporter of the `Asset:` file, and `arcue inspect <file> --json` names it for a `<file>//` file.
 3. Fix the comment's file. Fix a .blend in Blender and save it in place, following the saving rules in blender.md; there is no export. Fix an FBX in what it is exported from and export over it. Arcue reloads the files and carries the comments over to the new version.
-4. Show the result at a comment's moment: `arcue open <asset> --clip "<time.clip>" --frame <frame>`, with the first frame of a range, and neither flag when `time` is null.
+4. Show the result at a comment's moment: `arcue open <asset> --clip '<time.clip>' --frame <frame>`, with the first frame of a range, and neither flag when `time` is null.
 5. Report back by comment number; the user resolves or reopens comments in Arcue.
 
 If the round folder isn't on disk (`.arcue/` isn't committed, and Arcue's website keeps reviews in its tab), work from the prompt alone, and fix the model at the `Asset:` path or, if that path is from another machine, the same file in this checkout. When the prompt lists other loaded files, it doesn't say which one a comment is on: check with `arcue inspect` which file has its mesh or clip.

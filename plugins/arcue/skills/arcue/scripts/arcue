@@ -1,0 +1,372 @@
+#!/bin/sh
+# Runs arcue.js on Node 24 or later. "sh arcue setup" downloads the Node that node-sha256sums.txt pins.
+
+floor=24
+cr=$(printf '\r')
+nl='
+'
+
+die() {
+  code=$1
+  shift
+  printf '%s\n' "$*" >&2
+  exit "$code"
+}
+
+user_path=$PATH
+safe_path=''
+rest=$PATH:
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  rest=${rest#*:}
+  case $dir in /*) safe_path=$safe_path${safe_path:+:}$dir ;; esac
+done
+PATH=$safe_path
+export PATH
+
+kernel=$(uname -s)
+self=$0
+case $kernel in MINGW* | MSYS* | CYGWIN*) self=$(cygpath -u -- "$0") ;; esac
+for _ in 1 2 3 4 5 6 7 8; do
+  [ -L "$self" ] || break
+  link=$(readlink -- "$self") || break
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+here=$(CDPATH='' cd -- "$(dirname -- "$self")" && pwd -P) || die 1 "Cannot find the folder of $0."
+launcher=$here/arcue
+script=$here/arcue.js
+pins=$here/node-sha256sums.txt
+damaged="Reinstall the Arcue plugin: $pins is missing or damaged."
+
+os='' arch='' exe=node ext=tar.xz size=30
+case $kernel in
+  Darwin)
+    os=darwin
+    case $(uname -m) in
+      arm64) arch=arm64 ;;
+      x86_64) if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then arch=arm64; else arch=x64; fi ;;
+    esac
+    ;;
+  Linux)
+    os=linux
+    case $(uname -m) in
+      x86_64 | amd64) arch=x64 ;;
+      aarch64 | arm64) arch=arm64 ;;
+    esac
+    command -v xz >/dev/null 2>&1 || ext=tar.gz size=60
+    ;;
+  MINGW* | MSYS* | CYGWIN*)
+    os=win exe=node.exe ext=zip size=35
+    case " ${PROCESSOR_ARCHITECTURE-} ${PROCESSOR_ARCHITEW6432-} ${PROCESSOR_IDENTIFIER-}" in
+      *" ARM64"* | *" ARMv8"*) arch=arm64 ;;
+      *" AMD64"*) arch=x64 ;;
+    esac
+    ;;
+esac
+
+read_version() {
+  line=''
+  [ -f "$pins" ] || die 1 "$damaged"
+  IFS= read -r line <"$pins"
+  version=${line#*  node-v}
+  version=${version%%-*}
+  case $version in '' | *[!0-9.]*) die 1 "$damaged" ;; esac
+}
+
+sum_of() {
+  sha=''
+  while read -r hash name || [ -n "$name" ]; do
+    [ "${name%"$cr"}" = "$1" ] && sha=$hash
+  done <"$pins"
+  case $sha in '' | *[!0-9a-f]*) die 1 "$damaged" ;; esac
+  [ ${#sha} -eq 64 ] || die 1 "$damaged"
+}
+
+runtime_root() {
+  if [ -n "${ARCUE_RUNTIME_DIR-}" ]; then
+    root=$ARCUE_RUNTIME_DIR
+    [ "$os" != win ] || root=$(cygpath -u -- "$root")
+    case $root in /*) ;; *) die 1 "ARCUE_RUNTIME_DIR must be an absolute path, got \"$ARCUE_RUNTIME_DIR\"." ;; esac
+  elif [ "$os" = win ]; then
+    [ -n "${LOCALAPPDATA-}" ] || die 1 "LOCALAPPDATA is not set. Set ARCUE_RUNTIME_DIR to a folder for Arcue's Node."
+    root=$(cygpath -u -- "$LOCALAPPDATA")/Arcue/runtime
+  elif [ "$os" = linux ] && case ${XDG_CACHE_HOME-} in /*) true ;; *) false ;; esac then
+    root=$XDG_CACHE_HOME/Arcue/runtime
+  else
+    [ -n "${HOME-}" ] || die 1 "HOME is not set. Set it, or set ARCUE_RUNTIME_DIR to a folder for Arcue's Node."
+    if [ "$os" = darwin ]; then root=$HOME/Library/Caches/Arcue/runtime; else root=$HOME/.cache/Arcue/runtime; fi
+  fi
+  root=${root%/}
+  install=$root/node-v$version-$os-$arch
+  pinned=$install/$exe
+  check_root
+}
+
+check_root() {
+  [ "$os" != win ] && [ -d "$root" ] || return 0
+  uid=$(id -u)
+  real=$(CDPATH='' cd -P -- "$root" && pwd -P) || real=$root
+  set -- /
+  for dir in "$root" "$real"; do
+    while [ -n "$dir" ]; do
+      set -- "$@" "$dir"
+      dir=${dir%/*}
+    done
+  done
+  set -- "$@" -prune ! \( \( -user "$uid" -o -user 0 \) \( -type l -o -perm -1000 -o \( ! -perm -002 \( ! -perm -020
+  [ "$(id -gn)" != "$(id -un)" ] || set -- "$@" -o -gid "$(id -g)"
+  set -- "$@" \) \) \) \) -print
+  if [ -z "$(find -H "$root" -prune -user "$uid" ! -perm -020 ! -perm -002 -print 2>/dev/null)" ] ||
+    [ -n "$(find "$@" 2>/dev/null)" ]; then
+    die 1 "Arcue does not use $root, because other users can change it. Set ARCUE_RUNTIME_DIR to a folder that only you can change."
+  fi
+}
+
+redact() {
+  rest=${1#*://}
+  host=${rest%%/*}
+  shown=${1%"$rest"}${host##*@}${rest#"$host"}
+}
+
+probe() {
+  got=$(NODE_OPTIONS='' "$1" --version </dev/null 2>/dev/null) || got=''
+  got=${got%"$cr"}
+}
+
+new_enough() {
+  case $1 in v[0-9]*) ;; *) return 1 ;; esac
+  major=${1#v}
+  major=${major%%.*}
+  case $major in *[!0-9]*) return 1 ;; esac
+  [ "$major" -ge "$floor" ]
+}
+
+path_node() {
+  path_node=$(command -v node 2>/dev/null) || path_node=''
+  path_version=''
+  case $path_node in /*) ;; *) path_node='' && return 1 ;; esac
+  probe "$path_node"
+  path_version=$got
+  new_enough "$path_version"
+}
+
+cached_node() {
+  for candidate in "$pinned" "$root"/node-v*-"$os-$arch/$exe"; do
+    { [ -f "$candidate" ] && [ -x "$candidate" ]; } || continue
+    probe "$candidate"
+    if new_enough "$got"; then
+      node=$candidate
+      return 0
+    fi
+  done
+  return 1
+}
+
+pinned_ok() {
+  [ -f "$pinned" ] && [ -x "$pinned" ] || return 1
+  probe "$pinned"
+  [ "$got" = "v$version" ]
+}
+
+no_runtime() {
+  if [ -n "$path_version" ]; then
+    found="node on PATH is $path_version"
+  elif [ -n "$path_node" ]; then
+    found="node on PATH ($path_node) does not run"
+  else
+    found="there is none on PATH"
+  fi
+  [ -n "$arch" ] || die 3 "Arcue needs Node $floor or later, and $found. Install Node $floor or later and put it on PATH: there is no Node download for $(uname -s) $(uname -m)."
+  redact "${ARCUE_NODE_MIRROR:-nodejs.org}"
+  from=$shown
+  [ ! -e "$pinned" ] || die 3 "Arcue needs Node $floor or later, and $found. The Node in $install does not run. Ask the user before you run sh \"$launcher\" setup again: it downloads Node $version from $from again (about $size MB) and replaces it."
+  die 3 "Arcue needs Node $floor or later, and $found. Ask the user before you run sh \"$launcher\" setup: it downloads Node $version from $from (about $size MB) into $root, once. Nothing was downloaded."
+}
+
+older_than() {
+  v_major=${1%%.*}
+  v_rest=${1#*.}
+  v_minor=${v_rest%%.*}
+  case $v_major$v_minor in '' | *[!0-9]*) return 1 ;; esac
+  [ "$v_major" -lt "$2" ] || { [ "$v_major" -eq "$2" ] && [ "$v_minor" -lt "$3" ]; }
+}
+
+preflight() {
+  if [ "$os" = win ]; then
+    sys=$(cygpath -S)
+    { [ -f "$sys/curl.exe" ] && [ -f "$sys/tar.exe" ]; } ||
+      die 1 "Setup needs curl.exe and tar.exe, which Windows has since Windows 10 version 1803."
+    downloader=$sys/curl.exe
+  elif command -v curl >/dev/null 2>&1; then
+    downloader=curl
+  elif command -v wget >/dev/null 2>&1; then
+    downloader=wget
+  else
+    die 1 "Setup needs curl or wget to download Node."
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    hasher=sha256sum
+  elif command -v shasum >/dev/null 2>&1; then
+    hasher=shasum
+  elif command -v openssl >/dev/null 2>&1; then
+    hasher=openssl
+  else
+    die 1 "Setup needs sha256sum, shasum or openssl to check the download."
+  fi
+  case $os in
+    darwin)
+      macos=$(sw_vers -productVersion 2>/dev/null)
+      if older_than "$macos" 13 5; then die 1 "Node $floor needs macOS 13.5 or later, and this is macOS $macos."; fi
+      ;;
+    linux)
+      libc=$(getconf GNU_LIBC_VERSION 2>/dev/null)
+      case $libc in
+        "glibc "*)
+          if older_than "${libc#glibc }" 2 28; then
+            die 1 "Node's Linux builds need glibc 2.28 or later, and this system has $libc. Install Node $floor or later from your package manager and put it on PATH."
+          fi
+          ;;
+        *)
+          if ls /lib/ld-musl-* >/dev/null 2>&1; then
+            die 1 "Node's Linux builds need glibc, and this system uses musl. Install Node $floor or later from your package manager and put it on PATH."
+          fi
+          ;;
+      esac
+      ;;
+  esac
+  mirror=${ARCUE_NODE_MIRROR:-https://nodejs.org/dist}
+  mirror=${mirror%/}
+  case $mirror in
+    https://?*) scheme=https ;;
+    http://?*) scheme=http ;;
+    *) die 1 "ARCUE_NODE_MIRROR must start with https:// or http://." ;;
+  esac
+}
+
+hash_file() {
+  case $hasher in
+    sha256sum) digest=$(sha256sum <"$1") ;;
+    shasum) digest=$(shasum -a 256 <"$1") ;;
+    openssl) digest=$(openssl dgst -sha256 <"$1") && digest=${digest##* } ;;
+  esac
+  printf '%s\n' "${digest%% *}"
+}
+
+in_background() {
+  "$@" 2>"$tmp/error" &
+  child=$!
+  wait "$child"
+  status=$?
+  child=''
+  error=$(cat "$tmp/error" 2>/dev/null)
+  return "$status"
+}
+
+stop() {
+  if [ -n "${child-}" ]; then
+    kill "$child" 2>/dev/null
+    wait "$child" 2>/dev/null
+  fi
+  exit "$1"
+}
+
+winpath() {
+  if [ "$os" = win ]; then cygpath -w -- "$1"; else printf '%s\n' "$1"; fi
+}
+
+setup() {
+  [ $# -eq 0 ] || die 2 "\"arcue setup\" takes no arguments, got \"$*\"."
+  if path_node; then
+    printf '%s\n' "Node $path_version on PATH ($path_node) runs Arcue, so setup has nothing to download."
+    exit 0
+  fi
+  [ -n "$arch" ] || die 1 "There is no Node download for $(uname -s) $(uname -m). Install Node $floor or later and put it on PATH."
+  read_version
+  runtime_root
+  if pinned_ok; then
+    printf '%s\n' "Node $version for Arcue is already set up in $install."
+    exit 0
+  fi
+  preflight
+  file=node-v$version-$os-$arch.$ext
+  sum_of "$file"
+  umask 022
+  { mkdir -p "$root" && tmp=$(mktemp -d "$root/.setup-XXXXXX"); } 2>/dev/null ||
+    die 1 "Cannot write to $root. Setup needs to write there: when commands run in a sandbox, allow this one, or set ARCUE_RUNTIME_DIR to a folder it can write to."
+  trap 'rm -rf "$tmp"' EXIT
+  trap 'stop 129' HUP
+  trap 'stop 130' INT
+  trap 'stop 143' TERM
+  check_root
+  find "$root" -maxdepth 1 -name '.setup-*' -type d -mtime +1 -exec rm -rf {} + 2>/dev/null
+
+  url=$mirror/v$version/$file
+  archive=$tmp/$file
+  redact "$url"
+  printf '%s\n' "Downloading $shown" >&2
+  if [ "$downloader" = wget ]; then
+    in_background wget -nv -o /dev/stderr --tries=3 -T 60 -O "$archive" "$url" || {
+      error=${error##*"$nl"}
+      error=${error#????-??-?? ??:??:?? }
+      error=${error%.}
+      false
+    }
+  else
+    in_background "$downloader" --fail --location --silent --show-error --proto "=$scheme" \
+      --proto-redir "=https,$scheme" --max-filesize 104857600 --connect-timeout 30 --speed-limit 1024 \
+      --speed-time 60 --retry 2 --output "$(winpath "$archive")" "$url"
+  fi || die 1 "Could not download $shown: ${error:-the download failed}. Setup needs network access: when commands run in a sandbox, allow this one. Behind a proxy, set HTTPS_PROXY, or set ARCUE_NODE_MIRROR to a mirror of nodejs.org/dist."
+
+  actual=$(hash_file "$archive")
+  redact "$mirror"
+  [ "$actual" = "$sha" ] ||
+    die 1 "$file from $shown does not match the SHA-256 checksum the Arcue plugin pins, so setup deleted it. Expected $sha, got ${actual:-nothing}. Run setup again; if it fails again, the mirror or a proxy changes the file."
+
+  if [ "$os" = win ]; then
+    member=node-v$version-$os-$arch/node.exe
+    in_background "$sys/tar.exe" -xof "$(winpath "$archive")" -C "$(winpath "$tmp")" "$member"
+  else
+    member=node-v$version-$os-$arch/bin/node
+    in_background tar -xof "$archive" -C "$tmp" "$member"
+  fi || die 1 "Could not unpack $member from $file: $error"
+  unpacked=$tmp/$member
+  { [ -f "$unpacked" ] && [ ! -L "$unpacked" ]; } || die 1 "$file has no $member."
+  got=$(NODE_OPTIONS='' "$unpacked" --version </dev/null 2>&1) || true
+  got=${got%"$cr"}
+  [ "$got" = "v$version" ] ||
+    die 1 "The Node that setup downloaded does not run here: ${got:-it printed nothing}. Install Node $floor or later and put it on PATH."
+
+  mkdir -p "$install" 2>/dev/null || die 1 "Cannot write to $install."
+  if ! pinned_ok; then
+    mv -f "$unpacked" "$pinned" 2>/dev/null
+    pinned_ok || die 1 "Cannot install Node as $pinned."
+  fi
+  for old in "$root"/node-v*-"$os-$arch"; do
+    [ "$old" = "$install" ] || [ ! -d "$old" ] || rm -rf "$old" 2>/dev/null
+  done
+  printf '%s\n' "Node $version for Arcue is ready in $install."
+}
+
+[ -f "$script" ] || die 1 "Reinstall the Arcue plugin: there is no arcue.js beside $launcher."
+
+if [ "${1-}" = setup ]; then
+  shift
+  setup "$@"
+  exit 0
+fi
+
+if path_node; then
+  node=$path_node
+else
+  [ -n "$arch" ] || no_runtime
+  read_version
+  runtime_root
+  cached_node || no_runtime
+fi
+[ "$os" != win ] || script=$(cygpath -w -- "$script")
+PATH=$user_path
+export PATH
+exec "$node" "$script" "$@"

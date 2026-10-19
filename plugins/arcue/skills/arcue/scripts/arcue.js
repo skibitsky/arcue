@@ -5702,6 +5702,10 @@ var USAGE = `Usage:
   arcue status
       Reports whether Arcue is running, where a browser shows it, and which assets it has open. Exits with 1 when it is
       not running.
+  arcue setup
+      Through the agent plugin's launcher, on a computer without Node 24 or later: downloads the Node build the
+      plugin pins from nodejs.org once, checks its SHA-256 checksum, and keeps it in this user's cache. No other
+      command downloads anything. Exits with 3 when arcue runs on a Node older than 24.
   arcue help
       Shows this text.
 
@@ -5719,6 +5723,10 @@ function parseArgs(args) {
 	if (command === "status") {
 		if (rest.length > 0) throw new UsageError(`"arcue status" takes no arguments, got "${rest.join(" ")}".`);
 		return { command: "status" };
+	}
+	if (command === "setup") {
+		if (rest.length > 0) throw new UsageError(`"arcue setup" takes no arguments, got "${rest.join(" ")}".`);
+		return { command: "setup" };
 	}
 	if (command === "inspect") return parseInspect(rest);
 	if (command === "serve") return parseServe(rest);
@@ -9697,7 +9705,11 @@ function webSocketStream(socket) {
 }
 //#endregion
 //#region src/run.ts
-/** Runs the command line and returns its exit code: 0 on success, 1 on failure, 2 for a usage error. */
+var NODE_MAJOR = 24;
+/**
+* Runs the command line and returns its exit code: 0 on success, 1 on failure, 2 for a usage error, and 3 when `setup`
+* runs on a Node older than 24.
+*/
 async function run(args, output, cwd = process.cwd(), options = {}) {
 	let command;
 	try {
@@ -9716,11 +9728,23 @@ async function run(args, output, cwd = process.cwd(), options = {}) {
 			case "open": return await open(command, cwd, output);
 			case "inspect": return await inspect(command, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
 			case "serve": return await serve(command, output, options);
+			case "setup": return setup(output, options.node ?? {
+				version: process.versions.node,
+				execPath: process.execPath
+			});
 		}
 	} catch (error) {
 		output.err(`${error instanceof Error ? error.message : String(error)}\n`);
 		return 1;
 	}
+}
+function setup(output, node) {
+	if (Number(node.version.split(".")[0]) >= NODE_MAJOR) {
+		output.out(`Arcue runs on Node ${node.version} at ${node.execPath}, so there is nothing to set up.\n`);
+		return 0;
+	}
+	output.err(`Arcue needs Node ${NODE_MAJOR} or later, and runs on Node ${node.version} at ${node.execPath}. Install Node ${NODE_MAJOR} or later and put it on PATH; with the agent plugin, run setup through the launcher in the skill's scripts folder.\n`);
+	return 3;
 }
 async function status(output) {
 	const connection = await connectToApp(userDataDir());
