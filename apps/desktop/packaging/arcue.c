@@ -23,20 +23,20 @@
 
 static HANDLE child = NULL;
 
-static wchar_t *concat(const wchar_t *const *parts, int count) {
+static wchar_t *concat(const wchar_t *const *parts, SIZE_T count) {
   SIZE_T length = 1;
-  for (int index = 0; index < count; index++) length += (SIZE_T)lstrlenW(parts[index]);
+  for (SIZE_T index = 0; index < count; index++) length += (SIZE_T)lstrlenW(parts[index]);
   wchar_t *text = HeapAlloc(GetProcessHeap(), 0, length * sizeof(wchar_t));
   if (text == NULL) ExitProcess(1);
   wchar_t *end = text;
-  for (int index = 0; index < count; index++) {
+  for (SIZE_T index = 0; index < count; index++) {
     for (const wchar_t *from = parts[index]; *from != L'\0'; from++) *end++ = *from;
   }
   *end = L'\0';
   return text;
 }
 
-static void say(const wchar_t *const *parts, int count) {
+static void say(const wchar_t *const *parts, SIZE_T count) {
   wchar_t *text = concat(parts, count);
   HANDLE error = GetStdHandle(STD_ERROR_HANDLE);
   DWORD mode;
