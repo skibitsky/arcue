@@ -1,0 +1,4 @@
+*.sh text eol=lf
+apps/plugin/launcher/arcue text eol=lf
+apps/plugin/launcher/node-sha256sums.txt text eol=lf
+apps/plugin/launcher/*.cmd text eol=crlf

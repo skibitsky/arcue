@@ -3,6 +3,8 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compositionFileSchema, roundDataSchema } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
+import { LAUNCHER_FILES } from "./assemble";
+import { NODE_PINS_FILE } from "./node-pins";
 
 const folder = fileURLToPath(new URL("../../../skills/arcue/", import.meta.url));
 
@@ -64,6 +66,27 @@ describe("the arcue skill", () => {
 
     expect(roundDataSchema.safeParse(await example("round-json.md")).error).toBeUndefined();
     expect(compositionFileSchema.safeParse(await example("composition.md")).error).toBeUndefined();
+  });
+
+  it("names the launchers the plugin ships", async () => {
+    const { body } = await skillFile();
+
+    for (const path of [
+      '/scripts/arcue"',
+      '\\scripts\\arcue-node.cmd"',
+      '\\scripts\\arcue-setup.cmd"',
+      '\\scripts\\arcue.js"',
+    ]) {
+      expect(body).toContain(path);
+    }
+    for (const { name } of LAUNCHER_FILES) if (name !== NODE_PINS_FILE) expect(body).toContain(name);
+  });
+
+  it("says how to quote a clip name that contains a quote, in sh and in PowerShell", async () => {
+    const { body } = await skillFile();
+
+    expect(body).toContain("`'\\''`");
+    for (const quote of ["'", "\u2018", "\u2019", "\u201a", "\u201b"]) expect(body).toContain(`\`${quote}\``);
   });
 
   it("names itself in its Codex default prompt", async () => {
