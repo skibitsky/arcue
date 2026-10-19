@@ -11,5 +11,6 @@ The approved source is `arcue-master.png`: the Diagonal lift image with the fina
 | `arcue.ico` | Windows app icon, 16–256 pixels |
 | `favicon.ico` | Browser favicon, 16, 32, and 48 pixels |
 | `png/arcue-*.png` | Individual 16–1024 pixel exports |
+| `png/arcue-rounded-128.png` | 128 × 128 image with rounded, transparent corners, for the repository README |
 
 Run `pnpm icons` to regenerate every format and refresh the web host's favicon and home-screen icons. The master is raster artwork; these exports do not claim to be a vector logo.

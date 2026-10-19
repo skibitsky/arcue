@@ -1,4 +1,4 @@
-<h1><img src="assets/branding/png/arcue-128.png" width="40" align="center" alt=""> Arcue</h1>
+<h1><img src="assets/branding/png/arcue-rounded-128.png" width="40" align="top" alt=""> Arcue</h1>
 
 <!-- Demo video goes here. -->
 
