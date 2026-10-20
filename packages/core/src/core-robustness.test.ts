@@ -1,4 +1,5 @@
 import type { ReviewFile, RoundData } from "@arcue/protocol";
+import { REVIEW_FORMAT } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
 import type { TestCore } from "./test-support";
 import {
@@ -175,6 +176,32 @@ describe("review.json changed by another program", () => {
     await flush();
     await test.core.idle();
     expect(changes).toHaveLength(1);
+  });
+});
+
+describe("a review a newer Arcue saved", () => {
+  it("opens with its comments and refuses changes, leaving the file as the newer Arcue wrote it", async () => {
+    const test = await setup();
+    await test.core.client.execute("comment.create", looseComment(test.assetId));
+    await test.core.client.execute("asset.close", { assetId: test.assetId });
+    const saved = (await readJson(test.platform, REVIEW_JSON)) as ReviewFile;
+    const newer = JSON.stringify({ ...saved, format: REVIEW_FORMAT + 1, notes: "Kept by the newer Arcue." }, null, 2);
+    await test.platform.writeFile(REVIEW_JSON, newer);
+
+    const assetId = await openAsset(test);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, status: "ready", error: null }],
+    });
+    await expect(test.core.client.query("review.get", { assetId })).resolves.toMatchObject({
+      format: REVIEW_FORMAT + 1,
+      comments: [{ text: "Textures look washed out." }],
+    });
+    await expect(test.core.client.execute("comment.create", pinComment(assetId))).rejects.toMatchObject({
+      code: "forbidden",
+      message: "The review of Hero.fbx was saved by a newer version of Arcue. Update Arcue to change it.",
+    });
+    await expect(test.platform.readText(REVIEW_JSON)).resolves.toBe(newer);
+    await expect(test.platform.exists(`${HERO_REVIEW}/screenshots`)).resolves.toBe(false);
   });
 });
 

@@ -25,7 +25,7 @@ import { isEventName } from "./events";
 import { importWarningSchema } from "./import-warning";
 import { isQueryName } from "./queries";
 import type { ReviewFile } from "./review";
-import { reviewFileSchema } from "./review";
+import { REVIEW_FORMAT, reviewFileSchema, reviewFormat } from "./review";
 import { roundDataSchema } from "./round";
 import { settingsSchema } from "./settings";
 import { viewStateSchema } from "./view-state";
@@ -293,6 +293,16 @@ describe("reviewFileSchema", () => {
 
   it("rejects other schema versions", () => {
     expect(reviewFileSchema.safeParse({ ...review(), schemaVersion: 2 }).success).toBe(false);
+  });
+
+  it("reads a schema version 1 review without a format as format 1, and keeps a newer format", () => {
+    const older = reviewFileSchema.parse(review());
+    expect(older).not.toHaveProperty("format");
+    expect(reviewFormat(older)).toBe(1);
+    expect(reviewFormat(reviewFileSchema.parse(review({ format: REVIEW_FORMAT })))).toBe(REVIEW_FORMAT);
+    const newer = reviewFileSchema.parse({ ...review(), format: REVIEW_FORMAT + 1, notes: "From a newer Arcue." });
+    expect(reviewFormat(newer)).toBe(REVIEW_FORMAT + 1);
+    expect(reviewFileSchema.safeParse(review({ format: 0 })).success).toBe(false);
   });
 
   it("rejects ids that are neither form, in comments, the queue and rounds", () => {

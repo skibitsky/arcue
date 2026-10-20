@@ -8,11 +8,14 @@ import type { Platform } from "./platform";
 import type { ReviewLocation } from "./review-store";
 import {
   checkReviewPath,
+  checkSavable,
   compositionFilePath,
+  isNewerFormat,
   parseReview,
   prepareArcueFolder,
   removeReviewFile,
   reviewFilePath,
+  savedReview,
   serializeReview,
   writeReviewFile,
 } from "./review-store";
@@ -35,10 +38,10 @@ export interface ReviewMove {
  * Moves a model's review folder, with its `review.json`, `composition.json`, screenshots and rounds, to the review
  * folder of the model's new path in one rename, then writes the new path into `review.json`. It never overwrites or
  * merges: a review or anything else at the new place refuses the move with "conflict", except an empty folder or, with
- * `replaceUntouched`, an untouched review. A `review.json` it cannot read refuses the move before anything changes, and
- * a failure after the rename moves the folder back. When the model moved to another folder or took another name, the
- * composition's paths are rewritten so they still find the same files, and the ids `review.json` keeps for those
- * files follow them.
+ * `replaceUntouched`, an untouched review. A `review.json` it cannot read or a newer Arcue saved refuses the move
+ * before anything changes, and a failure after the rename moves the folder back. When the model moved to another
+ * folder or took another name, the composition's paths are rewritten so they still find the same files, and the ids
+ * `review.json` keeps for those files follow them.
  */
 export async function moveReview(platform: Platform, move: ReviewMove): Promise<void> {
   const { from, to } = move;
@@ -49,6 +52,7 @@ export async function moveReview(platform: Platform, move: ReviewMove): Promise<
     throw new ArcueError("not-found", `${basename(move.fromModel)} has no review to move.`);
   }
   const review = parseReview(await platform.readText(source), source);
+  checkSavable(review, from);
   const composition = await movedComposition(platform, move, review);
   await clearTarget(platform, move);
   await prepareArcueFolder(platform, to);
@@ -57,12 +61,7 @@ export async function moveReview(platform: Platform, move: ReviewMove): Promise<
   try {
     if (composition.text !== null) await writeReviewFile(platform, to, compositionPath, composition.text);
     const moved = relabelMembers({ ...review, asset: { ...review.asset, path: to.assetPath } }, composition.labels);
-    await writeReviewFile(
-      platform,
-      to,
-      reviewFilePath(to),
-      serializeReview({ ...moved, revision: review.revision + 1 }),
-    );
+    await writeReviewFile(platform, to, reviewFilePath(to), serializeReview(savedReview(moved, review.revision + 1)));
   } catch (error) {
     const undo = async () => {
       if (composition.text !== null) {
@@ -79,9 +78,17 @@ export async function moveReview(platform: Platform, move: ReviewMove): Promise<
   await removeEmptyFolders(platform, from);
 }
 
-/** Whether a review holds nothing but versions: no comments, rounds or dismissed warnings. */
+/**
+ * Whether a review holds nothing but versions: no comments, rounds or dismissed warnings. A review a newer Arcue saved
+ * may hold what this build cannot read, so it never counts as untouched.
+ */
 export function isUntouched(review: ReviewFile): boolean {
-  return review.comments.length === 0 && review.rounds.length === 0 && (review.dismissedWarnings ?? []).length === 0;
+  return (
+    !isNewerFormat(review) &&
+    review.comments.length === 0 &&
+    review.rounds.length === 0 &&
+    (review.dismissedWarnings ?? []).length === 0
+  );
 }
 
 async function clearTarget(platform: Platform, move: ReviewMove): Promise<void> {

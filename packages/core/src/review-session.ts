@@ -5,7 +5,16 @@ import type { ReviewEdit } from "./history";
 import { ReviewHistory } from "./history";
 import type { Platform } from "./platform";
 import type { ReviewLocation } from "./review-store";
-import { checkReviewPath, parseReview, prepareArcueFolder, reviewFilePath, serializeReview } from "./review-store";
+import {
+  checkReviewPath,
+  checkSavable,
+  isNewerFormat,
+  parseReview,
+  prepareArcueFolder,
+  reviewFilePath,
+  savedReview,
+  serializeReview,
+} from "./review-store";
 import { Serial } from "./serial";
 
 /** What one command does to the review. */
@@ -34,7 +43,9 @@ const encoder = new TextEncoder();
  * One asset's `review.json` while the asset is open. Changes run one at a time. Each starts from the file on disk:
  * when another program changed it, the session adopts that content, drops the undo history, and computes the change
  * from it. Just before saving it checks the file again and starts over if it moved. Each save adds one to the
- * review's `revision`. A change that would write the text the file already holds, and no other file, is not saved.
+ * review's `revision` and records this build's format. A change that would write the text the file already holds,
+ * and no other file, is not saved. A review a newer Arcue saved can be read but not changed: a change that would save
+ * it is refused, so the fields this build does not know stay in the file.
  */
 export class ReviewSession {
   readonly history = new ReviewHistory();
@@ -77,18 +88,19 @@ export class ReviewSession {
         const change = await compute(current);
         if (
           change.next === null ||
-          (!change.prepare && !change.clearHistory && this.#matchesDisk({ ...change.next, revision: current.revision }))
+          (!change.prepare && !change.clearHistory && this.#unchanged(change.next, current))
         ) {
           change.apply?.();
           if (change.edit) this.history.record(change.edit);
           return change.result;
         }
-        const next: ReviewFile = { ...change.next, revision: current.revision + 1 };
+        const next = savedReview(change.next, current.revision + 1);
         const text = serializeReview(next);
         if ((await this.#readDisk()).hash !== this.#diskHash) {
           if (attempt < ATTEMPTS) continue;
           throw new ArcueError("conflict", "review.json keeps changing on disk; try again.");
         }
+        checkSavable(current, this.#location);
         await prepareArcueFolder(this.#platform, this.#location);
         try {
           await change.prepare?.();
@@ -164,9 +176,14 @@ export class ReviewSession {
     }
   }
 
-  /** Whether saving the review would write the text the file already holds. */
-  #matchesDisk(review: ReviewFile): boolean {
-    return this.#diskHash !== null && textHash(serializeReview(review)) === this.#diskHash;
+  /**
+   * Whether saving the review would change nothing: it would write the text the file already holds, or, for a review a
+   * newer Arcue saved, which reads without the fields this build does not know, the review as it was read.
+   */
+  #unchanged(review: ReviewFile, current: ReviewFile): boolean {
+    const text = serializeReview({ ...review, revision: current.revision });
+    if (isNewerFormat(current)) return text === serializeReview(current);
+    return this.#diskHash !== null && textHash(text) === this.#diskHash;
   }
 
   async #sync(): Promise<void> {

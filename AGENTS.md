@@ -41,7 +41,7 @@ Arcue is a desktop app for reviewing 3D models and animations and handing anchor
 - The schemas in `packages/protocol` are the contract. Change a command, file format or event there first.
 - Clips are identified by their name in the file, such as "Armature|Charge", made unique by `clipNames`; a composition's other files prefix theirs as `<file>//<clip>`. Display names are only for people.
 - A model's composition file, `composition.json` in its review folder, loads other files into its view. Its paths are relative to the model's folder. Their nodes, parts and anchors are named `<file>//<node path>`; `splitMemberPath` splits them. The core never writes beside the model.
-- A `review.json` that an earlier build wrote must keep loading, so new fields are optional or have defaults. Comment ids are `c` and a lowercase ULID, or `c` and a number in older reviews. Never read order or a number from an id: sort by `createdAt`, then id, and number comments by their place in the queue.
+- A `review.json` that an earlier build wrote must keep loading, so new fields are optional or have defaults. Each new field raises `REVIEW_FORMAT` in `packages/protocol`, so that older builds refuse to save over the file instead of dropping the field. Comment ids are `c` and a lowercase ULID, or `c` and a number in older reviews. Never read order or a number from an id: sort by `createdAt`, then id, and number comments by their place in the queue.
 - Every package exports its public surface from `src/index.ts`. Do not import another package's internal files.
 - Logic gets Vitest tests next to the code, as `*.test.ts`.
 - No code comments unless they are essential for understanding how to use the code. Prefer clear names.

@@ -13,6 +13,12 @@ import { commentContextSchema, screenshotOwner } from "./context";
 import { commentWarningSchema, warningIdSchema } from "./import-warning";
 import { partViewSchema } from "./view-state";
 
+/**
+ * The newest `review.json` format this build knows. Raise it whenever review.json gains a field: a build refuses to
+ * save over a review in a newer format than its own, since saving would drop the fields it does not know.
+ */
+export const REVIEW_FORMAT = 1;
+
 const timestampSchema = z.iso.datetime();
 const roundNumberSchema = z.int().positive();
 
@@ -158,6 +164,8 @@ export const roundSummarySchema = z.object({
 export const reviewFileSchema = z
   .object({
     schemaVersion: z.literal(1),
+    /** The `REVIEW_FORMAT` of the build that last saved the file. Older builds saved none, which reads as format 1. */
+    format: z.int().positive().optional(),
     asset: z.object({
       /** Relative to the workspace root, or absolute when the asset is outside a git repository. */
       path: z.string().min(1),
@@ -200,6 +208,11 @@ export const reviewFileSchema = z
       }
     });
   });
+
+/** The format a review was saved in. */
+export function reviewFormat(review: ReviewFile): number {
+  return review.format ?? 1;
+}
 
 export type CommentStatus = z.output<typeof commentStatusSchema>;
 export type AnchorState = z.output<typeof anchorStateSchema>;
