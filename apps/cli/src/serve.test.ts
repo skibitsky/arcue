@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingHttpHeaders } from "node:http";
 import { request } from "node:http";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -63,6 +64,7 @@ interface Answer {
   status: number;
   type: string | undefined;
   cache: string | undefined;
+  headers: IncomingHttpHeaders;
   body: string;
 }
 
@@ -89,6 +91,7 @@ function get(url: string, path: string, init: { host?: string; method?: string }
             status: response.statusCode ?? 0,
             type: response.headers["content-type"],
             cache: response.headers["cache-control"],
+            headers: response.headers,
             body,
           }),
         );
@@ -106,6 +109,24 @@ function openSocket(url: string, origin: string, path = SERVE_CORE_PATH): Promis
     socket.once("error", reject);
   });
 }
+
+/** The headers of the answer that refuses a socket. */
+function refusedSocket(url: string, origin: string): Promise<IncomingHttpHeaders> {
+  const socket = new WebSocket(`${url.replace("http:", "ws:")}${SERVE_CORE_PATH}`, { origin });
+  return new Promise((resolve, reject) => {
+    socket.once("unexpected-response", (_request, response) => {
+      resolve(response.headers);
+      response.destroy();
+    });
+    socket.once("open", () => reject(new Error("The socket opened.")));
+  });
+}
+
+const forbidsFraming = {
+  "content-security-policy": "frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+};
 
 /** A window's connection to the core over the page's socket. */
 function windowClient(socket: WebSocket): CoreClient {
@@ -162,6 +183,29 @@ describe("arcue serve", () => {
     expect((await get(url, "/", { host: `evil.example:${port}` })).status).toBe(403);
     expect((await get(url, "/", { host: "localhost:1" })).status).toBe(403);
     expect((await get(url, "/", { method: "POST" })).status).toBe(405);
+  });
+
+  it("forbids other pages to frame it, and sends no referrer, in every answer", async () => {
+    const { url } = await serve();
+    const { port } = new URL(url);
+
+    const answers = {
+      page: await get(url, "/"),
+      asset: await get(url, "/assets/index-abc.js"),
+      head: await get(url, "/", { method: "HEAD" }),
+      missing: await get(url, "/assets/missing.js"),
+      outside: await get(url, "/%2e%2e/secret.txt"),
+      malformed: await get(url, "/%E0%A4%A"),
+      otherHost: await get(url, "/", { host: `evil.example:${port}` }),
+      write: await get(url, "/", { method: "POST" }),
+    };
+    for (const [name, answer] of Object.entries(answers)) {
+      expect(answer.headers, name).toMatchObject({ ...forbidsFraming, "x-content-type-options": "nosniff" });
+    }
+    expect(answers.page.status).toBe(200);
+    expect(answers.otherHost.status).toBe(403);
+    expect(answers.write.status).toBe(405);
+    expect(await refusedSocket(url, "https://evil.example")).toMatchObject(forbidsFraming);
   });
 
   it("knows the Host headers of localhost addresses, without the port for port 80", () => {
