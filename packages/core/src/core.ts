@@ -61,6 +61,7 @@ import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
 import type { LostFile } from "./lost-files";
 import { findLostFiles, lostFiles, withMovedFiles } from "./lost-files";
+import type { ShowAt } from "./open-asset";
 import { findComment, OpenAsset, readRootFor } from "./open-asset";
 import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
 import type { FileStat, Platform } from "./platform";
@@ -140,6 +141,17 @@ export interface ArcueCoreOptions {
 const VIEW_SHOW_ASSET = "view.showAsset";
 const VIEW_RELEASE_ASSET = "view.releaseAsset";
 
+/** Where an asset shows: a window and its view, or with a null window the view whose page the core holds it for. */
+interface Place {
+  view: string | null;
+  window: string | null;
+}
+
+/** Who asks to show an asset: a window for itself, or with a null window a caller for an agent session's view or none. */
+type Requester = Place;
+
+type Shown = CommandOutput<"asset.openInView">["shown"];
+
 /** The most files in a missing model's folder that the core checks for the model under a new name. */
 const MAX_RENAME_CANDIDATES = 256;
 
@@ -210,7 +222,7 @@ export class ArcueCore {
     this.#connections.add(options.connection);
     peer.onClose(() => this.#connections.delete(options.connection));
     if (options.caller === "window") {
-      this.#windows.add(options.connection, peer);
+      this.#windows.add(options.connection, peer, options.view ?? null);
       peer.onClose(() => {
         this.#windows.remove(options.connection);
         for (const asset of this.#assets.values()) if (asset.window === options.connection) asset.window = null;
@@ -234,7 +246,15 @@ export class ArcueCore {
   #registerHandlers(): void {
     const registry = this.registry;
     this.#unregister.push(
-      registry.handleCommand("asset.open", (args, context) => this.#opening.run(() => this.#open(args, context))),
+      registry.handleCommand("asset.open", (args, context) =>
+        this.#opening.run(async () => {
+          const { assetId } = await this.#open(args, this.#requester(context), false);
+          return { assetId };
+        }),
+      ),
+      registry.handleCommand("asset.openInView", (args) =>
+        this.#opening.run(() => this.#open(args, { view: args.view, window: null }, args.move)),
+      ),
       registry.handleCommand("asset.close", (args) => this.#close(args.assetId)),
       registry.handleCommand("asset.relink", (args) => this.#relinkAsset(args.assetId, args.path)),
       registry.handleCommand("asset.reload", async (args) => {
@@ -265,8 +285,11 @@ export class ArcueCore {
       registry.handleCommand("settings.set", (args) => this.#settings.update(args)),
       registry.handleCommand("view.reportState", (args, context) => {
         const asset = this.#asset(args.assetId);
+        if (context.caller === "window" && this.#windows.has(context.connection)) {
+          this.#checkSameView(asset, context.connection);
+          this.#shownIn(asset, context.connection);
+        }
         asset.viewState = args.state;
-        if (context.caller === "window" && this.#windows.has(context.connection)) asset.window = context.connection;
       }),
       registry.handleCommand("view.moveAsset", (args, context) =>
         this.#opening.run(() => this.#move(args.assetId, context, args.unlessShown ?? false)),
@@ -276,11 +299,12 @@ export class ArcueCore {
       }),
       registry.handleCommand(VIEW_SHOW_ASSET, async (args, context) => {
         const asset = this.#asset(args.assetId);
-        const window =
-          context.caller === "window" && this.#windows.has(context.connection)
-            ? context.connection
-            : this.#windowFor(asset, context);
-        await this.#showAsset(asset, window, args);
+        if (context.caller === "window" && this.#windows.has(context.connection)) {
+          this.#checkSameView(asset, context.connection);
+          await this.#showAsset(asset, context.connection, args);
+        } else {
+          await this.#reveal(asset, { view: this.#ownerOf(asset), window: null }, args, false);
+        }
       }),
       registry.handleQuery("asset.list", () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) })),
       registry.handleQuery("review.get", (args) => this.#asset(args.assetId).session.review),
@@ -359,17 +383,54 @@ export class ArcueCore {
     return name === undefined ? undefined : { name };
   }
 
-  #windowFor(asset: OpenAsset, context: CallContext): string {
-    const window = this.#windows.has(asset.window) ? asset.window : this.#windows.choose(context);
-    if (window === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
-    return window;
+  /** Who asks to show an asset: a window for itself, or a caller outside the windows for an agent session's view or none. */
+  #requester(context: CallContext): Requester {
+    if (context.caller === "window" && this.#windows.has(context.connection)) {
+      return { view: this.#windows.viewOf(context.connection), window: context.connection };
+    }
+    return { view: null, window: null };
   }
 
-  async #showAsset(
-    asset: OpenAsset,
-    window: string,
-    { clip, frame }: { clip?: string | undefined; frame?: number | undefined },
-  ): Promise<void> {
+  /**
+   * Where an open shows an asset. A window's open shows it in that window. An open for a view shows it in the view's
+   * page; while that page is not connected, in a window outside views; and with neither, in no window yet, as the core
+   * holds the asset for the page. An open without a view shows it in a window outside views, and with none is null.
+   */
+  #placeFor(requester: Requester): Place | null {
+    if (requester.window !== null) return requester;
+    if (requester.view !== null) {
+      const page = this.#windows.inView(requester.view);
+      if (page !== null) return { view: requester.view, window: page };
+    }
+    const window = this.#windows.inView(null);
+    if (window !== null) return { view: null, window };
+    return requester.view === null ? null : requester;
+  }
+
+  /** The window that shows the asset, while it is connected. */
+  #windowOf(asset: OpenAsset): string | null {
+    return this.#windows.has(asset.window) ? asset.window : null;
+  }
+
+  /** The view the asset is in: its window's, or while no window shows it, the view it belongs to. */
+  #ownerOf(asset: OpenAsset): string | null {
+    const window = this.#windowOf(asset);
+    return window === null ? asset.view : this.#windows.viewOf(window);
+  }
+
+  /** Refuses a window that asks for an asset of another view, or for an asset of no view from a view's page. */
+  #checkSameView(asset: OpenAsset, window: string): void {
+    const owner = this.#ownerOf(asset);
+    if (owner !== this.#windows.viewOf(window)) throw new ArcueError("conflict", openElsewhere(asset.name, owner));
+  }
+
+  #shownIn(asset: OpenAsset, window: string): void {
+    asset.window = window;
+    asset.view = this.#windows.viewOf(window);
+    asset.waiting = null;
+  }
+
+  async #showAsset(asset: OpenAsset, window: string, { clip, frame }: ShowAt): Promise<void> {
     const input: CommandArgs<"view.showAsset"> = { assetId: asset.id };
     if (clip !== undefined) input.clip = clip;
     if (frame !== undefined) input.frame = frame;
@@ -377,12 +438,75 @@ export class ArcueCore {
       ms: this.#showAssetTimeoutMs,
       clock: this.#platform.clock,
     });
-    asset.window = window;
+    this.#shownIn(asset, window);
+  }
+
+  /** Shows the asset at the place, or holds it there for the view's page. */
+  async #place(asset: OpenAsset, place: Place, at: ShowAt): Promise<void> {
+    if (place.window !== null) {
+      await this.#showAsset(asset, place.window, at);
+      return;
+    }
+    asset.window = null;
+    asset.view = place.view;
+    asset.waiting = showAt(at);
   }
 
   /**
-   * Moves an asset's tab to the calling window. The window that shows it releases the tab first and returns its view
-   * state, so the receiving window starts from the same camera, clip and frame.
+   * Removes the asset's tab from its window, keeping the view state the window returns. A window refuses while the tab's
+   * comment box has unsaved text.
+   */
+  async #release(asset: OpenAsset, window: string): Promise<void> {
+    const released = await this.#windows.request(
+      window,
+      VIEW_RELEASE_ASSET,
+      { assetId: asset.id },
+      { ms: this.#showAssetTimeoutMs, clock: this.#platform.clock },
+    );
+    const state = viewStateSchema.nullable().safeParse(released);
+    if (state.success && state.data) asset.viewState = state.data;
+    asset.window = null;
+  }
+
+  /** Shows the asset at the place, after releasing its tab from the window that shows it, which gets it back on failure. */
+  async #relocateTab(asset: OpenAsset, from: string | null, place: Place, at: ShowAt): Promise<void> {
+    if (from === null || from === place.window) {
+      await this.#place(asset, place, at);
+      return;
+    }
+    await this.#release(asset, from);
+    try {
+      await this.#place(asset, place, at);
+    } catch (error) {
+      if (this.#windows.has(from)) await this.#showAsset(asset, from, {}).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * Shows an open asset for the requester. A window of the requester's place that shows it focuses its tab. An asset in
+   * another view, or in a window outside views while the requester's view has its page, stays there unless `move` takes
+   * it. One that no window shows goes to the requester's place, unless it belongs to another view.
+   */
+  async #reveal(asset: OpenAsset, requester: Requester, at: ShowAt, move: boolean): Promise<Shown> {
+    const place = this.#placeFor(requester);
+    const window = this.#windowOf(asset);
+    const owner = this.#ownerOf(asset);
+    if (window !== null && place !== null && owner === place.view) {
+      await this.#showAsset(asset, window, at);
+      return shownAs({ view: owner, window });
+    }
+    const free = window === null && (owner === null || owner === requester.view);
+    if (!free && !move) throw new ArcueError("conflict", openElsewhere(asset.name, owner));
+    if (place === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
+    await this.#relocateTab(asset, window, place, at);
+    return shownAs(place);
+  }
+
+  /**
+   * Moves an asset's tab to the calling window, within the window's view. The window that shows it releases the tab
+   * first and returns its view state, so the receiving window starts from the same camera, clip and frame. An asset the
+   * core holds for the view shows at the clip and frame its open asked for.
    */
   async #move(assetId: string, context: CallContext, unlessShown: boolean): Promise<void> {
     if (context.caller !== "window" || !this.#windows.has(context.connection)) {
@@ -391,41 +515,30 @@ export class ArcueCore {
     const asset = this.#asset(assetId);
     if (asset.closing) throw new ArcueError("conflict", `${asset.name} is closing, so its tab cannot move.`);
     const target = context.connection;
-    const source = asset.window;
-    if (unlessShown && source !== target && this.#windows.has(source)) return;
-    if (source !== target && this.#windows.has(source)) {
-      const released = await this.#windows.request(
-        source,
-        VIEW_RELEASE_ASSET,
-        { assetId },
-        { ms: this.#showAssetTimeoutMs, clock: this.#platform.clock },
-      );
-      const state = viewStateSchema.nullable().safeParse(released);
-      if (state.success && state.data) asset.viewState = state.data;
-      asset.window = null;
+    const source = this.#windowOf(asset);
+    const owner = this.#ownerOf(asset);
+    if (owner !== this.#windows.viewOf(target)) {
+      if (unlessShown) return;
+      throw new ArcueError("conflict", openElsewhere(asset.name, owner));
     }
-    try {
-      await this.#showAsset(asset, target, {});
-    } catch (error) {
-      if (source !== target && this.#windows.has(source)) {
-        await this.#showAsset(asset, source, {}).catch(() => undefined);
-      }
-      throw error;
-    }
+    if (unlessShown && source !== null && source !== target) return;
+    const at = source === null ? (asset.waiting ?? {}) : {};
+    await this.#relocateTab(asset, source, { view: owner, window: target }, at);
   }
 
-  async #open(args: CommandArgs<"asset.open">, context: CallContext): Promise<CommandOutput<"asset.open">> {
+  async #open(
+    args: CommandArgs<"asset.open">,
+    requester: Requester,
+    move: boolean,
+  ): Promise<{ assetId: string; shown: Shown }> {
     const path = normalizePath(args.path);
     const existing = [...this.#assets.values()].find((asset) => asset.path === path && !asset.closing);
-    if (existing) {
-      await this.#showAsset(existing, this.#windowFor(existing, context), args);
-      return { assetId: existing.id };
-    }
+    if (existing) return { assetId: existing.id, shown: await this.#reveal(existing, requester, args, move) };
     const stat = await this.#platform.stat(path);
     if (!stat) throw new ArcueError("not-found", `${path} does not exist.`);
     if (stat.kind !== "file") throw new ArcueError("invalid-input", `${path} is not an asset file.`);
-    const window = this.#windows.choose(context);
-    if (window === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
+    const place = this.#placeFor(requester);
+    if (place === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
     const location = await locateReview(this.#platform, path);
     const reviewPath = reviewFilePath(location);
     await checkReviewPath(this.#platform, location, reviewPath);
@@ -441,7 +554,7 @@ export class ArcueCore {
     asset.earlier = earlier.unmatched;
     this.#assets.set(asset.id, asset);
     try {
-      await this.#showAsset(asset, window, args);
+      await this.#place(asset, place, args);
     } catch (error) {
       this.#assets.delete(asset.id);
       throw error;
@@ -453,7 +566,7 @@ export class ArcueCore {
     this.#offer(asset);
     this.#watchAsset(asset);
     void this.#load(asset).catch(() => undefined);
-    return { assetId: asset.id };
+    return { assetId: asset.id, shown: shownAs(place) };
   }
 
   /**
@@ -1578,6 +1691,21 @@ export class ArcueCore {
       return { next: null, result: undefined };
     });
   }
+}
+
+function shownAs(place: Place): Shown {
+  if (place.window === null) return "held";
+  return place.view === null ? "window" : "view";
+}
+
+function showAt({ clip, frame }: ShowAt): ShowAt {
+  return { ...(clip !== undefined ? { clip } : {}), ...(frame !== undefined ? { frame } : {}) };
+}
+
+function openElsewhere(name: string, view: string | null): string {
+  return view === null
+    ? `${name} is open in a window outside agent sessions' views.`
+    : `${name} is open in another agent session's view, "${view}".`;
 }
 
 /** A file name's extension in lowercase, such as ".fbx". */

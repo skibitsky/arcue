@@ -368,7 +368,15 @@ export class WorkspaceStore {
 
   readonly #viewHandlers: ViewHandlers = {
     "view.showAsset": (args) => this.showAsset(args),
-    "view.releaseAsset": ({ assetId }) => this.releaseAsset(assetId),
+    "view.releaseAsset": ({ assetId }) => {
+      const session = this.#sessions.get(assetId);
+      if (session?.hasUnsavedBox()) {
+        session.nudgeBox();
+        const { name } = session.state.get().summary;
+        throw new ArcueError("conflict", `${name} has unsaved comment text where it is open, so it stays there.`);
+      }
+      return this.releaseAsset(assetId);
+    },
     "view.setClip": ({ assetId, clip }) => {
       const session = this.#require(assetId);
       if (clip !== null && !session.clipInfo(clip)) throw new ArcueError("not-found", `No clip named "${clip}".`);

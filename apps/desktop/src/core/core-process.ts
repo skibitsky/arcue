@@ -91,7 +91,12 @@ async function start(userData: string, logFile: string): Promise<void> {
     });
     const started = await ArcueCore.start({ platform, onError });
     try {
-      bridge = await startBridgeServer({ core: started, userData, ensureWindow: () => windows.ensure(), onError });
+      bridge = await startBridgeServer({
+        core: started,
+        userData,
+        ensureWindow: (view) => windows.ensure(view),
+        onError,
+      });
       log.info(`The bridge listens on ${bridge.info.socket}`);
     } catch (error) {
       if (error instanceof CoreRunningError) {

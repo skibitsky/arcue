@@ -5,7 +5,7 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectToCore } from "@arcue/platform-node";
-import type { CoreClient } from "@arcue/protocol";
+import type { CoreClient, IncomingRequest } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
   binaryFrameCodec,
@@ -128,8 +128,8 @@ const forbidsFraming = {
   "referrer-policy": "no-referrer",
 };
 
-/** A window's connection to the core over the page's socket. */
-function windowClient(socket: WebSocket): CoreClient {
+/** A window's connection to the core over the page's socket, recording the core's requests to it. */
+function windowClient(socket: WebSocket, requests: IncomingRequest[] = []): CoreClient {
   const channel = messageChannel(
     {
       write: (bytes) => socket.send(bytes),
@@ -146,7 +146,14 @@ function windowClient(socket: WebSocket): CoreClient {
     },
     binaryFrameCodec,
   );
-  return createRemoteClient(createPeer(framedEndpoint(channel)));
+  return createRemoteClient(
+    createPeer(framedEndpoint(channel), {
+      handleRequest: (request) => {
+        requests.push(request);
+        return undefined;
+      },
+    }),
+  );
 }
 
 describe("arcue serve", () => {
@@ -221,6 +228,50 @@ describe("arcue serve", () => {
     await expect(client.query("asset.list", {})).resolves.toEqual({ assets: [] });
     await expect(client.execute("view.reportFocus", {})).resolves.toBeUndefined();
     socket.close();
+  });
+
+  it("connects a page whose address names a view as that view's page", async () => {
+    const { url } = await serve();
+    const model = join(temp, "Hero.fbx");
+    writeFileSync(model, "fbx");
+    const viewed: IncomingRequest[] = [];
+    const outside: IncomingRequest[] = [];
+    windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=3f9a0c1d2b4e`), viewed);
+    windowClient(await openSocket(url, url), outside);
+    const connection = await connectToCore(userData);
+
+    await expect(
+      connection?.client.execute("asset.openInView", { path: model, view: "3f9a0c1d2b4e" }),
+    ).resolves.toMatchObject({ shown: "view" });
+
+    expect(viewed.map((request) => request.name)).toEqual(["view.showAsset"]);
+    expect(outside).toEqual([]);
+    connection?.close();
+  });
+
+  it("holds a model for its view's page without waiting for a browser", async () => {
+    let waited = false;
+    const { url } = await serve({ onWaitingForWindow: () => (waited = true) });
+    const model = join(temp, "Hero.fbx");
+    writeFileSync(model, "fbx");
+    const other: IncomingRequest[] = [];
+    windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=b`), other);
+    const connection = await connectToCore(userData);
+
+    await expect(connection?.client.execute("asset.openInView", { path: model, view: "a" })).resolves.toMatchObject({
+      shown: "held",
+    });
+
+    expect(waited).toBe(false);
+    expect(other).toEqual([]);
+    connection?.close();
+  });
+
+  it("refuses a page socket whose address names a view that is not valid", async () => {
+    const { url } = await serve();
+
+    await expect(openSocket(url, url, `${SERVE_CORE_PATH}?view=..%2Fa`)).rejects.toThrow("400");
+    await expect(openSocket(url, url, `${SERVE_CORE_PATH}?view=a&view=b`)).rejects.toThrow("400");
   });
 
   it("refuses sockets from other origins and on other paths", async () => {

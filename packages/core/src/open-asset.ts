@@ -9,6 +9,12 @@ import type { ReviewLocation } from "./review-store";
 import { compositionFilePath } from "./review-store";
 import { Serial } from "./serial";
 
+/** Where to show an asset in its tab, as `asset.open` asks. */
+export interface ShowAt {
+  clip?: string | undefined;
+  frame?: number | undefined;
+}
+
 /** Everything the core holds for one open asset. */
 export class OpenAsset {
   readonly id: string;
@@ -42,6 +48,13 @@ export class OpenAsset {
   viewState: ViewState | null = null;
   /** The connection of the window that shows the asset. */
   window: string | null = null;
+  /**
+   * The agent session's view the asset belongs to, or null for none: the view of the window that shows it, or of the
+   * page the core holds it for. It stays when that page closes, so the page takes the asset back when it reloads.
+   */
+  view: string | null = null;
+  /** The clip and frame an open asked for while the core held the asset, for the page that shows it later. */
+  waiting: ShowAt | null = null;
   closed = false;
   /** Set while `asset.close` waits for the edits in flight. */
   closing: Promise<void> | null = null;

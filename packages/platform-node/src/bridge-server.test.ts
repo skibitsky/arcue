@@ -119,6 +119,40 @@ describe("the bridge server", () => {
     server = { info: server.info, close: async () => undefined };
   });
 
+  it("holds back an open until a window for the view it names is open, keeping later requests in order", async () => {
+    await server.close();
+    const asked: (string | null)[] = [];
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server = await startBridgeServer({
+      core,
+      userData,
+      ensureWindow: async (view) => {
+        asked.push(view);
+        if (view === "a") await held;
+      },
+      onError: () => undefined,
+    });
+    const client = await connectWith(server.info.token);
+
+    await expect(client.execute("asset.open", { path: "/missing.fbx" })).rejects.toMatchObject({ code: "not-found" });
+    const opening = client.execute("asset.openInView", { path: "/missing.fbx", view: "a" });
+    let listed = false;
+    const listing = client.query("asset.list", {}).then(() => {
+      listed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(listed).toBe(false);
+    release();
+
+    await expect(opening).rejects.toMatchObject({ code: "not-found" });
+    await listing;
+    await client.execute("asset.openInView", { path: "/missing.fbx", view: "../a" }).catch(() => undefined);
+    expect(asked).toEqual([null, "a"]);
+  });
+
   it("refuses to start while another core answers at bridge.json, and leaves that core's file and socket", async () => {
     const second = startBridgeServer({ core, userData, ensureWindow: async () => undefined, onError: () => undefined });
 

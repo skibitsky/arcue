@@ -15,6 +15,7 @@ import {
   HANDSHAKE_MAX_FRAME_BYTES,
   isEnvelope,
   jsonFrameCodec,
+  viewNameSchema,
 } from "@arcue/protocol";
 import { runningCore } from "./core-connection";
 import { socketStream } from "./node-socket";
@@ -22,8 +23,12 @@ import { socketStream } from "./node-socket";
 export interface BridgeServerOptions {
   core: ArcueCore;
   userData: string;
-  /** Resolves once a window is open, so an "asset.open" from the command line has a window to show it in. */
-  ensureWindow: () => Promise<void>;
+  /**
+   * Resolves once a window is open that may show a model the command line opens for an agent session's view, or with
+   * null for none, so the core has a window to show it in. A host whose views' pages only the agent can open resolves
+   * at once for a view, and the core holds the model for the page.
+   */
+  ensureWindow: (view: string | null) => Promise<void>;
   onError: ListenerErrorHandler;
   handshakeTimeoutMs?: number;
   /** Where a browser shows this core's window, for `bridge.json`. */
@@ -213,8 +218,14 @@ function unrefTimer(delayMs: number, callback: () => void): () => void {
   return () => clearTimeout(handle);
 }
 
-/** Holds back an "asset.open" request until a window is open, keeping every message in order. */
-export function windowFirst(endpoint: MessageEndpoint, ensureWindow: () => Promise<void>): MessageEndpoint {
+/**
+ * Holds back a request that opens a model until a window that may show it is open, for the view the request names or
+ * for none, keeping every message in order.
+ */
+export function windowFirst(
+  endpoint: MessageEndpoint,
+  ensureWindow: (view: string | null) => Promise<void>,
+): MessageEndpoint {
   return {
     post: (message, transfer) => endpoint.post(message, transfer),
     onClose: (listener) => endpoint.onClose(listener),
@@ -222,12 +233,22 @@ export function windowFirst(endpoint: MessageEndpoint, ensureWindow: () => Promi
       let queue = Promise.resolve();
       return endpoint.listen((message) => {
         queue = queue.then(async () => {
-          if (isEnvelope(message) && message.type === "request" && message.name === "asset.open") {
-            await ensureWindow().catch(() => undefined);
-          }
+          const view = openedView(message);
+          if (view !== undefined) await ensureWindow(view).catch(() => undefined);
           listener(message);
         });
       });
     },
   };
+}
+
+/** The view a request that opens a model names: null for "asset.open", and undefined for any other message. */
+function openedView(message: unknown): string | null | undefined {
+  if (!isEnvelope(message) || message.type !== "request" || message.kind !== "command") return undefined;
+  if (message.name === "asset.open") return null;
+  if (message.name !== "asset.openInView" || typeof message.input !== "object" || message.input === null) {
+    return undefined;
+  }
+  const view = viewNameSchema.safeParse((message.input as { view?: unknown }).view);
+  return view.success ? view.data : undefined;
 }
