@@ -168,13 +168,17 @@ try {
 
   const openStriker = ["open", striker, "--clip", CLIP, "--frame", "12"];
   let started = await arcue(openStriker, env);
-  if (started.code !== 0 && SLOW_FIRST_START.some((text) => started.stderr.includes(text))) {
-    // A first start can outlast what the command line waits for: Rosetta translates the app on its first start, and
-    // without a GPU the window's first render can block it.
-    console.warn(
-      `The app was slow to start for the first arcue open, so it opens again once the app runs.\n${started.stderr}`,
-    );
-    await runningWithin(env, 120_000);
+  const slowStartDeadline = Date.now() + 180_000;
+  while (
+    started.code !== 0 &&
+    SLOW_FIRST_START.some((text) => started.stderr.includes(text)) &&
+    Date.now() < slowStartDeadline
+  ) {
+    // A first start can outlast what the command line waits for: Rosetta translates the app and its window's helpers
+    // on their first start, and without a GPU the window's first render can block it.
+    console.warn(`The app was slow to start, so arcue open tries again once the app runs.\n${started.stderr}`);
+    await runningWithin(env, Math.max(0, slowStartDeadline - Date.now()));
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     started = await arcue(openStriker, env);
   }
   check(
