@@ -222,7 +222,7 @@ export class ArcueCore {
     this.#connections.add(options.connection);
     peer.onClose(() => this.#connections.delete(options.connection));
     if (options.caller === "window") {
-      this.#windows.add(options.connection, peer, options.view ?? null);
+      this.#windows.add(options.connection, peer, { view: options.view ?? null, browser: options.browser ?? false });
       peer.onClose(() => {
         this.#windows.remove(options.connection);
         for (const asset of this.#assets.values()) if (asset.window === options.connection) asset.window = null;
@@ -393,18 +393,20 @@ export class ArcueCore {
 
   /**
    * Where an open shows an asset. A window's open shows it in that window. An open for a view shows it in the view's
-   * page; while that page is not connected, in a window outside views; and with neither, in no window yet, as the core
-   * holds the asset for the page. An open without a view shows it in a window outside views, and with none is null.
+   * page; while that page is not connected, in a desktop window outside views; and with neither, in no window yet, as
+   * the core holds the asset for the page. It never shows in a browser page outside views, which may be another agent
+   * session's. An open without a view shows it in any window outside views, and with none is null.
    */
   #placeFor(requester: Requester): Place | null {
     if (requester.window !== null) return requester;
-    if (requester.view !== null) {
-      const page = this.#windows.inView(requester.view);
-      if (page !== null) return { view: requester.view, window: page };
+    if (requester.view === null) {
+      const window = this.#windows.inView(null);
+      return window === null ? null : { view: null, window };
     }
-    const window = this.#windows.inView(null);
-    if (window !== null) return { view: null, window };
-    return requester.view === null ? null : requester;
+    const page = this.#windows.inView(requester.view);
+    if (page !== null) return { view: requester.view, window: page };
+    const window = this.#windows.inView(null, { desktopOnly: true });
+    return window === null ? requester : { view: null, window };
   }
 
   /** The window that shows the asset, while it is connected. */
@@ -485,8 +487,9 @@ export class ArcueCore {
 
   /**
    * Shows an open asset for the requester. A window of the requester's place that shows it focuses its tab. An asset in
-   * another view, or in a window outside views while the requester's view has its page, stays there unless `move` takes
-   * it. One that no window shows goes to the requester's place, unless it belongs to another view.
+   * another view, or in a window outside views while the requester's place is in a view, its page or held for it, stays
+   * there unless `move` takes it. One that no window shows goes to the requester's place, unless it belongs to another
+   * view.
    */
   async #reveal(asset: OpenAsset, requester: Requester, at: ShowAt, move: boolean): Promise<Shown> {
     const place = this.#placeFor(requester);

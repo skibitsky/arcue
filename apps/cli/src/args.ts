@@ -13,8 +13,8 @@ export const USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>] [--view <name>] [--move]
       Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
       files its composition lists. Run by an agent, it shows the model in that agent session's view: the page whose
-      address "arcue status" prints. Until that page is open, a page or window outside views shows the model, or with
-      none Arcue holds it for the page. Run by a person, it shows the model only outside views.
+      address "arcue status" prints, and until that page is open Arcue holds the model for it. The desktop app, which
+      has no such pages, shows it in its window. Run by a person, it shows the model only outside views.
       --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
       --frame is a whole frame number from 0.
       --view names the session, in place of ARCUE_VIEW, CLAUDE_CODE_SESSION_ID, CODEX_SESSION_ID or CODEX_THREAD_ID,

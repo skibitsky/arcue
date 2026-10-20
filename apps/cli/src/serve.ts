@@ -79,8 +79,8 @@ export interface ArcueServer {
  * reach it, and it refuses to start while another core runs.
  *
  * A page whose address names an agent session's view, `/?view=<name>`, connects as that view's page and shows the
- * models that session opens. While that page is not open, a page outside views shows them, or with none the core holds
- * them for the page, so an open for a view never waits for a browser.
+ * models that session opens. While that page is not open, the core holds them for the page rather than show them in a
+ * page outside views, which may be another session's, so an open for a view never waits for a browser.
  *
  * Only pages from this server's own origin can connect to the core, and only through a localhost address, so other
  * websites and DNS rebinding cannot reach it. No website may show its pages in a frame, where the user could not see a
@@ -138,6 +138,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       connection: `browser-${next++}`,
       caller: "window",
       view: view ?? undefined,
+      browser: true,
       onListenerError: options.onError,
     });
     windows.added(view);

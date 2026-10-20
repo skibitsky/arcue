@@ -6,6 +6,8 @@ interface WindowEntry {
   peer: Peer;
   /** The agent session's view the window shows, or null for a window outside views. */
   view: string | null;
+  /** A page `arcue serve` serves to a browser, rather than a desktop window. */
+  browser: boolean;
   /** When the window last gained focus, in focus reports since the core started; 0 before the first. */
   focused: number;
 }
@@ -15,8 +17,8 @@ export class WindowRegistry {
   readonly #windows = new Map<string, WindowEntry>();
   #focusCount = 0;
 
-  add(connection: string, peer: Peer, view: string | null): void {
-    this.#windows.set(connection, { peer, view, focused: 0 });
+  add(connection: string, peer: Peer, { view, browser }: { view: string | null; browser: boolean }): void {
+    this.#windows.set(connection, { peer, view, browser, focused: 0 });
   }
 
   remove(connection: string): void {
@@ -39,12 +41,12 @@ export class WindowRegistry {
 
   /**
    * The window to show a view's assets in, or with a null view a window outside views: of those, the one focused last,
-   * otherwise the one that connected last. Null when none is connected.
+   * otherwise the one that connected last. With `desktopOnly`, never a browser page. Null when none is connected.
    */
-  inView(view: string | null): string | null {
+  inView(view: string | null, { desktopOnly = false }: { desktopOnly?: boolean } = {}): string | null {
     let chosen: { connection: string; focused: number } | null = null;
     for (const [connection, entry] of this.#windows) {
-      if (entry.view !== view) continue;
+      if (entry.view !== view || (desktopOnly && entry.browser)) continue;
       if (chosen === null || entry.focused >= chosen.focused) chosen = { connection, focused: entry.focused };
     }
     return chosen?.connection ?? null;
