@@ -1,7 +1,7 @@
 import type { ReviewFile } from "@arcue/protocol";
-import { ArcueError, COMPOSITION_FILE_NAME, reviewFileSchema } from "@arcue/protocol";
+import { ArcueError, COMPOSITION_FILE_NAME, REVIEW_FORMAT, reviewFileSchema, reviewFormat } from "@arcue/protocol";
 import { insideWithoutLinks } from "./links";
-import { joinPath, normalizePath, pathInside } from "./paths";
+import { basename, joinPath, normalizePath, pathInside } from "./paths";
 import type { Platform } from "./platform";
 
 export const REVIEW_SCHEMA_VERSION = 1;
@@ -172,6 +172,27 @@ export async function loadReview(
   const text = await platform.readText(path);
   const review = parseReview(text, path);
   return { review: { ...review, asset: { ...review.asset, path: location.assetPath } }, text };
+}
+
+/** Whether a newer Arcue saved the review, which may then hold fields that this build drops as it reads the file. */
+export function isNewerFormat(review: ReviewFile): boolean {
+  return reviewFormat(review) > REVIEW_FORMAT;
+}
+
+/** Refuses to save over a review a newer Arcue saved, since that would delete the fields this build does not know. */
+export function checkSavable(review: ReviewFile, location: ReviewLocation): void {
+  if (isNewerFormat(review)) {
+    throw new ArcueError(
+      "forbidden",
+      `The review of ${basename(location.folder)} was saved by a newer version of Arcue. Update Arcue to change it.`,
+    );
+  }
+}
+
+/** The review as this build saves it: at `revision`, and in this build's format, recorded beside the schema version. */
+export function savedReview(review: ReviewFile, revision: number): ReviewFile {
+  const { schemaVersion, format: _format, ...rest } = review;
+  return { schemaVersion, format: REVIEW_FORMAT, ...rest, revision };
 }
 
 /** The file text of a review, after checking it against the schema. */

@@ -1,3 +1,4 @@
+import { REVIEW_FORMAT } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
 import { MemoryPlatform } from "./memory-platform";
 import {
@@ -52,6 +53,13 @@ describe("parseReview", () => {
     expect(() => parseReview(JSON.stringify(newer), "review.json")).toThrow(
       expect.objectContaining({ code: "conflict", message: expect.stringContaining("newer Arcue") }),
     );
+  });
+
+  it("reads a review in a newer format, so that an older Arcue can still show it", () => {
+    const newer = { ...emptyReview("Assets/Hero.fbx"), format: REVIEW_FORMAT + 1, notes: "Kept by a newer Arcue." };
+    const parsed = parseReview(JSON.stringify(newer), "review.json");
+    expect(parsed).toMatchObject({ schemaVersion: 1, format: REVIEW_FORMAT + 1, asset: { path: "Assets/Hero.fbx" } });
+    expect(parsed).not.toHaveProperty("notes");
   });
 
   it("rejects broken JSON and files that break the schema as conflicts", () => {
