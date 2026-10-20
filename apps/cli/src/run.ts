@@ -1,7 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { connectToCore } from "@arcue/platform-node";
-import type { CommandOutput } from "@arcue/protocol";
+import type { BridgeInfo, CommandOutput } from "@arcue/protocol";
 import { ArcueError, viewAddress } from "@arcue/protocol";
 import { connectOrLaunch, userDataDir } from "./app-connection";
 import type { Command } from "./args";
@@ -170,6 +170,7 @@ async function open(
     return shown ? 0 : 1;
   } catch (error) {
     if (!(error instanceof ArcueError)) throw error;
+    if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info));
     if (url && error.code === "unavailable") {
       throw new Error(`${error.message} Arcue runs in a browser: open ${url} first.`);
     }
@@ -180,6 +181,14 @@ async function open(
   } finally {
     connection.close();
   }
+}
+
+/** What `arcue open` says when the running core predates agent sessions' views. */
+function olderCore({ url, pid }: BridgeInfo): string {
+  const [running, restart] = url
+    ? [`The Arcue at ${url}`, "stop that arcue serve and run arcue serve again"]
+    : ["The Arcue app", "quit the app and run arcue open again"];
+  return `${running} (process ${pid}) is older than this arcue command and cannot show models in a session's view. Restart it: ${restart}.`;
 }
 
 /**

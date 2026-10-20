@@ -39,7 +39,7 @@ export const commands = {
   }),
   "asset.openInView": command({
     description:
-      "Open an asset for an agent session's view, or focus its tab, as asset.open does. The view's page shows it. While that page is not connected, a window outside views shows it, and with neither the core holds the asset until the page connects. An asset shows in one view at a time: when another view has it, or a window outside views has it while this view's page is connected, the call fails with conflict, unless move takes the asset from there. A move never discards a comment box with unsaved text.",
+      "Open an asset for an agent session's view, or focus its tab, as asset.open does. The view's page shows it. While that page is not connected, a desktop window outside views shows it, never a browser page, which may be another session's; with neither, the core holds the asset until the page connects. An asset shows in one view at a time: when another view has it, or a window outside views has it while this call would show or hold it for this view, the call fails with conflict, unless move takes the asset from there. A move never discards a comment box with unsaved text.",
     runsIn: "core",
     input: z.object({
       path: z.string().min(1),
@@ -50,7 +50,7 @@ export const commands = {
     }),
     output: z.object({
       assetId: assetIdSchema,
-      /** "view" when the view's page shows the asset, "window" when a window outside views does, "held" while it waits for the page. */
+      /** "view" when the view's page shows the asset, "window" when a desktop window outside views does, "held" while it waits for the page. */
       shown: z.enum(["view", "window", "held"]),
     }),
   }),

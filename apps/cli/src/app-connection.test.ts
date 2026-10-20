@@ -276,6 +276,27 @@ describe("the arcue command in an agent session", () => {
     expect(requests.at(-1)?.input).toMatchObject({ view, move: true });
   });
 
+  it("says to restart an Arcue older than views, naming where it runs", async () => {
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    openInView = () => {
+      throw new ArcueError("unknown-command", `There is no command named "asset.openInView".`);
+    };
+    await startFakeCore(TOKEN, "http://localhost:4530");
+    const served = capture();
+
+    await expect(run(["open", "Hero.fbx"], served.output, env(session), userData)).resolves.toBe(1);
+    expect(served.lines.err).toBe(
+      "The Arcue at http://localhost:4530 (process 4242) is older than this arcue command and cannot show models in a session's view. Restart it: stop that arcue serve and run arcue serve again.\n",
+    );
+
+    writeBridgeInfo(TOKEN);
+    const desktop = capture();
+    await expect(run(["open", "Hero.fbx"], desktop.output, env(session), userData)).resolves.toBe(1);
+    expect(desktop.lines.err).toBe(
+      "The Arcue app (process 4242) is older than this arcue command and cannot show models in a session's view. Restart it: quit the app and run arcue open again.\n",
+    );
+  });
+
   it("refuses --move outside a session before it starts the app", async () => {
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     const { lines, output } = capture();

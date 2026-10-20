@@ -12,6 +12,11 @@ export interface ServeOptions {
    * views, as every desktop window is.
    */
   view?: string | undefined;
+  /**
+   * For a window, whether it is a page `arcue serve` serves to a browser rather than a desktop window. An open for a
+   * view whose page is not connected never shows in a browser page outside views, which may be another session's.
+   */
+  browser?: boolean;
   /** The person or agent behind the channel, asked on every call; handlers see it as `context.user`. */
   user?: () => Author | undefined;
   /** Receives errors thrown by the peer's event and close listeners. By default they surface as unhandled rejections. */

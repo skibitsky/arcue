@@ -10,6 +10,19 @@ async function setup(): Promise<TestCore> {
   return startTestCore({ ...heroFiles(), [VILLAIN]: fakeAsset(heroSpec) });
 }
 
+/** A core as `arcue serve` runs it, before any browser page connects. */
+async function setupServe(): Promise<TestCore> {
+  const test = await setup();
+  test.window.close();
+  await flush();
+  return test;
+}
+
+/** A page `arcue serve` serves: at the plain address without a view, or at a view's address. */
+function browserPage(test: TestCore, connection: string, view?: string): FakeWindow {
+  return new FakeWindow(test.core, connection, view, { browser: true });
+}
+
 function bridge(test: TestCore) {
   const [coreSide, bridgeSide] = createMemoryChannel();
   test.core.connect(coreSide, { connection: "cli-1", caller: "bridge" });
@@ -59,7 +72,7 @@ describe("opening in an agent session's view", () => {
     expect(second.requests).toEqual([]);
   });
 
-  it("falls back to a window outside views while the view's page is not connected", async () => {
+  it("falls back to a desktop window while the view's page is not connected", async () => {
     const test = await setup();
     const pageB = new FakeWindow(test.core, "page-b", "b");
     await pageB.client.execute("view.reportFocus", {});
@@ -86,6 +99,70 @@ describe("opening in an agent session's view", () => {
       name: "view.showAsset",
       input: { assetId, frame: 5 },
     });
+  });
+});
+
+describe("opening in an agent session's view in arcue serve", () => {
+  it("holds the model for the view's page rather than show it in a page outside views", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    await plain.client.execute("view.reportFocus", {});
+
+    const { assetId, shown } = await bridge(test).execute("asset.openInView", { path: HERO, view: "a" });
+
+    expect(shown).toBe("held");
+    await plain.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(plain.requests).toEqual([]);
+  });
+
+  it("shows the model in the view's page once the page outside views closes and the view's page connects", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 12 });
+    plain.close();
+    await flush();
+
+    const page = browserPage(test, "browser-2", "a");
+    await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
+
+    expect(page.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
+    await cli.execute("view.setFrame", { assetId, frame: 3 });
+    expect(page.requestNames).toEqual(["view.showAsset", "view.setFrame"]);
+    expect(plain.requests).toEqual([]);
+  });
+
+  it("still shows a model opened without a view in a page outside views", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    const page = browserPage(test, "browser-2", "a");
+    await page.client.execute("view.reportFocus", {});
+
+    const { assetId } = await bridge(test).execute("asset.open", { path: HERO });
+
+    expect(plain.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId } }]);
+    expect(page.requests).toEqual([]);
+  });
+
+  it("refuses a model a page outside views shows, and holds it for the view's page with move", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.open", { path: HERO });
+
+    await expect(cli.execute("asset.openInView", { path: HERO, view: "a" })).rejects.toMatchObject({
+      code: "conflict",
+      message: "Hero.fbx is open in a window outside agent sessions' views.",
+    });
+    await expect(cli.execute("asset.openInView", { path: HERO, view: "a", move: true })).resolves.toEqual({
+      assetId,
+      shown: "held",
+    });
+
+    expect(plain.requestNames).toEqual(["view.showAsset", "view.releaseAsset"]);
+    const page = browserPage(test, "browser-2", "a");
+    await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(page.requestNames).toEqual(["view.showAsset"]);
   });
 });
 
