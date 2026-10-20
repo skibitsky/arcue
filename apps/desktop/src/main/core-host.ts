@@ -3,6 +3,7 @@ import { clipboard, MessageChannelMain, utilityProcess } from "electron";
 import type { FromCore, ToCore } from "../shared/core-messages";
 import { fromCoreSchema } from "../shared/core-messages";
 import type { Log } from "../shared/log";
+import type { RunningCore } from "./already-running";
 
 export interface CoreHostOptions {
   /** The bundled utility process entry. */
@@ -14,6 +15,8 @@ export interface CoreHostOptions {
   onNeedWindow(): void;
   /** The core stopped unexpectedly. Windows show "reconnecting" and ask for a new port. */
   onLost(): void;
+  /** Another core runs for the data folder, so this one stopped for good. */
+  onAlreadyRunning(running: RunningCore): void;
 }
 
 interface PortRequest {
@@ -110,6 +113,10 @@ export class CoreHost {
         return;
       case "failed":
         this.#options.log.error(`The core could not start: ${message.message}`);
+        return;
+      case "already-running":
+        void this.stop();
+        this.#options.onAlreadyRunning({ pid: message.pid, url: message.url });
         return;
       case "need-window":
         this.#options.onNeedWindow();

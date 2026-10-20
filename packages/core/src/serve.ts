@@ -7,6 +7,11 @@ export interface ServeOptions {
   connection: string;
   /** Who is on the other side. Bridges, the command line and MCP, cannot call internal commands. */
   caller: "window" | "bridge";
+  /**
+   * For a window, the agent session's view it shows, as its page's address names it. A window without one is outside
+   * views, as every desktop window is.
+   */
+  view?: string | undefined;
   /** The person or agent behind the channel, asked on every call; handlers see it as `context.user`. */
   user?: () => Author | undefined;
   /** Receives errors thrown by the peer's event and close listeners. By default they surface as unhandled rejections. */

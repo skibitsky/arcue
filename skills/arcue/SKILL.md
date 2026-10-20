@@ -19,18 +19,20 @@ The launcher runs Arcue on Node 24 or later from PATH, or on the Node that setup
 
 Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 
-- `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in the user's Arcue window: the page `arcue serve` serves while it runs, otherwise the desktop app, which it starts if needed.
+- `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in this session's view, the page `arcue serve` serves for this session while it runs, otherwise in the desktop app, which it starts if needed. `--move` takes a model from another session's view.
 - `arcue serve` runs Arcue in a browser instead of the desktop app, at http://localhost:4530 until it is stopped, on the user's files with their reviews in `.arcue/` as the desktop app keeps them. `--port <number>` picks another port.
 - `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, bones, clips, materials, missing textures, composed files and import warnings.
-- `arcue status` says whether Arcue runs and at which address a browser shows it, lists the models it has open, and exits with 1 when it isn't running.
+- `arcue status` says whether Arcue runs, the address of this session's view when a browser shows it, and the models it has open, and exits with 1 when it isn't running.
 
 ## Where Arcue shows models
 
-When the app you run in has a built-in browser, such as the Browser pane in the Claude desktop app or the in-app browser in the Codex app, show Arcue there:
+`arcue open` shows models in this session's view, a page that only this session and its subagents fill. When the app you run in has a built-in browser, such as the Browser pane in the Claude desktop app or the in-app browser in the Codex app, show that page there:
 
-1. Run `arcue status`. When it names an address, open that. When Arcue runs without one, that is the desktop app: use it as it is.
-2. Otherwise start `arcue serve` as a background command that keeps running, and open http://localhost:4530 in the built-in browser. In the Claude desktop app, add `{ "name": "arcue", "url": "http://localhost:4530", "port": 4530 }` to `configurations` in the project's `.claude/launch.json`, creating it with `"version": "0.0.1"` if needed, and start that configuration in the Browser pane. In the Codex app, open the address with its browser tool and keep the tab.
-3. `arcue open` now shows models on that page.
+1. Run `arcue status`. When it prints this session's view, open that address. When Arcue runs without an address, that is the desktop app: use it as it is.
+2. When Arcue isn't running, start `arcue serve` as a background command that keeps running, and run `arcue status` again. In the Claude desktop app, a launch.json `url` must be a bare origin: add `{ "name": "arcue", "url": "http://localhost:4530", "port": 4530 }` to `configurations` in the project's `.claude/launch.json`, creating it with `"version": "0.0.1"` if needed, start that configuration in the Browser pane, then navigate it to the printed address. In the Codex app, open the address with its browser tool.
+3. Keep the page open. When `arcue open` prints an address, the page isn't open: open the address in the built-in browser.
+
+A model shows in one view at a time. When `arcue open` says another session's view has it, add `--move` only if the user wants it here.
 
 Without a built-in browser, `arcue open` starts the desktop app. When it says Arcue has not been started on this computer yet, or is no longer where it was, and the desktop app is installed, run the same `arcue open` once with the app's own command, above, which starts it. Otherwise, when it says to run `arcue serve`, do that and give the user the address to open.
 

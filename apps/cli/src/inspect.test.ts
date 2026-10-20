@@ -18,13 +18,10 @@ const execFileAsync = promisify(execFile);
 
 let dist: string;
 let userData: string;
-let previousUserData: string | undefined;
 
 beforeAll(async () => {
   dist = realpathSync(mkdtempSync(join(tmpdir(), "arcue-cli-build-")));
   userData = realpathSync(mkdtempSync(join(tmpdir(), "arcue-cli-data-")));
-  previousUserData = process.env.ARCUE_USER_DATA;
-  process.env.ARCUE_USER_DATA = userData;
   await build({
     root: appDir,
     configFile: join(appDir, "vite.config.ts"),
@@ -34,8 +31,6 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(() => {
-  if (previousUserData === undefined) delete process.env.ARCUE_USER_DATA;
-  else process.env.ARCUE_USER_DATA = previousUserData;
   rmSync(dist, { recursive: true, force: true });
   rmSync(userData, { recursive: true, force: true });
 });
@@ -50,9 +45,9 @@ function capture() {
 
 function inspect(args: string[]) {
   const { lines, output } = capture();
-  return run(["inspect", ...args], output, samples, { importWorkerEntry: join(dist, "import-worker.js") }).then(
-    (code) => ({ code, ...lines }),
-  );
+  return run(["inspect", ...args], output, { ARCUE_USER_DATA: userData }, samples, {
+    importWorkerEntry: join(dist, "import-worker.js"),
+  }).then((code) => ({ code, ...lines }));
 }
 
 async function runBuilt(args: string[]): Promise<{ code: number; out: string; err: string }> {
@@ -152,7 +147,7 @@ describe("arcue inspect", () => {
     expect(unreadable).toMatchObject({ code: 1, out: "", err: "No importer reads README.md.\n" });
 
     const { lines, output } = capture();
-    const code = await run(["inspect", "crate.fbx"], output, samples, {
+    const code = await run(["inspect", "crate.fbx"], output, { ARCUE_USER_DATA: userData }, samples, {
       importWorkerEntry: join(userData, "no-worker.js"),
     });
     expect(code).toBe(1);

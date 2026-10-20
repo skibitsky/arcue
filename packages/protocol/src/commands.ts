@@ -8,6 +8,7 @@ import { command } from "./definitions";
 import { warningIdSchema, warningSubjectSchema } from "./import-warning";
 import { settingsSchema } from "./settings";
 import { displayModeSchema, partIdSchema, partViewSchema, viewStateSchema } from "./view-state";
+import { viewNameSchema } from "./views";
 
 const assetRef = { assetId: assetIdSchema };
 const commentRef = { assetId: assetIdSchema, commentId: commentIdSchema };
@@ -25,7 +26,7 @@ const compositionOutput = z.object({
 export const commands = {
   "asset.open": command({
     description:
-      "Open an asset in a tab, or focus its tab when it is already open. The model loads with the files its composition lists. Optionally show a clip, by its name in the file, and a frame.",
+      "Open an asset in a tab, or focus its tab when it is already open. The calling window shows it, or for any other caller a window outside views; asset.openInView shows it in an agent session's view instead. The model loads with the files its composition lists. Optionally show a clip, by its name in the file, and a frame.",
     runsIn: "core",
     input: z.object({
       path: z.string().min(1),
@@ -35,6 +36,23 @@ export const commands = {
       viewState: viewStateSchema.optional(),
     }),
     output: z.object({ assetId: assetIdSchema }),
+  }),
+  "asset.openInView": command({
+    description:
+      "Open an asset for an agent session's view, or focus its tab, as asset.open does. The view's page shows it. While that page is not connected, a window outside views shows it, and with neither the core holds the asset until the page connects. An asset shows in one view at a time: when another view has it, or a window outside views has it while this view's page is connected, the call fails with conflict, unless move takes the asset from there. A move never discards a comment box with unsaved text.",
+    runsIn: "core",
+    input: z.object({
+      path: z.string().min(1),
+      clip: clipNameSchema.optional(),
+      frame: indexSchema.optional(),
+      view: viewNameSchema,
+      move: z.boolean().default(false),
+    }),
+    output: z.object({
+      assetId: assetIdSchema,
+      /** "view" when the view's page shows the asset, "window" when a window outside views does, "held" while it waits for the page. */
+      shown: z.enum(["view", "window", "held"]),
+    }),
   }),
   "asset.close": command({
     description: "Close an asset's tab. Its review data stays on disk.",
@@ -256,19 +274,22 @@ export const commands = {
   }),
   "view.moveAsset": command({
     description:
-      "Move an asset's tab from the window that shows it to the calling window, with its camera, clip and frame.",
+      "Move an asset's tab from the window that shows it to the calling window, with its camera, clip and frame. Only within a view: an asset of another view, or of no view for a view's page, stays where it is.",
     runsIn: "core",
     internal: true,
     input: z.object({
       ...assetRef,
-      /** Leaves the tab where it is when another window shows the asset, as a page that reopens after a reload does. */
+      /**
+       * Leaves the tab where it is when another window shows the asset, or the asset belongs to another view, as a page
+       * that reopens after a reload does. Without it, an asset of another view fails with conflict.
+       */
       unlessShown: z.boolean().optional(),
     }),
     output: z.void(),
   }),
   "view.releaseAsset": command({
     description:
-      "Remove an asset's tab from this window without closing the asset, and return what the tab showed. The core sends it before moving the tab to another window.",
+      "Remove an asset's tab from this window without closing the asset, and return what the tab showed. The core sends it before moving the tab to another window. A window refuses with conflict while the tab's comment box has unsaved text.",
     runsIn: "view",
     internal: true,
     input: z.object(assetRef),

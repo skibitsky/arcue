@@ -37,6 +37,39 @@ describe("WindowPresence", () => {
     await expect(waiting).rejects.toMatchObject({ code: "unavailable" });
   });
 
+  it("waits for the view's page or a window outside views, never a page of another view", async () => {
+    const { windows, requests } = presence();
+    windows.added("b");
+    let shown = false;
+    const waiting = windows.ensure("a").then(() => {
+      shown = true;
+    });
+    windows.added("b");
+    await Promise.resolve();
+    expect(shown).toBe(false);
+    windows.added("a");
+    await waiting;
+    expect(requests()).toBe(1);
+    await windows.ensure("a");
+  });
+
+  it("takes a window outside views for a view, but no view's page for an open without one", async () => {
+    const { windows } = presence();
+    windows.added("a");
+    let shown = false;
+    const waiting = windows.ensure(null).then(() => {
+      shown = true;
+    });
+    await Promise.resolve();
+    expect(shown).toBe(false);
+    windows.added(null);
+    await waiting;
+    await windows.ensure("b");
+    windows.removed(null);
+    expect(windows.count(null)).toBe(0);
+    expect(windows.count("a")).toBe(1);
+  });
+
   it("asks again after the last window is gone", async () => {
     const { windows, requests } = presence();
     windows.added();

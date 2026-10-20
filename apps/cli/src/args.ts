@@ -2,19 +2,24 @@
 export const DEFAULT_SERVE_PORT = 4530;
 
 export type Command =
-  | { command: "open"; path: string; clip?: string; frame?: number }
+  | { command: "open"; path: string; clip?: string; frame?: number; view?: string; move?: boolean }
   | { command: "inspect"; path: string; json: boolean }
   | { command: "serve"; port?: number }
-  | { command: "status" }
+  | { command: "status"; view?: string }
   | { command: "setup" }
   | { command: "help" };
 
 export const USAGE = `Usage:
-  arcue open <file> [--clip <name>] [--frame <number>]
+  arcue open <file> [--clip <name>] [--frame <number>] [--view <name>] [--move]
       Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
-      files its composition lists.
+      files its composition lists. Run by an agent, it shows the model in that agent session's view: the page whose
+      address "arcue status" prints. Until that page is open, a page or window outside views shows the model, or with
+      none Arcue holds it for the page. Run by a person, it shows the model only outside views.
       --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
       --frame is a whole frame number from 0.
+      --view names the session, in place of ARCUE_VIEW, CLAUDE_CODE_SESSION_ID, CODEX_SESSION_ID or CODEX_THREAD_ID,
+      the first of which that is set names it otherwise.
+      --move takes the model into this session's view when another view shows it. Unsaved comment text keeps it there.
   arcue inspect <file> [--json]
       Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
       composed with the files its composition lists, as opening it would.
@@ -23,9 +28,9 @@ export const USAGE = `Usage:
       Runs Arcue in a browser instead of the desktop app, until stopped: serves its window at
       http://localhost:${DEFAULT_SERVE_PORT}, or at the given port, to this computer only. "arcue open" then shows models
       there. Exits with 1 when Arcue already runs.
-  arcue status
-      Reports whether Arcue is running, where a browser shows it, and which assets it has open. Exits with 1 when it is
-      not running.
+  arcue status [--view <name>]
+      Reports whether Arcue is running, where a browser shows it and this session's view, and which assets it has open.
+      Exits with 1 when it is not running.
   arcue setup
       Through the agent plugin's launcher, on a computer without Node 24 or later: downloads the Node build the
       plugin pins from nodejs.org once, checks its SHA-256 checksum, and keeps it in this user's cache. No other
@@ -48,10 +53,7 @@ export function parseArgs(args: readonly string[]): Command {
   if (command === undefined || command === "help" || command === "--help" || command === "-h") {
     return { command: "help" };
   }
-  if (command === "status") {
-    if (rest.length > 0) throw new UsageError(`"arcue status" takes no arguments, got "${rest.join(" ")}".`);
-    return { command: "status" };
-  }
+  if (command === "status") return parseStatus(rest);
   if (command === "setup") {
     if (rest.length > 0) throw new UsageError(`"arcue setup" takes no arguments, got "${rest.join(" ")}".`);
     return { command: "setup" };
@@ -62,14 +64,19 @@ export function parseArgs(args: readonly string[]): Command {
   let path: string | undefined;
   let clip: string | undefined;
   let frame: number | undefined;
+  let view: string | undefined;
+  let move = false;
   for (let index = 0; index < rest.length; index++) {
     const arg = rest[index] ?? "";
     const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, undefined];
-    if (flag === "--clip" || flag === "--frame") {
+    if (flag === "--clip" || flag === "--frame" || flag === "--view") {
       const value = inline ?? rest[++index];
       if (value === undefined || value === "") throw new UsageError(`${flag} needs a value.`);
       if (flag === "--clip") clip = value;
+      else if (flag === "--view") view = value;
       else frame = parseFrame(value);
+    } else if (arg === "--move") {
+      move = true;
     } else if (arg.startsWith("--")) {
       throw new UsageError(`Unknown option "${arg}".`);
     } else if (path === undefined) {
@@ -79,7 +86,33 @@ export function parseArgs(args: readonly string[]): Command {
     }
   }
   if (path === undefined) throw new UsageError('"arcue open" needs a file.');
-  return { command: "open", path, ...(clip !== undefined ? { clip } : {}), ...(frame !== undefined ? { frame } : {}) };
+  return {
+    command: "open",
+    path,
+    ...(clip !== undefined ? { clip } : {}),
+    ...(frame !== undefined ? { frame } : {}),
+    ...(view !== undefined ? { view } : {}),
+    ...(move ? { move } : {}),
+  };
+}
+
+function parseStatus(args: readonly string[]): Command {
+  let view: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? "";
+    const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, undefined];
+    if (flag !== "--view") {
+      throw new UsageError(
+        arg.startsWith("--")
+          ? `Unknown option "${arg}".`
+          : `"arcue status" takes no arguments but --view, got "${args.join(" ")}".`,
+      );
+    }
+    const value = inline ?? args[++index];
+    if (value === undefined || value === "") throw new UsageError("--view needs a value.");
+    view = value;
+  }
+  return { command: "status", ...(view !== undefined ? { view } : {}) };
 }
 
 function parseInspect(args: readonly string[]): Command {

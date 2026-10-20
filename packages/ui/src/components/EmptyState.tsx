@@ -20,6 +20,7 @@ export function EmptyState({
   onOpenSample,
   title = "Drop an FBX or Blender file",
   dropHint,
+  dropRefusal,
   tabId,
 }: {
   store: WorkspaceStore;
@@ -29,6 +30,8 @@ export function EmptyState({
   dropHint?: string | undefined;
   onOpenFile?: (() => void) | undefined;
   onDropFiles?: ((files: File[]) => void) | undefined;
+  /** Why the host can't open dropped files. The empty state then doesn't invite drops, and says this on one. */
+  dropRefusal?: string | undefined;
   /** The empty tab this state belongs to, or null when no tab is open. */
   tabId: string | null;
 }) {
@@ -42,6 +45,7 @@ export function EmptyState({
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
+        if (dropRefusal) return;
         event.dataTransfer.dropEffect = "copy";
         setOver(true);
       }}
@@ -52,11 +56,13 @@ export function EmptyState({
         event.preventDefault();
         setOver(false);
         const files = [...event.dataTransfer.files];
-        if (files.length > 0) onDropFiles?.(files);
+        if (files.length === 0) return;
+        if (dropRefusal) store.notify({ message: dropRefusal, kind: "alert" });
+        else onDropFiles?.(files);
       }}
     >
       <div className="drop">
-        <Icon name="upload" />
+        <Icon name={dropRefusal ? "cube" : "upload"} />
         <strong>{title}</strong>
         {dropHint ? <span>{dropHint}</span> : null}
         {onOpenFile ? (

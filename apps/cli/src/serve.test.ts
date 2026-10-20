@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingHttpHeaders } from "node:http";
 import { request } from "node:http";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CoreClient } from "@arcue/protocol";
+import { connectToCore } from "@arcue/platform-node";
+import type { CoreClient, IncomingRequest } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
   binaryFrameCodec,
@@ -16,7 +18,6 @@ import {
 } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { connectToApp } from "./app-connection";
 import type { ArcueServer, ServeOptions } from "./serve";
 import { localHosts, startServer } from "./serve";
 
@@ -63,6 +64,7 @@ interface Answer {
   status: number;
   type: string | undefined;
   cache: string | undefined;
+  headers: IncomingHttpHeaders;
   body: string;
 }
 
@@ -89,6 +91,7 @@ function get(url: string, path: string, init: { host?: string; method?: string }
             status: response.statusCode ?? 0,
             type: response.headers["content-type"],
             cache: response.headers["cache-control"],
+            headers: response.headers,
             body,
           }),
         );
@@ -107,8 +110,26 @@ function openSocket(url: string, origin: string, path = SERVE_CORE_PATH): Promis
   });
 }
 
-/** A window's connection to the core over the page's socket. */
-function windowClient(socket: WebSocket): CoreClient {
+/** The headers of the answer that refuses a socket. */
+function refusedSocket(url: string, origin: string): Promise<IncomingHttpHeaders> {
+  const socket = new WebSocket(`${url.replace("http:", "ws:")}${SERVE_CORE_PATH}`, { origin });
+  return new Promise((resolve, reject) => {
+    socket.once("unexpected-response", (_request, response) => {
+      resolve(response.headers);
+      response.destroy();
+    });
+    socket.once("open", () => reject(new Error("The socket opened.")));
+  });
+}
+
+const forbidsFraming = {
+  "content-security-policy": "frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+};
+
+/** A window's connection to the core over the page's socket, recording the core's requests to it. */
+function windowClient(socket: WebSocket, requests: IncomingRequest[] = []): CoreClient {
   const channel = messageChannel(
     {
       write: (bytes) => socket.send(bytes),
@@ -125,7 +146,14 @@ function windowClient(socket: WebSocket): CoreClient {
     },
     binaryFrameCodec,
   );
-  return createRemoteClient(createPeer(framedEndpoint(channel)));
+  return createRemoteClient(
+    createPeer(framedEndpoint(channel), {
+      handleRequest: (request) => {
+        requests.push(request);
+        return undefined;
+      },
+    }),
+  );
 }
 
 describe("arcue serve", () => {
@@ -164,6 +192,29 @@ describe("arcue serve", () => {
     expect((await get(url, "/", { method: "POST" })).status).toBe(405);
   });
 
+  it("forbids other pages to frame it, and sends no referrer, in every answer", async () => {
+    const { url } = await serve();
+    const { port } = new URL(url);
+
+    const answers = {
+      page: await get(url, "/"),
+      asset: await get(url, "/assets/index-abc.js"),
+      head: await get(url, "/", { method: "HEAD" }),
+      missing: await get(url, "/assets/missing.js"),
+      outside: await get(url, "/%2e%2e/secret.txt"),
+      malformed: await get(url, "/%E0%A4%A"),
+      otherHost: await get(url, "/", { host: `evil.example:${port}` }),
+      write: await get(url, "/", { method: "POST" }),
+    };
+    for (const [name, answer] of Object.entries(answers)) {
+      expect(answer.headers, name).toMatchObject({ ...forbidsFraming, "x-content-type-options": "nosniff" });
+    }
+    expect(answers.page.status).toBe(200);
+    expect(answers.otherHost.status).toBe(403);
+    expect(answers.write.status).toBe(405);
+    expect(await refusedSocket(url, "https://evil.example")).toMatchObject(forbidsFraming);
+  });
+
   it("knows the Host headers of localhost addresses, without the port for port 80", () => {
     expect([...localHosts(4530)]).toEqual(["localhost:4530", "127.0.0.1:4530", "[::1]:4530"]);
     expect([...localHosts(80)]).toEqual(["localhost", "127.0.0.1", "[::1]"]);
@@ -177,6 +228,50 @@ describe("arcue serve", () => {
     await expect(client.query("asset.list", {})).resolves.toEqual({ assets: [] });
     await expect(client.execute("view.reportFocus", {})).resolves.toBeUndefined();
     socket.close();
+  });
+
+  it("connects a page whose address names a view as that view's page", async () => {
+    const { url } = await serve();
+    const model = join(temp, "Hero.fbx");
+    writeFileSync(model, "fbx");
+    const viewed: IncomingRequest[] = [];
+    const outside: IncomingRequest[] = [];
+    windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=3f9a0c1d2b4e`), viewed);
+    windowClient(await openSocket(url, url), outside);
+    const connection = await connectToCore(userData);
+
+    await expect(
+      connection?.client.execute("asset.openInView", { path: model, view: "3f9a0c1d2b4e" }),
+    ).resolves.toMatchObject({ shown: "view" });
+
+    expect(viewed.map((request) => request.name)).toEqual(["view.showAsset"]);
+    expect(outside).toEqual([]);
+    connection?.close();
+  });
+
+  it("holds a model for its view's page without waiting for a browser", async () => {
+    let waited = false;
+    const { url } = await serve({ onWaitingForWindow: () => (waited = true) });
+    const model = join(temp, "Hero.fbx");
+    writeFileSync(model, "fbx");
+    const other: IncomingRequest[] = [];
+    windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=b`), other);
+    const connection = await connectToCore(userData);
+
+    await expect(connection?.client.execute("asset.openInView", { path: model, view: "a" })).resolves.toMatchObject({
+      shown: "held",
+    });
+
+    expect(waited).toBe(false);
+    expect(other).toEqual([]);
+    connection?.close();
+  });
+
+  it("refuses a page socket whose address names a view that is not valid", async () => {
+    const { url } = await serve();
+
+    await expect(openSocket(url, url, `${SERVE_CORE_PATH}?view=..%2Fa`)).rejects.toThrow("400");
+    await expect(openSocket(url, url, `${SERVE_CORE_PATH}?view=a&view=b`)).rejects.toThrow("400");
   });
 
   it("refuses sockets from other origins and on other paths", async () => {
@@ -229,7 +324,7 @@ describe("arcue serve", () => {
 
     const info = bridgeInfoSchema.parse(JSON.parse(readFileSync(join(userData, BRIDGE_INFO_FILE), "utf8")));
     expect(info.url).toBe(url);
-    const connection = await connectToApp(userData);
+    const connection = await connectToCore(userData);
     expect(connection?.info.url).toBe(url);
     await expect(connection?.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
     connection?.close();

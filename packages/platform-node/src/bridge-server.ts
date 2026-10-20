@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { ArcueCore } from "@arcue/core";
 import type { BridgeInfo, ListenerErrorHandler, MessageEndpoint } from "@arcue/protocol";
 import {
+  ArcueError,
   acceptBridge,
   BRIDGE_INFO_FILE,
   bridgeInfoSchema,
@@ -14,14 +15,20 @@ import {
   HANDSHAKE_MAX_FRAME_BYTES,
   isEnvelope,
   jsonFrameCodec,
+  viewNameSchema,
 } from "@arcue/protocol";
+import { runningCore } from "./core-connection";
 import { socketStream } from "./node-socket";
 
 export interface BridgeServerOptions {
   core: ArcueCore;
   userData: string;
-  /** Resolves once a window is open, so an "asset.open" from the command line has a window to show it in. */
-  ensureWindow: () => Promise<void>;
+  /**
+   * Resolves once a window is open that may show a model the command line opens for an agent session's view, or with
+   * null for none, so the core has a window to show it in. A host whose views' pages only the agent can open resolves
+   * at once for a view, and the core holds the model for the page.
+   */
+  ensureWindow: (view: string | null) => Promise<void>;
   onError: ListenerErrorHandler;
   handshakeTimeoutMs?: number;
   /** Where a browser shows this core's window, for `bridge.json`. */
@@ -31,6 +38,17 @@ export interface BridgeServerOptions {
 export interface BridgeServer {
   readonly info: BridgeInfo;
   close(): Promise<void>;
+}
+
+/** Another core answers at `bridge.json`. */
+export class CoreRunningError extends ArcueError {
+  readonly running: BridgeInfo;
+
+  constructor(running: BridgeInfo) {
+    const where = running.url ? ` at ${running.url}` : "";
+    super("conflict", `Arcue is already running${where} (process ${running.pid}).`);
+    this.running = running;
+  }
 }
 
 /** macOS limits a Unix socket path to 104 bytes, Linux to 108. */
@@ -47,9 +65,8 @@ export interface BridgeAddress {
  * Where the core listens, reachable only by this user: a Unix domain socket in a folder only the user can enter, or a
  * named pipe with a new random name on each start, since any user can see pipe names. `bridge.json` names it.
  *
- * Each server gets its own socket, since a closing server removes its socket by path: a core that stops after another
- * one took over `bridge.json`, as `arcue serve` does when the desktop app starts beside it, removes only its own.
- * Sockets of processes that have ended are removed.
+ * Each server gets its own socket, named after its process, so a closing server removes only its own. Sockets of
+ * processes that have ended are removed.
  */
 export async function bridgeAddress(
   userData: string,
@@ -101,10 +118,15 @@ async function privateFolder(path: string): Promise<void> {
  * Listens for the command line on a local socket. Each connection must present the token from `bridge.json`, which
  * only the user can read, and is then served with the caller "bridge", so internal commands are refused. A hello
  * that names a user makes that user the author of what the connection does.
+ *
+ * Only one core may run for a data folder, since two would overwrite each other's review files. While another core
+ * answers at `bridge.json`, this throws a `CoreRunningError` and leaves that core's file alone.
  */
 export async function startBridgeServer(options: BridgeServerOptions): Promise<BridgeServer> {
   const infoPath = join(options.userData, BRIDGE_INFO_FILE);
   await mkdir(options.userData, { recursive: true, mode: 0o700 });
+  const running = await runningCore(options.userData);
+  if (running) throw new CoreRunningError(running);
   await rm(infoPath, { force: true });
   const address = await bridgeAddress(options.userData);
   const token = randomBytes(32).toString("base64url");
@@ -196,8 +218,14 @@ function unrefTimer(delayMs: number, callback: () => void): () => void {
   return () => clearTimeout(handle);
 }
 
-/** Holds back an "asset.open" request until a window is open, keeping every message in order. */
-export function windowFirst(endpoint: MessageEndpoint, ensureWindow: () => Promise<void>): MessageEndpoint {
+/**
+ * Holds back a request that opens a model until a window that may show it is open, for the view the request names or
+ * for none, keeping every message in order.
+ */
+export function windowFirst(
+  endpoint: MessageEndpoint,
+  ensureWindow: (view: string | null) => Promise<void>,
+): MessageEndpoint {
   return {
     post: (message, transfer) => endpoint.post(message, transfer),
     onClose: (listener) => endpoint.onClose(listener),
@@ -205,12 +233,22 @@ export function windowFirst(endpoint: MessageEndpoint, ensureWindow: () => Promi
       let queue = Promise.resolve();
       return endpoint.listen((message) => {
         queue = queue.then(async () => {
-          if (isEnvelope(message) && message.type === "request" && message.name === "asset.open") {
-            await ensureWindow().catch(() => undefined);
-          }
+          const view = openedView(message);
+          if (view !== undefined) await ensureWindow(view).catch(() => undefined);
           listener(message);
         });
       });
     },
   };
+}
+
+/** The view a request that opens a model names: null for "asset.open", and undefined for any other message. */
+function openedView(message: unknown): string | null | undefined {
+  if (!isEnvelope(message) || message.type !== "request" || message.kind !== "command") return undefined;
+  if (message.name === "asset.open") return null;
+  if (message.name !== "asset.openInView" || typeof message.input !== "object" || message.input === null) {
+    return undefined;
+  }
+  const view = viewNameSchema.safeParse((message.input as { view?: unknown }).view);
+  return view.success ? view.data : undefined;
 }

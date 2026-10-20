@@ -1,4 +1,5 @@
 import type { SceneDescription } from "@arcue/scene";
+import { skeletonNodes } from "@arcue/scene";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -21,12 +22,11 @@ export class SkeletonOverlay {
   private readonly dotTexture: CanvasTexture;
 
   constructor(scene: SceneDescription, color: string) {
-    const joints = new Set(scene.skeletons.flatMap((skeleton) => skeleton.joints));
-    const isBone = (index: number) => scene.nodes[index]?.kind === "bone" || joints.has(index);
-    this.bones = scene.nodes.map((_, index) => index).filter(isBone);
+    this.bones = skeletonNodes(scene);
+    const drawn = new Set(this.bones);
     this.parents = this.bones.map((bone) => {
       for (let parent = scene.nodes[bone]?.parent ?? -1; parent >= 0; parent = scene.nodes[parent]?.parent ?? -1) {
-        if (isBone(parent)) return parent;
+        if (drawn.has(parent)) return parent;
       }
       return -1;
     });

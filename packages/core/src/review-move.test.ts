@@ -1,4 +1,5 @@
 import type { Comment, CompositionFile, ReviewFile } from "@arcue/protocol";
+import { REVIEW_FORMAT } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
 import { MemoryPlatform } from "./memory-platform";
 import { moveReview, relabelMembers } from "./review-move";
@@ -109,6 +110,7 @@ describe("moveReview", () => {
     const review = JSON.parse(await platform.readText(`${NEW}/review.json`)) as ReviewFile;
     expect(review.asset.path).toBe("Assets/New/Striker.fbx");
     expect(review.revision).toBe(8);
+    expect(review.format).toBe(REVIEW_FORMAT);
   });
 
   it("points the composition at the same files from the new folder, and renames the ids of moved paths", async () => {
@@ -179,6 +181,26 @@ describe("moveReview", () => {
       await expect(platform.readText(`${OLD}/review.json`)).resolves.toBe(text);
       await expect(platform.readText(`${NEW}/review.json`)).resolves.toBe(untouched);
     }
+  });
+
+  it("refuses to move a review a newer Arcue saved, or to replace one as untouched", async () => {
+    const newer = (review: ReviewFile) => JSON.stringify({ ...review, format: REVIEW_FORMAT + 1, notes: "Kept." });
+    const moving = newer(reviewWith([comment({})]));
+    const platform = new MemoryPlatform({ files: { ...files(), [`${OLD}/review.json`]: moving } });
+    await expect(moveReview(platform, move)).rejects.toMatchObject({
+      code: "forbidden",
+      message: "The review of Hero.fbx was saved by a newer version of Arcue. Update Arcue to change it.",
+    });
+    await expect(platform.readText(`${OLD}/review.json`)).resolves.toBe(moving);
+    await expect(platform.exists(NEW)).resolves.toBe(false);
+
+    const waiting = newer(emptyReview("Assets/New/Striker.fbx"));
+    const occupied = new MemoryPlatform({ files: { ...files(), [`${NEW}/review.json`]: waiting } });
+    await expect(moveReview(occupied, { ...move, replaceUntouched: true })).rejects.toMatchObject({
+      code: "conflict",
+      message: "Striker.fbx already has a review, so the review of Hero.fbx stays where it is.",
+    });
+    await expect(occupied.readText(`${NEW}/review.json`)).resolves.toBe(waiting);
   });
 
   it("moves the folder back with its composition as it was when a write at the new place fails", async () => {

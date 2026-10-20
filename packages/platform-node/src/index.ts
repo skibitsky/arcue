@@ -1,5 +1,7 @@
 export type { BridgeServer, BridgeServerOptions } from "./bridge-server";
-export { startBridgeServer } from "./bridge-server";
+export { CoreRunningError, startBridgeServer } from "./bridge-server";
+export type { CoreConnection } from "./core-connection";
+export { connectToCore, runningCore } from "./core-connection";
 export type { PathStyle } from "./native-paths";
 export { fromNativePath, hostPathStyle, toNativePath } from "./native-paths";
 export { startNodeImportWorker } from "./node-import-worker";

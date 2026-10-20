@@ -1,25 +1,13 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { connect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { socketStream } from "@arcue/platform-node";
-import type { BridgeInfo, CoreClient, LaunchInfo, Peer } from "@arcue/protocol";
-import {
-  ArcueError,
-  BRIDGE_INFO_FILE,
-  bridgeInfoSchema,
-  connectBridge,
-  createPeer,
-  createRemoteClient,
-  framedChannel,
-  HANDSHAKE_MAX_FRAME_BYTES,
-  jsonFrameCodec,
-  LAUNCH_INFO_FILE,
-  launchInfoSchema,
-} from "@arcue/protocol";
+import type { CoreConnection } from "@arcue/platform-node";
+import { connectToCore } from "@arcue/platform-node";
+import type { LaunchInfo } from "@arcue/protocol";
+import { ArcueError, LAUNCH_INFO_FILE, launchInfoSchema } from "@arcue/protocol";
 
 /** The app's data folder: `ARCUE_USER_DATA` when set, otherwise where Electron keeps an app named "Arcue". */
 export function userDataDir(
@@ -33,17 +21,6 @@ export function userDataDir(
   return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Arcue");
 }
 
-export interface AppConnection {
-  client: CoreClient;
-  info: BridgeInfo;
-  close(): void;
-}
-
-const timer = (delayMs: number, callback: () => void) => {
-  const handle = setTimeout(callback, delayMs);
-  return () => clearTimeout(handle);
-};
-
 async function readJson(path: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(path, "utf8"));
@@ -52,45 +29,9 @@ async function readJson(path: string): Promise<unknown> {
   }
 }
 
-export async function readBridgeInfo(userData: string): Promise<BridgeInfo | null> {
-  const parsed = bridgeInfoSchema.safeParse(await readJson(join(userData, BRIDGE_INFO_FILE)));
-  return parsed.success ? parsed.data : null;
-}
-
 export async function readLaunchInfo(userData: string): Promise<LaunchInfo | null> {
   const parsed = launchInfoSchema.safeParse(await readJson(join(userData, LAUNCH_INFO_FILE)));
   return parsed.success ? parsed.data : null;
-}
-
-/** Connects to the running app's core and presents the token; null when nothing listens on the socket. */
-export async function connectToApp(userData: string, handshakeMs = 5000): Promise<AppConnection | null> {
-  const info = await readBridgeInfo(userData);
-  if (!info) return null;
-  const socket = connect(info.socket);
-  const opened = await new Promise<boolean>((resolve) => {
-    socket.once("connect", () => resolve(true));
-    socket.once("error", () => resolve(false));
-  });
-  if (!opened) {
-    socket.destroy();
-    return null;
-  }
-  const channel = framedChannel(socketStream(socket), jsonFrameCodec, {
-    firstFrameMaxBytes: HANDSHAKE_MAX_FRAME_BYTES,
-  });
-  const endpoint = await connectBridge(channel, {
-    token: info.token,
-    timeout: { ms: handshakeMs, setTimer: timer },
-  });
-  const peer: Peer = createPeer(endpoint);
-  return {
-    client: createRemoteClient(peer),
-    info,
-    close: () => {
-      peer.close();
-      socket.destroy();
-    },
-  };
 }
 
 /** What runs the command line: the Node, or the Electron running as Node, and the folder of the script. */
@@ -199,11 +140,11 @@ export interface ConnectOrLaunchOptions {
 export async function connectOrLaunch(
   userData: string,
   { timeoutMs = 30_000, pollMs = 200, handshakeMs = 5000, app = bundledApp() }: ConnectOrLaunchOptions = {},
-): Promise<AppConnection> {
+): Promise<CoreConnection> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown = null;
   const attempt = () =>
-    connectToApp(userData, handshakeMs).catch((error: unknown) => {
+    connectToCore(userData, handshakeMs).catch((error: unknown) => {
       lastError = error;
       return null;
     });

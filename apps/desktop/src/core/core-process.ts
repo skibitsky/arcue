@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { ArcueCore } from "@arcue/core";
 import type { BridgeServer } from "@arcue/platform-node";
 import {
+  CoreRunningError,
   fromNativePath,
   NodePlatform,
   startBridgeServer,
@@ -89,19 +90,29 @@ async function start(userData: string, logFile: string): Promise<void> {
       writeClipboard,
     });
     const started = await ArcueCore.start({ platform, onError });
+    try {
+      bridge = await startBridgeServer({
+        core: started,
+        userData,
+        ensureWindow: (view) => windows.ensure(view),
+        onError,
+      });
+      log.info(`The bridge listens on ${bridge.info.socket}`);
+    } catch (error) {
+      if (error instanceof CoreRunningError) {
+        started.dispose();
+        log.info(`${error.message} This core stops.`);
+        post({ type: "already-running", pid: error.running.pid, url: error.running.url ?? null });
+        return;
+      }
+      log.error("The bridge for the command line could not start; windows work without it", error);
+    }
     started.client.subscribe("asset.updated", ({ asset }) => {
       if (asset.status === "failed")
         log.error(`${asset.path} could not be opened: ${asset.error ?? "no reason given"}`);
     });
     core = started;
     for (const { connection, port } of waitingPorts.splice(0)) connectWindow(started, connection, port);
-    bridge = await startBridgeServer({ core: started, userData, ensureWindow: () => windows.ensure(), onError }).catch(
-      (error: unknown) => {
-        log.error("The bridge for the command line could not start; windows work without it", error);
-        return null;
-      },
-    );
-    if (bridge) log.info(`The bridge listens on ${bridge.info.socket}`);
     post({ type: "started", socket: bridge?.info.socket ?? null });
   } catch (error) {
     log.error("The core could not start", error);

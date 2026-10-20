@@ -1,6 +1,6 @@
 import type { DisplayMode } from "@arcue/protocol";
 import type { MaterialSlot, MaterialSlots, SceneDescription, Texture } from "@arcue/scene";
-import { fileNameOf, materialSlots } from "@arcue/scene";
+import { fileNameOf, materialSlots, skeletonNodes } from "@arcue/scene";
 import { Popover } from "radix-ui";
 import type { DragEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -24,7 +24,6 @@ const displayModes: { mode: DisplayMode; label: string; icon: "lit" | "clay" | "
 export function Toolbar({ store, session }: { store: WorkspaceStore; session: AssetSession }) {
   const tool = useSelect(session.state, (state) => state.tool);
   const displayMode = useSelect(session.state, (state) => state.displayMode);
-  const skeleton = useSelect(session.state, (state) => state.skeleton);
   const ready = useSelect(session.state, (state) => state.viewportReady);
   return (
     <div className="toolbar">
@@ -61,13 +60,7 @@ export function Toolbar({ store, session }: { store: WorkspaceStore; session: As
           />
         ))}
       </fieldset>
-      <IconButton
-        icon="skeleton"
-        label="Skeleton"
-        tipSide="bottom"
-        pressed={skeleton}
-        onClick={() => session.setSkeleton(!skeleton)}
-      />
+      <SkeletonButton session={session} />
       <LodSwitch session={session} />
       <span className="tb-sep" />
       <IconButton
@@ -103,6 +96,23 @@ function OutlineButton({ session }: { session: AssetSession }) {
       />
       <span className="tb-sep" />
     </>
+  );
+}
+
+/** The skeleton toggle, dimmed for a model without bones or skin joints. */
+function SkeletonButton({ session }: { session: AssetSession }) {
+  const scene = useSelect(session.state, (state) => state.scene);
+  const missing = useMemo(() => scene !== null && skeletonNodes(scene).length === 0, [scene]);
+  const skeleton = useSelect(session.state, (state) => state.skeleton);
+  return (
+    <IconButton
+      icon="skeleton"
+      label="Skeleton"
+      tipSide="bottom"
+      pressed={skeleton && !missing}
+      unavailable={missing ? "This model has no skeleton" : undefined}
+      onClick={() => session.setSkeleton(!skeleton)}
+    />
   );
 }
 
