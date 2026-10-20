@@ -1,8 +1,9 @@
 name: Release
 
-# Builds the desktop app, with the arcue command, for macOS, Windows and Linux on Arm and x64, each on its own kind of
-# runner. Each job installs what it built, checks that arcue runs from PATH on the app's own Node and opens models in
-# the app, and uninstalls it again. A tag v<version>, where <version> is the version in apps/desktop/package.json,
+# Builds the desktop app, with the arcue command, for macOS, Windows and Linux on Arm and x64. Windows and Linux build
+# on a runner of each architecture. Both macOS apps build on Apple silicon, as pnpm has no Intel macOS build, and the
+# Intel app runs there under Rosetta. Each job installs what it built, checks that arcue runs from PATH on the app's
+# own Node and opens models in the app, and uninstalls it again. A tag v<version>, where <version> is the version in apps/desktop/package.json,
 # then publishes a GitHub release with the installers, SHA256SUMS.txt and build provenance attestations. Pull requests
 # that change the packaging, and manual runs, keep the installers as workflow artifacts instead.
 #
@@ -46,7 +47,7 @@ jobs:
       matrix:
         include:
           - { target: mac-arm64, platform: darwin, arch: arm64, runner: macos-latest }
-          - { target: mac-x64, platform: darwin, arch: x64, runner: macos-15-intel }
+          - { target: mac-x64, platform: darwin, arch: x64, runner: macos-latest }
           - { target: win-x64, platform: win32, arch: x64, runner: windows-latest }
           - { target: win-arm64, platform: win32, arch: arm64, runner: windows-11-arm }
           - { target: linux-x64, platform: linux, arch: x64, runner: ubuntu-latest }
@@ -181,6 +182,8 @@ jobs:
           ditto "$mount/Arcue.app" "$RUNNER_TEMP/Applications/Arcue.app"
           hdiutil detach "$mount"
           app="$RUNNER_TEMP/Applications/Arcue.app"
+          if [ "$ARCH" = x64 ]; then want=x86_64; else want=arm64; fi
+          [ "$(lipo -archs "$app/Contents/MacOS/Arcue")" = "$want" ]
           codesign --verify --deep --strict "$app"
           if [ -n "${ARCUE_APPLE_API_KEY:-}" ]; then
             xcrun stapler validate "$app"

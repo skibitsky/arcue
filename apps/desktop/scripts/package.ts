@@ -52,6 +52,7 @@ const [bundle] = await packager({
   dir: staging,
   name: PRODUCT.name,
   appBundleId: PRODUCT.bundleId,
+  win32metadata: { CompanyName: PRODUCT.name },
   appVersion: version.full,
   buildVersion: version.numeric,
   platform,

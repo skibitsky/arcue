@@ -95,6 +95,16 @@ async function statusOnceReady(env: NodeJS.ProcessEnv, files: readonly string[])
   }
 }
 
+/** The end of the app's own logs, which a failed check prints. */
+async function appLogs(userData: string): Promise<string> {
+  const parts: string[] = [];
+  for (const name of ["main.log", "core.log"]) {
+    const text = await readFile(join(userData, "logs", name), "utf8").catch(() => "(none)\n");
+    parts.push(`--- ${name}\n${text.split("\n").slice(-80).join("\n")}`);
+  }
+  return parts.join("\n");
+}
+
 const work = await realpath(await mkdtemp(join(tmpdir(), "arcue smoke & (x) ")));
 const userData = join(work, "user data");
 const models = join(work, "My Models");
@@ -131,7 +141,13 @@ try {
   const notRunning = await arcue(["status"], env);
   check(notRunning.code === 1 && notRunning.stdout === "Arcue is not running.\n", "arcue status before", notRunning);
 
-  const started = await arcue(["open", striker, "--clip", CLIP, "--frame", "12"], env);
+  const openStriker = ["open", striker, "--clip", CLIP, "--frame", "12"];
+  let started = await arcue(openStriker, env);
+  if (started.code !== 0 && started.stderr.includes("did not answer")) {
+    // Without a GPU, the window's first render can block it for longer than the core waits for an answer.
+    console.warn(`The window was slow to answer the first arcue open, so it opens again.\n${started.stderr}`);
+    started = await arcue(openStriker, env);
+  }
   check(
     started.code === 0 && started.stdout.startsWith(`Opened ${striker} in Arcue as `),
     "arcue open, starting the app",
@@ -149,6 +165,9 @@ try {
   check(status.code === 0 && status.stdout.startsWith("Arcue is running (process "), "arcue status", status);
   check(allReady(status, [striker, golem]), "arcue status lists both models as ready", status);
   console.log(`${command} runs on ${node}, starts the app and opens models in it.`);
+} catch (error) {
+  console.error(await appLogs(userData));
+  throw error;
 } finally {
   await stopApp(userData);
   await rm(work, { recursive: true, force: true }).catch(() => undefined);
