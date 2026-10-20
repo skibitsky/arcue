@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as viewStateSchema, B as materialSlots, C as IMAGE_FILE_EXTENSIONS, D as joinsByName, E as compositionFileSchema, H as fileNameOf, I as countInRanges, J as memberPath, K as composeScene, L as decodeRanges, O as keysModelBones, P as lastFrame, R as encodeRanges, S as COMPOSITION_FILE_NAME, T as animatesModel, U as imageMimeType, V as parseStoredPath, W as sameTopology, X as describeTextureUses, Y as splitMemberPath, Z as importWarning, _ as commands, _t as framedEndpoint, a as isQueryName, at as TEXTURE_SLOTS, b as warningId, bt as COMMENT_ID_PATTERN, c as importReadFileInputSchema, ct as HANDSHAKE_MAX_FRAME_BYTES, d as createPeer, dt as acceptBridge, et as isDefaultPartView, f as withTransfer, ft as bridgeInfoSchema, g as reviewFileSchema, gt as framedChannel, h as reportListenerError, ht as MAX_FRAME_BYTES, i as roundDataSchema, it as TEXTURE_REF_NAMES, k as memberRoles, l as importRequests, lt as LAUNCH_INFO_FILE, m as callEach, mt as launchInfoSchema, n as binaryFrameCodec, nt as shownByDefault, o as queries, p as isEnvelope, pt as connectBridge, q as findNode, r as jsonFrameCodec, rt as TEXTURE_REF_KEYS, s as importFindFileInputSchema, st as BRIDGE_INFO_FILE, t as portEndpoint, tt as knownPartView, v as isCommandName, vt as messageChannel, w as MODEL_FILE_EXTENSIONS, x as screenshotOwner, y as settingsSchema, yt as ArcueError, z as rangesWithin } from "./arcue-B7VgtAwc.js";
+import { A as memberRoles, B as rangesWithin, C as COMPOSITION_FILE_NAME, D as compositionFileSchema, E as animatesModel, F as lastFrame, G as sameTopology, H as parseStoredPath, J as findNode, L as countInRanges, O as joinsByName, Q as importWarning, R as decodeRanges, S as screenshotOwner, T as MODEL_FILE_EXTENSIONS, U as fileNameOf, V as materialSlots, W as imageMimeType, X as splitMemberPath, Y as memberPath, Z as describeTextureUses, _ as reviewFormat, _t as framedChannel, a as isQueryName, at as TEXTURE_REF_NAMES, b as settingsSchema, bt as ArcueError, c as importReadFileInputSchema, ct as BRIDGE_INFO_FILE, d as createPeer, f as withTransfer, ft as acceptBridge, g as reviewFileSchema, gt as MAX_FRAME_BYTES, h as reportListenerError, ht as launchInfoSchema, i as roundDataSchema, it as TEXTURE_REF_KEYS, j as viewStateSchema, k as keysModelBones, l as importRequests, lt as HANDSHAKE_MAX_FRAME_BYTES, m as callEach, mt as connectBridge, n as binaryFrameCodec, nt as knownPartView, o as queries, ot as TEXTURE_SLOTS, p as isEnvelope, pt as bridgeInfoSchema, q as composeScene, r as jsonFrameCodec, rt as shownByDefault, s as importFindFileInputSchema, t as portEndpoint, tt as isDefaultPartView, ut as LAUNCH_INFO_FILE, v as commands, vt as framedEndpoint, w as IMAGE_FILE_EXTENSIONS, x as warningId, xt as COMMENT_ID_PATTERN, y as isCommandName, yt as messageChannel, z as encodeRanges } from "./arcue-Cwht77Mb.js";
 import { createRequire } from "node:module";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
@@ -2128,6 +2128,24 @@ async function loadReview(platform, location) {
 		text
 	};
 }
+/** Whether a newer Arcue saved the review, which may then hold fields that this build drops as it reads the file. */
+function isNewerFormat(review) {
+	return reviewFormat(review) > 1;
+}
+/** Refuses to save over a review a newer Arcue saved, since that would delete the fields this build does not know. */
+function checkSavable(review, location) {
+	if (isNewerFormat(review)) throw new ArcueError("forbidden", `The review of ${basename(location.folder)} was saved by a newer version of Arcue. Update Arcue to change it.`);
+}
+/** The review as this build saves it: at `revision`, and in this build's format, recorded beside the schema version. */
+function savedReview(review, revision) {
+	const { schemaVersion, format: _format, ...rest } = review;
+	return {
+		schemaVersion,
+		format: 1,
+		...rest,
+		revision
+	};
+}
 /** The file text of a review, after checking it against the schema. */
 function serializeReview(review) {
 	const checked = reviewFileSchema.safeParse(review);
@@ -2143,10 +2161,10 @@ function serializeReview(review) {
 * Moves a model's review folder, with its `review.json`, `composition.json`, screenshots and rounds, to the review
 * folder of the model's new path in one rename, then writes the new path into `review.json`. It never overwrites or
 * merges: a review or anything else at the new place refuses the move with "conflict", except an empty folder or, with
-* `replaceUntouched`, an untouched review. A `review.json` it cannot read refuses the move before anything changes, and
-* a failure after the rename moves the folder back. When the model moved to another folder or took another name, the
-* composition's paths are rewritten so they still find the same files, and the ids `review.json` keeps for those
-* files follow them.
+* `replaceUntouched`, an untouched review. A `review.json` it cannot read or a newer Arcue saved refuses the move
+* before anything changes, and a failure after the rename moves the folder back. When the model moved to another
+* folder or took another name, the composition's paths are rewritten so they still find the same files, and the ids
+* `review.json` keeps for those files follow them.
 */
 async function moveReview(platform, move) {
 	const { from, to } = move;
@@ -2155,6 +2173,7 @@ async function moveReview(platform, move) {
 	await checkReviewPath(platform, to, to.folder);
 	if ((await platform.stat(source))?.kind !== "file") throw new ArcueError("not-found", `${basename(move.fromModel)} has no review to move.`);
 	const review = parseReview(await platform.readText(source), source);
+	checkSavable(review, from);
 	const composition = await movedComposition(platform, move, review);
 	await clearTarget(platform, move);
 	await prepareArcueFolder(platform, to);
@@ -2169,10 +2188,7 @@ async function moveReview(platform, move) {
 				path: to.assetPath
 			}
 		}, composition.labels);
-		await writeReviewFile(platform, to, reviewFilePath(to), serializeReview({
-			...moved,
-			revision: review.revision + 1
-		}));
+		await writeReviewFile(platform, to, reviewFilePath(to), serializeReview(savedReview(moved, review.revision + 1)));
 	} catch (error) {
 		const undo = async () => {
 			if (composition.text !== null) {
@@ -2188,9 +2204,12 @@ async function moveReview(platform, move) {
 	}
 	await removeEmptyFolders(platform, from);
 }
-/** Whether a review holds nothing but versions: no comments, rounds or dismissed warnings. */
+/**
+* Whether a review holds nothing but versions: no comments, rounds or dismissed warnings. A review a newer Arcue saved
+* may hold what this build cannot read, so it never counts as untouched.
+*/
 function isUntouched(review) {
-	return review.comments.length === 0 && review.rounds.length === 0 && (review.dismissedWarnings ?? []).length === 0;
+	return !isNewerFormat(review) && review.comments.length === 0 && review.rounds.length === 0 && (review.dismissedWarnings ?? []).length === 0;
 }
 async function clearTarget(platform, move) {
 	const { folder } = move.to;
@@ -3364,7 +3383,9 @@ var encoder$1 = new TextEncoder();
 * One asset's `review.json` while the asset is open. Changes run one at a time. Each starts from the file on disk:
 * when another program changed it, the session adopts that content, drops the undo history, and computes the change
 * from it. Just before saving it checks the file again and starts over if it moved. Each save adds one to the
-* review's `revision`. A change that would write the text the file already holds, and no other file, is not saved.
+* review's `revision` and records this build's format. A change that would write the text the file already holds,
+* and no other file, is not saved. A review a newer Arcue saved can be read but not changed: a change that would save
+* it is refused, so the fields this build does not know stay in the file.
 */
 var ReviewSession = class {
 	history = new ReviewHistory();
@@ -3397,23 +3418,18 @@ var ReviewSession = class {
 				await this.#sync();
 				const current = this.#review;
 				const change = await compute(current);
-				if (change.next === null || !change.prepare && !change.clearHistory && this.#matchesDisk({
-					...change.next,
-					revision: current.revision
-				})) {
+				if (change.next === null || !change.prepare && !change.clearHistory && this.#unchanged(change.next, current)) {
 					change.apply?.();
 					if (change.edit) this.history.record(change.edit);
 					return change.result;
 				}
-				const next = {
-					...change.next,
-					revision: current.revision + 1
-				};
+				const next = savedReview(change.next, current.revision + 1);
 				const text = serializeReview(next);
 				if ((await this.#readDisk()).hash !== this.#diskHash) {
 					if (attempt < ATTEMPTS) continue;
 					throw new ArcueError("conflict", "review.json keeps changing on disk; try again.");
 				}
+				checkSavable(current, this.#location);
 				await prepareArcueFolder(this.#platform, this.#location);
 				try {
 					await change.prepare?.();
@@ -3479,9 +3495,17 @@ var ReviewSession = class {
 			return true;
 		}
 	}
-	/** Whether saving the review would write the text the file already holds. */
-	#matchesDisk(review) {
-		return this.#diskHash !== null && textHash(serializeReview(review)) === this.#diskHash;
+	/**
+	* Whether saving the review would change nothing: it would write the text the file already holds, or, for a review a
+	* newer Arcue saved, which reads without the fields this build does not know, the review as it was read.
+	*/
+	#unchanged(review, current) {
+		const text = serializeReview({
+			...review,
+			revision: current.revision
+		});
+		if (isNewerFormat(current)) return text === serializeReview(current);
+		return this.#diskHash !== null && textHash(text) === this.#diskHash;
 	}
 	async #sync() {
 		const disk = await this.#readDisk();
@@ -9493,14 +9517,22 @@ var CONTENT_TYPES = {
 	".png": "image/png",
 	".ico": "image/x-icon"
 };
+/** Sent with every response: no website may show these pages in a frame, and links from them reveal no address. */
+var PAGE_HEADERS = {
+	"Content-Security-Policy": "frame-ancestors 'none'",
+	"X-Frame-Options": "DENY",
+	"Referrer-Policy": "no-referrer",
+	"X-Content-Type-Options": "nosniff"
+};
 /**
 * Runs a core on this computer's files and serves its window to a browser on localhost, as the desktop app shows it in
 * its own window. The core takes the desktop app's place: it writes `bridge.json`, so `arcue open` and `arcue status`
 * reach it, and it refuses to start while another core runs.
 *
 * Only pages from this server's own origin can connect to the core, and only through a localhost address, so other
-* websites and DNS rebinding cannot reach it. Like any local web server, it is open to other programs on this computer
-* while it runs.
+* websites and DNS rebinding cannot reach it. No website may show its pages in a frame, where the user could not see a
+* model the command line opens and clicks could be hijacked. Like any local web server, it is open to other programs on
+* this computer while it runs.
 */
 async function startServer(options) {
 	const webUi = await realpath(options.webUi).catch(() => null);
@@ -9563,6 +9595,7 @@ async function startServer(options) {
 	});
 	for (const server of http) {
 		server.on("request", (request, response) => {
+			for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
 			if (!allowed(request)) return refuse(response, 403);
 			if (request.method !== "GET" && request.method !== "HEAD") return refuse(response, 405);
 			sendFile(webUi, request, response).catch((error) => {
@@ -9574,7 +9607,7 @@ async function startServer(options) {
 		server.on("upgrade", (request, socket, head) => {
 			const path = URL.parse(request.url ?? "/", url)?.pathname;
 			if (!allowed(request) || path !== "/core/2" || request.headers.origin !== `http://${request.headers.host}`) {
-				socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+				socket.end(`HTTP/1.1 403 Forbidden\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
 				return;
 			}
 			sockets.handleUpgrade(request, socket, head, (connected) => sockets.emit("connection", connected, request));
@@ -9646,11 +9679,11 @@ function isCode(error, code) {
 	return error instanceof Error && error.code === code;
 }
 function refuse(response, status) {
-	response.writeHead(status, {
-		"Content-Type": "text/plain; charset=utf-8",
-		"X-Content-Type-Options": "nosniff"
-	});
+	response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
 	response.end(`${status}\n`);
+}
+function rawHeaders(headers) {
+	return Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
 }
 /** Sends a file from the web UI's folder, `index.html` for "/". Anything outside the folder is not found. */
 async function sendFile(webUi, request, response) {
@@ -9668,8 +9701,7 @@ async function sendFile(webUi, request, response) {
 	response.writeHead(200, {
 		"Content-Type": CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
 		"Content-Length": found.size,
-		"Cache-Control": relative.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
-		"X-Content-Type-Options": "nosniff"
+		"Cache-Control": relative.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache"
 	});
 	if (request.method === "HEAD") {
 		response.end();

@@ -8574,6 +8574,8 @@ var roundSummarySchema = object({
 */
 var reviewFileSchema = object({
 	schemaVersion: literal(1),
+	/** The `REVIEW_FORMAT` of the build that last saved the file. Older builds saved none, which reads as format 1. */
+	format: int().positive().optional(),
 	asset: object({
 		/** Relative to the workspace root, or absolute when the asset is outside a git repository. */
 		path: string().min(1),
@@ -8629,6 +8631,10 @@ var reviewFileSchema = object({
 		]);
 	});
 });
+/** The format a review was saved in. */
+function reviewFormat(review) {
+	return review.format ?? 1;
+}
 object({ asset: assetSummarySchema }), object({ asset: assetSummarySchema }), object({ assetId: assetIdSchema }), object({
 	assetId: assetIdSchema,
 	review: reviewFileSchema
@@ -9397,4 +9403,4 @@ function portEndpoint(port) {
 	};
 }
 //#endregion
-export { describeParts as $, viewStateSchema as A, materialSlots as B, IMAGE_FILE_EXTENSIONS as C, joinsByName as D, compositionFileSchema as E, mergeKeyTimes as F, topologyFingerprint as G, fileNameOf as H, countInRanges as I, memberPath as J, composeScene as K, decodeRanges as L, frameCountFor as M, isKeyedEveryFrame as N, keysModelBones as O, lastFrame as P, defaultViewBounds as Q, encodeRanges as R, COMPOSITION_FILE_NAME as S, animatesModel as T, imageMimeType as U, parseStoredPath as V, sameTopology as W, describeTextureUses as X, splitMemberPath as Y, importWarning as Z, commands as _, framedEndpoint as _t, isQueryName as a, TEXTURE_SLOTS as at, warningId as b, COMMENT_ID_PATTERN as bt, importReadFileInputSchema as c, HANDSHAKE_MAX_FRAME_BYTES as ct, createPeer as d, acceptBridge as dt, isDefaultPartView as et, withTransfer as f, bridgeInfoSchema as ft, reviewFileSchema as g, framedChannel as gt, reportListenerError as h, MAX_FRAME_BYTES as ht, roundDataSchema as i, TEXTURE_REF_NAMES as it, unshownUvSetWarnings as j, memberRoles as k, importRequests as l, LAUNCH_INFO_FILE as lt, callEach as m, launchInfoSchema as mt, binaryFrameCodec as n, shownByDefault as nt, queries as o, TEXTURE_SLOT_KEYS as ot, isEnvelope as p, connectBridge as pt, findNode as q, jsonFrameCodec as r, TEXTURE_REF_KEYS as rt, importFindFileInputSchema as s, BRIDGE_INFO_FILE as st, portEndpoint as t, knownPartView as tt, serveImportWorker as u, SERVE_CORE_PATH as ut, isCommandName as v, messageChannel as vt, MODEL_FILE_EXTENSIONS as w, screenshotOwner as x, settingsSchema as y, ArcueError as yt, rangesWithin as z };
+export { defaultViewBounds as $, memberRoles as A, rangesWithin as B, COMPOSITION_FILE_NAME as C, compositionFileSchema as D, animatesModel as E, lastFrame as F, sameTopology as G, parseStoredPath as H, mergeKeyTimes as I, findNode as J, topologyFingerprint as K, countInRanges as L, unshownUvSetWarnings as M, frameCountFor as N, joinsByName as O, isKeyedEveryFrame as P, importWarning as Q, decodeRanges as R, screenshotOwner as S, MODEL_FILE_EXTENSIONS as T, fileNameOf as U, materialSlots as V, imageMimeType as W, splitMemberPath as X, memberPath as Y, describeTextureUses as Z, reviewFormat as _, framedChannel as _t, isQueryName as a, TEXTURE_REF_NAMES as at, settingsSchema as b, ArcueError as bt, importReadFileInputSchema as c, BRIDGE_INFO_FILE as ct, createPeer as d, SERVE_CORE_PATH as dt, describeParts as et, withTransfer as f, acceptBridge as ft, reviewFileSchema as g, MAX_FRAME_BYTES as gt, reportListenerError as h, launchInfoSchema as ht, roundDataSchema as i, TEXTURE_REF_KEYS as it, viewStateSchema as j, keysModelBones as k, importRequests as l, HANDSHAKE_MAX_FRAME_BYTES as lt, callEach as m, connectBridge as mt, binaryFrameCodec as n, knownPartView as nt, queries as o, TEXTURE_SLOTS as ot, isEnvelope as p, bridgeInfoSchema as pt, composeScene as q, jsonFrameCodec as r, shownByDefault as rt, importFindFileInputSchema as s, TEXTURE_SLOT_KEYS as st, portEndpoint as t, isDefaultPartView as tt, serveImportWorker as u, LAUNCH_INFO_FILE as ut, commands as v, framedEndpoint as vt, IMAGE_FILE_EXTENSIONS as w, warningId as x, COMMENT_ID_PATTERN as xt, isCommandName as y, messageChannel as yt, encodeRanges as z };
