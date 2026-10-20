@@ -38,6 +38,14 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".ico": "image/x-icon",
 };
 
+/** Sent with every response: no website may show these pages in a frame, and links from them reveal no address. */
+const PAGE_HEADERS: Readonly<Record<string, string>> = {
+  "Content-Security-Policy": "frame-ancestors 'none'",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+};
+
 export interface ServeOptions {
   /** The app's data folder, shared with the desktop app. */
   userData: string;
@@ -63,8 +71,9 @@ export interface ArcueServer {
  * reach it, and it refuses to start while another core runs.
  *
  * Only pages from this server's own origin can connect to the core, and only through a localhost address, so other
- * websites and DNS rebinding cannot reach it. Like any local web server, it is open to other programs on this computer
- * while it runs.
+ * websites and DNS rebinding cannot reach it. No website may show its pages in a frame, where the user could not see a
+ * model the command line opens and clicks could be hijacked. Like any local web server, it is open to other programs on
+ * this computer while it runs.
  */
 export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   const webUi = await realpath(options.webUi).catch(() => null);
@@ -127,6 +136,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
 
   for (const server of http) {
     server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+      for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
       if (!allowed(request)) return refuse(response, 403);
       if (request.method !== "GET" && request.method !== "HEAD") return refuse(response, 405);
       sendFile(webUi, request, response).catch((error: unknown) => {
@@ -142,7 +152,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
         path !== SERVE_CORE_PATH ||
         request.headers.origin !== `http://${request.headers.host}`
       ) {
-        socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        socket.end(`HTTP/1.1 403 Forbidden\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
         return;
       }
       sockets.handleUpgrade(request, socket, head, (connected) => sockets.emit("connection", connected, request));
@@ -213,8 +223,14 @@ function isCode(error: unknown, code: string): boolean {
 }
 
 function refuse(response: ServerResponse, status: 403 | 404 | 405 | 500): void {
-  response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff" });
+  response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   response.end(`${status}\n`);
+}
+
+function rawHeaders(headers: Readonly<Record<string, string>>): string {
+  return Object.entries(headers)
+    .map(([name, value]) => `${name}: ${value}\r\n`)
+    .join("");
 }
 
 /** Sends a file from the web UI's folder, `index.html` for "/". Anything outside the folder is not found. */
@@ -234,7 +250,6 @@ async function sendFile(webUi: string, request: IncomingMessage, response: Serve
     "Content-Type": CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
     "Content-Length": found.size,
     "Cache-Control": relative.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
-    "X-Content-Type-Options": "nosniff",
   });
   if (request.method === "HEAD") {
     response.end();
