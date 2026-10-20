@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { ArcueCore } from "@arcue/core";
 import type { BridgeInfo, ListenerErrorHandler, MessageEndpoint } from "@arcue/protocol";
 import {
+  ArcueError,
   acceptBridge,
   BRIDGE_INFO_FILE,
   bridgeInfoSchema,
@@ -15,6 +16,7 @@ import {
   isEnvelope,
   jsonFrameCodec,
 } from "@arcue/protocol";
+import { runningCore } from "./core-connection";
 import { socketStream } from "./node-socket";
 
 export interface BridgeServerOptions {
@@ -33,6 +35,17 @@ export interface BridgeServer {
   close(): Promise<void>;
 }
 
+/** Another core answers at `bridge.json`. */
+export class CoreRunningError extends ArcueError {
+  readonly running: BridgeInfo;
+
+  constructor(running: BridgeInfo) {
+    const where = running.url ? ` at ${running.url}` : "";
+    super("conflict", `Arcue is already running${where} (process ${running.pid}).`);
+    this.running = running;
+  }
+}
+
 /** macOS limits a Unix socket path to 104 bytes, Linux to 108. */
 const MAX_SOCKET_PATH = 100;
 const SOCKET_NAME = /^arcue-(\d+)-[0-9a-f]+\.sock$/;
@@ -47,9 +60,8 @@ export interface BridgeAddress {
  * Where the core listens, reachable only by this user: a Unix domain socket in a folder only the user can enter, or a
  * named pipe with a new random name on each start, since any user can see pipe names. `bridge.json` names it.
  *
- * Each server gets its own socket, since a closing server removes its socket by path: a core that stops after another
- * one took over `bridge.json`, as `arcue serve` does when the desktop app starts beside it, removes only its own.
- * Sockets of processes that have ended are removed.
+ * Each server gets its own socket, named after its process, so a closing server removes only its own. Sockets of
+ * processes that have ended are removed.
  */
 export async function bridgeAddress(
   userData: string,
@@ -101,10 +113,15 @@ async function privateFolder(path: string): Promise<void> {
  * Listens for the command line on a local socket. Each connection must present the token from `bridge.json`, which
  * only the user can read, and is then served with the caller "bridge", so internal commands are refused. A hello
  * that names a user makes that user the author of what the connection does.
+ *
+ * Only one core may run for a data folder, since two would overwrite each other's review files. While another core
+ * answers at `bridge.json`, this throws a `CoreRunningError` and leaves that core's file alone.
  */
 export async function startBridgeServer(options: BridgeServerOptions): Promise<BridgeServer> {
   const infoPath = join(options.userData, BRIDGE_INFO_FILE);
   await mkdir(options.userData, { recursive: true, mode: 0o700 });
+  const running = await runningCore(options.userData);
+  if (running) throw new CoreRunningError(running);
   await rm(infoPath, { force: true });
   const address = await bridgeAddress(options.userData);
   const token = randomBytes(32).toString("base64url");

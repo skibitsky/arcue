@@ -26,7 +26,7 @@ import {
 } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeServer } from "./bridge-server";
-import { bridgeAddress, startBridgeServer } from "./bridge-server";
+import { bridgeAddress, CoreRunningError, startBridgeServer } from "./bridge-server";
 import { socketStream } from "./node-socket";
 
 let userData: string;
@@ -119,18 +119,43 @@ describe("the bridge server", () => {
     server = { info: server.info, close: async () => undefined };
   });
 
-  it("leaves bridge.json and the socket to a core that started after it", async () => {
-    const later = await startBridgeServer({
+  it("refuses to start while another core answers at bridge.json, and leaves that core's file and socket", async () => {
+    const second = startBridgeServer({ core, userData, ensureWindow: async () => undefined, onError: () => undefined });
+
+    await expect(second).rejects.toBeInstanceOf(CoreRunningError);
+    await expect(second).rejects.toMatchObject({ code: "conflict", running: server.info });
+    expect(readInfo()).toEqual(server.info);
+    if (process.platform !== "win32")
+      expect(readdirSync(join(userData, "bridge"))).toEqual([basename(server.info.socket)]);
+    const client = await connectWith(server.info.token);
+    await expect(client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
+
+  it("names the running core's address when it refuses", async () => {
+    await server.close();
+    server = await startBridgeServer({
       core,
       userData,
       ensureWindow: async () => undefined,
       onError: () => undefined,
+      url: "http://localhost:4530",
     });
-    await server.close();
-    server = later;
 
-    expect(readInfo().token).toBe(later.info.token);
-    const client = await connectWith(later.info.token);
+    await expect(
+      startBridgeServer({ core, userData, ensureWindow: async () => undefined, onError: () => undefined }),
+    ).rejects.toThrow(`Arcue is already running at http://localhost:4530 (process ${process.pid}).`);
+  });
+
+  it("replaces the bridge.json of a core that stopped without removing it", async () => {
+    const stopped = server.info;
+    await server.close();
+    writeFileSync(join(userData, BRIDGE_INFO_FILE), JSON.stringify(stopped));
+
+    server = await startBridgeServer({ core, userData, ensureWindow: async () => undefined, onError: () => undefined });
+
+    expect(readInfo().token).toBe(server.info.token);
+    expect(server.info.token).not.toBe(stopped.token);
+    const client = await connectWith(server.info.token);
     await expect(client.query("asset.list", {})).resolves.toEqual({ assets: [] });
   });
 

@@ -15,6 +15,8 @@ export const fromCoreSchema = z.discriminatedUnion("type", [
   /** `socket` is null when the bridge for the command line could not start. */
   z.object({ type: z.literal("started"), socket: z.string().min(1).nullable() }),
   z.object({ type: z.literal("failed"), message: z.string() }),
+  /** Another core answers at `bridge.json`, so this one stopped before it served a window. */
+  z.object({ type: z.literal("already-running"), pid: z.int().positive(), url: z.string().nullable() }),
   /** A bridge opened an asset while no window was connected. */
   z.object({ type: z.literal("need-window") }),
   z.object({ type: z.literal("clipboard"), id: z.int().positive(), text: z.string().max(10_000_000) }),

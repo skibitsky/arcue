@@ -1,7 +1,8 @@
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { connectToCore } from "@arcue/platform-node";
 import { ArcueError } from "@arcue/protocol";
-import { connectOrLaunch, connectToApp, userDataDir } from "./app-connection";
+import { connectOrLaunch, userDataDir } from "./app-connection";
 import type { Command } from "./args";
 import { DEFAULT_SERVE_PORT, parseArgs, USAGE, UsageError } from "./args";
 import { bundledImportWorker, formatInspection, inspectFile } from "./inspect";
@@ -77,7 +78,7 @@ function setup(output: Output, node: { version: string; execPath: string }): num
 }
 
 async function status(output: Output): Promise<number> {
-  const connection = await connectToApp(userDataDir());
+  const connection = await connectToCore(userDataDir());
   if (!connection) {
     output.out("Arcue is not running.\n");
     return 1;

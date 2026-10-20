@@ -14,7 +14,7 @@ import {
   LAUNCH_INFO_FILE,
 } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectOrLaunch, connectToApp, userDataDir } from "./app-connection";
+import { connectOrLaunch, userDataDir } from "./app-connection";
 import { run } from "./run";
 
 const TOKEN = "t".repeat(43);
@@ -111,28 +111,6 @@ afterEach(async () => {
   if (previousUserData === undefined) delete process.env.ARCUE_USER_DATA;
   else process.env.ARCUE_USER_DATA = previousUserData;
   rmSync(userData, { recursive: true, force: true });
-});
-
-describe("connecting to the app", () => {
-  it("presents the token from bridge.json and queries the core", async () => {
-    await startFakeCore();
-    const connection = await connectToApp(userData);
-    expect(connection).not.toBeNull();
-    await expect(connection?.client.query("asset.list", {})).resolves.toMatchObject({ assets: [{ assetId: "a1" }] });
-    connection?.close();
-  });
-
-  it("is refused when the token does not match", async () => {
-    await startFakeCore("u".repeat(43));
-    await expect(connectToApp(userData)).rejects.toMatchObject({ code: "forbidden" });
-  });
-
-  it("finds nothing without bridge.json or with a stale socket", async () => {
-    await expect(connectToApp(userData)).resolves.toBeNull();
-    const stale: BridgeInfo = { version: 1, socket: join(userData, "gone.sock"), token: TOKEN, pid: 1 };
-    writeFileSync(join(userData, BRIDGE_INFO_FILE), JSON.stringify(stale));
-    await expect(connectToApp(userData)).resolves.toBeNull();
-  });
 });
 
 describe("starting the app", () => {
