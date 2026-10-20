@@ -273,13 +273,29 @@ describe("Workspace", () => {
         store={setup().store}
         createViewport={() => new TestViewport()}
         emptyTitle="Ask your agent to show you a model"
-        dropHint="Or run arcue open <file>."
+        dropHint="Or run arcue open <file> in a terminal."
       />,
     );
 
     expect(screen.getByText("Ask your agent to show you a model")).toBeTruthy();
-    expect(screen.getByText("Or run arcue open <file>.")).toBeTruthy();
+    expect(screen.getByText("Or run arcue open <file> in a terminal.")).toBeTruthy();
     expect(screen.queryByText("Drop an FBX or Blender file")).toBeNull();
+  });
+
+  it("says why when the host can't open dropped files, without inviting the drop", () => {
+    render(
+      <Workspace
+        store={setup().store}
+        createViewport={() => new TestViewport()}
+        dropRefusal="Run arcue open <file>."
+      />,
+    );
+    const zone = screen.getByRole("region", { name: "Open an asset" });
+    const file = new File(["fbx"], "Hero.fbx");
+    fireEvent.dragOver(zone, { dataTransfer: { files: [file], types: ["Files"] } });
+    expect(zone.classList.contains("is-over")).toBe(false);
+    fireEvent.drop(zone, { dataTransfer: { files: [file], types: ["Files"] } });
+    expect(document.querySelector(".toast")?.textContent).toBe("Run arcue open <file>.");
   });
 
   it("reports dropped files to the host", async () => {
