@@ -33,6 +33,8 @@ export interface WorkspaceProps extends TabDragHandlers {
   emptyTitle?: string;
   /** The line under the empty state's headline. */
   dropHint?: string;
+  /** Why the host can't open dropped files, for a host without `onDropFiles`. A drop on the empty state shows it. */
+  dropRefusal?: string;
   /** Replaces the "+" button's default, which adds an empty tab. */
   onNewTab?: () => void;
   /** Drawn at the left of the title bar, such as window buttons or the space macOS keeps for its own. */
@@ -107,6 +109,7 @@ export function Workspace(props: WorkspaceProps) {
             onOpenSample={props.onOpenSample}
             title={props.emptyTitle}
             dropHint={props.dropHint}
+            dropRefusal={props.dropRefusal}
             tabId={activeTab?.id ?? null}
           />
         ) : null}

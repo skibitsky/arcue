@@ -30,11 +30,9 @@ createRoot(root).render(
     <Workspace
       store={store}
       createViewport={createViewport}
-      onDropFiles={() =>
-        store.notify({ message: "This page can't open dropped files. Run arcue open <file> instead.", kind: "alert" })
-      }
       emptyTitle="Ask your agent to show you a model"
-      dropHint="Or run arcue open <file>."
+      dropHint="Or run arcue open <file> in a terminal. Dropping files doesn't work here."
+      dropRefusal="The browser doesn't tell Arcue where a dropped file is. Run arcue open <file>."
     />
   </StrictMode>,
 );
