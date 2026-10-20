@@ -4,6 +4,7 @@ import { request } from "node:http";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connectToCore } from "@arcue/platform-node";
 import type { CoreClient } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
@@ -17,7 +18,6 @@ import {
 } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { connectToApp } from "./app-connection";
 import type { ArcueServer, ServeOptions } from "./serve";
 import { localHosts, startServer } from "./serve";
 
@@ -273,7 +273,7 @@ describe("arcue serve", () => {
 
     const info = bridgeInfoSchema.parse(JSON.parse(readFileSync(join(userData, BRIDGE_INFO_FILE), "utf8")));
     expect(info.url).toBe(url);
-    const connection = await connectToApp(userData);
+    const connection = await connectToCore(userData);
     expect(connection?.info.url).toBe(url);
     await expect(connection?.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
     connection?.close();

@@ -11,6 +11,7 @@ import type { BridgeServer } from "@arcue/platform-node";
 import {
   fromNativePath,
   NodePlatform,
+  runningCore,
   startBridgeServer,
   startNodeImportWorker,
   systemClock,
@@ -20,7 +21,6 @@ import type { ByteStream, ListenerErrorHandler } from "@arcue/protocol";
 import { binaryFrameCodec, framedEndpoint, MAX_FRAME_BYTES, messageChannel, SERVE_CORE_PATH } from "@arcue/protocol";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
-import { connectToApp } from "./app-connection";
 
 /** The web UI the build writes beside `arcue.js`. */
 export const bundledWebUi = fileURLToPath(new URL("./web/", import.meta.url));
@@ -80,11 +80,10 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   if (!webUi || !(await stat(resolve(webUi, "index.html")).catch(() => null))?.isFile()) {
     throw new Error(`This arcue has no web UI in ${options.webUi}.`);
   }
-  const running = await connectToApp(options.userData).catch(() => null);
+  const running = await runningCore(options.userData);
   if (running) {
-    running.close();
-    const where = running.info.url ? ` at ${running.info.url}` : "";
-    throw new Error(`Arcue is already running${where} (process ${running.info.pid}). "arcue open" shows models there.`);
+    const where = running.url ? ` at ${running.url}` : "";
+    throw new Error(`Arcue is already running${where} (process ${running.pid}). "arcue open" shows models there.`);
   }
 
   const { servers: http, port } = await listenLocally(options.port);

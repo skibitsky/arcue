@@ -3,10 +3,14 @@ import { mkdirSync } from "node:fs";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runningCore } from "@arcue/platform-node";
 import type { LaunchInfo } from "@arcue/protocol";
 import { LAUNCH_INFO_FILE } from "@arcue/protocol";
-import { app, protocol, session } from "electron";
+import { app, dialog, protocol, session, shell } from "electron";
+import type { Log } from "../shared/log";
 import { fileLog } from "../shared/log";
+import type { RunningCore } from "./already-running";
+import { alreadyRunningNotice } from "./already-running";
 import { assetPathsFromArgv, launchDataSchema } from "./args";
 import { CoreHost } from "./core-host";
 import { installMenu } from "./menu";
@@ -70,6 +74,12 @@ async function run(): Promise<void> {
   process.on("uncaughtException", (error) => log.error("Uncaught exception in the main process", error));
   process.on("unhandledRejection", (error) => log.error("Unhandled rejection in the main process", error));
 
+  const running = await runningCore(userData);
+  if (running) {
+    await quitBeside({ pid: running.pid, url: running.url ?? null }, log);
+    return;
+  }
+
   harden(devServer);
   const rendererRoot = join(here, "renderer");
   protocol.handle(RENDERER_SCHEME, (request) => serveRenderer(rendererRoot, request.url));
@@ -93,6 +103,7 @@ async function run(): Promise<void> {
     log,
     onNeedWindow: () => windows?.ensureWindow(),
     onLost: () => windows?.coreLost(),
+    onAlreadyRunning: (other) => void quitBeside(other, log),
   });
   const manager = new WindowManager({
     core,
@@ -131,6 +142,31 @@ async function run(): Promise<void> {
       app.quit();
     })();
   });
+}
+
+/** Says that another Arcue runs on the same reviews, offers to open the address it runs at, and quits. */
+async function quitBeside(running: RunningCore, log: Log): Promise<void> {
+  log.info(
+    `Arcue is already running (process ${running.pid}${running.url ? ` at ${running.url}` : ""}), so this one quits`,
+  );
+  const notice = alreadyRunningNotice(running);
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      title: "Arcue",
+      message: notice.message,
+      detail: notice.detail,
+      buttons: notice.buttons,
+      defaultId: 0,
+      cancelId: notice.buttons.length - 1,
+      noLink: true,
+    });
+    if (notice.open && response === 0) await shell.openExternal(notice.open);
+  } catch (error) {
+    log.error("Could not show where Arcue runs", error);
+  } finally {
+    app.quit();
+  }
 }
 
 /** No remote content, no new windows, no navigation away from the app, and only the clipboard permission. */
