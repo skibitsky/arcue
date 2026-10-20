@@ -3,12 +3,12 @@ import { A as memberRoles, B as rangesWithin, C as COMPOSITION_FILE_NAME, D as c
 import { createRequire } from "node:module";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
-import { spawn } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import { connect, createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { randomBytes, randomUUID } from "node:crypto";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { createReadStream, unwatchFile, watch, watchFile } from "node:fs";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer as createServer$1 } from "node:http";
 //#region \0rolldown/runtime.js
@@ -367,7 +367,88 @@ function socketStream(socket) {
 	};
 }
 //#endregion
+//#region ../../packages/platform-node/src/core-connection.ts
+var timer = (delayMs, callback) => {
+	const handle = setTimeout(callback, delayMs);
+	return () => clearTimeout(handle);
+};
+/** What `bridge.json` in the data folder says, or null when it is missing or not valid. */
+async function readBridgeInfo(userData) {
+	try {
+		const parsed = bridgeInfoSchema.safeParse(JSON.parse(await readFile(join(userData, BRIDGE_INFO_FILE), "utf8")));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
+}
+/** Connects to the core that `bridge.json` names and presents its token; null when nothing listens on its socket. */
+async function connectToCore(userData, handshakeMs = 5e3) {
+	const info = await readBridgeInfo(userData);
+	return info ? connectWith(info, handshakeMs) : null;
+}
+/**
+* The core that `bridge.json` names, while something listens on its socket. Only one core may run for a data folder,
+* since two would overwrite each other's review files. A core that refuses the token or does not answer in time still
+* listens there, so it counts as running.
+*/
+async function runningCore(userData, handshakeMs = 5e3) {
+	const info = await readBridgeInfo(userData);
+	if (!info) return null;
+	try {
+		const connection = await connectWith(info, handshakeMs);
+		connection?.close();
+		return connection ? info : null;
+	} catch {
+		return info;
+	}
+}
+async function connectWith(info, handshakeMs) {
+	const socket = await openSocket(info.socket);
+	if (!socket) return null;
+	const channel = framedChannel(socketStream(socket), jsonFrameCodec, { firstFrameMaxBytes: HANDSHAKE_MAX_FRAME_BYTES });
+	const endpoint = await connectBridge(channel, {
+		token: info.token,
+		timeout: {
+			ms: handshakeMs,
+			setTimer: timer
+		}
+	});
+	const peer = createPeer(endpoint);
+	return {
+		client: createRemoteClient(peer),
+		info,
+		close: () => {
+			peer.close();
+			socket.destroy();
+		}
+	};
+}
+function openSocket(path) {
+	let socket;
+	try {
+		socket = connect(path);
+	} catch {
+		return Promise.resolve(null);
+	}
+	return new Promise((resolve) => {
+		socket.once("connect", () => resolve(socket));
+		socket.once("error", () => {
+			socket.destroy();
+			resolve(null);
+		});
+	});
+}
+//#endregion
 //#region ../../packages/platform-node/src/bridge-server.ts
+/** Another core answers at `bridge.json`. */
+var CoreRunningError = class extends ArcueError {
+	running;
+	constructor(running) {
+		const where = running.url ? ` at ${running.url}` : "";
+		super("conflict", `Arcue is already running${where} (process ${running.pid}).`);
+		this.running = running;
+	}
+};
 /** macOS limits a Unix socket path to 104 bytes, Linux to 108. */
 var MAX_SOCKET_PATH = 100;
 var SOCKET_NAME = /^arcue-(\d+)-[0-9a-f]+\.sock$/;
@@ -375,9 +456,8 @@ var SOCKET_NAME = /^arcue-(\d+)-[0-9a-f]+\.sock$/;
 * Where the core listens, reachable only by this user: a Unix domain socket in a folder only the user can enter, or a
 * named pipe with a new random name on each start, since any user can see pipe names. `bridge.json` names it.
 *
-* Each server gets its own socket, since a closing server removes its socket by path: a core that stops after another
-* one took over `bridge.json`, as `arcue serve` does when the desktop app starts beside it, removes only its own.
-* Sockets of processes that have ended are removed.
+* Each server gets its own socket, named after its process, so a closing server removes only its own. Sockets of
+* processes that have ended are removed.
 */
 async function bridgeAddress(userData, platform = process.platform, pid = process.pid) {
 	if (platform === "win32") return {
@@ -432,6 +512,9 @@ async function privateFolder(path) {
 * Listens for the command line on a local socket. Each connection must present the token from `bridge.json`, which
 * only the user can read, and is then served with the caller "bridge", so internal commands are refused. A hello
 * that names a user makes that user the author of what the connection does.
+*
+* Only one core may run for a data folder, since two would overwrite each other's review files. While another core
+* answers at `bridge.json`, this throws a `CoreRunningError` and leaves that core's file alone.
 */
 async function startBridgeServer(options) {
 	const infoPath = join(options.userData, BRIDGE_INFO_FILE);
@@ -439,6 +522,8 @@ async function startBridgeServer(options) {
 		recursive: true,
 		mode: 448
 	});
+	const running = await runningCore(options.userData);
+	if (running) throw new CoreRunningError(running);
 	await rm(infoPath, { force: true });
 	const address = await bridgeAddress(options.userData);
 	const token = randomBytes(32).toString("base64url");
@@ -5626,10 +5711,6 @@ function userDataDir(env = process.env, platform = process.platform, home = home
 	if (platform === "win32") return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Arcue");
 	return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Arcue");
 }
-var timer = (delayMs, callback) => {
-	const handle = setTimeout(callback, delayMs);
-	return () => clearTimeout(handle);
-};
 async function readJson(path) {
 	try {
 		return JSON.parse(await readFile(path, "utf8"));
@@ -5637,43 +5718,9 @@ async function readJson(path) {
 		return null;
 	}
 }
-async function readBridgeInfo(userData) {
-	const parsed = bridgeInfoSchema.safeParse(await readJson(join(userData, BRIDGE_INFO_FILE)));
-	return parsed.success ? parsed.data : null;
-}
 async function readLaunchInfo(userData) {
 	const parsed = launchInfoSchema.safeParse(await readJson(join(userData, LAUNCH_INFO_FILE)));
 	return parsed.success ? parsed.data : null;
-}
-/** Connects to the running app's core and presents the token; null when nothing listens on the socket. */
-async function connectToApp(userData, handshakeMs = 5e3) {
-	const info = await readBridgeInfo(userData);
-	if (!info) return null;
-	const socket = connect(info.socket);
-	if (!await new Promise((resolve) => {
-		socket.once("connect", () => resolve(true));
-		socket.once("error", () => resolve(false));
-	})) {
-		socket.destroy();
-		return null;
-	}
-	const channel = framedChannel(socketStream(socket), jsonFrameCodec, { firstFrameMaxBytes: HANDSHAKE_MAX_FRAME_BYTES });
-	const endpoint = await connectBridge(channel, {
-		token: info.token,
-		timeout: {
-			ms: handshakeMs,
-			setTimer: timer
-		}
-	});
-	const peer = createPeer(endpoint);
-	return {
-		client: createRemoteClient(peer),
-		info,
-		close: () => {
-			peer.close();
-			socket.destroy();
-		}
-	};
 }
 /** Starts the app the way `launch.json` recorded, detached from this process. */
 async function launchApp(userData) {
@@ -5694,7 +5741,7 @@ async function launchApp(userData) {
 async function connectOrLaunch(userData, { timeoutMs = 3e4, pollMs = 200 } = {}) {
 	const deadline = Date.now() + timeoutMs;
 	let lastError = null;
-	const attempt = () => connectToApp(userData).catch((error) => {
+	const attempt = () => connectToCore(userData).catch((error) => {
 		lastError = error;
 		return null;
 	});
@@ -9537,11 +9584,10 @@ var PAGE_HEADERS = {
 async function startServer(options) {
 	const webUi = await realpath(options.webUi).catch(() => null);
 	if (!webUi || !(await stat(resolve(webUi, "index.html")).catch(() => null))?.isFile()) throw new Error(`This arcue has no web UI in ${options.webUi}.`);
-	const running = await connectToApp(options.userData).catch(() => null);
+	const running = await runningCore(options.userData);
 	if (running) {
-		running.close();
-		const where = running.info.url ? ` at ${running.info.url}` : "";
-		throw new Error(`Arcue is already running${where} (process ${running.info.pid}). "arcue open" shows models there.`);
+		const where = running.url ? ` at ${running.url}` : "";
+		throw new Error(`Arcue is already running${where} (process ${running.pid}). "arcue open" shows models there.`);
 	}
 	const { servers: http, port } = await listenLocally(options.port);
 	const url = `http://localhost:${port}`;
@@ -9779,7 +9825,7 @@ function setup(output, node) {
 	return 3;
 }
 async function status(output) {
-	const connection = await connectToApp(userDataDir());
+	const connection = await connectToCore(userDataDir());
 	if (!connection) {
 		output.out("Arcue is not running.\n");
 		return 1;
