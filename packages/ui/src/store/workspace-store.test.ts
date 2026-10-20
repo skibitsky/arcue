@@ -73,6 +73,23 @@ describe("view commands", () => {
     expect(client.calls.slice(before)).toEqual([]);
   });
 
+  it("refuses to release a tab whose comment box has unsaved text, and shakes the box", async () => {
+    const { store, session, viewport } = await openStone();
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("Half written");
+
+    await expect(
+      store.handleRequest({ kind: "command", name: "view.releaseAsset", input: { assetId: session.assetId } }),
+    ).rejects.toMatchObject({
+      code: "conflict",
+      message: "StoneResonator.fbx has unsaved comment text where it is open, so it stays there.",
+    });
+
+    expect(store.session(session.assetId)).toBe(session);
+    expect(session.state.get().box).toMatchObject({ text: "Half written", nudge: 1 });
+    expect(store.state.get().tabs).toEqual([{ kind: "asset", id: session.assetId }]);
+  });
+
   it("does not play a clip of one or two frames", async () => {
     const { client, session, viewport } = await openStone({ scene: withPoseClips });
     session.setClip("Armature|Pose", 1);

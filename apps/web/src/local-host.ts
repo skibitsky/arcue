@@ -31,8 +31,9 @@ export class LocalHost {
   }
 
   /**
-   * Shows the assets the core has open that no other page shows, as after a reload, in the views they had. A page
-   * that is still open keeps its tabs and the drafts in them.
+   * Shows the assets of this page's view that no other page shows, in the views they had: those the core held for the
+   * page, and those it showed before a reload. The core leaves assets of other views where they are. A page that is
+   * still open keeps its tabs and the drafts in them.
    */
   async adoptOpenAssets(): Promise<void> {
     const { assets } = await this.client.query("asset.list", {});

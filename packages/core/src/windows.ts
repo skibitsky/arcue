@@ -1,43 +1,58 @@
 import type { Peer } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { Clock } from "./platform";
-import type { CallContext } from "./registry";
 
-/** The windows connected to the core, and which one gained focus last. */
+interface WindowEntry {
+  peer: Peer;
+  /** The agent session's view the window shows, or null for a window outside views. */
+  view: string | null;
+  /** When the window last gained focus, in focus reports since the core started; 0 before the first. */
+  focused: number;
+}
+
+/** The windows connected to the core, the view each belongs to, and which gained focus last. */
 export class WindowRegistry {
-  readonly #peers = new Map<string, Peer>();
-  #lastFocused: string | null = null;
+  readonly #windows = new Map<string, WindowEntry>();
+  #focusCount = 0;
 
-  add(connection: string, peer: Peer): void {
-    this.#peers.set(connection, peer);
+  add(connection: string, peer: Peer, view: string | null): void {
+    this.#windows.set(connection, { peer, view, focused: 0 });
   }
 
   remove(connection: string): void {
-    this.#peers.delete(connection);
-    if (this.#lastFocused === connection) this.#lastFocused = null;
+    this.#windows.delete(connection);
   }
 
   has(connection: string | null): connection is string {
-    return connection !== null && this.#peers.has(connection);
+    return connection !== null && this.#windows.has(connection);
+  }
+
+  /** The view a connected window belongs to, or null for a window outside views. */
+  viewOf(connection: string): string | null {
+    return this.#windows.get(connection)?.view ?? null;
   }
 
   focus(connection: string): void {
-    if (this.#peers.has(connection)) this.#lastFocused = connection;
+    const entry = this.#windows.get(connection);
+    if (entry) entry.focused = ++this.#focusCount;
   }
 
   /**
-   * The window for a newly shown asset: the caller's own window when a window asked, otherwise the window focused
-   * last, otherwise the window that connected last. Null when no window is connected.
+   * The window to show a view's assets in, or with a null view a window outside views: of those, the one focused last,
+   * otherwise the one that connected last. Null when none is connected.
    */
-  choose(context: CallContext): string | null {
-    if (context.caller === "window" && this.has(context.connection)) return context.connection;
-    if (this.has(this.#lastFocused)) return this.#lastFocused;
-    return [...this.#peers.keys()].at(-1) ?? null;
+  inView(view: string | null): string | null {
+    let chosen: { connection: string; focused: number } | null = null;
+    for (const [connection, entry] of this.#windows) {
+      if (entry.view !== view) continue;
+      if (chosen === null || entry.focused >= chosen.focused) chosen = { connection, focused: entry.focused };
+    }
+    return chosen?.connection ?? null;
   }
 
   /** Sends a command to a window. With a timeout, a window that does not answer in time rejects as "unavailable". */
   request(connection: string, name: string, input: unknown, timeout?: { ms: number; clock: Clock }): Promise<unknown> {
-    const peer = this.#peers.get(connection);
+    const peer = this.#windows.get(connection)?.peer;
     if (!peer) return Promise.reject(new ArcueError("unavailable", "The window that shows this asset is closed."));
     const answer = peer.request("command", name, input);
     if (!timeout) return answer;

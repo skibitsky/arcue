@@ -19,9 +19,19 @@ let model: string;
 let env: NodeJS.ProcessEnv;
 let server: ChildProcess;
 
+/** The environment without the variables that name an agent session, as a person at a terminal has it. */
+function outsideSessions(given: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sessions = ["ARCUE_VIEW", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID"];
+  return Object.fromEntries(Object.entries(given).filter(([name]) => !sessions.includes(name)));
+}
+
 function arcue(...args: string[]): Promise<{ code: number; out: string }> {
+  return arcueIn(env, ...args);
+}
+
+function arcueIn(environment: NodeJS.ProcessEnv, ...args: string[]): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    execFile(process.execPath, [ARCUE, ...args], { env }, (error, stdout, stderr) => {
+    execFile(process.execPath, [ARCUE, ...args], { env: environment }, (error, stdout, stderr) => {
       resolve({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, out: `${stdout}${stderr}` });
     });
   });
@@ -35,7 +45,7 @@ test.beforeAll(async () => {
   mkdirSync(join(project, ".git"), { recursive: true });
   model = join(project, "stone-striker.fbx");
   copyFileSync(SAMPLE, model);
-  env = { ...process.env, ARCUE_USER_DATA: join(temp, "data") };
+  env = { ...outsideSessions(process.env), ARCUE_USER_DATA: join(temp, "data") };
   server = spawn(process.execPath, [ARCUE, "serve", "--port", String(PORT)], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -118,6 +128,40 @@ test("leaves the models to the page that shows them when another page opens", as
   await other.goto(ADDRESS);
   await expect(other.getByText("Ask your agent to show you a model")).toBeVisible();
   await expect(page.getByRole("tab", { name: "stone-striker.fbx" })).toBeVisible();
+  await other.close();
+});
+
+test("shows each agent session's models only in its own view's page", async ({ page, context }) => {
+  const first = { ...env, ARCUE_VIEW: "first session" };
+  const second = { ...env, ARCUE_VIEW: "second session" };
+  const address = (status: string) => /This session's view: (\S+)/.exec(status)?.[1] ?? "";
+  const firstAddress = address((await arcueIn(first, "status")).out);
+  const secondAddress = address((await arcueIn(second, "status")).out);
+  expect(firstAddress).toMatch(new RegExp(`^${ADDRESS}/\\?view=[0-9a-f]{12}$`));
+  expect(secondAddress).not.toBe(firstAddress);
+
+  await page.goto(firstAddress);
+  const other = await context.newPage();
+  await other.goto(secondAddress);
+  await expect(other.getByText("Ask your agent to show you a model")).toBeVisible();
+
+  const copy = join(project, "stone-striker-copy.fbx");
+  copyFileSync(SAMPLE, copy);
+  expect(await arcueIn(first, "open", copy, "--frame", "5")).toMatchObject({
+    code: 0,
+    out: expect.stringContaining("in this session's view as"),
+  });
+  await expect(page.getByRole("tab", { name: "stone-striker-copy.fbx" })).toBeVisible();
+  await expect(other.getByRole("tab", { name: "stone-striker-copy.fbx" })).toBeHidden();
+
+  expect(await arcueIn(second, "open", copy)).toMatchObject({
+    code: 1,
+    out: expect.stringContaining("Add --move"),
+  });
+  await other.reload();
+  await expect(other.getByText("Ask your agent to show you a model")).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "stone-striker-copy.fbx" })).toBeVisible();
   await other.close();
 });
 

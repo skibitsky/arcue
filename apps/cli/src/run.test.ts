@@ -13,7 +13,7 @@ describe("arcue setup", () => {
   it("says there is nothing to set up when arcue runs on Node 24 or later", async () => {
     const { lines, output } = capture();
 
-    const code = await run(["setup"], output, process.cwd(), {
+    const code = await run(["setup"], output, {}, process.cwd(), {
       node: { version: "24.9.0", execPath: "/usr/local/bin/node" },
     });
 
@@ -24,7 +24,7 @@ describe("arcue setup", () => {
   it("exits with 3 from setup on an older Node", async () => {
     const { lines, output } = capture();
 
-    const code = await run(["setup"], output, process.cwd(), {
+    const code = await run(["setup"], output, {}, process.cwd(), {
       node: { version: "22.12.0", execPath: "/usr/bin/node" },
     });
 

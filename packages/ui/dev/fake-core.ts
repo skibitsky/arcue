@@ -475,6 +475,7 @@ export class FakeCoreClient implements CoreClient {
 
   readonly #commands: CommandHandlers = {
     "asset.open": (args) => this.#openAsset(args),
+    "asset.openInView": async (args) => ({ ...(await this.#openAsset(args)), shown: "view" }),
     "asset.close": ({ assetId }) => {
       this.#asset(assetId);
       this.#assets.delete(assetId);

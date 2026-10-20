@@ -16,20 +16,26 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectOrLaunch, userDataDir } from "./app-connection";
 import { run } from "./run";
+import { sessionView } from "./session-view";
 
 const TOKEN = "t".repeat(43);
 let userData: string;
 let server: Server;
 let sockets: Set<Socket>;
 let requests: IncomingRequest[];
-let previousUserData: string | undefined;
+let openInView: (input: unknown) => unknown;
 
 const timer = (delayMs: number, callback: () => void) => {
   const handle = setTimeout(callback, delayMs);
   return () => clearTimeout(handle);
 };
 
-async function startFakeCore(token = TOKEN): Promise<void> {
+/** The environment of a person at a terminal, with the test's data folder. */
+function env(more: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { ARCUE_USER_DATA: userData, ...more };
+}
+
+async function startFakeCore(token = TOKEN, url?: string): Promise<void> {
   const socket = join(userData, "arcue.sock");
   server = createServer((connection) => {
     sockets.add(connection);
@@ -67,6 +73,7 @@ async function startFakeCore(token = TOKEN): Promise<void> {
               };
             }
             if (request.name === "asset.open") return { assetId: "a2" };
+            if (request.name === "asset.openInView") return openInView(request.input);
             throw new ArcueError("unknown-command", request.name);
           },
         });
@@ -75,11 +82,17 @@ async function startFakeCore(token = TOKEN): Promise<void> {
     );
   });
   await new Promise<void>((resolve) => server.listen(socket, resolve));
-  writeBridgeInfo(TOKEN);
+  writeBridgeInfo(TOKEN, url);
 }
 
-function writeBridgeInfo(token: string): void {
-  const info: BridgeInfo = { version: 1, socket: join(userData, "arcue.sock"), token, pid: 4242 };
+function writeBridgeInfo(token: string, url?: string): void {
+  const info: BridgeInfo = {
+    version: 1,
+    socket: join(userData, "arcue.sock"),
+    token,
+    pid: 4242,
+    ...(url ? { url } : {}),
+  };
   writeFileSync(join(userData, BRIDGE_INFO_FILE), JSON.stringify(info));
 }
 
@@ -101,15 +114,12 @@ beforeEach(() => {
   userData = realpathSync(mkdtempSync(join(tmpdir(), "arcue-cli-")));
   sockets = new Set();
   requests = [];
-  previousUserData = process.env.ARCUE_USER_DATA;
-  process.env.ARCUE_USER_DATA = userData;
+  openInView = () => ({ assetId: "a2", shown: "view" });
 });
 
 afterEach(async () => {
   for (const socket of sockets) socket.destroy();
   if (server?.listening) await new Promise((resolve) => server.close(resolve));
-  if (previousUserData === undefined) delete process.env.ARCUE_USER_DATA;
-  else process.env.ARCUE_USER_DATA = previousUserData;
   rmSync(userData, { recursive: true, force: true });
 });
 
@@ -158,7 +168,7 @@ describe("the arcue command", () => {
     await startFakeCore();
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     const { lines, output } = capture();
-    const code = await run(["open", "Hero.fbx", "--clip", "Armature|Charge", "--frame", "34"], output, userData);
+    const code = await run(["open", "Hero.fbx", "--clip", "Armature|Charge", "--frame", "34"], output, env(), userData);
     expect(code).toBe(0);
     expect(requests.find((request) => request.name === "asset.open")?.input).toEqual({
       path: join(userData, "Hero.fbx"),
@@ -173,7 +183,7 @@ describe("the arcue command", () => {
     if (!existsSync(join(userData, "HERO.FBX"))) skip();
     await startFakeCore();
     const { output } = capture();
-    await expect(run(["open", "hero.FBX"], output, userData)).resolves.toBe(0);
+    await expect(run(["open", "hero.FBX"], output, env(), userData)).resolves.toBe(0);
     expect(requests.find((request) => request.name === "asset.open")?.input).toEqual({
       path: join(userData, "Hero.fbx"),
     });
@@ -181,28 +191,109 @@ describe("the arcue command", () => {
 
   it("refuses a missing file before it starts the app", async () => {
     const { lines, output } = capture();
-    await expect(run(["open", "Missing.fbx"], output, userData)).resolves.toBe(1);
+    await expect(run(["open", "Missing.fbx"], output, env(), userData)).resolves.toBe(1);
     expect(lines.err).toContain("is not a file");
   });
 
   it("reports the running app's assets", async () => {
     await startFakeCore();
     const { lines, output } = capture();
-    await expect(run(["status"], output)).resolves.toBe(0);
+    await expect(run(["status"], output, env())).resolves.toBe(0);
     expect(lines.out).toContain("process 4242");
     expect(lines.out).toContain("a1  ready    /work/Hero.fbx");
   });
 
   it("reports when the app is not running", async () => {
     const { lines, output } = capture();
-    await expect(run(["status"], output)).resolves.toBe(1);
+    await expect(run(["status"], output, env())).resolves.toBe(1);
     expect(lines.out).toBe("Arcue is not running.\n");
   });
 
   it("exits with 2 and the usage for bad arguments", async () => {
     const { lines, output } = capture();
-    await expect(run(["open"], output)).resolves.toBe(2);
+    await expect(run(["open"], output, env())).resolves.toBe(2);
     expect(lines.err).toContain("Usage:");
+  });
+});
+
+describe("the arcue command in an agent session", () => {
+  const session = { CLAUDE_CODE_SESSION_ID: "c3a1d6f0-8e2b-4b1c-9d7e-2f5a6b8c0e14" };
+  const view = sessionView(session) ?? "";
+  const address = `http://localhost:4530/?view=${view}`;
+
+  it("opens a file in the view of the session the environment names", async () => {
+    await startFakeCore(TOKEN, "http://localhost:4530");
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    const { lines, output } = capture();
+
+    await expect(run(["open", "Hero.fbx", "--frame", "12"], output, env(session), userData)).resolves.toBe(0);
+
+    expect(requests.find((request) => request.name === "asset.openInView")?.input).toEqual({
+      path: join(userData, "Hero.fbx"),
+      frame: 12,
+      view,
+      move: false,
+    });
+    expect(requests.some((request) => request.name === "asset.open")).toBe(false);
+    expect(lines.out).toBe(`Opened ${join(userData, "Hero.fbx")} in this session's view as a2.\n`);
+  });
+
+  it("names the session's page when Arcue holds the model for it, or shows it outside views", async () => {
+    await startFakeCore(TOKEN, "http://localhost:4530");
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    openInView = () => ({ assetId: "a2", shown: "held" });
+    const held = capture();
+
+    await expect(run(["open", "Hero.fbx"], held.output, env(session), userData)).resolves.toBe(0);
+    expect(held.lines.out).toContain(`until this session's page opens. Open ${address} in the built-in browser`);
+
+    openInView = () => ({ assetId: "a2", shown: "window" });
+    const outside = capture();
+    await expect(run(["open", "Hero.fbx"], outside.output, env(session), userData)).resolves.toBe(0);
+    expect(outside.lines.out).toContain(`in the Arcue page at http://localhost:4530, since this session's page`);
+    expect(outside.lines.out).toContain(`Open ${address} in the built-in browser`);
+  });
+
+  it("takes --view and --move, and says how to move a model another view shows", async () => {
+    await startFakeCore();
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    openInView = (input) => {
+      if ((input as { move: boolean }).move) return { assetId: "a2", shown: "view" };
+      throw new ArcueError("conflict", `Hero.fbx is open in another agent session's view, "abc".`);
+    };
+    const refused = capture();
+
+    await expect(run(["open", "Hero.fbx", "--view", "review"], refused.output, env(session), userData)).resolves.toBe(
+      1,
+    );
+    expect(refused.lines.err).toBe(
+      `Hero.fbx is open in another agent session's view, "abc". Add --move to show it in this session's view instead.\n`,
+    );
+    expect(requests.at(-1)?.input).toMatchObject({ view: sessionView({}, "review"), move: false });
+
+    const moved = capture();
+    await expect(run(["open", "Hero.fbx", "--move"], moved.output, env(session), userData)).resolves.toBe(0);
+    expect(requests.at(-1)?.input).toMatchObject({ view, move: true });
+  });
+
+  it("refuses --move outside a session before it starts the app", async () => {
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    const { lines, output } = capture();
+
+    await expect(run(["open", "Hero.fbx", "--move"], output, env(), userData)).resolves.toBe(1);
+    expect(lines.err).toContain("--move takes a model into an agent session's view");
+  });
+
+  it("prints the session's view address in its status", async () => {
+    await startFakeCore(TOKEN, "http://localhost:4530");
+    const { lines, output } = capture();
+
+    await expect(run(["status"], output, env(session))).resolves.toBe(0);
+    expect(lines.out).toContain(`This session's view: ${address}\n`);
+
+    const outside = capture();
+    await expect(run(["status"], outside.output, env())).resolves.toBe(0);
+    expect(outside.lines.out).not.toContain("This session's view");
   });
 });
 

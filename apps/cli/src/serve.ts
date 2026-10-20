@@ -18,7 +18,15 @@ import {
   WindowPresence,
 } from "@arcue/platform-node";
 import type { ByteStream, ListenerErrorHandler } from "@arcue/protocol";
-import { binaryFrameCodec, framedEndpoint, MAX_FRAME_BYTES, messageChannel, SERVE_CORE_PATH } from "@arcue/protocol";
+import {
+  binaryFrameCodec,
+  framedEndpoint,
+  MAX_FRAME_BYTES,
+  messageChannel,
+  SERVE_CORE_PATH,
+  VIEW_PARAMETER,
+  viewNameSchema,
+} from "@arcue/protocol";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 
@@ -55,7 +63,7 @@ export interface ServeOptions {
   /** 0 picks a free port. */
   port: number;
   onError: ListenerErrorHandler;
-  /** Called when the command line opens a model and no browser shows Arcue yet. */
+  /** Called when the command line opens a model without a view and no page outside views is open. */
   onWaitingForWindow?: () => void;
 }
 
@@ -69,6 +77,10 @@ export interface ArcueServer {
  * Runs a core on this computer's files and serves its window to a browser on localhost, as the desktop app shows it in
  * its own window. The core takes the desktop app's place: it writes `bridge.json`, so `arcue open` and `arcue status`
  * reach it, and it refuses to start while another core runs.
+ *
+ * A page whose address names an agent session's view, `/?view=<name>`, connects as that view's page and shows the
+ * models that session opens. While that page is not open, a page outside views shows them, or with none the core holds
+ * them for the page, so an open for a view never waits for a browser.
  *
  * Only pages from this server's own origin can connect to the core, and only through a localhost address, so other
  * websites and DNS rebinding cannot reach it. No website may show its pages in a frame, where the user could not see a
@@ -106,7 +118,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
     bridge = await startBridgeServer({
       core,
       userData: options.userData,
-      ensureWindow: () => windows.ensure(),
+      ensureWindow: (view) => (view === null ? windows.ensure(null) : Promise.resolve()),
       onError: options.onError,
       url,
     });
@@ -119,16 +131,18 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
 
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   let next = 1;
-  sockets.on("connection", (socket: WebSocket) => {
+  sockets.on("connection", (socket: WebSocket, request: IncomingMessage) => {
+    const view = socketView(URL.parse(request.url ?? "/", url)) ?? null;
     const channel = messageChannel(webSocketStream(socket), binaryFrameCodec);
     const peer = started.connect(framedEndpoint(channel), {
       connection: `browser-${next++}`,
       caller: "window",
+      view: view ?? undefined,
       onListenerError: options.onError,
     });
-    windows.added();
+    windows.added(view);
     peer.onClose(() => {
-      windows.removed();
+      windows.removed(view);
       channel.close();
     });
   });
@@ -145,13 +159,17 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       });
     });
     server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-      const path = URL.parse(request.url ?? "/", url)?.pathname;
+      const address = URL.parse(request.url ?? "/", url);
       if (
         !allowed(request) ||
-        path !== SERVE_CORE_PATH ||
+        address?.pathname !== SERVE_CORE_PATH ||
         request.headers.origin !== `http://${request.headers.host}`
       ) {
         socket.end(`HTTP/1.1 403 Forbidden\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
+        return;
+      }
+      if (socketView(address) === undefined) {
+        socket.end(`HTTP/1.1 400 Bad Request\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
         return;
       }
       sockets.handleUpgrade(request, socket, head, (connected) => sockets.emit("connection", connected, request));
@@ -168,6 +186,14 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       started.dispose();
     },
   };
+}
+
+/** The agent session's view a page's socket address names, null for none, or undefined for a name that is not one. */
+function socketView(address: URL | null): string | null | undefined {
+  const given = address?.searchParams.getAll(VIEW_PARAMETER) ?? [];
+  if (given.length === 0) return null;
+  const view = viewNameSchema.safeParse(given[0]);
+  return given.length === 1 && view.success ? view.data : undefined;
 }
 
 /** The Host headers a browser sends for this computer's own addresses, which leave out the default port 80. */

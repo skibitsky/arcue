@@ -1,9 +1,14 @@
 import type { ByteStream } from "@arcue/protocol";
-import { SERVE_CORE_PATH } from "@arcue/protocol";
+import { SERVE_CORE_PATH, VIEW_PARAMETER } from "@arcue/protocol";
 
-/** The address of the core's socket on the server that served `location`. */
-export function coreSocketUrl(location: Pick<Location, "protocol" | "host">): string {
-  return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${SERVE_CORE_PATH}`;
+/**
+ * The address of the core's socket on the server that served `location`. It names the agent session's view that the
+ * page's address names, so the page connects as that view's page.
+ */
+export function coreSocketUrl(location: Pick<Location, "protocol" | "host" | "search">): string {
+  const view = new URLSearchParams(location.search).get(VIEW_PARAMETER);
+  const query = view === null ? "" : `?${new URLSearchParams({ [VIEW_PARAMETER]: view })}`;
+  return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${SERVE_CORE_PATH}${query}`;
 }
 
 /** One frame per message. Frames written before the socket opens wait for it. */

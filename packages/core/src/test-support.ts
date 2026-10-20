@@ -267,7 +267,8 @@ export class FakeWindow {
   respond: (request: IncomingRequest) => unknown = () => undefined;
   readonly #endpoint: MemoryEndpoint;
 
-  constructor(core: ArcueCore, connection: string) {
+  /** A window with a view is the page of that agent session's view. */
+  constructor(core: ArcueCore, connection: string, view?: string) {
     const [coreSide, windowSide] = createMemoryChannel();
     this.connection = connection;
     this.#endpoint = windowSide;
@@ -278,7 +279,7 @@ export class FakeWindow {
       },
     });
     this.client = createRemoteClient(this.peer);
-    core.connect(coreSide, { connection, caller: "window" });
+    core.connect(coreSide, { connection, caller: "window", view });
   }
 
   get requestNames(): string[] {
