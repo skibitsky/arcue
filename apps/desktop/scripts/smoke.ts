@@ -78,11 +78,13 @@ async function stopApp(userData: string): Promise<void> {
   if (alive(info.pid)) process.kill(info.pid);
 }
 
-/** Whether `arcue status` lists every file as ready. */
+/** Whether `arcue status` lists every file as ready. It writes Windows paths with forward slashes. */
 function allReady(status: Result, files: readonly string[]): boolean {
-  const lines = status.stdout.split("\n");
+  const slashes = (text: string) => text.replaceAll("\\", "/");
+  const lines = status.stdout.split("\n").map(slashes);
   return (
-    status.code === 0 && files.every((file) => lines.some((line) => line.includes(file) && line.includes(" ready ")))
+    status.code === 0 &&
+    files.every((file) => lines.some((line) => line.includes(slashes(file)) && line.includes(" ready ")))
   );
 }
 
@@ -92,6 +94,15 @@ async function statusOnceReady(env: NodeJS.ProcessEnv, files: readonly string[])
     const status = await arcue(["status"], env);
     if (allReady(status, files) || Date.now() > deadline) return status;
     await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
+const SLOW_FIRST_START = ["did not answer", "did not start within"];
+
+async function runningWithin(env: NodeJS.ProcessEnv, ms: number): Promise<void> {
+  const deadline = Date.now() + ms;
+  while ((await arcue(["status"], env)).code !== 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }
 
@@ -143,9 +154,13 @@ try {
 
   const openStriker = ["open", striker, "--clip", CLIP, "--frame", "12"];
   let started = await arcue(openStriker, env);
-  if (started.code !== 0 && started.stderr.includes("did not answer")) {
-    // Without a GPU, the window's first render can block it for longer than the core waits for an answer.
-    console.warn(`The window was slow to answer the first arcue open, so it opens again.\n${started.stderr}`);
+  if (started.code !== 0 && SLOW_FIRST_START.some((text) => started.stderr.includes(text))) {
+    // A first start can outlast what the command line waits for: Rosetta translates the app on its first start, and
+    // without a GPU the window's first render can block it.
+    console.warn(
+      `The app was slow to start for the first arcue open, so it opens again once the app runs.\n${started.stderr}`,
+    );
+    await runningWithin(env, 120_000);
     started = await arcue(openStriker, env);
   }
   check(
