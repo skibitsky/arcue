@@ -58,13 +58,34 @@ interface IconButtonProps extends Omit<ComponentProps<"button">, "children"> {
   tipSide?: TipSide;
   pressed?: boolean;
   small?: boolean;
+  /** Why the button does nothing now. It shows dimmed with this as its tooltip, which a disabled button could not show. */
+  unavailable?: string | undefined;
 }
 
-export function IconButton({ icon, label, shortcut, tipSide, pressed, small, className, ...rest }: IconButtonProps) {
+export function IconButton({
+  icon,
+  label,
+  shortcut,
+  tipSide,
+  pressed,
+  small,
+  unavailable,
+  className,
+  onClick,
+  ...rest
+}: IconButtonProps) {
   const classes = ["ibtn", small ? "ibtn-sm" : "", className ?? ""].filter(Boolean).join(" ");
   return (
-    <Tip label={label} shortcut={shortcut} side={tipSide ?? "top"}>
-      <button type="button" className={classes} aria-label={label} aria-pressed={pressed} {...rest}>
+    <Tip label={unavailable ?? label} shortcut={unavailable ? undefined : shortcut} side={tipSide ?? "top"}>
+      <button
+        type="button"
+        className={classes}
+        aria-label={label}
+        aria-pressed={pressed}
+        aria-disabled={unavailable ? true : undefined}
+        onClick={unavailable ? undefined : onClick}
+        {...rest}
+      >
         <Icon name={icon} />
       </button>
     </Tip>

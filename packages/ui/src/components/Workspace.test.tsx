@@ -2,7 +2,7 @@ import type { Clip, Material, SceneDescription } from "@arcue/scene";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
-import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
+import { fakeScene, STONE_RESONATOR, STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import type { FileHost } from "../store/view-files";
 import { flush, NOW, setup, TestViewport, withPoseClips } from "../test-helpers";
 import { Workspace } from "./Workspace";
@@ -304,6 +304,34 @@ describe("Workspace", () => {
       const name = button.getAttribute("aria-label") ?? button.textContent ?? "";
       expect(name.trim(), button.outerHTML).not.toBe("");
     }
+  });
+
+  it("dims the skeleton toggle for a model without bones and says why", async () => {
+    const { client, session, viewport } = await renderStone();
+    const user = userEvent.setup();
+    const button = screen.getByRole("button", { name: "Skeleton" });
+    await user.click(button);
+    expect(viewport()?.skeleton).toBe(true);
+    await user.click(button);
+
+    const stone = fakeScene(STONE_RESONATOR);
+    const boneless: SceneDescription = {
+      ...stone,
+      nodes: stone.nodes.map((node) => (node.kind === "bone" ? { ...node, kind: "empty" } : node)),
+      meshes: stone.meshes.map((mesh) => ({ ...mesh, skeleton: null, bindMatrix: null, joints: null, weights: null })),
+      skeletons: [],
+    };
+    await act(async () => {
+      await client.simulateExport(session.assetId, { scene: boneless });
+      await flush(10);
+    });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    await user.click(button);
+    expect(session.state.get().skeleton).toBe(false);
+    expect(viewport()?.skeleton).toBe(false);
+    await user.unhover(button);
+    await user.hover(button);
+    expect((await screen.findByRole("tooltip", {}, { timeout: 2000 })).textContent).toBe("This model has no skeleton");
   });
 
   it("lets Space press a focused button instead of starting playback", async () => {

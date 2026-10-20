@@ -181,7 +181,7 @@
   place-items: center;
 }
 
-.ibtn:hover:not(:disabled) {
+.ibtn:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--surface-raised);
   color: var(--text);
 }
@@ -191,7 +191,8 @@
   color: var(--text);
 }
 
-.ibtn:disabled {
+.ibtn:disabled,
+.ibtn[aria-disabled="true"] {
   color: var(--text-faint);
   opacity: 0.5;
 }
