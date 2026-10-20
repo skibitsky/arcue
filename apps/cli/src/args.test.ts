@@ -61,7 +61,9 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["open", "a.fbx", "--clip"])).toThrow("needs a value");
     expect(() => parseArgs(["open", "a.fbx", "--speed", "2"])).toThrow('Unknown option "--speed"');
     expect(() => parseArgs(["close"])).toThrow('Unknown command "close"');
-    expect(() => parseArgs(["status", "now"])).toThrow('"arcue status" takes no file, got "now".');
+    expect(() => parseArgs(["status", "now", "a b"])).toThrow(
+      '"arcue status" takes no arguments but --view, got "now a b".',
+    );
     expect(() => parseArgs(["status", "--view"])).toThrow("--view needs a value");
     expect(() => parseArgs(["status", "--move"])).toThrow('Unknown option "--move"');
     expect(() => parseArgs(["open", "a.fbx", "--view="])).toThrow("--view needs a value");

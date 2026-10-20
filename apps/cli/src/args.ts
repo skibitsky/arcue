@@ -103,7 +103,9 @@ function parseStatus(args: readonly string[]): Command {
     const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, undefined];
     if (flag !== "--view") {
       throw new UsageError(
-        arg.startsWith("--") ? `Unknown option "${arg}".` : `"arcue status" takes no file, got "${arg}".`,
+        arg.startsWith("--")
+          ? `Unknown option "${arg}".`
+          : `"arcue status" takes no arguments but --view, got "${args.join(" ")}".`,
       );
     }
     const value = inline ?? args[++index];
