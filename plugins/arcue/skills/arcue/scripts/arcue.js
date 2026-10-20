@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { A as memberRoles, B as rangesWithin, C as COMPOSITION_FILE_NAME, D as compositionFileSchema, E as animatesModel, F as lastFrame, G as sameTopology, H as parseStoredPath, J as findNode, L as countInRanges, O as joinsByName, Q as importWarning, R as decodeRanges, S as screenshotOwner, T as MODEL_FILE_EXTENSIONS, U as fileNameOf, V as materialSlots, W as imageMimeType, X as splitMemberPath, Y as memberPath, Z as describeTextureUses, _ as reviewFormat, _t as framedChannel, a as isQueryName, at as TEXTURE_REF_NAMES, b as settingsSchema, bt as ArcueError, c as importReadFileInputSchema, ct as BRIDGE_INFO_FILE, d as createPeer, f as withTransfer, ft as acceptBridge, g as reviewFileSchema, gt as MAX_FRAME_BYTES, h as reportListenerError, ht as launchInfoSchema, i as roundDataSchema, it as TEXTURE_REF_KEYS, j as viewStateSchema, k as keysModelBones, l as importRequests, lt as HANDSHAKE_MAX_FRAME_BYTES, m as callEach, mt as connectBridge, n as binaryFrameCodec, nt as knownPartView, o as queries, ot as TEXTURE_SLOTS, p as isEnvelope, pt as bridgeInfoSchema, q as composeScene, r as jsonFrameCodec, rt as shownByDefault, s as importFindFileInputSchema, t as portEndpoint, tt as isDefaultPartView, ut as LAUNCH_INFO_FILE, v as commands, vt as framedEndpoint, w as IMAGE_FILE_EXTENSIONS, x as warningId, xt as COMMENT_ID_PATTERN, y as isCommandName, yt as messageChannel, z as encodeRanges } from "./arcue-Cwht77Mb.js";
+import { $ as splitMemberPath, A as compositionFileSchema, B as countInRanges, C as settingsSchema, Ct as ArcueError, D as IMAGE_FILE_EXTENSIONS, E as COMPOSITION_FILE_NAME, G as parseStoredPath, H as encodeRanges, J as sameTopology, K as fileNameOf, M as keysModelBones, N as memberRoles, O as MODEL_FILE_EXTENSIONS, P as viewStateSchema, Q as memberPath, R as lastFrame, S as viewNameSchema, St as messageChannel, T as screenshotOwner, U as rangesWithin, V as decodeRanges, W as materialSlots, X as composeScene, Z as findNode, _ as reviewFormat, _t as connectBridge, a as isQueryName, at as knownPartView, bt as framedChannel, c as importReadFileInputSchema, ct as TEXTURE_REF_NAMES, d as createPeer, dt as BRIDGE_INFO_FILE, et as describeTextureUses, f as withTransfer, ft as HANDSHAKE_MAX_FRAME_BYTES, g as reviewFileSchema, gt as bridgeInfoSchema, h as reportListenerError, ht as acceptBridge, i as roundDataSchema, it as isDefaultPartView, j as joinsByName, k as animatesModel, l as importRequests, lt as TEXTURE_SLOTS, m as callEach, n as binaryFrameCodec, o as queries, ot as shownByDefault, p as isEnvelope, pt as LAUNCH_INFO_FILE, q as imageMimeType, r as jsonFrameCodec, s as importFindFileInputSchema, st as TEXTURE_REF_KEYS, t as portEndpoint, tt as importWarning, v as commands, vt as launchInfoSchema, w as warningId, wt as COMMENT_ID_PATTERN, x as viewAddress, xt as framedEndpoint, y as isCommandName, yt as MAX_FRAME_BYTES } from "./arcue-B-LzbgNn.js";
 import { createRequire } from "node:module";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { connect, createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { MessageChannel, Worker } from "node:worker_threads";
@@ -609,7 +609,10 @@ function unrefTimer(delayMs, callback) {
 	handle.unref();
 	return () => clearTimeout(handle);
 }
-/** Holds back an "asset.open" request until a window is open, keeping every message in order. */
+/**
+* Holds back a request that opens a model until a window that may show it is open, for the view the request names or
+* for none, keeping every message in order.
+*/
 function windowFirst(endpoint, ensureWindow) {
 	return {
 		post: (message, transfer) => endpoint.post(message, transfer),
@@ -618,12 +621,21 @@ function windowFirst(endpoint, ensureWindow) {
 			let queue = Promise.resolve();
 			return endpoint.listen((message) => {
 				queue = queue.then(async () => {
-					if (isEnvelope(message) && message.type === "request" && message.name === "asset.open") await ensureWindow().catch(() => void 0);
+					const view = openedView(message);
+					if (view !== void 0) await ensureWindow(view).catch(() => void 0);
 					listener(message);
 				});
 			});
 		}
 	};
+}
+/** The view a request that opens a model names: null for "asset.open", and undefined for any other message. */
+function openedView(message) {
+	if (!isEnvelope(message) || message.type !== "request" || message.kind !== "command") return void 0;
+	if (message.name === "asset.open") return null;
+	if (message.name !== "asset.openInView" || typeof message.input !== "object" || message.input === null) return;
+	const view = viewNameSchema.safeParse(message.input.view);
+	return view.success ? view.data : void 0;
 }
 //#endregion
 //#region ../../packages/core/src/comment-ids.ts
@@ -2599,6 +2611,13 @@ var OpenAsset = class {
 	viewState = null;
 	/** The connection of the window that shows the asset. */
 	window = null;
+	/**
+	* The agent session's view the asset belongs to, or null for none: the view of the window that shows it, or of the
+	* page the core holds it for. It stays when that page closes, so the page takes the asset back when it reloads.
+	*/
+	view = null;
+	/** The clip and frame an open asked for while the core held the asset, for the page that shows it later. */
+	waiting = null;
 	closed = false;
 	/** Set while `asset.close` waits for the edits in flight. */
 	closing = null;
@@ -3849,35 +3868,49 @@ var SettingsStore = class {
 };
 //#endregion
 //#region ../../packages/core/src/windows.ts
-/** The windows connected to the core, and which one gained focus last. */
+/** The windows connected to the core, the view each belongs to, and which gained focus last. */
 var WindowRegistry = class {
-	#peers = /* @__PURE__ */ new Map();
-	#lastFocused = null;
-	add(connection, peer) {
-		this.#peers.set(connection, peer);
+	#windows = /* @__PURE__ */ new Map();
+	#focusCount = 0;
+	add(connection, peer, view) {
+		this.#windows.set(connection, {
+			peer,
+			view,
+			focused: 0
+		});
 	}
 	remove(connection) {
-		this.#peers.delete(connection);
-		if (this.#lastFocused === connection) this.#lastFocused = null;
+		this.#windows.delete(connection);
 	}
 	has(connection) {
-		return connection !== null && this.#peers.has(connection);
+		return connection !== null && this.#windows.has(connection);
+	}
+	/** The view a connected window belongs to, or null for a window outside views. */
+	viewOf(connection) {
+		return this.#windows.get(connection)?.view ?? null;
 	}
 	focus(connection) {
-		if (this.#peers.has(connection)) this.#lastFocused = connection;
+		const entry = this.#windows.get(connection);
+		if (entry) entry.focused = ++this.#focusCount;
 	}
 	/**
-	* The window for a newly shown asset: the caller's own window when a window asked, otherwise the window focused
-	* last, otherwise the window that connected last. Null when no window is connected.
+	* The window to show a view's assets in, or with a null view a window outside views: of those, the one focused last,
+	* otherwise the one that connected last. Null when none is connected.
 	*/
-	choose(context) {
-		if (context.caller === "window" && this.has(context.connection)) return context.connection;
-		if (this.has(this.#lastFocused)) return this.#lastFocused;
-		return [...this.#peers.keys()].at(-1) ?? null;
+	inView(view) {
+		let chosen = null;
+		for (const [connection, entry] of this.#windows) {
+			if (entry.view !== view) continue;
+			if (chosen === null || entry.focused >= chosen.focused) chosen = {
+				connection,
+				focused: entry.focused
+			};
+		}
+		return chosen?.connection ?? null;
 	}
 	/** Sends a command to a window. With a timeout, a window that does not answer in time rejects as "unavailable". */
 	request(connection, name, input, timeout) {
-		const peer = this.#peers.get(connection);
+		const peer = this.#windows.get(connection)?.peer;
 		if (!peer) return Promise.reject(new ArcueError("unavailable", "The window that shows this asset is closed."));
 		const answer = peer.request("command", name, input);
 		if (!timeout) return answer;
@@ -3962,7 +3995,7 @@ var ArcueCore = class ArcueCore {
 		this.#connections.add(options.connection);
 		peer.onClose(() => this.#connections.delete(options.connection));
 		if (options.caller === "window") {
-			this.#windows.add(options.connection, peer);
+			this.#windows.add(options.connection, peer, options.view ?? null);
 			peer.onClose(() => {
 				this.#windows.remove(options.connection);
 				for (const asset of this.#assets.values()) if (asset.window === options.connection) asset.window = null;
@@ -3982,20 +4015,34 @@ var ArcueCore = class ArcueCore {
 	}
 	#registerHandlers() {
 		const registry = this.registry;
-		this.#unregister.push(registry.handleCommand("asset.open", (args, context) => this.#opening.run(() => this.#open(args, context))), registry.handleCommand("asset.close", (args) => this.#close(args.assetId)), registry.handleCommand("asset.relink", (args) => this.#relinkAsset(args.assetId, args.path)), registry.handleCommand("asset.reload", async (args) => {
+		this.#unregister.push(registry.handleCommand("asset.open", (args, context) => this.#opening.run(async () => {
+			const { assetId } = await this.#open(args, this.#requester(context), false);
+			return { assetId };
+		})), registry.handleCommand("asset.openInView", (args) => this.#opening.run(() => this.#open(args, {
+			view: args.view,
+			window: null
+		}, args.move))), registry.handleCommand("asset.close", (args) => this.#close(args.assetId)), registry.handleCommand("asset.relink", (args) => this.#relinkAsset(args.assetId, args.path)), registry.handleCommand("asset.reload", async (args) => {
 			const asset = this.#asset(args.assetId);
 			asset.searched.clear();
 			return { version: await this.#load(asset) };
 		}), registry.handleCommand("comment.create", (args, context) => this.#createComment(args, context.user)), registry.handleCommand("comment.update", (args) => this.#updateComment(args)), registry.handleCommand("comment.delete", (args) => this.#deleteComment(args)), registry.handleCommand("comment.resolve", (args) => this.#resolveComment(args)), registry.handleCommand("comment.reopen", (args, context) => this.#reopenComment(args, context.user)), registry.handleCommand("comment.createFromWarning", (args, context) => this.#createFromWarning(args, context.user)), registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])), registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)), registry.handleCommand("round.copy", (args, context) => this.#inCompositionLine(this.#asset(args.assetId), () => this.#copyRound(args.assetId, context.user))), registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")), registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")), registry.handleCommand("review.relink", (args) => this.#relinkReview(args.assetId, args.from)), registry.handleCommand("composition.addFile", (args) => this.#addCompositionFile(args)), registry.handleCommand("composition.removeFile", (args) => this.#removeCompositionFile(args)), registry.handleCommand("composition.attachFile", (args) => this.#attachCompositionFile(args)), registry.handleCommand("material.setTexture", (args) => this.#setMaterialTexture(args)), registry.handleCommand("settings.set", (args) => this.#settings.update(args)), registry.handleCommand("view.reportState", (args, context) => {
 			const asset = this.#asset(args.assetId);
+			if (context.caller === "window" && this.#windows.has(context.connection)) {
+				this.#checkSameView(asset, context.connection);
+				this.#shownIn(asset, context.connection);
+			}
 			asset.viewState = args.state;
-			if (context.caller === "window" && this.#windows.has(context.connection)) asset.window = context.connection;
 		}), registry.handleCommand("view.moveAsset", (args, context) => this.#opening.run(() => this.#move(args.assetId, context, args.unlessShown ?? false))), registry.handleCommand("view.reportFocus", (_args, context) => {
 			if (context.caller === "window" && context.connection !== null) this.#windows.focus(context.connection);
 		}), registry.handleCommand(VIEW_SHOW_ASSET, async (args, context) => {
 			const asset = this.#asset(args.assetId);
-			const window = context.caller === "window" && this.#windows.has(context.connection) ? context.connection : this.#windowFor(asset, context);
-			await this.#showAsset(asset, window, args);
+			if (context.caller === "window" && this.#windows.has(context.connection)) {
+				this.#checkSameView(asset, context.connection);
+				await this.#showAsset(asset, context.connection, args);
+			} else await this.#reveal(asset, {
+				view: this.#ownerOf(asset),
+				window: null
+			}, args, false);
 		}), registry.handleQuery("asset.list", () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) })), registry.handleQuery("review.get", (args) => this.#asset(args.assetId).session.review), registry.handleQuery("review.candidates", (args) => ({ candidates: this.#asset(args.assetId).candidates })), registry.handleQuery("viewState.get", (args) => this.#asset(args.assetId).viewState), registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()), registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })), registry.handleQuery("scene.materials", (args) => ({ materials: materialSlots(this.#asset(args.assetId).loaded().scene).map(({ material, slots }) => ({
 			material,
 			slots: slots.map(({ slot, state, path, overridden }) => ({
@@ -4051,10 +4098,56 @@ var ArcueCore = class ArcueCore {
 		const name = this.#settings.current.authorName;
 		return name === void 0 ? void 0 : { name };
 	}
-	#windowFor(asset, context) {
-		const window = this.#windows.has(asset.window) ? asset.window : this.#windows.choose(context);
-		if (window === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
-		return window;
+	/** Who asks to show an asset: a window for itself, or a caller outside the windows for an agent session's view or none. */
+	#requester(context) {
+		if (context.caller === "window" && this.#windows.has(context.connection)) return {
+			view: this.#windows.viewOf(context.connection),
+			window: context.connection
+		};
+		return {
+			view: null,
+			window: null
+		};
+	}
+	/**
+	* Where an open shows an asset. A window's open shows it in that window. An open for a view shows it in the view's
+	* page; while that page is not connected, in a window outside views; and with neither, in no window yet, as the core
+	* holds the asset for the page. An open without a view shows it in a window outside views, and with none is null.
+	*/
+	#placeFor(requester) {
+		if (requester.window !== null) return requester;
+		if (requester.view !== null) {
+			const page = this.#windows.inView(requester.view);
+			if (page !== null) return {
+				view: requester.view,
+				window: page
+			};
+		}
+		const window = this.#windows.inView(null);
+		if (window !== null) return {
+			view: null,
+			window
+		};
+		return requester.view === null ? null : requester;
+	}
+	/** The window that shows the asset, while it is connected. */
+	#windowOf(asset) {
+		return this.#windows.has(asset.window) ? asset.window : null;
+	}
+	/** The view the asset is in: its window's, or while no window shows it, the view it belongs to. */
+	#ownerOf(asset) {
+		const window = this.#windowOf(asset);
+		return window === null ? asset.view : this.#windows.viewOf(window);
+	}
+	/** Refuses a window that asks for an asset of another view, or for an asset of no view from a view's page. */
+	#checkSameView(asset, window) {
+		const owner = this.#ownerOf(asset);
+		if (owner !== this.#windows.viewOf(window)) throw new ArcueError("conflict", openElsewhere(asset.name, owner));
+	}
+	#shownIn(asset, window) {
+		asset.window = window;
+		asset.view = this.#windows.viewOf(window);
+		asset.waiting = null;
 	}
 	async #showAsset(asset, window, { clip, frame }) {
 		const input = { assetId: asset.id };
@@ -4064,47 +4157,101 @@ var ArcueCore = class ArcueCore {
 			ms: this.#showAssetTimeoutMs,
 			clock: this.#platform.clock
 		});
-		asset.window = window;
+		this.#shownIn(asset, window);
+	}
+	/** Shows the asset at the place, or holds it there for the view's page. */
+	async #place(asset, place, at) {
+		if (place.window !== null) {
+			await this.#showAsset(asset, place.window, at);
+			return;
+		}
+		asset.window = null;
+		asset.view = place.view;
+		asset.waiting = showAt(at);
 	}
 	/**
-	* Moves an asset's tab to the calling window. The window that shows it releases the tab first and returns its view
-	* state, so the receiving window starts from the same camera, clip and frame.
+	* Removes the asset's tab from its window, keeping the view state the window returns. A window refuses while the tab's
+	* comment box has unsaved text.
+	*/
+	async #release(asset, window) {
+		const released = await this.#windows.request(window, VIEW_RELEASE_ASSET, { assetId: asset.id }, {
+			ms: this.#showAssetTimeoutMs,
+			clock: this.#platform.clock
+		});
+		const state = viewStateSchema.nullable().safeParse(released);
+		if (state.success && state.data) asset.viewState = state.data;
+		asset.window = null;
+	}
+	/** Shows the asset at the place, after releasing its tab from the window that shows it, which gets it back on failure. */
+	async #relocateTab(asset, from, place, at) {
+		if (from === null || from === place.window) {
+			await this.#place(asset, place, at);
+			return;
+		}
+		await this.#release(asset, from);
+		try {
+			await this.#place(asset, place, at);
+		} catch (error) {
+			if (this.#windows.has(from)) await this.#showAsset(asset, from, {}).catch(() => void 0);
+			throw error;
+		}
+	}
+	/**
+	* Shows an open asset for the requester. A window of the requester's place that shows it focuses its tab. An asset in
+	* another view, or in a window outside views while the requester's view has its page, stays there unless `move` takes
+	* it. One that no window shows goes to the requester's place, unless it belongs to another view.
+	*/
+	async #reveal(asset, requester, at, move) {
+		const place = this.#placeFor(requester);
+		const window = this.#windowOf(asset);
+		const owner = this.#ownerOf(asset);
+		if (window !== null && place !== null && owner === place.view) {
+			await this.#showAsset(asset, window, at);
+			return shownAs({
+				view: owner,
+				window
+			});
+		}
+		if (!(window === null && (owner === null || owner === requester.view)) && !move) throw new ArcueError("conflict", openElsewhere(asset.name, owner));
+		if (place === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
+		await this.#relocateTab(asset, window, place, at);
+		return shownAs(place);
+	}
+	/**
+	* Moves an asset's tab to the calling window, within the window's view. The window that shows it releases the tab
+	* first and returns its view state, so the receiving window starts from the same camera, clip and frame. An asset the
+	* core holds for the view shows at the clip and frame its open asked for.
 	*/
 	async #move(assetId, context, unlessShown) {
 		if (context.caller !== "window" || !this.#windows.has(context.connection)) throw new ArcueError("forbidden", "Only a window can take an asset's tab.");
 		const asset = this.#asset(assetId);
 		if (asset.closing) throw new ArcueError("conflict", `${asset.name} is closing, so its tab cannot move.`);
 		const target = context.connection;
-		const source = asset.window;
-		if (unlessShown && source !== target && this.#windows.has(source)) return;
-		if (source !== target && this.#windows.has(source)) {
-			const released = await this.#windows.request(source, VIEW_RELEASE_ASSET, { assetId }, {
-				ms: this.#showAssetTimeoutMs,
-				clock: this.#platform.clock
-			});
-			const state = viewStateSchema.nullable().safeParse(released);
-			if (state.success && state.data) asset.viewState = state.data;
-			asset.window = null;
+		const source = this.#windowOf(asset);
+		const owner = this.#ownerOf(asset);
+		if (owner !== this.#windows.viewOf(target)) {
+			if (unlessShown) return;
+			throw new ArcueError("conflict", openElsewhere(asset.name, owner));
 		}
-		try {
-			await this.#showAsset(asset, target, {});
-		} catch (error) {
-			if (source !== target && this.#windows.has(source)) await this.#showAsset(asset, source, {}).catch(() => void 0);
-			throw error;
-		}
+		if (unlessShown && source !== null && source !== target) return;
+		const at = source === null ? asset.waiting ?? {} : {};
+		await this.#relocateTab(asset, source, {
+			view: owner,
+			window: target
+		}, at);
 	}
-	async #open(args, context) {
+	async #open(args, requester, move) {
 		const path = normalizePath(args.path);
 		const existing = [...this.#assets.values()].find((asset) => asset.path === path && !asset.closing);
-		if (existing) {
-			await this.#showAsset(existing, this.#windowFor(existing, context), args);
-			return { assetId: existing.id };
-		}
+		if (existing) return {
+			assetId: existing.id,
+			shown: await this.#reveal(existing, requester, args, move)
+		};
 		const stat = await this.#platform.stat(path);
 		if (!stat) throw new ArcueError("not-found", `${path} does not exist.`);
 		if (stat.kind !== "file") throw new ArcueError("invalid-input", `${path} is not an asset file.`);
-		const window = this.#windows.choose(context);
-		if (window === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
+		const place = this.#placeFor(requester);
+		if (place === null) throw new ArcueError("unavailable", "No window is open to show the asset.");
 		const location = await locateReview(this.#platform, path);
 		const reviewPath = reviewFilePath(location);
 		await checkReviewPath(this.#platform, location, reviewPath);
@@ -4120,7 +4267,7 @@ var ArcueCore = class ArcueCore {
 		asset.earlier = earlier.unmatched;
 		this.#assets.set(asset.id, asset);
 		try {
-			await this.#showAsset(asset, window, args);
+			await this.#place(asset, place, args);
 		} catch (error) {
 			this.#assets.delete(asset.id);
 			throw error;
@@ -4134,7 +4281,10 @@ var ArcueCore = class ArcueCore {
 		this.#offer(asset);
 		this.#watchAsset(asset);
 		this.#load(asset).catch(() => void 0);
-		return { assetId: asset.id };
+		return {
+			assetId: asset.id,
+			shown: shownAs(place)
+		};
 	}
 	/**
 	* For a file without a review: finds the reviews whose model is gone and, when exactly one has a version with the
@@ -5262,6 +5412,19 @@ var ArcueCore = class ArcueCore {
 		});
 	}
 };
+function shownAs(place) {
+	if (place.window === null) return "held";
+	return place.view === null ? "window" : "view";
+}
+function showAt({ clip, frame }) {
+	return {
+		...clip !== void 0 ? { clip } : {},
+		...frame !== void 0 ? { frame } : {}
+	};
+}
+function openElsewhere(name, view) {
+	return view === null ? `${name} is open in a window outside agent sessions' views.` : `${name} is open in another agent session's view, "${view}".`;
+}
 /** A file name's extension in lowercase, such as ".fbx". */
 function extensionOf(name) {
 	return name.slice(name.lastIndexOf(".")).toLowerCase();
@@ -5661,11 +5824,12 @@ function watchPath(path, native, folders, listener) {
 //#endregion
 //#region ../../packages/platform-node/src/window-presence.ts
 /**
-* Counts the windows connected to the core, so an open from the command line can wait for a window. On macOS the app
-* keeps running with every window closed; `requestWindow` then asks the main process to open one.
+* Counts the windows connected to the core by the agent session's view each shows, so an open from the command line can
+* wait for a window that may show its model: the view's page, or a window outside views. On macOS the app keeps running
+* with every window closed; `requestWindow` then asks the main process to open one.
 */
 var WindowPresence = class {
-	#count = 0;
+	#counts = /* @__PURE__ */ new Map();
 	#waiters = [];
 	#requestWindow;
 	#setTimer;
@@ -5675,23 +5839,35 @@ var WindowPresence = class {
 		this.#setTimer = options.setTimer;
 		this.#timeoutMs = options.timeoutMs ?? 15e3;
 	}
-	get count() {
-		return this.#count;
+	/** The windows connected for a view, or with null the windows outside views. */
+	count(view = null) {
+		return this.#counts.get(view) ?? 0;
 	}
-	added() {
-		this.#count++;
-		for (const resolve of this.#waiters.splice(0)) resolve();
+	added(view = null) {
+		this.#counts.set(view, this.count(view) + 1);
+		const ready = this.#waiters.filter((waiter) => this.#canShow(waiter.view));
+		this.#waiters = this.#waiters.filter((waiter) => !ready.includes(waiter));
+		for (const waiter of ready) waiter.resolve();
 	}
-	removed() {
-		this.#count = Math.max(0, this.#count - 1);
+	removed(view = null) {
+		const count = this.count(view) - 1;
+		if (count > 0) this.#counts.set(view, count);
+		else this.#counts.delete(view);
 	}
-	/** Resolves once a window is connected, asking for one when none is; rejects as "unavailable" after the timeout. */
-	ensure() {
-		if (this.#count > 0) return Promise.resolve();
+	/**
+	* Resolves once a window that may show a model opened for the view is connected: the view's page or a window outside
+	* views, or with a null view only a window outside views. Asks for a window when none is; rejects as "unavailable"
+	* after the timeout.
+	*/
+	ensure(view = null) {
+		if (this.#canShow(view)) return Promise.resolve();
 		return new Promise((resolve, reject) => {
-			const waiter = () => {
-				cancel();
-				resolve();
+			const waiter = {
+				view,
+				resolve: () => {
+					cancel();
+					resolve();
+				}
 			};
 			const cancel = this.#setTimer(this.#timeoutMs, () => {
 				this.#waiters = this.#waiters.filter((entry) => entry !== waiter);
@@ -5700,6 +5876,9 @@ var WindowPresence = class {
 			this.#waiters.push(waiter);
 			if (this.#waiters.length === 1) this.#requestWindow();
 		});
+	}
+	#canShow(view) {
+		return this.count(null) > 0 || view !== null && this.count(view) > 0;
 	}
 };
 //#endregion
@@ -5757,11 +5936,16 @@ async function connectOrLaunch(userData, { timeoutMs = 3e4, pollMs = 200 } = {})
 	throw new Error(`Arcue did not start within ${Math.round(timeoutMs / 1e3)} seconds.`);
 }
 var USAGE = `Usage:
-  arcue open <file> [--clip <name>] [--frame <number>]
+  arcue open <file> [--clip <name>] [--frame <number>] [--view <name>] [--move]
       Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
-      files its composition lists.
+      files its composition lists. Run by an agent, it shows the model in that agent session's view: the page whose
+      address "arcue status" prints. Until that page is open, a page or window outside views shows the model, or with
+      none Arcue holds it for the page. Run by a person, it shows the model only outside views.
       --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
       --frame is a whole frame number from 0.
+      --view names the session, in place of ARCUE_VIEW, CLAUDE_CODE_SESSION_ID, CODEX_SESSION_ID or CODEX_THREAD_ID,
+      the first of which that is set names it otherwise.
+      --move takes the model into this session's view when another view shows it. Unsaved comment text keeps it there.
   arcue inspect <file> [--json]
       Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
       composed with the files its composition lists, as opening it would.
@@ -5770,9 +5954,9 @@ var USAGE = `Usage:
       Runs Arcue in a browser instead of the desktop app, until stopped: serves its window at
       http://localhost:4530, or at the given port, to this computer only. "arcue open" then shows models
       there. Exits with 1 when Arcue already runs.
-  arcue status
-      Reports whether Arcue is running, where a browser shows it, and which assets it has open. Exits with 1 when it is
-      not running.
+  arcue status [--view <name>]
+      Reports whether Arcue is running, where a browser shows it and this session's view, and which assets it has open.
+      Exits with 1 when it is not running.
   arcue setup
       Through the agent plugin's launcher, on a computer without Node 24 or later: downloads the Node build the
       plugin pins from nodejs.org once, checks its SHA-256 checksum, and keeps it in this user's cache. No other
@@ -5791,10 +5975,7 @@ var UsageError = class extends Error {
 function parseArgs(args) {
 	const [command, ...rest] = args;
 	if (command === void 0 || command === "help" || command === "--help" || command === "-h") return { command: "help" };
-	if (command === "status") {
-		if (rest.length > 0) throw new UsageError(`"arcue status" takes no arguments, got "${rest.join(" ")}".`);
-		return { command: "status" };
-	}
+	if (command === "status") return parseStatus(rest);
 	if (command === "setup") {
 		if (rest.length > 0) throw new UsageError(`"arcue setup" takes no arguments, got "${rest.join(" ")}".`);
 		return { command: "setup" };
@@ -5805,15 +5986,19 @@ function parseArgs(args) {
 	let path;
 	let clip;
 	let frame;
+	let view;
+	let move = false;
 	for (let index = 0; index < rest.length; index++) {
 		const arg = rest[index] ?? "";
 		const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, void 0];
-		if (flag === "--clip" || flag === "--frame") {
+		if (flag === "--clip" || flag === "--frame" || flag === "--view") {
 			const value = inline ?? rest[++index];
 			if (value === void 0 || value === "") throw new UsageError(`${flag} needs a value.`);
 			if (flag === "--clip") clip = value;
+			else if (flag === "--view") view = value;
 			else frame = parseFrame(value);
-		} else if (arg.startsWith("--")) throw new UsageError(`Unknown option "${arg}".`);
+		} else if (arg === "--move") move = true;
+		else if (arg.startsWith("--")) throw new UsageError(`Unknown option "${arg}".`);
 		else if (path === void 0) path = arg;
 		else throw new UsageError(`"arcue open" takes one file, got "${path}" and "${arg}".`);
 	}
@@ -5822,7 +6007,24 @@ function parseArgs(args) {
 		command: "open",
 		path,
 		...clip !== void 0 ? { clip } : {},
-		...frame !== void 0 ? { frame } : {}
+		...frame !== void 0 ? { frame } : {},
+		...view !== void 0 ? { view } : {},
+		...move ? { move } : {}
+	};
+}
+function parseStatus(args) {
+	let view;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index] ?? "";
+		const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, void 0];
+		if (flag !== "--view") throw new UsageError(arg.startsWith("--") ? `Unknown option "${arg}".` : `"arcue status" takes no arguments but --view, got "${args.join(" ")}".`);
+		const value = inline ?? args[++index];
+		if (value === void 0 || value === "") throw new UsageError("--view needs a value.");
+		view = value;
+	}
+	return {
+		command: "status",
+		...view !== void 0 ? { view } : {}
 	};
 }
 function parseInspect(args) {
@@ -8007,7 +8209,7 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	var http$1 = __require("http");
 	var net = __require("net");
 	var tls = __require("tls");
-	var { randomBytes: randomBytes$1, createHash: createHash$1 } = __require("crypto");
+	var { randomBytes: randomBytes$1, createHash: createHash$2 } = __require("crypto");
 	var { Duplex: Duplex$2, Readable } = __require("stream");
 	var { URL: URL$1 } = __require("url");
 	var PerMessageDeflate = require_permessage_deflate();
@@ -8685,7 +8887,7 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 				abortHandshake(websocket, socket, "Invalid Upgrade header");
 				return;
 			}
-			const digest = createHash$1("sha1").update(key + GUID).digest("base64");
+			const digest = createHash$2("sha1").update(key + GUID).digest("base64");
 			if (res.headers["sec-websocket-accept"] !== digest) {
 				abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
 				return;
@@ -9159,7 +9361,7 @@ var require_websocket_server = /* @__PURE__ */ __commonJSMin(((exports, module) 
 	var EventEmitter = __require("events");
 	var http = __require("http");
 	var { Duplex } = __require("stream");
-	var { createHash } = __require("crypto");
+	var { createHash: createHash$1 } = __require("crypto");
 	var extension = require_extension();
 	var PerMessageDeflate = require_permessage_deflate();
 	var subprotocol = require_subprotocol();
@@ -9429,7 +9631,7 @@ var require_websocket_server = /* @__PURE__ */ __commonJSMin(((exports, module) 
 				"HTTP/1.1 101 Switching Protocols",
 				"Upgrade: websocket",
 				"Connection: Upgrade",
-				`Sec-WebSocket-Accept: ${createHash("sha1").update(key + GUID).digest("base64")}`
+				`Sec-WebSocket-Accept: ${createHash$1("sha1").update(key + GUID).digest("base64")}`
 			];
 			const ws = new this.options.WebSocket(null, void 0, this.options);
 			if (protocols.size) {
@@ -9576,6 +9778,10 @@ var PAGE_HEADERS = {
 * its own window. The core takes the desktop app's place: it writes `bridge.json`, so `arcue open` and `arcue status`
 * reach it, and it refuses to start while another core runs.
 *
+* A page whose address names an agent session's view, `/?view=<name>`, connects as that view's page and shows the
+* models that session opens. While that page is not open, a page outside views shows them, or with none the core holds
+* them for the page, so an open for a view never waits for a browser.
+*
 * Only pages from this server's own origin can connect to the core, and only through a localhost address, so other
 * websites and DNS rebinding cannot reach it. No website may show its pages in a frame, where the user could not see a
 * model the command line opens and clicks could be hijacked. Like any local web server, it is open to other programs on
@@ -9611,7 +9817,7 @@ async function startServer(options) {
 		bridge = await startBridgeServer({
 			core,
 			userData: options.userData,
-			ensureWindow: () => windows.ensure(),
+			ensureWindow: (view) => view === null ? windows.ensure(null) : Promise.resolve(),
 			onError: options.onError,
 			url
 		});
@@ -9626,16 +9832,18 @@ async function startServer(options) {
 		maxPayload: MAX_FRAME_BYTES
 	});
 	let next = 1;
-	sockets.on("connection", (socket) => {
+	sockets.on("connection", (socket, request) => {
+		const view = socketView(URL.parse(request.url ?? "/", url)) ?? null;
 		const channel = messageChannel(webSocketStream(socket), binaryFrameCodec);
 		const peer = started.connect(framedEndpoint(channel), {
 			connection: `browser-${next++}`,
 			caller: "window",
+			view: view ?? void 0,
 			onListenerError: options.onError
 		});
-		windows.added();
+		windows.added(view);
 		peer.onClose(() => {
-			windows.removed();
+			windows.removed(view);
 			channel.close();
 		});
 	});
@@ -9651,9 +9859,13 @@ async function startServer(options) {
 			});
 		});
 		server.on("upgrade", (request, socket, head) => {
-			const path = URL.parse(request.url ?? "/", url)?.pathname;
-			if (!allowed(request) || path !== "/core/2" || request.headers.origin !== `http://${request.headers.host}`) {
+			const address = URL.parse(request.url ?? "/", url);
+			if (!allowed(request) || address?.pathname !== "/core/2" || request.headers.origin !== `http://${request.headers.host}`) {
 				socket.end(`HTTP/1.1 403 Forbidden\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
+				return;
+			}
+			if (socketView(address) === void 0) {
+				socket.end(`HTTP/1.1 400 Bad Request\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
 				return;
 			}
 			sockets.handleUpgrade(request, socket, head, (connected) => sockets.emit("connection", connected, request));
@@ -9669,6 +9881,13 @@ async function startServer(options) {
 			started.dispose();
 		}
 	};
+}
+/** The agent session's view a page's socket address names, null for none, or undefined for a name that is not one. */
+function socketView(address) {
+	const given = address?.searchParams.getAll("view") ?? [];
+	if (given.length === 0) return null;
+	const view = viewNameSchema.safeParse(given[0]);
+	return given.length === 1 && view.success ? view.data : void 0;
 }
 /** The Host headers a browser sends for this computer's own addresses, which leave out the default port 80. */
 function localHosts(port) {
@@ -9782,13 +10001,36 @@ function webSocketStream(socket) {
 	};
 }
 //#endregion
+//#region src/session-view.ts
+/**
+* The environment variables that name the agent session a command runs for, in the order they are taken. Codex sets
+* CODEX_SESSION_ID to its conversation's root thread, which the conversation's subagents share; releases before it set
+* only CODEX_THREAD_ID, which differs for each subagent.
+*/
+var SESSION_VARIABLES = [
+	"ARCUE_VIEW",
+	"CLAUDE_CODE_SESSION_ID",
+	"CODEX_SESSION_ID",
+	"CODEX_THREAD_ID"
+];
+/**
+* The view of the agent session a command runs for: the first of `--view` and the session variables that is set,
+* hashed into a short name. Subagents inherit the variables, so they reach their session's view. Null when none is set,
+* as for a person at a terminal.
+*/
+function sessionView(env, given) {
+	const identity = [given, ...SESSION_VARIABLES.map((name) => env[name])].find((value) => value !== void 0 && value !== "");
+	if (identity === void 0) return null;
+	return createHash("sha256").update(identity).digest("hex").slice(0, 12);
+}
+//#endregion
 //#region src/run.ts
 var NODE_MAJOR = 24;
 /**
-* Runs the command line and returns its exit code: 0 on success, 1 on failure, 2 for a usage error, and 3 when `setup`
-* runs on a Node older than 24.
+* Runs the command line in an environment, which names the data folder and the agent session, and returns its exit
+* code: 0 on success, 1 on failure, 2 for a usage error, and 3 when `setup` runs on a Node older than 24.
 */
-async function run(args, output, cwd = process.cwd(), options = {}) {
+async function run(args, output, env, cwd = process.cwd(), options = {}) {
 	let command;
 	try {
 		command = parseArgs(args);
@@ -9802,10 +10044,10 @@ async function run(args, output, cwd = process.cwd(), options = {}) {
 			case "help":
 				output.out(USAGE);
 				return 0;
-			case "status": return await status(output);
-			case "open": return await open(command, cwd, output);
-			case "inspect": return await inspect(command, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
-			case "serve": return await serve(command, output, options);
+			case "status": return await status(command, env, output);
+			case "open": return await open(command, env, cwd, output);
+			case "inspect": return await inspect(command, env, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
+			case "serve": return await serve(command, env, output, options);
 			case "setup": return setup(output, options.node ?? {
 				version: process.versions.node,
 				execPath: process.execPath
@@ -9824,8 +10066,8 @@ function setup(output, node) {
 	output.err(`Arcue needs Node ${NODE_MAJOR} or later, and runs on Node ${node.version} at ${node.execPath}. Install Node ${NODE_MAJOR} or later and put it on PATH; with the agent plugin, run setup through the launcher in the skill's scripts folder.\n`);
 	return 3;
 }
-async function status(output) {
-	const connection = await connectToCore(userDataDir());
+async function status(command, env, output) {
+	const connection = await connectToCore(userDataDir(env));
 	if (!connection) {
 		output.out("Arcue is not running.\n");
 		return 1;
@@ -9833,7 +10075,9 @@ async function status(output) {
 	try {
 		const { assets } = await connection.client.query("asset.list", {});
 		const { url, pid } = connection.info;
+		const view = sessionView(env, command.view);
 		const lines = [url ? `Arcue is running in a browser at ${url} (process ${pid}).` : `Arcue is running (process ${pid}).`];
+		if (url && view !== null) lines.push(`This session's view: ${viewAddress(url, view)}`);
 		if (assets.length === 0) lines.push("No assets are open.");
 		else lines.push(`Open assets:`, ...assets.map((asset) => `  ${asset.assetId}  ${asset.status.padEnd(7)}  ${asset.path}`));
 		output.out(`${lines.join("\n")}\n`);
@@ -9847,12 +10091,12 @@ async function existingFile(cwd, relative) {
 	if (!(await stat(given).catch(() => null))?.isFile()) throw new Error(`${given} is not a file.`);
 	return realpath(given);
 }
-async function inspect(command, cwd, output, importWorkerEntry) {
+async function inspect(command, env, cwd, output, importWorkerEntry) {
 	const path = await existingFile(cwd, command.path);
 	let workerError = null;
 	const inspection = await inspectFile(path, {
 		importWorkerEntry,
-		userData: userDataDir(),
+		userData: userDataDir(env),
 		onError: (error) => {
 			workerError ??= error;
 		}
@@ -9862,28 +10106,64 @@ async function inspect(command, cwd, output, importWorkerEntry) {
 	output.out(command.json ? `${JSON.stringify(inspection, null, 2)}\n` : formatInspection(inspection));
 	return 0;
 }
-async function open(command, cwd, output) {
+async function open(command, env, cwd, output) {
+	const view = sessionView(env, command.view);
+	if (command.move && view === null) throw new Error("--move takes a model into an agent session's view, and no session names one. Give --view <name>.");
 	const path = await existingFile(cwd, command.path);
-	const connection = await connectOrLaunch(userDataDir());
+	const connection = await connectOrLaunch(userDataDir(env));
+	const { url } = connection.info;
+	const at = {
+		path,
+		...command.clip !== void 0 ? { clip: command.clip } : {},
+		...command.frame !== void 0 ? { frame: command.frame } : {}
+	};
 	try {
-		const { assetId } = await connection.client.execute("asset.open", {
-			path,
-			...command.clip !== void 0 ? { clip: command.clip } : {},
-			...command.frame !== void 0 ? { frame: command.frame } : {}
-		});
-		output.out(`Opened ${path} in Arcue as ${assetId}.\n`);
-		return 0;
+		if (view === null) {
+			const { assetId } = await connection.client.execute("asset.open", at);
+			output.out(`Opened ${path} in Arcue as ${assetId}.\n`);
+			return 0;
+		}
+		const { text, shown } = openedInView(path, await connection.client.execute("asset.openInView", {
+			...at,
+			view,
+			move: command.move ?? false
+		}), url ? viewAddress(url, view) : null, url);
+		output.out(`${text}\n`);
+		return shown ? 0 : 1;
 	} catch (error) {
-		const { url } = connection.info;
-		if (url && error instanceof ArcueError && error.code === "unavailable") throw new Error(`${error.message} Arcue runs in a browser: open ${url} first.`);
+		if (!(error instanceof ArcueError)) throw error;
+		if (url && error.code === "unavailable") throw new Error(`${error.message} Arcue runs in a browser: open ${url} first.`);
+		if (view !== null && error.code === "conflict" && !command.move) throw new Error(`${error.message} Add --move to show it in this session's view instead.`);
 		throw error;
 	} finally {
 		connection.close();
 	}
 }
-async function serve(command, output, options) {
+/**
+* What `arcue open` says about a model it opened for a session's view, and whether a window shows it or will. It names
+* the view's address only when the page is not open.
+*/
+function openedInView(path, { assetId, shown }, address, url) {
+	if (shown === "view") return {
+		text: `Opened ${path} in this session's view as ${assetId}.`,
+		shown: true
+	};
+	if (shown === "window") return {
+		text: url ? `Opened ${path} as ${assetId} in the Arcue page at ${url}, since this session's page is not open. Open ${address} in the built-in browser and keep it open.` : `Opened ${path} in Arcue as ${assetId}.`,
+		shown: true
+	};
+	if (address) return {
+		text: `Arcue holds ${path} as ${assetId} until this session's page opens. Open ${address} in the built-in browser and keep it open.`,
+		shown: true
+	};
+	return {
+		text: `No Arcue window opened in time to show ${path}. Arcue holds it as ${assetId}; run arcue open again once its window is open.`,
+		shown: false
+	};
+}
+async function serve(command, env, output, options) {
 	const server = await startServer({
-		userData: userDataDir(),
+		userData: userDataDir(env),
 		importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
 		webUi: options.webUi ?? bundledWebUi,
 		port: command.port ?? 4530,
@@ -9914,6 +10194,6 @@ function signalled() {
 process.exitCode = await run(process.argv.slice(2), {
 	out: (text) => process.stdout.write(text),
 	err: (text) => process.stderr.write(text)
-});
+}, process.env);
 //#endregion
 export {};

@@ -7991,6 +7991,22 @@ var settingsSchema = object({
 	authorName: authorSchema.shape.name.optional()
 });
 //#endregion
+//#region ../../packages/protocol/src/views.ts
+/** The query parameter of a page's address, and of its socket's, that names the view the page shows. */
+var VIEW_PARAMETER = "view";
+/**
+* The name of an agent session's view, such as "3f9a0c1d2b4e". The page at `?view=<name>` shows the models that
+* session opens, and only those.
+*/
+var viewNameSchema = string().regex(/^[a-z0-9-]{1,64}$/, "A view name is 1 to 64 lowercase letters, digits and dashes.");
+/**
+* The address of a view's page on the server at an origin such as "http://localhost:4530", for a view name the schema
+* accepts: "http://localhost:4530/?view=3f9a0c1d2b4e".
+*/
+function viewAddress(origin, view) {
+	return `${origin.replace(/\/+$/, "")}/?${VIEW_PARAMETER}=${view}`;
+}
+//#endregion
 //#region ../../packages/protocol/src/commands.ts
 var assetRef$1 = { assetId: assetIdSchema };
 var commentRef = {
@@ -8008,7 +8024,7 @@ var compositionOutput = object({
 path: string().min(1) });
 var commands = {
 	"asset.open": command({
-		description: "Open an asset in a tab, or focus its tab when it is already open. The model loads with the files its composition lists. Optionally show a clip, by its name in the file, and a frame.",
+		description: "Open an asset in a tab, or focus its tab when it is already open. The calling window shows it, or for any other caller a window outside views; asset.openInView shows it in an agent session's view instead. The model loads with the files its composition lists. Optionally show a clip, by its name in the file, and a frame.",
 		runsIn: "core",
 		input: object({
 			path: string().min(1),
@@ -8018,6 +8034,26 @@ var commands = {
 			viewState: viewStateSchema.optional()
 		}),
 		output: object({ assetId: assetIdSchema })
+	}),
+	"asset.openInView": command({
+		description: "Open an asset for an agent session's view, or focus its tab, as asset.open does. The view's page shows it. While that page is not connected, a window outside views shows it, and with neither the core holds the asset until the page connects. An asset shows in one view at a time: when another view has it, or a window outside views has it while this view's page is connected, the call fails with conflict, unless move takes the asset from there. A move never discards a comment box with unsaved text.",
+		runsIn: "core",
+		input: object({
+			path: string().min(1),
+			clip: clipNameSchema.optional(),
+			frame: indexSchema.optional(),
+			view: viewNameSchema,
+			move: boolean().default(false)
+		}),
+		output: object({
+			assetId: assetIdSchema,
+			/** "view" when the view's page shows the asset, "window" when a window outside views does, "held" while it waits for the page. */
+			shown: _enum([
+				"view",
+				"window",
+				"held"
+			])
+		})
 	}),
 	"asset.close": command({
 		description: "Close an asset's tab. Its review data stays on disk.",
@@ -8242,18 +8278,21 @@ var commands = {
 		output: _void()
 	}),
 	"view.moveAsset": command({
-		description: "Move an asset's tab from the window that shows it to the calling window, with its camera, clip and frame.",
+		description: "Move an asset's tab from the window that shows it to the calling window, with its camera, clip and frame. Only within a view: an asset of another view, or of no view for a view's page, stays where it is.",
 		runsIn: "core",
 		internal: true,
 		input: object({
 			...assetRef$1,
-			/** Leaves the tab where it is when another window shows the asset, as a page that reopens after a reload does. */
+			/**
+			* Leaves the tab where it is when another window shows the asset, or the asset belongs to another view, as a page
+			* that reopens after a reload does. Without it, an asset of another view fails with conflict.
+			*/
 			unlessShown: boolean().optional()
 		}),
 		output: _void()
 	}),
 	"view.releaseAsset": command({
-		description: "Remove an asset's tab from this window without closing the asset, and return what the tab showed. The core sends it before moving the tab to another window.",
+		description: "Remove an asset's tab from this window without closing the asset, and return what the tab showed. The core sends it before moving the tab to another window. A window refuses with conflict while the tab's comment box has unsaved text.",
 		runsIn: "view",
 		internal: true,
 		input: object(assetRef$1),
@@ -9403,4 +9442,4 @@ function portEndpoint(port) {
 	};
 }
 //#endregion
-export { defaultViewBounds as $, memberRoles as A, rangesWithin as B, COMPOSITION_FILE_NAME as C, compositionFileSchema as D, animatesModel as E, lastFrame as F, sameTopology as G, parseStoredPath as H, mergeKeyTimes as I, findNode as J, topologyFingerprint as K, countInRanges as L, unshownUvSetWarnings as M, frameCountFor as N, joinsByName as O, isKeyedEveryFrame as P, importWarning as Q, decodeRanges as R, screenshotOwner as S, MODEL_FILE_EXTENSIONS as T, fileNameOf as U, materialSlots as V, imageMimeType as W, splitMemberPath as X, memberPath as Y, describeTextureUses as Z, reviewFormat as _, framedChannel as _t, isQueryName as a, TEXTURE_REF_NAMES as at, settingsSchema as b, ArcueError as bt, importReadFileInputSchema as c, BRIDGE_INFO_FILE as ct, createPeer as d, SERVE_CORE_PATH as dt, describeParts as et, withTransfer as f, acceptBridge as ft, reviewFileSchema as g, MAX_FRAME_BYTES as gt, reportListenerError as h, launchInfoSchema as ht, roundDataSchema as i, TEXTURE_REF_KEYS as it, viewStateSchema as j, keysModelBones as k, importRequests as l, HANDSHAKE_MAX_FRAME_BYTES as lt, callEach as m, connectBridge as mt, binaryFrameCodec as n, knownPartView as nt, queries as o, TEXTURE_SLOTS as ot, isEnvelope as p, bridgeInfoSchema as pt, composeScene as q, jsonFrameCodec as r, shownByDefault as rt, importFindFileInputSchema as s, TEXTURE_SLOT_KEYS as st, portEndpoint as t, isDefaultPartView as tt, serveImportWorker as u, LAUNCH_INFO_FILE as ut, commands as v, framedEndpoint as vt, IMAGE_FILE_EXTENSIONS as w, warningId as x, COMMENT_ID_PATTERN as xt, isCommandName as y, messageChannel as yt, encodeRanges as z };
+export { splitMemberPath as $, compositionFileSchema as A, countInRanges as B, settingsSchema as C, ArcueError as Ct, IMAGE_FILE_EXTENSIONS as D, COMPOSITION_FILE_NAME as E, unshownUvSetWarnings as F, parseStoredPath as G, encodeRanges as H, frameCountFor as I, sameTopology as J, fileNameOf as K, isKeyedEveryFrame as L, keysModelBones as M, memberRoles as N, MODEL_FILE_EXTENSIONS as O, viewStateSchema as P, memberPath as Q, lastFrame as R, viewNameSchema as S, messageChannel as St, screenshotOwner as T, rangesWithin as U, decodeRanges as V, materialSlots as W, composeScene as X, topologyFingerprint as Y, findNode as Z, reviewFormat as _, connectBridge as _t, isQueryName as a, knownPartView as at, VIEW_PARAMETER as b, framedChannel as bt, importReadFileInputSchema as c, TEXTURE_REF_NAMES as ct, createPeer as d, BRIDGE_INFO_FILE as dt, describeTextureUses as et, withTransfer as f, HANDSHAKE_MAX_FRAME_BYTES as ft, reviewFileSchema as g, bridgeInfoSchema as gt, reportListenerError as h, acceptBridge as ht, roundDataSchema as i, isDefaultPartView as it, joinsByName as j, animatesModel as k, importRequests as l, TEXTURE_SLOTS as lt, callEach as m, SERVE_CORE_PATH as mt, binaryFrameCodec as n, defaultViewBounds as nt, queries as o, shownByDefault as ot, isEnvelope as p, LAUNCH_INFO_FILE as pt, imageMimeType as q, jsonFrameCodec as r, describeParts as rt, importFindFileInputSchema as s, TEXTURE_REF_KEYS as st, portEndpoint as t, importWarning as tt, serveImportWorker as u, TEXTURE_SLOT_KEYS as ut, commands as v, launchInfoSchema as vt, warningId as w, COMMENT_ID_PATTERN as wt, viewAddress as x, framedEndpoint as xt, isCommandName as y, MAX_FRAME_BYTES as yt, mergeKeyTimes as z };
