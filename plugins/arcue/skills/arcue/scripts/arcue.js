@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { $ as splitMemberPath, A as compositionFileSchema, B as countInRanges, C as settingsSchema, Ct as ArcueError, D as IMAGE_FILE_EXTENSIONS, E as COMPOSITION_FILE_NAME, G as parseStoredPath, H as encodeRanges, J as sameTopology, K as fileNameOf, M as keysModelBones, N as memberRoles, O as MODEL_FILE_EXTENSIONS, P as viewStateSchema, Q as memberPath, R as lastFrame, S as viewNameSchema, St as messageChannel, T as screenshotOwner, U as rangesWithin, V as decodeRanges, W as materialSlots, X as composeScene, Z as findNode, _ as reviewFormat, _t as connectBridge, a as isQueryName, at as knownPartView, bt as framedChannel, c as importReadFileInputSchema, ct as TEXTURE_REF_NAMES, d as createPeer, dt as BRIDGE_INFO_FILE, et as describeTextureUses, f as withTransfer, ft as HANDSHAKE_MAX_FRAME_BYTES, g as reviewFileSchema, gt as bridgeInfoSchema, h as reportListenerError, ht as acceptBridge, i as roundDataSchema, it as isDefaultPartView, j as joinsByName, k as animatesModel, l as importRequests, lt as TEXTURE_SLOTS, m as callEach, n as binaryFrameCodec, o as queries, ot as shownByDefault, p as isEnvelope, pt as LAUNCH_INFO_FILE, q as imageMimeType, r as jsonFrameCodec, s as importFindFileInputSchema, st as TEXTURE_REF_KEYS, t as portEndpoint, tt as importWarning, v as commands, vt as launchInfoSchema, w as warningId, wt as COMMENT_ID_PATTERN, x as viewAddress, xt as framedEndpoint, y as isCommandName, yt as MAX_FRAME_BYTES } from "./arcue-B-LzbgNn.js";
+import { $ as splitMemberPath, A as compositionFileSchema, B as countInRanges, C as settingsSchema, Ct as ArcueError, D as IMAGE_FILE_EXTENSIONS, E as COMPOSITION_FILE_NAME, G as parseStoredPath, H as encodeRanges, J as sameTopology, K as fileNameOf, M as keysModelBones, N as memberRoles, O as MODEL_FILE_EXTENSIONS, P as viewStateSchema, Q as memberPath, R as lastFrame, S as viewNameSchema, St as messageChannel, T as screenshotOwner, U as rangesWithin, V as decodeRanges, W as materialSlots, X as composeScene, Z as findNode, _ as reviewFormat, _t as connectBridge, a as isQueryName, at as knownPartView, bt as framedChannel, c as importReadFileInputSchema, ct as TEXTURE_REF_NAMES, d as createPeer, dt as BRIDGE_INFO_FILE, et as describeTextureUses, f as withTransfer, ft as HANDSHAKE_MAX_FRAME_BYTES, g as reviewFileSchema, gt as bridgeInfoSchema, h as reportListenerError, ht as acceptBridge, i as roundDataSchema, it as isDefaultPartView, j as joinsByName, k as animatesModel, l as importRequests, lt as TEXTURE_SLOTS, m as callEach, n as binaryFrameCodec, o as queries, ot as shownByDefault, p as isEnvelope, pt as LAUNCH_INFO_FILE, q as imageMimeType, r as jsonFrameCodec, s as importFindFileInputSchema, st as TEXTURE_REF_KEYS, t as portEndpoint, tt as importWarning, v as commands, vt as launchInfoSchema, w as warningId, wt as COMMENT_ID_PATTERN, x as viewAddress, xt as framedEndpoint, y as isCommandName, yt as MAX_FRAME_BYTES } from "./arcue-CIHJxDUj.js";
 import { createRequire } from "node:module";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
@@ -3872,10 +3872,11 @@ var SettingsStore = class {
 var WindowRegistry = class {
 	#windows = /* @__PURE__ */ new Map();
 	#focusCount = 0;
-	add(connection, peer, view) {
+	add(connection, peer, { view, browser }) {
 		this.#windows.set(connection, {
 			peer,
 			view,
+			browser,
 			focused: 0
 		});
 	}
@@ -3895,12 +3896,12 @@ var WindowRegistry = class {
 	}
 	/**
 	* The window to show a view's assets in, or with a null view a window outside views: of those, the one focused last,
-	* otherwise the one that connected last. Null when none is connected.
+	* otherwise the one that connected last. With `desktopOnly`, never a browser page. Null when none is connected.
 	*/
-	inView(view) {
+	inView(view, { desktopOnly = false } = {}) {
 		let chosen = null;
 		for (const [connection, entry] of this.#windows) {
-			if (entry.view !== view) continue;
+			if (entry.view !== view || desktopOnly && entry.browser) continue;
 			if (chosen === null || entry.focused >= chosen.focused) chosen = {
 				connection,
 				focused: entry.focused
@@ -3995,7 +3996,10 @@ var ArcueCore = class ArcueCore {
 		this.#connections.add(options.connection);
 		peer.onClose(() => this.#connections.delete(options.connection));
 		if (options.caller === "window") {
-			this.#windows.add(options.connection, peer, options.view ?? null);
+			this.#windows.add(options.connection, peer, {
+				view: options.view ?? null,
+				browser: options.browser ?? false
+			});
 			peer.onClose(() => {
 				this.#windows.remove(options.connection);
 				for (const asset of this.#assets.values()) if (asset.window === options.connection) asset.window = null;
@@ -4111,24 +4115,29 @@ var ArcueCore = class ArcueCore {
 	}
 	/**
 	* Where an open shows an asset. A window's open shows it in that window. An open for a view shows it in the view's
-	* page; while that page is not connected, in a window outside views; and with neither, in no window yet, as the core
-	* holds the asset for the page. An open without a view shows it in a window outside views, and with none is null.
+	* page; while that page is not connected, in a desktop window outside views; and with neither, in no window yet, as
+	* the core holds the asset for the page. It never shows in a browser page outside views, which may be another agent
+	* session's. An open without a view shows it in any window outside views, and with none is null.
 	*/
 	#placeFor(requester) {
 		if (requester.window !== null) return requester;
-		if (requester.view !== null) {
-			const page = this.#windows.inView(requester.view);
-			if (page !== null) return {
-				view: requester.view,
-				window: page
+		if (requester.view === null) {
+			const window = this.#windows.inView(null);
+			return window === null ? null : {
+				view: null,
+				window
 			};
 		}
-		const window = this.#windows.inView(null);
-		if (window !== null) return {
+		const page = this.#windows.inView(requester.view);
+		if (page !== null) return {
+			view: requester.view,
+			window: page
+		};
+		const window = this.#windows.inView(null, { desktopOnly: true });
+		return window === null ? requester : {
 			view: null,
 			window
 		};
-		return requester.view === null ? null : requester;
 	}
 	/** The window that shows the asset, while it is connected. */
 	#windowOf(asset) {
@@ -4198,8 +4207,9 @@ var ArcueCore = class ArcueCore {
 	}
 	/**
 	* Shows an open asset for the requester. A window of the requester's place that shows it focuses its tab. An asset in
-	* another view, or in a window outside views while the requester's view has its page, stays there unless `move` takes
-	* it. One that no window shows goes to the requester's place, unless it belongs to another view.
+	* another view, or in a window outside views while the requester's place is in a view, its page or held for it, stays
+	* there unless `move` takes it. One that no window shows goes to the requester's place, unless it belongs to another
+	* view.
 	*/
 	async #reveal(asset, requester, at, move) {
 		const place = this.#placeFor(requester);
@@ -5939,8 +5949,8 @@ var USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>] [--view <name>] [--move]
       Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
       files its composition lists. Run by an agent, it shows the model in that agent session's view: the page whose
-      address "arcue status" prints. Until that page is open, a page or window outside views shows the model, or with
-      none Arcue holds it for the page. Run by a person, it shows the model only outside views.
+      address "arcue status" prints, and until that page is open Arcue holds the model for it. The desktop app, which
+      has no such pages, shows it in its window. Run by a person, it shows the model only outside views.
       --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
       --frame is a whole frame number from 0.
       --view names the session, in place of ARCUE_VIEW, CLAUDE_CODE_SESSION_ID, CODEX_SESSION_ID or CODEX_THREAD_ID,
@@ -9779,8 +9789,8 @@ var PAGE_HEADERS = {
 * reach it, and it refuses to start while another core runs.
 *
 * A page whose address names an agent session's view, `/?view=<name>`, connects as that view's page and shows the
-* models that session opens. While that page is not open, a page outside views shows them, or with none the core holds
-* them for the page, so an open for a view never waits for a browser.
+* models that session opens. While that page is not open, the core holds them for the page rather than show them in a
+* page outside views, which may be another session's, so an open for a view never waits for a browser.
 *
 * Only pages from this server's own origin can connect to the core, and only through a localhost address, so other
 * websites and DNS rebinding cannot reach it. No website may show its pages in a frame, where the user could not see a
@@ -9839,6 +9849,7 @@ async function startServer(options) {
 			connection: `browser-${next++}`,
 			caller: "window",
 			view: view ?? void 0,
+			browser: true,
 			onListenerError: options.onError
 		});
 		windows.added(view);
@@ -10132,12 +10143,18 @@ async function open(command, env, cwd, output) {
 		return shown ? 0 : 1;
 	} catch (error) {
 		if (!(error instanceof ArcueError)) throw error;
+		if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info));
 		if (url && error.code === "unavailable") throw new Error(`${error.message} Arcue runs in a browser: open ${url} first.`);
 		if (view !== null && error.code === "conflict" && !command.move) throw new Error(`${error.message} Add --move to show it in this session's view instead.`);
 		throw error;
 	} finally {
 		connection.close();
 	}
+}
+/** What `arcue open` says when the running core predates agent sessions' views. */
+function olderCore({ url, pid }) {
+	const [running, restart] = url ? [`The Arcue at ${url}`, "stop that arcue serve and run arcue serve again"] : ["The Arcue app", "quit the app and run arcue open again"];
+	return `${running} (process ${pid}) is older than this arcue command and cannot show models in a session's view. Restart it: ${restart}.`;
 }
 /**
 * What `arcue open` says about a model it opened for a session's view, and whether a window shows it or will. It names
