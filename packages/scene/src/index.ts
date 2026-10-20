@@ -55,6 +55,7 @@ export { countInRanges, decodeRanges, encodeRanges, rangesContain, rangesWithin 
 export type { SceneDescription } from "./scene";
 export { collectTransferables } from "./scene";
 export type { Skeleton } from "./skeleton";
+export { skeletonNodes } from "./skeleton";
 export type {
   AxisDirection,
   CoordinateAxes,
