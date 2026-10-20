@@ -1,12 +1,13 @@
 name: Publish blend
 
-# A blend-v<version> tag publishes packages/blend to npm as @arcue/blend. It uses npm's trusted publishing, so no npm
-# token is stored: npm accepts the publish because this workflow runs it. The tag must name the version in
+# A blend-v<version> tag stages packages/blend on npm as @arcue/blend. It uses npm's trusted publishing, so no npm
+# token is stored: npm accepts the upload because this workflow runs it. The tag must name the version in
 # packages/blend/package.json, and the package's tests and checks must pass first.
 #
-# npm sets up a trusted publisher only for a package that exists, so the first version was published by hand with
-# `pnpm publish` from packages/blend, which applies publishConfig, unlike `npm publish`. The package's trusted publisher
-# on npmjs.com names this repository and this file, publish-blend.yml.
+# The package's trusted publisher on npmjs.com names this repository and this file, publish-blend.yml, and allows
+# staging only. A staged version goes public only when a maintainer approves it with 2FA, in the package's Staged
+# Packages tab on npmjs.com or with `npm stage approve <stage-id>`. `npm stage` needs npm 11.15 or later, so the job
+# takes the latest Node 24, whose npm is newer.
 
 on:
   push:
@@ -34,6 +35,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          check-latest: true
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
@@ -54,5 +56,5 @@ jobs:
           pnpm pack --pack-destination "$RUNNER_TEMP/package"
           pnpm dlx publint@0.3.25 --pack pnpm
           pnpm dlx @arethetypeswrong/cli@0.18.5 --profile esm-only "$RUNNER_TEMP"/package/arcue-blend-*.tgz
-      - name: Publish
-        run: npm publish "$RUNNER_TEMP"/package/arcue-blend-*.tgz --access public
+      - name: Stage the version for approval
+        run: npm stage publish "$RUNNER_TEMP"/package/arcue-blend-*.tgz --access public
