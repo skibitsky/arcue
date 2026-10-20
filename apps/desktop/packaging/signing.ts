@@ -1,3 +1,11 @@
+import { fileURLToPath } from "node:url";
+
+/**
+ * The entitlements of every file in the app that a Developer ID signs: only JIT, which V8 needs under the hardened
+ * runtime. @electron/osx-sign's defaults would also ask for the camera, microphone, location, photos and more.
+ */
+export const ENTITLEMENTS = fileURLToPath(new URL("entitlements.plist", import.meta.url));
+
 /** A Developer ID identity, and App Store Connect API credentials when the app is notarized as well. */
 export interface MacSigning {
   /** Such as "Developer ID Application: Name (TEAMID)". */
@@ -39,4 +47,39 @@ export function macSigning(env: NodeJS.ProcessEnv): MacSigning | null {
       ? { notarize: { appleApiKey, appleApiKeyId, appleApiIssuer } }
       : {}),
   };
+}
+
+/** A notarization that `notarytool submit --output-format json` reports. */
+export interface NotarySubmission {
+  id?: string;
+  status?: string;
+}
+
+/** The submission in notarytool's JSON output, or none when it printed no JSON, as when it fails before submitting. */
+export function notarySubmission(stdout: string): NotarySubmission {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    return {};
+  }
+  if (typeof value !== "object" || value === null) return {};
+  const { id, status } = value as Record<string, unknown>;
+  return { ...(typeof id === "string" ? { id } : {}), ...(typeof status === "string" ? { status } : {}) };
+}
+
+/** What `execFile` rejects with when a command fails or does not run. */
+export interface CommandError {
+  code?: unknown;
+  signal?: unknown;
+  message?: string;
+  stdout?: string;
+  stderr?: string;
+}
+
+/** Why notarytool failed, without its command line, which holds the API key's id and issuer. */
+export function notarytoolFailure(error: CommandError): string {
+  if (typeof error.code === "number") return `notarytool exited with ${error.code}`;
+  if (error.signal) return `notarytool was stopped by ${String(error.signal)}`;
+  return error.message ?? "notarytool did not run";
 }

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseVersion } from "./layout";
-import { findOnPath, INSTALLER_SCRIPT, installerDefines, parseSet, vcvarsArgument } from "./windows";
+import { findOnPath, INSTALLER_SCRIPT, installerDefines, parseSet, vcvarsArgument, vcvarsCommand } from "./windows";
 
 describe("building the Windows command", () => {
   it("asks vcvarsall for a native or a cross compiler", () => {
@@ -16,6 +16,23 @@ describe("building the Windows command", () => {
     expect(parseSet("Path=C:\\VC\\bin;C:\\Windows\r\n=C:=C:\\work\r\nINCLUDE=C:\\VC\\include\r\n")).toEqual({
       Path: "C:\\VC\\bin;C:\\Windows",
       INCLUDE: "C:\\VC\\include",
+    });
+  });
+
+  it("has set print UTF-16LE, which keeps a user name outside the code page", () => {
+    const vcvarsall = "C:\\Program Files\\Microsoft Visual Studio\\VC\\Auxiliary\\Build\\vcvarsall.bat";
+    const output = Buffer.from("TMP=C:\\Users\\Jürgen Ødegård\\AppData\\Local\\Temp\r\nUSERNAME=山田\r\n", "utf16le");
+
+    expect(vcvarsCommand(vcvarsall, "x64", "arm64")).toEqual([
+      "/d",
+      "/u",
+      "/s",
+      "/c",
+      `""${vcvarsall}" amd64_arm64 >nul && set"`,
+    ]);
+    expect(parseSet(output.toString("utf16le"))).toEqual({
+      TMP: "C:\\Users\\Jürgen Ødegård\\AppData\\Local\\Temp",
+      USERNAME: "山田",
     });
   });
 

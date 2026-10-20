@@ -43,4 +43,17 @@ pnpm --filter @arcue/desktop smoke     # checks the arcue command on PATH agains
 
 ## Release the desktop app
 
-The Release workflow builds the installers on macOS, Windows and Linux, for Arm and x64, on every pull request that changes the packaging. It installs each one and checks that `arcue` runs from PATH on the app's own Node and opens models in the app. To publish a release, set `version` in `apps/desktop/package.json`, merge it, and push the tag `v<version>`; a version such as `0.2.0-beta.1` publishes a prerelease. The workflow signs and notarizes the macOS app, and signs the Windows app, when the secrets its header lists are set. Without them it publishes unsigned installers, and the release notes say so.
+The Release workflow builds the installers on macOS, Windows and Linux, for Arm and x64, on every pull request that changes the packaging. It installs each one and checks that `arcue` runs from PATH on the app's own Node and opens models in the app. A manual run of the workflow builds and checks everything the same way, unsigned.
+
+Before the first release, create the `release` environment in the repository's Settings > Environments. Limit its deployment branches and tags to tags that match `v*`, and give it the `MACOS_*`, `APPLE_*` and `AZURE_*` secrets and the `ARTIFACT_SIGNING_*` variables that the workflow's header lists, as environment secrets and variables. Then delete any repository-level copies of them, and add a tag ruleset for `v*` that restricts creations, updates and deletions and that only you can bypass, or make yourself a required reviewer of the environment. Anyone who can push a `v*` tag can otherwise read its secrets: the tagged commit's own workflow runs with them, and can drop its check that the commit is on main.
+
+Only a tag push signs, with that environment's values. A tag pushed before the environment exists gets an empty one, which GitHub creates, and publishes unsigned installers. A platform with none of its values builds unsigned, and one with only some fails. The release notes say how the macOS and Windows installers are signed.
+
+To publish a release, set `version` in `apps/desktop/package.json`, merge it to main, and push the tag `v<version>` on a commit of main. The first release is `v0.1.0`. A version is `x.y.z`, or `x.y.z-name` or `x.y.z-name.N` for a prerelease, such as `0.2.0-beta` or `0.2.0-beta.1`. Only the highest stable version becomes the latest release, which the install links in [INSTALL.md](INSTALL.md) download, so they need a stable release. A tag that does not match `version`, or is not on main, fails every build. Delete it and tag again:
+
+```sh
+git push origin :refs/tags/v<version>
+git tag -d v<version>
+```
+
+The workflow writes the release notes; add your own on the release page once it is published. It replaces a draft release for the tag, which a failed run leaves behind. A run for a tag that is already released fails: delete the release first, or tag a new version.

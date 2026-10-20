@@ -174,7 +174,49 @@ describe("starting the app", () => {
 
   it("gives up when the started app never listens", async () => {
     writeLaunchInfo("");
-    await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(/did not start within/);
+    await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(
+      /^Arcue did not start within \d+ seconds\. Run "arcue serve" to use it in a browser\.$/,
+    );
+  });
+
+  it("keeps waiting when the started app exits with 0, as a second instance does", async () => {
+    const marker = join(userData, "launched");
+    writeLaunchInfo(`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`);
+    const connecting = connectOrLaunch(userData, { timeoutMs: 10_000, pollMs: 20 });
+    await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await startFakeCore();
+    (await connecting).close();
+  });
+
+  it("says so at once when the app is no longer where launch.json says", async () => {
+    const gone = join(userData, "gone", "Arcue");
+    const info: LaunchInfo = { version: 1, command: gone, args: [] };
+    writeFileSync(join(userData, LAUNCH_INFO_FILE), JSON.stringify(info));
+    const started = Date.now();
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 30_000, pollMs: 20 })).rejects.toThrow(
+      `Arcue is not running, and it is no longer at ${gone}. Open Arcue once where it is installed now, or run "arcue serve" to use it in a browser.`,
+    );
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("says so at once when the started app quits with an error", async () => {
+    writeLaunchInfo("process.exit(3)");
+    const started = Date.now();
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 30_000, pollMs: 20 })).rejects.toThrow(
+      'Arcue quit as it started (exit code 3). Run "arcue serve" to use it in a browser.',
+    );
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it.skipIf(process.platform === "win32")("names the signal that ended the started app", async () => {
+    writeLaunchInfo('process.kill(process.pid, "SIGKILL")');
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 30_000, pollMs: 20 })).rejects.toThrow(
+      "Arcue quit as it started (signal SIGKILL).",
+    );
   });
 
   it("says so when the app was never started on this computer", async () => {
@@ -195,6 +237,22 @@ describe("starting the app", () => {
     await startFakeCore("u".repeat(43));
     await expect(connectOrLaunch(userData, { timeoutMs: 200, pollMs: 20 })).rejects.toMatchObject({
       code: "forbidden",
+      message:
+        'Arcue refused the connection. The token does not match the running app. Quit Arcue and open it again, or run "arcue serve" to use it in a browser.',
+    });
+  });
+
+  it("says what to do when the app accepts the connection but never answers", async () => {
+    server = createServer((connection) => {
+      sockets.add(connection);
+    });
+    await new Promise<void>((resolve) => server.listen(join(userData, "arcue.sock"), resolve));
+    writeBridgeInfo(TOKEN);
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 200, pollMs: 20, handshakeMs: 50 })).rejects.toMatchObject({
+      code: "timeout",
+      message:
+        'The handshake took longer than 50 ms. Quit Arcue and open it again, or run "arcue serve" to use it in a browser.',
     });
   });
 });

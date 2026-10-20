@@ -1,5 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { DEB_APP_DIR, debianControl, debianCopyright, desktopEntry, wrap } from "./debian";
+import { copyrightHolder, DEB_APP_DIR, debianControl, debianCopyright, desktopEntry, wrap } from "./debian";
 import { parseVersion } from "./layout";
 
 describe("the Debian package", () => {
@@ -32,9 +33,62 @@ describe("the Debian package", () => {
     expect(entry).toContain("Icon=arcue\n");
   });
 
-  it("carries the license with blank lines marked", () => {
-    expect(debianCopyright("MIT License\r\n\r\nCopyright (c) Someone\n")).toBe(
-      "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: Arcue\nSource: https://github.com/skibitsky/arcue\n\nFiles: *\nLicense: MIT\n MIT License\n .\n Copyright (c) Someone\n",
+  it("carries the license's holder and text with blank lines marked", () => {
+    expect(debianCopyright("MIT License\r\n\r\nCopyright (c) 2031 Someone\r\n")).toBe(
+      "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: Arcue\nSource: https://github.com/skibitsky/arcue\n\nFiles: *\nCopyright: Electron contributors, The Chromium Authors and others\nLicense: other\n The Electron runtime. Its licenses are in /usr/lib/arcue/LICENSE and\n /usr/lib/arcue/LICENSES.chromium.html.\n\nFiles: usr/bin/arcue\n usr/lib/arcue/bin/*\n usr/lib/arcue/resources/*\n usr/share/*\nCopyright: 2031 Someone\nComment: Includes bundled libraries and fonts under their own licenses.\nLicense: MIT\n MIT License\n .\n Copyright (c) 2031 Someone\n",
+    );
+  });
+
+  it("leaves Electron's files under Electron's licenses and gives Arcue's the license", () => {
+    const paragraphs = debianCopyright("Copyright (c) 2031 Someone\n")
+      .split("\n\n")
+      .slice(1)
+      .map((paragraph) => {
+        const fields = new Map<string, string>();
+        let name = "";
+        for (const line of paragraph.split("\n").filter(Boolean)) {
+          if (line.startsWith(" ")) fields.set(name, `${fields.get(name)}\n${line.slice(1)}`);
+          else {
+            name = line.slice(0, line.indexOf(":"));
+            fields.set(name, line.slice(name.length + 2));
+          }
+        }
+        return fields;
+      });
+    const owner = (path: string) =>
+      paragraphs
+        .filter((fields) =>
+          (fields.get("Files") ?? "")
+            .split(/\s+/)
+            .some((pattern) => new RegExp(`^${pattern.replaceAll(".", "\\.").replaceAll("*", ".*")}$`).test(path)),
+        )
+        .at(-1)
+        ?.get("Copyright");
+
+    for (const fields of paragraphs) expect(fields.get("License")).toMatch(/^\S+\n\S/);
+    for (const path of ["usr/lib/arcue/Arcue", "usr/lib/arcue/LICENSE", "usr/lib/arcue/libffmpeg.so"])
+      expect(owner(path)).toMatch(/^Electron contributors/);
+    for (const path of [
+      "usr/bin/arcue",
+      "usr/lib/arcue/bin/arcue",
+      "usr/lib/arcue/resources/app/LICENSE",
+      "usr/lib/arcue/resources/cli/arcue.js",
+      "usr/share/applications/arcue.desktop",
+      "usr/share/icons/hicolor/16x16/apps/arcue.png",
+    ])
+      expect(owner(path)).toBe("2031 Someone");
+  });
+
+  it("reads the holder from the copyright line", async () => {
+    expect(copyrightHolder("Copyright 2030 A and B")).toBe("2030 A and B");
+    expect(copyrightHolder("The above copyright notice\n  Copyright © 2029-2030 Someone  \n")).toBe(
+      "2029-2030 Someone",
+    );
+    expect(() => copyrightHolder("MIT License\n\nThe above copyright notice")).toThrow(/no copyright line/);
+    const license = await readFile(new URL("../../../LICENSE", import.meta.url), "utf8");
+
+    expect(debianCopyright(license)).toMatch(
+      /^Files: \*\nCopyright: Electron contributors\b[\s\S]*\n\nFiles: usr\/bin\/arcue\n( \S+\n)* usr\/lib\/arcue\/resources\/\*\n( \S+\n)*Copyright: \d{4}(-\d{4})? \S.*\n(Comment: .*\n)?License: MIT\n/m,
     );
   });
 });

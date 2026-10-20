@@ -8,12 +8,12 @@ license: MIT
 
 ## The arcue command
 
-Use `arcue` when it is on PATH, where the Arcue desktop app installs it; in PowerShell, only when `(Get-Command arcue).Source` ends in `arcue.exe`. Otherwise run the launcher in this skill's `scripts` folder in its place:
+When this skill has a `scripts` folder, as it does in the plugin, run the launcher there, which matches this skill's version:
 
 - bash, zsh or Git Bash: `sh "<this skill's folder>/scripts/arcue" <arguments>`
 - PowerShell: `& (& "<this skill's folder>\scripts\arcue-node.cmd") "<this skill's folder>\scripts\arcue.js" <arguments>`. Never give a `.cmd` file arguments: cmd.exe would run a `|` or `&` in them as a command.
 
-When there is neither, as when only this skill is installed, ask the user to install the desktop app as https://github.com/skibitsky/arcue/blob/main/INSTALL.md#desktop-app describes.
+Otherwise use the desktop app's own command: `arcue` when it is on PATH, where the app installs it, and in PowerShell only when `(Get-Command arcue).Source` ends in `arcue.exe`. When PATH does not have it yet, use `/Applications/Arcue.app/Contents/Resources/bin/arcue <arguments>` on macOS, and on Windows `"$LOCALAPPDATA/Programs/Arcue/bin/arcue.exe" <arguments>` in Git Bash or `& "$env:LOCALAPPDATA\Programs\Arcue\bin\arcue.exe" <arguments>` in PowerShell. When there is none of these, ask the user to install the desktop app as https://github.com/skibitsky/arcue/blob/main/INSTALL.md#desktop-app describes.
 
 The launcher runs Arcue on Node 24 or later from PATH, or on the Node that setup downloaded. When it says Arcue needs Node 24 or later, ask the user before you run `arcue setup` through it, which in PowerShell is `& "<this skill's folder>\scripts\arcue-setup.cmd"`. Setup downloads Node from nodejs.org once, about 30 MB; it needs network access, so allow it in a sandbox, and can take a few minutes.
 
@@ -32,7 +32,7 @@ When the app you run in has a built-in browser, such as the Browser pane in the 
 2. Otherwise start `arcue serve` as a background command that keeps running, and open http://localhost:4530 in the built-in browser. In the Claude desktop app, add `{ "name": "arcue", "url": "http://localhost:4530", "port": 4530 }` to `configurations` in the project's `.claude/launch.json`, creating it with `"version": "0.0.1"` if needed, and start that configuration in the Browser pane. In the Codex app, open the address with its browser tool and keep the tab.
 3. `arcue open` now shows models on that page.
 
-Without a built-in browser, `arcue open` starts the desktop app. If it says Arcue has not been started on this computer yet, run `arcue serve` and give the user the address to open.
+Without a built-in browser, `arcue open` starts the desktop app. When it says Arcue has not been started on this computer yet, or is no longer where it was, and the desktop app is installed, run the same `arcue open` once with the app's own command, above, which starts it. Otherwise, when it says to run `arcue serve`, do that and give the user the address to open.
 
 Name a clip as the file does, from `inspect` or `time.clip`: `--clip 'Armature|Walk'` for an FBX take, `--clip 'Walk'` for the action `Walk` in a .blend. The name comes from the file, so keep it literal: in single quotes, with each `'` in it written as `'\''` in sh, or in PowerShell with each `'`, `‘`, `’`, `‚` and `‛` doubled. Quote file paths the same way. Any other name, such as the display name `Walk` of `Armature|Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
 

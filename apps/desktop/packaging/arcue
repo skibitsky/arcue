@@ -29,14 +29,13 @@ for _ in 1 2 3 4 5 6 7 8; do
 done
 here=$(CDPATH='' cd -- "$(dirname -- "$self")" && pwd -P) || die "Cannot find the folder of $0."
 
-if [ -f "$here/../../MacOS/Arcue" ]; then
-  root=$(CDPATH='' cd -- "$here/../.." && pwd -P) || die "Cannot find the app that holds $here."
+root=$(CDPATH='' cd -- "$here/.." && pwd -P) || die "Cannot find the app that holds $here."
+app=$root/Arcue
+script=$root/resources/cli/arcue.js
+if ! { [ -f "$app" ] && [ -f "$script" ]; } && [ -f "$root/cli/arcue.js" ]; then
+  root=$(CDPATH='' cd -- "$root/.." && pwd -P) || die "Cannot find the app that holds $here."
   app=$root/MacOS/Arcue
   script=$root/Resources/cli/arcue.js
-else
-  root=$(CDPATH='' cd -- "$here/.." && pwd -P) || die "Cannot find the app that holds $here."
-  app=$root/Arcue
-  script=$root/resources/cli/arcue.js
 fi
 { [ -f "$app" ] && [ -x "$app" ] && [ -f "$script" ]; } || die "Reinstall Arcue: $root is not a complete Arcue app."
 

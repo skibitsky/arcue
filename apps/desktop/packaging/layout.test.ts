@@ -12,14 +12,36 @@ describe("parseVersion", () => {
       debian: "1.3.0~beta.2",
     });
     expect(parseVersion("0.1.0-rc").debian).toBe("0.1.0~rc");
+    expect(parseVersion("1.0.0-rc.10").debian).toBe("1.0.0~rc.10");
+    expect(parseVersion("1.0.0-beta.0").prerelease).toBe(true);
   });
 
-  it.each(["1.2", "v1.2.0", "01.2.0", "1.2.0-", "1.2.0-beta.2.1", "1.2.0+build", "1.2.0-be_ta"])(
-    "refuses %s",
-    (value) => {
-      expect(() => parseVersion(value)).toThrow(/not a release version/);
-    },
-  );
+  it.each([
+    "1.2",
+    "v1.2.0",
+    "01.2.0",
+    "1.2.0-",
+    "1.2.0-beta.2.1",
+    "1.2.0+build",
+    "1.2.0-be_ta",
+    "1.0.0-alpha.beta",
+    "1.0.0-beta.rc1",
+    "1.0.0-beta.2a",
+    "1.0.0-beta.02",
+    "1.0.0-beta.",
+  ])("refuses %s", (value) => {
+    expect(() => parseVersion(value)).toThrow(/not a release version/);
+  });
+
+  it("gives Windows only numbers between the dots", () => {
+    for (const value of ["1.2.0", "1.3.0-beta", "1.3.0-beta.2", "1.0.0-rc.10", "1.0.0-1"]) {
+      const { full } = parseVersion(value);
+      const parts = full.split(".");
+
+      expect(parts.length).toBeLessThanOrEqual(4);
+      for (const part of parts) expect(Number.isNaN(Number.parseInt(part, 10))).toBe(false);
+    }
+  });
 
   it("accepts the desktop app's version", async () => {
     const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {

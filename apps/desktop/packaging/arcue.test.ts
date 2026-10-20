@@ -147,6 +147,38 @@ describe.skipIf(process.platform === "win32")("the arcue launcher", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  it("never runs a macOS app planted beside the Linux app", async () => {
+    const shared = join(temp, "shared");
+    const planted = join(shared, "MacOS", "Arcue");
+    await mkdir(join(shared, "MacOS"), { recursive: true });
+    await mkdir(join(shared, "Resources", "cli"), { recursive: true });
+    await fakeElectron(planted);
+    await writeFile(join(shared, "Resources", "cli", "arcue.js"), "");
+    const root = join(shared, "Arcue-linux-x64");
+    const app = join(root, "Arcue");
+    const launcher = join(root, "bin", "arcue");
+    await mkdir(join(root, "resources", "cli"), { recursive: true });
+    await fakeElectron(app);
+    await writeFile(join(root, "resources", "cli", "arcue.js"), "");
+    await install(launcher);
+
+    const result = await run(launcher, ["status"]);
+
+    expect(result.code, result.stderr).toBe(0);
+    expect((JSON.parse(result.stdout) as Seen).argv).toEqual([
+      app,
+      join(root, "resources", "cli", "arcue.js"),
+      "status",
+    ]);
+
+    await rm(app);
+    const incomplete = await run(launcher, ["status"]);
+
+    expect(incomplete.code).toBe(1);
+    expect(incomplete.stdout).toBe("");
+    expect(incomplete.stderr).toBe(`Reinstall Arcue: ${root} is not a complete Arcue app.\n`);
+  });
+
   it("asks for a reinstall when the app beside it is incomplete", async () => {
     const broken = join(temp, "broken", "bin", "arcue");
     await install(broken);

@@ -78,19 +78,41 @@ export function desktopEntry(): string {
   ]);
 }
 
-/** `/usr/share/doc/arcue/copyright`, in Debian's machine-readable format, with the license's text. */
+/** The holder in a license's copyright line: "2026 The Arcue Authors" in "Copyright (c) 2026 The Arcue Authors". */
+export function copyrightHolder(license: string): string {
+  const holder = /^[ \t]*Copyright[ \t]+(?:\(c\)|©)?[ \t]*(\S.*?)[ \t]*\r?$/im.exec(license)?.[1];
+  if (!holder) throw new Error("The license has no copyright line, such as Copyright (c) 2026 The Arcue Authors.");
+  return holder;
+}
+
+/**
+ * `/usr/share/doc/arcue/copyright`, in Debian's machine-readable format. The first paragraph covers Electron's runtime,
+ * and a later one, which wins, gives Arcue's own files the license's holder and text.
+ */
 export function debianCopyright(license: string): string {
   const text = license
     .replaceAll("\r\n", "\n")
     .trim()
     .split("\n")
     .map((line) => (line.trim() === "" ? " ." : ` ${line}`));
+  const app = DEB_APP_DIR.slice(1);
   return lines([
     "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/",
     `Upstream-Name: ${PRODUCT.name}`,
     `Source: ${PRODUCT.homepage}`,
     "",
     "Files: *",
+    "Copyright: Electron contributors, The Chromium Authors and others",
+    "License: other",
+    ` The Electron runtime. Its licenses are in ${DEB_APP_DIR}/LICENSE and`,
+    ` ${DEB_APP_DIR}/LICENSES.chromium.html.`,
+    "",
+    "Files: usr/bin/arcue",
+    ` ${app}/bin/*`,
+    ` ${app}/resources/*`,
+    " usr/share/*",
+    `Copyright: ${copyrightHolder(license)}`,
+    "Comment: Includes bundled libraries and fonts under their own licenses.",
     "License: MIT",
     ...text,
   ]);

@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Options } from "@electron/packager";
 import { packager } from "@electron/packager";
+import { flipElectronFuses } from "../packaging/fuses.ts";
 import { appLayout, PRODUCT, parseArch, parsePlatform, parseVersion } from "../packaging/layout.ts";
-import { macSigning } from "../packaging/signing.ts";
+import { ENTITLEMENTS, macSigning } from "../packaging/signing.ts";
 import { compileCommand } from "../packaging/windows.ts";
 import { appRoot, buildProcesses, buildRenderer, dist } from "./bundles.ts";
 
@@ -42,6 +43,7 @@ await writeFile(
 const command = join(build, "command");
 await rm(command, { recursive: true, force: true });
 await cp(cliBuild, join(command, "cli"), { recursive: true });
+await writeFile(join(command, "cli", "package.json"), `${JSON.stringify({ type: "module" })}\n`);
 await cp(webBuild, join(command, "cli", "web"), { recursive: true });
 if (platform === "darwin") await installLauncher(join(command, "bin", "arcue"));
 
@@ -64,6 +66,7 @@ const [bundle] = await packager({
   asar: false,
   prune: false,
   extraResource: platform === "darwin" ? [join(command, "cli"), join(command, "bin")] : [join(command, "cli")],
+  afterExtract: [({ buildPath }) => flipElectronFuses(buildPath, platform)],
   ...(platform === "darwin" ? macOptions() : {}),
 });
 if (!bundle) throw new Error("@electron/packager made no app.");
@@ -79,7 +82,10 @@ async function installLauncher(path: string): Promise<void> {
   await chmod(path, 0o755);
 }
 
-/** Signs with the Developer ID identity the environment names and notarizes, or signs ad hoc without one. */
+/**
+ * Signs with the Developer ID identity the environment names, with only the JIT entitlement, and notarizes, or signs ad
+ * hoc without one. A signature that fails stops the build, since setting the fuses broke the one Electron came with.
+ */
 function macOptions(): Pick<Options, "osxSign" | "osxNotarize"> {
   const signing = macSigning(process.env);
   if (!signing) {
@@ -90,11 +96,17 @@ function macOptions(): Pick<Options, "osxSign" | "osxNotarize"> {
         optionsForFile: () => ({ hardenedRuntime: false }),
         preAutoEntitlements: false,
         preEmbedProvisioningProfile: false,
+        continueOnError: false,
       },
     };
   }
   return {
-    osxSign: { identity: signing.identity, ...(signing.keychain ? { keychain: signing.keychain } : {}) },
+    osxSign: {
+      identity: signing.identity,
+      ...(signing.keychain ? { keychain: signing.keychain } : {}),
+      optionsForFile: () => ({ entitlements: ENTITLEMENTS }),
+      continueOnError: false,
+    },
     ...(signing.notarize ? { osxNotarize: signing.notarize } : {}),
   };
 }

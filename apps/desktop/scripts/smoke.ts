@@ -1,12 +1,14 @@
 // Checks an installed arcue command against the app it came with: it runs on the app's own Node, reads a model, starts
 // the app to open one, and reaches the running app through bridge.json. Pass the command, or "arcue" to find it on
-// PATH, and the app's program it should run on. On Linux without a display, run it under xvfb-run.
+// PATH, and the app's program it should run on, which must then have the fuses packaging/fuses.ts sets and ignore
+// NODE_OPTIONS. On Linux without a display, run it under xvfb-run.
 import { execFile } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { unsetFuses } from "../packaging/fuses.ts";
 
 const [command = "arcue", expectedApp] = process.argv.slice(2);
 const run = promisify(execFile);
@@ -19,8 +21,8 @@ interface Result {
   stderr: string;
 }
 
-function arcue(args: readonly string[], env: NodeJS.ProcessEnv): Promise<Result> {
-  return run(command, args, { env, encoding: "utf8", timeout: 120_000 }).then(
+function execute(file: string, args: readonly string[], env: NodeJS.ProcessEnv): Promise<Result> {
+  return run(file, args, { env, encoding: "utf8", timeout: 120_000 }).then(
     ({ stdout, stderr }) => ({ code: 0, stdout, stderr }),
     (error: { code?: unknown; stdout?: string; stderr?: string }) => ({
       code: typeof error.code === "number" ? error.code : -1,
@@ -28,6 +30,10 @@ function arcue(args: readonly string[], env: NodeJS.ProcessEnv): Promise<Result>
       stderr: error.stderr ?? String(error),
     }),
   );
+}
+
+function arcue(args: readonly string[], env: NodeJS.ProcessEnv): Promise<Result> {
+  return execute(command, args, env);
 }
 
 function check(condition: unknown, step: string, result?: Result): asserts condition {
@@ -137,6 +143,14 @@ try {
   check(/^arcue(\.exe)?$/i.test(basename(node)), `arcue runs on the app's own program, not on ${node},`, setup);
   if (expectedApp) {
     check((await realpath(node)) === (await realpath(expectedApp)), `arcue runs on ${expectedApp}, not ${node},`);
+    const options = await execute(expectedApp, ["-e", "process.exit(0)"], {
+      ...env,
+      ELECTRON_RUN_AS_NODE: "1",
+      NODE_OPTIONS: "--require arcue-smoke-missing-module",
+    });
+    check(options.code === 0, `${expectedApp} as Node, ignoring NODE_OPTIONS,`, options);
+    const unset = await unsetFuses(expectedApp);
+    check(unset.length === 0, `Setting the fuses ${unset.join(", ")} of ${expectedApp}`);
   }
 
   const inspected = await arcue(["inspect", "--json", striker], env);

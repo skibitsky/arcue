@@ -23,6 +23,14 @@ export function vcvarsArgument(host: string, target: Arch): string {
   return name(host) === name(target) ? name(target) : `${name(host)}_${name(target)}`;
 }
 
+/**
+ * cmd's arguments for running vcvarsall.bat and printing the environment it leaves. `/u` makes `set` write UTF-16LE,
+ * which keeps names outside the console's code page, such as a user's in TMP, intact.
+ */
+export function vcvarsCommand(vcvarsall: string, host: string, target: Arch): string[] {
+  return ["/d", "/u", "/s", "/c", `""${vcvarsall}" ${vcvarsArgument(host, target)} >nul && set"`];
+}
+
 /** The variables that `set` prints, one `NAME=value` per line. */
 export function parseSet(output: string): Record<string, string> {
   const env: Record<string, string> = {};
@@ -55,7 +63,7 @@ async function compilerEnvironment(target: Arch): Promise<Record<string, string>
       ? "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
       : "Microsoft.VisualStudio.Component.VC.Tools.x86.x64";
   const found = existsSync(vswhere)
-    ? await run(vswhere, ["-latest", "-products", "*", "-requires", tools, "-property", "installationPath"])
+    ? await run(vswhere, ["-latest", "-products", "*", "-requires", tools, "-property", "installationPath", "-utf8"])
     : null;
   const installation = found?.stdout.split(/\r?\n/)[0]?.trim();
   if (!installation) {
@@ -64,12 +72,12 @@ async function compilerEnvironment(target: Arch): Promise<Record<string, string>
     );
   }
   const vcvarsall = join(installation, "VC", "Auxiliary", "Build", "vcvarsall.bat");
-  const { stdout } = await run(
-    process.env.ComSpec ?? "cmd.exe",
-    ["/d", "/s", "/c", `""${vcvarsall}" ${vcvarsArgument(process.arch, target)} >nul && set"`],
-    { windowsVerbatimArguments: true, maxBuffer: 16 * 1024 * 1024 },
-  );
-  return parseSet(stdout);
+  const { stdout } = await run(process.env.ComSpec ?? "cmd.exe", vcvarsCommand(vcvarsall, process.arch, target), {
+    windowsVerbatimArguments: true,
+    maxBuffer: 16 * 1024 * 1024,
+    encoding: "buffer",
+  });
+  return parseSet(stdout.toString("utf16le"));
 }
 
 /** Compiles `arcue.c` into the Windows `arcue` command at `out`. */

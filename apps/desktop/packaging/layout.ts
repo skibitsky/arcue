@@ -31,13 +31,19 @@ export interface Version {
   debian: string;
 }
 
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)?))?$/;
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z]+(?:\.(?:0|[1-9]\d*))?))?$/;
 
-/** A release version: three numbers and at most a two-part prerelease, which Windows version fields can hold. */
+/**
+ * A release version: three numbers and at most a prerelease of a word and a number, such as beta or beta.2. The
+ * Windows app's version fields read each part between dots as a number, so a second word, as in beta.rc1, cannot go
+ * there.
+ */
 export function parseVersion(value: string): Version {
   const match = VERSION.exec(value);
   if (!match) {
-    throw new Error(`"${value}" is not a release version such as 1.2.0 or 1.3.0-beta.2.`);
+    throw new Error(
+      `"${value}" is not a release version such as 1.2.0, 1.3.0-beta or 1.3.0-beta.2, whose prerelease is a word and at most one number.`,
+    );
   }
   const numeric = `${match[1]}.${match[2]}.${match[3]}`;
   const prerelease = match[4];

@@ -17,7 +17,8 @@ import {
   parsePlatform,
   parseVersion,
 } from "../packaging/layout.ts";
-import { macSigning } from "../packaging/signing.ts";
+import type { CommandError } from "../packaging/signing.ts";
+import { macSigning, notarySubmission, notarytoolFailure } from "../packaging/signing.ts";
 import { makeInstaller } from "../packaging/windows.ts";
 import { appRoot } from "./bundles.ts";
 
@@ -87,12 +88,19 @@ async function makeDiskImage(file: string): Promise<void> {
   if (!signing.notarize) return;
   const { appleApiKey, appleApiKeyId, appleApiIssuer } = signing.notarize;
   const credentials = ["--key", appleApiKey, "--key-id", appleApiKeyId, "--issuer", appleApiIssuer];
-  const { stdout } = await run(
+  const submit = await run(
     "xcrun",
     ["notarytool", "submit", file, ...credentials, "--wait", "--timeout", "1h", "--output-format", "json"],
     { maxBuffer: 16 * 1024 * 1024 },
-  ).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "{}" }));
-  const result = JSON.parse(stdout) as { id?: string; status?: string };
+  ).then(
+    ({ stdout, stderr }) => ({ failure: "", stdout, stderr }),
+    (error: CommandError) => ({
+      failure: notarytoolFailure(error),
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? "",
+    }),
+  );
+  const result = notarySubmission(submit.stdout);
   if (result.status !== "Accepted") {
     const log = result.id
       ? await run("xcrun", ["notarytool", "log", result.id, ...credentials]).then(
@@ -100,7 +108,9 @@ async function makeDiskImage(file: string): Promise<void> {
           () => "",
         )
       : "";
-    throw new Error(`Apple did not notarize ${file}: ${result.status ?? stdout}\n${log}`);
+    const status = result.status ? `the submission is ${result.status}` : submit.failure || "notarytool gave no status";
+    const details = [submit.stdout, submit.stderr, log].map((text) => text.trim()).filter(Boolean);
+    throw new Error([`Apple did not notarize ${file}: ${status}.`, ...details].join("\n"));
   }
   await run("xcrun", ["stapler", "staple", file]);
 }
