@@ -446,11 +446,12 @@ export class WorkspaceStore {
   async setCoordinates(coordinates: CoordinateConvention): Promise<void> {
     const previous = this.state.get().settings;
     if (!previous || previous.coordinates === coordinates) return;
-    this.state.patch({ settings: { ...previous, coordinates } });
+    const optimistic = { ...previous, coordinates };
+    this.state.patch({ settings: optimistic });
     try {
       this.state.patch({ settings: await this.client.execute("settings.set", { coordinates }) });
     } catch (error) {
-      this.state.patch({ settings: previous });
+      if (this.state.get().settings === optimistic) this.state.patch({ settings: previous });
       this.notify({ message: messageOf(error), kind: "alert" });
     }
   }

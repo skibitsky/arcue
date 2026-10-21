@@ -59,7 +59,7 @@ describe("TabRestore", () => {
     expect(activePath()).toBe(STONE);
   });
 
-  it("keeps the tabs not open yet when the generation changes or the connection drops during an open", async () => {
+  it("keeps the tabs not open yet when the generation changes during an open that fails or succeeds, or the connection drops", async () => {
     const { client, restore, store, open, paths, activePath, savedPaths } = restoring();
     const notify = vi.spyOn(store, "notify");
     restore.pending(saved([STONE, CRATE, GOLEM], 2));
@@ -79,7 +79,22 @@ describe("TabRestore", () => {
     expect(savedPaths()).toEqual([STONE, CRATE, GOLEM]);
     expect(restore.tabs().active).toBe(2);
 
+    let third: number | null = null;
     await restore.reopen(second ?? 0, {
+      open: async (tab) => {
+        if (tab.path === CRATE) {
+          third = restore.detach();
+          return;
+        }
+        await open(tab);
+      },
+    });
+    expect(third).toBe(restore.generation);
+    expect(paths()).toEqual([]);
+    expect(savedPaths()).toEqual([STONE, CRATE, GOLEM]);
+    expect(restore.tabs().active).toBe(2);
+
+    await restore.reopen(third ?? 0, {
       open: async (tab) => {
         if (tab.path === GOLEM) {
           client.setConnectionState("reconnecting");
@@ -97,6 +112,35 @@ describe("TabRestore", () => {
     expect(paths()).toEqual([STONE, CRATE, GOLEM]);
     expect(activePath()).toBe(GOLEM);
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("activates the saved active tab after adopting the other assets the core holds, and keeps it when adopting stops", async () => {
+    const { client, restore, open, paths, activePath } = restoring();
+    restore.pending(saved([STONE, CRATE], 0));
+    let whileAdopting: WindowTabs | null = null;
+    await restore.reopen(restore.detach(), {
+      open,
+      adopt: async () => {
+        await client.execute("asset.open", { path: GOLEM });
+        whileAdopting = restore.tabs();
+      },
+    });
+    expect(whileAdopting).toMatchObject({ tabs: [{ path: STONE }, { path: CRATE }, { path: GOLEM }], active: 0 });
+    expect(paths()).toEqual([STONE, CRATE, GOLEM]);
+    expect(activePath()).toBe(STONE);
+
+    let next: number | null = null;
+    await restore.reopen(restore.detach(), {
+      open,
+      adopt: async () => {
+        next = restore.detach();
+      },
+    });
+    expect(paths()).toEqual([]);
+    expect(restore.tabs()).toMatchObject({ tabs: [{ path: STONE }, { path: CRATE }, { path: GOLEM }], active: 0 });
+    await restore.reopen(next ?? 0, { open });
+    expect(paths()).toEqual([STONE, CRATE, GOLEM]);
+    expect(activePath()).toBe(STONE);
   });
 
   it("drops quiet errors without a toast and alerts the others, dropping both tabs", async () => {

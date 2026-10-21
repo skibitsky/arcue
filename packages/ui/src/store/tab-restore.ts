@@ -7,6 +7,11 @@ export interface ReopenOptions {
   open(tab: SavedTab): Promise<void>;
   /** Errors to drop without a toast, such as a model another session's view now has. */
   quiet?: (error: unknown) => boolean;
+  /**
+   * Runs once every saved tab is open, before the saved active tab is activated: for example, showing the other assets
+   * the core holds for this window, each of which takes the active tab.
+   */
+  adopt?: () => Promise<void>;
 }
 
 /**
@@ -71,9 +76,9 @@ export class TabRestore {
 
   /**
    * Opens the pending tabs one by one, keeping the rest when the generation changes or the client is not connected,
-   * then activates the saved active tab.
+   * runs `adopt`, then activates the saved active tab.
    */
-  async reopen(generation: number, { open, quiet }: ReopenOptions): Promise<void> {
+  async reopen(generation: number, { open, quiet, adopt }: ReopenOptions): Promise<void> {
     for (;;) {
       const tab = this.#unopened[0];
       if (!tab || generation !== this.#generation) break;
@@ -86,6 +91,8 @@ export class TabRestore {
       if (generation !== this.#generation) return;
       this.#unopened = this.#unopened.filter((pending) => pending !== tab);
     }
+    if (generation !== this.#generation) return;
+    await adopt?.();
     if (generation !== this.#generation) return;
     const wanted = this.#wantActive;
     this.#wantActive = null;

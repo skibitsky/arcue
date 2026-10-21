@@ -392,6 +392,30 @@ describe("view state and settings", () => {
     changed({ settings: { coordinates: "z-up-blender", authorName: "Ada" } });
     expect(store.state.get().settings).toEqual({ coordinates: "z-up-blender", authorName: "Ada" });
   });
+
+  it("keeps the settings another Arcue changed while a change of its own fails", async () => {
+    const client = new FakeCoreClient({ catalog: () => null });
+    const subscribe = vi.spyOn(client, "subscribe");
+    const execute = vi.spyOn(client, "execute");
+    const store = createWorkspaceStore({ client, setTimer: new ManualTimers().setTimer });
+    store.start();
+    await flush();
+    const changed = subscribe.mock.calls.find(([name]) => name === "settings.changed")?.[1];
+    if (!changed) throw new Error("The store does not listen for settings.changed.");
+    const busy = new ArcueError("timeout", "The settings are busy.");
+
+    execute.mockRejectedValueOnce(busy);
+    await store.setCoordinates("z-up-blender");
+    expect(store.state.get().settings).toEqual({ coordinates: "y-up" });
+    expect(store.state.get().toast).toMatchObject({ message: "The settings are busy.", kind: "alert" });
+
+    execute.mockImplementationOnce(async () => {
+      changed({ settings: { coordinates: "y-up", authorName: "Ada" } });
+      throw busy;
+    });
+    await store.setCoordinates("z-up-blender");
+    expect(store.state.get().settings).toEqual({ coordinates: "y-up", authorName: "Ada" });
+  });
 });
 
 describe("reconnecting", () => {
