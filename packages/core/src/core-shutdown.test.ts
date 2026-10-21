@@ -84,6 +84,41 @@ describe("ArcueCore.shutdown", () => {
     await expect(platform.exists(REVIEW_JSON)).resolves.toBe(false);
   });
 
+  it("waits for an open in flight, then closes the asset it opened", async () => {
+    const test = await startTestCore(heroFiles());
+    const statting = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    const stat = test.platform.stat.bind(test.platform);
+    let held = false;
+    vi.spyOn(test.platform, "stat").mockImplementation(async (path) => {
+      if (path === HERO && !held) {
+        held = true;
+        statting.resolve();
+        await released.promise;
+      }
+      return stat(path);
+    });
+    const closed: string[] = [];
+    test.core.client.subscribe("asset.closed", ({ assetId }) => closed.push(assetId));
+    const opening = test.window.client.execute("asset.open", { path: HERO });
+    await statting.promise;
+    let stopped = false;
+    const shutdown = test.core.shutdown().then(() => {
+      stopped = true;
+    });
+    await flush();
+    expect(stopped).toBe(false);
+
+    released.resolve();
+    await shutdown;
+    const { assetId } = await opening;
+    expect(closed).toEqual([assetId]);
+    const writes = test.platform.writes.length;
+    await flush();
+    await test.core.idle();
+    expect(test.platform.writes).toHaveLength(writes);
+  });
+
   it.todo("lets a save that waits for a held reviews lock time out, then finishes");
 
   it("does not wait for a window that closed while an open waited for it", async () => {

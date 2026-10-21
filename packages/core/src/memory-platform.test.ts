@@ -411,4 +411,22 @@ describe("MemoryPlatform locks", () => {
     expect(outcomes).toEqual(Array.from({ length: 11 }, (_, index) => `held ${index}`));
     expect(platform.heldLocks()).toEqual([]);
   });
+
+  it("times out the next waiter when the waiter granted the lock before it keeps it too long", async () => {
+    const clock = new ManualClock();
+    const platform = new MemoryPlatform({ clock, lockTimeoutMs: 1000 });
+    const holder = await platform.lock("/work/game", "reviews");
+    const first = platform.lock("/work/game", "reviews");
+    const second = platform.lock("/work/game", "reviews").catch((error: unknown) => error);
+    await holder();
+    const unlockFirst = await first;
+    expect(clock.pendingTimers).toBe(1);
+
+    clock.advance(1000);
+    await expect(second).resolves.toMatchObject({ code: "timeout", message: busy });
+    expect(clock.pendingTimers).toBe(0);
+    expect(platform.lockWaiters(platform.lockKey("/work/game", "reviews"))).toBe(0);
+    await unlockFirst();
+    expect(platform.heldLocks()).toEqual([]);
+  });
 });
