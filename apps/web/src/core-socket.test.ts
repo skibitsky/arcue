@@ -40,6 +40,13 @@ describe("the core socket", () => {
     );
   });
 
+  it("keeps only the view of the page's address in the socket's", () => {
+    const search = "?sample=stone-striker&view=3f9a0c1d2b4e&clip=Walk&frame=12&view=other";
+    expect(coreSocketUrl({ protocol: "http:", host: "localhost:4530", search })).toBe(
+      "ws://localhost:4530/core/2?view=3f9a0c1d2b4e",
+    );
+  });
+
   it("holds frames written before the socket opens, then sends them in order", () => {
     const { fake, socket } = fakeSocket();
     const stream = webSocketStream(socket);
