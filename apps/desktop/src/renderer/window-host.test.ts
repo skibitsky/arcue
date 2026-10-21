@@ -1,9 +1,8 @@
 import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
-import type { MemoryEndpoint } from "@arcue/protocol";
+import type { CoreChannel, MemoryEndpoint } from "@arcue/protocol";
 import { createMemoryChannel } from "@arcue/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopBridge, MenuCommand, TextEdit, WindowInit, WindowTabs } from "../shared/ipc";
-import type { CoreChannel } from "./reconnecting-client";
 import { WindowHost } from "./window-host";
 
 const HERO = "/work/Hero.fbx";

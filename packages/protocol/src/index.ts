@@ -24,16 +24,34 @@ export {
 } from "./assets";
 export type { Author } from "./author";
 export { authorSchema } from "./author";
-export type { AcceptedBridge, BridgeInfo, ConnectBridgeOptions, HandshakeOptions, LaunchInfo } from "./bridge";
+export type {
+  AcceptedBridge,
+  BridgeInfo,
+  ConnectBridgeOptions,
+  CoreKind,
+  HandshakeOptions,
+  LastCore,
+  LaunchInfo,
+} from "./bridge";
 export {
   acceptBridge,
   BRIDGE_INFO_FILE,
+  bridgeInfoFile,
   bridgeInfoSchema,
   connectBridge,
+  coreKindOf,
+  coreKindSchema,
   HANDSHAKE_MAX_FRAME_BYTES,
+  LAST_CORE_FILE,
   LAUNCH_INFO_FILE,
+  LOCAL_PAGE_MARKER,
+  LOCK_PROTOCOL,
+  lastCoreSchema,
   launchInfoSchema,
   SERVE_CORE_PATH,
+  SERVE_INFO_FILE,
+  SERVE_STOPPED_CLOSE_CODE,
+  sharesReviews,
 } from "./bridge";
 export type { ConnectionState, CoreClient, Unsubscribe } from "./client";
 export type { CommandArgs, CommandInput, CommandName, CommandOutput, Commands } from "./commands";
@@ -119,6 +137,8 @@ export type { JsonSchema, JsonSchemaEntry } from "./json-schema";
 export { protocolJsonSchemas } from "./json-schema";
 export type { ListenerErrorHandler } from "./listener-errors";
 export { reportListenerError } from "./listener-errors";
+export type { LockRecord, LockWaiting } from "./locks";
+export { LOCKS_FOLDER, lockRecordSchema, lockWaitingSchema, START_LOCK_FILE } from "./locks";
 export type { PartSummary } from "./parts";
 export { partSummarySchema } from "./parts";
 export type { Queries, QueryArgs, QueryInput, QueryName, QueryOutput } from "./queries";
@@ -174,8 +194,17 @@ export type { MemoryEndpoint } from "./transport/memory-channel";
 export { createMemoryChannel } from "./transport/memory-channel";
 export type { IncomingRequest, Peer, PeerOptions, RequestHandler, SetTimer } from "./transport/peer";
 export { createPeer, withTransfer } from "./transport/peer";
+export type { CoreChannel, ReconnectingClientOptions } from "./transport/reconnecting-client";
+export { ReconnectingClient } from "./transport/reconnecting-client";
 export type { RemoteClientOptions } from "./transport/remote-client";
 export { createRemoteClient } from "./transport/remote-client";
-export type { DisplayMode, PartView, ViewState } from "./view-state";
-export { displayModeSchema, partIdSchema, partViewSchema, viewStateSchema } from "./view-state";
+export type { DisplayMode, PartView, SavedTab, ViewState, WindowTabs } from "./view-state";
+export {
+  displayModeSchema,
+  partIdSchema,
+  partViewSchema,
+  savedTabSchema,
+  viewStateSchema,
+  windowTabsSchema,
+} from "./view-state";
 export { VIEW_PARAMETER, viewAddress, viewNameSchema } from "./views";

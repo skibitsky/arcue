@@ -1,8 +1,8 @@
+import type { CoreChannel } from "@arcue/protocol";
+import { ReconnectingClient } from "@arcue/protocol";
 import type { FileHost, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore } from "@arcue/ui";
 import type { DesktopBridge, MenuCommand, SavedTab, TextEdit, WindowTabs } from "../shared/ipc";
-import type { CoreChannel } from "./reconnecting-client";
-import { ReconnectingClient } from "./reconnecting-client";
 
 export interface WindowHostOptions {
   bridge: DesktopBridge;

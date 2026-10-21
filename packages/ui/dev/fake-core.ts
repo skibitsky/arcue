@@ -702,6 +702,9 @@ export class FakeCoreClient implements CoreClient {
       this.#settings = { ...this.#settings, ...args };
       return structuredClone(this.#settings);
     },
+    "serve.stop": () => {
+      throw new ArcueError("forbidden", "Only the arcue command can stop Arcue in the browser.");
+    },
     "review.undo": ({ assetId }) => this.#step(this.#asset(assetId), "undo"),
     "review.redo": ({ assetId }) => this.#step(this.#asset(assetId), "redo"),
     "asset.relink": ({ assetId, path }) => {

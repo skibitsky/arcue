@@ -2,7 +2,16 @@ import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import { unwatchFile, watchFile } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
-import type { Clock, DirectoryEntry, EntryKind, FileChange, FileStat, ImportWorker, Platform } from "@arcue/core";
+import type {
+  Clock,
+  DirectoryEntry,
+  EntryKind,
+  FileChange,
+  FileStat,
+  ImportWorker,
+  Platform,
+  Unlock,
+} from "@arcue/core";
 import { basename, dirname, findGitRoot, joinPath, normalizePath } from "@arcue/core";
 import { ArcueError } from "@arcue/protocol";
 import { FolderWatchers, isFolder } from "./folder-watchers";
@@ -30,6 +39,9 @@ export const systemClock: Clock = {
 
 const RENAME_ATTEMPTS = 5;
 const POLL_INTERVAL_MS = 1000;
+
+/** The last turn queued for each lock in this process, by lock name and folder. */
+const lockTurns = new Map<string, Promise<void>>();
 
 /** The `Platform` on Node's file system. Paths use "/" separators on every system and are converted at the edge. */
 export class NodePlatform implements Platform {
@@ -118,6 +130,23 @@ export class NodePlatform implements Platform {
 
   findWorkspaceRoot(path: string): Promise<string | null> {
     return findGitRoot(path, (candidate) => this.exists(candidate));
+  }
+
+  /** For now an in-process queue only: it keeps out holders in this process, not other processes. */
+  async lock(folder: string, name: string): Promise<Unlock> {
+    const key = `${name}\n${normalizePath(folder)}`;
+    const previous = lockTurns.get(key) ?? Promise.resolve();
+    const turn = Promise.withResolvers<void>();
+    const queued = previous.then(() => turn.promise);
+    lockTurns.set(key, queued);
+    await previous;
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      turn.resolve();
+      if (lockTurns.get(key) === queued) lockTurns.delete(key);
+    };
   }
 
   startImportWorker(): ImportWorker {

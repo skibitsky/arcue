@@ -26,6 +26,9 @@ export interface Clock {
   setTimer(delayMs: number, callback: () => void): () => void;
 }
 
+/** Lets go of a lock that `Platform.lock` took. It never rejects, and a second call does nothing. */
+export type Unlock = () => Promise<void>;
+
 /** A started import worker. The core talks to it with the requests in `importRequests`. */
 export interface ImportWorker {
   endpoint: MessageEndpoint;
@@ -74,6 +77,15 @@ export interface Platform {
   watch(path: string, listener: (change: FileChange) => void): () => void;
   /** Root of the git repository that contains `path`, or null when there is none. */
   findWorkspaceRoot(path: string): Promise<string | null>;
+  /**
+   * Holds the lock `name` of `folder` against every other holder of the same lock: in this process, and in every other
+   * process on this computer that uses the same app data folder, however it spells or links to `folder`. Waiters get it
+   * in turn, and a holder that ended without letting go loses it. Not re-entrant: never take a lock you hold, and never
+   * take a second lock while holding one. Rejects with "timeout" when one other holder keeps it longer than the host
+   * allows (15 seconds on Node; waiting behind this process's own holders does not count), and with "forbidden" when
+   * the host cannot create it.
+   */
+  lock(folder: string, name: string): Promise<Unlock>;
   /** Where review data goes for assets outside any git repository. */
   readonly appDataDir: string;
   readonly clock: Clock;

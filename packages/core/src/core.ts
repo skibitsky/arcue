@@ -183,6 +183,7 @@ export class ArcueCore {
   readonly #onError: ListenerErrorHandler;
   readonly #commentIds = new CommentIds();
   #nextAssetNumber = 1;
+  #stopping = false;
 
   /** Creates the core and reads its settings. */
   static async start(options: ArcueCoreOptions): Promise<ArcueCore> {
@@ -234,6 +235,17 @@ export class ArcueCore {
   /** Resolves once no parse, file check or background save is running. Waiting timers do not count. */
   async idle(): Promise<void> {
     while (this.#pending.size > 0) await Promise.allSettled([...this.#pending]);
+  }
+
+  /**
+   * Refuses new opens, waits for opens in flight, closes every asset once the changes in flight are saved, then
+   * disposes. Parses in flight are not waited for: they save nothing once their asset is closed.
+   */
+  async shutdown(): Promise<void> {
+    this.#stopping = true;
+    await this.#opening.run(async () => undefined);
+    await Promise.all([...this.#assets.keys()].map((id) => this.#close(id).catch(() => undefined)));
+    this.dispose();
   }
 
   /** Stops watching files and removes the handlers. Open assets are dropped without events. */
@@ -534,6 +546,7 @@ export class ArcueCore {
     requester: Requester,
     move: boolean,
   ): Promise<{ assetId: string; shown: Shown }> {
+    if (this.#stopping) throw new ArcueError("unavailable", "Arcue is stopping.");
     const path = normalizePath(args.path);
     const existing = [...this.#assets.values()].find((asset) => asset.path === path && !asset.closing);
     if (existing) return { assetId: existing.id, shown: await this.#reveal(existing, requester, args, move) };

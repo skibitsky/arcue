@@ -228,6 +228,13 @@ export const commands = {
     input: settingsSchema.partial(),
     output: settingsSchema,
   }),
+  "serve.stop": command({
+    description:
+      "Stops Arcue in the browser, the core arcue serve runs: it closes the command line's connections and its pages, lets the changes in flight finish saving, and exits. Only the command line may call it; the desktop app does not handle it.",
+    runsIn: "core",
+    input: z.object({}),
+    output: z.void(),
+  }),
   "review.undo": command({
     description:
       "Undo the asset's latest review edit, if there is one: a comment edit or a change to its composition file. A composition file that changed since the edit is not touched, and the call fails with conflict.",

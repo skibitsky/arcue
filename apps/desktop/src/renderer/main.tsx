@@ -3,7 +3,7 @@ import "@arcue/ui/tokens.css";
 import "@arcue/ui/base.css";
 import "@arcue/ui/workspace.css";
 import "./desktop.css";
-import type { CoreClient } from "@arcue/protocol";
+import type { CoreChannel, CoreClient } from "@arcue/protocol";
 import { portEndpoint } from "@arcue/protocol";
 import type { WorkspaceStore } from "@arcue/ui";
 import { inTextField, Workspace } from "@arcue/ui";
@@ -12,7 +12,6 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { DesktopBridge } from "../shared/ipc";
 import { CORE_PORT_MESSAGE } from "../shared/ipc";
-import type { CoreChannel } from "./reconnecting-client";
 import { WindowHost } from "./window-host";
 
 declare global {
