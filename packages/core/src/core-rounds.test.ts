@@ -51,9 +51,14 @@ describe("round.copy", () => {
   it("saves the round, marks its comments sent and returns the prompt", async () => {
     const test = await setup();
     const { assetId } = test;
-    const copied: number[] = [];
-    test.core.client.subscribe("round.copied", ({ round }) => copied.push(round));
     const { commentId: first } = await test.core.client.execute("comment.create", pinComment(assetId));
+    const firstScreenshot = `${HERO_REVIEW}/screenshots/${first}.png`;
+    const copied: number[] = [];
+    let removedFirst = false;
+    test.core.client.subscribe("round.copied", ({ round }) => {
+      copied.push(round);
+      removedFirst = test.platform.log.some((entry) => entry.op === "remove" && entry.path === firstScreenshot);
+    });
     await test.core.client.execute("comment.update", { assetId, commentId: first, screenshot: Uint8Array.of(7) });
     const { commentId: second } = await test.core.client.execute("comment.create", looseComment(assetId));
     const { commentId: third } = await test.core.client.execute("comment.create", regionComment(assetId));
@@ -67,8 +72,11 @@ describe("round.copy", () => {
     await expect(test.platform.readFile(`${folder}/${first}.png`)).resolves.toEqual(Uint8Array.of(7));
     await expect(test.platform.readFile(`${folder}/${third}.png`)).resolves.toEqual(png);
     await expect(test.platform.exists(`${folder}/${second}.png`)).resolves.toBe(false);
-    await expect(test.platform.exists(`${HERO_REVIEW}/screenshots/${first}.png`)).resolves.toBe(false);
+    await expect(test.platform.exists(firstScreenshot)).resolves.toBe(false);
     await expect(test.platform.list(`${HERO_REVIEW}/screenshots`)).resolves.toEqual([]);
+    expect(removedFirst).toBe(true);
+    const cleanup = test.platform.log.find((entry) => entry.op === "remove" && entry.path === firstScreenshot);
+    expect(cleanup).toMatchObject({ actor: "core-1", held: [test.platform.lockKey("/work/game", "reviews")] });
 
     const data = roundDataSchema.parse(await readJson(test.platform, `${folder}/round.json`));
     expect(data.asset).toEqual({

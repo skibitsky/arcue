@@ -19,18 +19,15 @@ import {
 
 const REVIEW_JSON = `${HERO_REVIEW}/review.json`;
 
-/** Holds back every write of review.json until `release`; `writing` resolves once one waits. */
+/** Holds back every write of review.json by a core until `release`; `writing` resolves once one waits. */
 function holdReviewWrites(platform: RecordingPlatform): { writing: Promise<void>; release(): void } {
   const writing = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
-  const write = platform.writeFileAtomic.bind(platform);
-  vi.spyOn(platform, "writeFileAtomic").mockImplementation(async (path, data) => {
-    if (path === REVIEW_JSON) {
-      writing.resolve();
-      await released.promise;
-    }
-    await write(path, data);
-  });
+  platform.beforeWrite = async (path, _op, actor) => {
+    if (path !== REVIEW_JSON || actor === null) return;
+    writing.resolve();
+    await released.promise;
+  };
   return { writing: writing.promise, release: () => released.resolve() };
 }
 
@@ -51,6 +48,8 @@ describe("ArcueCore.shutdown", () => {
     });
     await flush();
     expect(stopped).toBe(false);
+
+    expect(test.platform.heldLocks()).toEqual([test.platform.lockKey("/work/game", "reviews")]);
 
     held.release();
     await shutdown;
@@ -119,7 +118,30 @@ describe("ArcueCore.shutdown", () => {
     expect(test.platform.writes).toHaveLength(writes);
   });
 
-  it.todo("lets a save that waits for a held reviews lock time out, then finishes");
+  it("lets a save that waits for a held reviews lock time out, then finishes", async () => {
+    const test = await startTestCore(heroFiles(), { lockTimeoutMs: 15_000 });
+    const assetId = await openAsset(test);
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    const created = test.window.client
+      .execute("comment.create", looseComment(assetId))
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    let stopped = false;
+    const shutdown = test.core.shutdown().then(() => {
+      stopped = true;
+    });
+    await flush();
+    expect(stopped).toBe(false);
+
+    test.clock.advance(15_000);
+    await expect(created).resolves.toMatchObject({ code: "timeout" });
+    await shutdown;
+    expect(test.platform.heldLocks()).toEqual([key]);
+    await unlock();
+    expect(test.platform.heldLocks()).toEqual([]);
+    await expect(readJson(test.platform, REVIEW_JSON)).resolves.toMatchObject({ comments: [] });
+  });
 
   it("does not wait for a window that closed while an open waited for it", async () => {
     const test = await startTestCore(heroFiles());

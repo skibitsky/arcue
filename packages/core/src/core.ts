@@ -49,7 +49,7 @@ import {
   withTexture,
 } from "./composition-file";
 import type { AssetFiles, ReadFile } from "./composition-load";
-import { buildAssetScene, readAssetFiles } from "./composition-load";
+import { buildAssetScene, readAssetFiles, sameStats } from "./composition-load";
 import { readableImageExtensions } from "./file-search";
 import { versionIdOf } from "./hash";
 import type { CompositionEdit } from "./history";
@@ -62,9 +62,9 @@ import { insideWithoutLinks } from "./links";
 import type { LostFile } from "./lost-files";
 import { findLostFiles, lostFiles, withMovedFiles } from "./lost-files";
 import type { ShowAt } from "./open-asset";
-import { findComment, OpenAsset, readRootFor } from "./open-asset";
+import { FIRST_RETRY_MS, findComment, LAST_RETRY_MS, OpenAsset, readRootFor } from "./open-asset";
 import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
-import type { FileStat, Platform } from "./platform";
+import type { FileStat, Platform, Unlock } from "./platform";
 import { renderPrompt } from "./prompt";
 import { Reanchorer } from "./reanchor";
 import type { CallContext } from "./registry";
@@ -78,6 +78,7 @@ import {
   reviewedModelGone,
   volumeThere,
 } from "./relink";
+import type { ReviewMove } from "./review-move";
 import { isUntouched, moveReview, relabelMembers } from "./review-move";
 import type { ReviewChange } from "./review-session";
 import { ReviewSession } from "./review-session";
@@ -87,6 +88,7 @@ import {
   compositionFilePath,
   loadReview,
   locateReview,
+  lockReviews,
   prepareArcueFolder,
   removeReviewFile,
   reviewFilePath,
@@ -161,6 +163,9 @@ const MAX_RENAME_CANDIDATES = 256;
  */
 const MISSING_MODEL_MS = 2000;
 
+/** How many times a version is read again when its files change while it loads, before the load fails. */
+const VERSION_PASSES = 3;
+
 /**
  * All review state, behind the command registry. Hosts start it with a platform and connect each window and bridge
  * with `connect`; calls inside the host's own process go through `client`.
@@ -185,17 +190,20 @@ export class ArcueCore {
   #nextAssetNumber = 1;
   #stopping = false;
 
-  /** Creates the core and reads its settings. */
+  /** Creates the core, reads its settings and watches them. */
   static async start(options: ArcueCoreOptions): Promise<ArcueCore> {
     const core = new ArcueCore(options);
     await core.#settings.load();
+    core.#settings.watch(core.#onError);
     return core;
   }
 
   private constructor(options: ArcueCoreOptions) {
     this.#platform = options.platform;
     this.registry = options.registry ?? new CommandRegistry();
-    this.#settings = new SettingsStore(options.platform);
+    this.#settings = new SettingsStore(options.platform, (settings) =>
+      this.registry.emit("settings.changed", { settings }),
+    );
     this.#stabilityIntervalMs = options.stabilityIntervalMs ?? 300;
     this.#importTimeoutMs = options.importTimeoutMs ?? 120_000;
     this.#showAssetTimeoutMs = options.showAssetTimeoutMs ?? 10_000;
@@ -252,6 +260,7 @@ export class ArcueCore {
   dispose(): void {
     for (const asset of this.#assets.values()) this.#stop(asset);
     this.#assets.clear();
+    this.#settings.dispose();
     for (const unregister of this.#unregister.splice(0)) unregister();
   }
 
@@ -561,8 +570,12 @@ export class ArcueCore {
     const earlier = await this.#earlierReview(location, path, stat.size);
     const loaded = await loadReview(this.#platform, location);
     const id = `a${this.#nextAssetNumber++}`;
-    const session = new ReviewSession(this.#platform, location, loaded, (review) =>
-      this.registry.emit("review.changed", { assetId: id, review }),
+    const session = new ReviewSession(
+      this.#platform,
+      location,
+      loaded,
+      (review) => this.registry.emit("review.changed", { assetId: id, review }),
+      { adopted: (review, before) => this.#reanchorAdopted(asset, review, before) },
     );
     const asset = new OpenAsset(id, path, location, session);
     if (args.viewState) asset.viewState = args.viewState;
@@ -590,7 +603,8 @@ export class ArcueCore {
    * file's bytes or the file's Unity GUID, moves it to the file's review folder. Several such reviews become candidates
    * to offer, and so does a single one when the search stopped at a bound or the move was refused; with none, the
    * reviews are kept to compare meshes with once the file loads. A failure leaves the file without a review rather
-   * than failing the open.
+   * than failing the open. The move checks again under the reviews lock, so when another Arcue gave the file a review
+   * or took the earlier one meanwhile, the file opens with what is on disk.
    */
   async #earlierReview(
     location: ReviewLocation,
@@ -607,17 +621,40 @@ export class ArcueCore {
       const [only] = matches;
       if (only && matches.length === 1 && complete) {
         const { location: from, model } = only.earlier;
-        try {
-          await moveReview(this.#platform, { from, fromModel: model, to: location, toModel: path });
-          return { ...none, moved: model };
-        } catch (error) {
-          if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
-        }
+        const taken = await this.#takeEarlierReview({ from, fromModel: model, to: location, toModel: path });
+        if (taken === "moved") return { ...none, moved: model };
+        if (taken === "none") return none;
       }
       return { ...none, candidates: offered(matches), unmatched: matches.length === 0 ? earlier : [] };
     } catch (error) {
       this.#onError(error);
       return none;
+    }
+  }
+
+  /**
+   * Moves the earlier review under the reviews lock: "none" when the file got a review or the earlier one went
+   * meanwhile, and "refused" when its model is back, the move was refused or the lock stayed busy.
+   */
+  async #takeEarlierReview(move: ReviewMove): Promise<"moved" | "none" | "refused"> {
+    let unlock: Unlock;
+    try {
+      unlock = await lockReviews(this.#platform, move.to);
+    } catch (error) {
+      if (!hasCode(error, "timeout")) this.#onError(error);
+      return "refused";
+    }
+    try {
+      if ((await this.#platform.stat(reviewFilePath(move.to))) !== null) return "none";
+      if (!(await reviewedModelGone(this.#platform, move.from, move.fromModel))) return "refused";
+      await moveReview(this.#platform, move);
+      return "moved";
+    } catch (error) {
+      if (hasCode(error, "not-found")) return "none";
+      if (!hasCode(error, "conflict") && !hasCode(error, "timeout")) this.#onError(error);
+      return "refused";
+    } finally {
+      await unlock();
     }
   }
 
@@ -664,15 +701,18 @@ export class ArcueCore {
         if ([...this.#assets.values()].some((open) => open.location.folder === earlier.folder)) {
           throw new ArcueError("conflict", `The review of ${basename(from)} is open in a tab.`);
         }
-        await asset.session.moveTo(asset.location, () =>
-          moveReview(this.#platform, {
+        await asset.session.moveTo(asset.location, async () => {
+          if (!(await reviewedModelGone(this.#platform, earlier, from))) {
+            throw new ArcueError("conflict", `${basename(from)} still exists, so its review stays with it.`);
+          }
+          await moveReview(this.#platform, {
             from: earlier,
             fromModel: from,
             to: asset.location,
             toModel: asset.path,
             replaceUntouched: true,
-          }),
-        );
+          });
+        });
       });
       asset.candidates = [];
       asset.earlier = [];
@@ -756,6 +796,22 @@ export class ArcueCore {
     for (const stop of asset.compositionWatchers.values()) stop();
     asset.compositionWatchers.clear();
     asset.cancelStabilityCheck();
+    asset.cancelRetry();
+  }
+
+  /**
+   * Runs background work again later, after it met a reviews lock another Arcue kept busy: after one second at first,
+   * then twice as long each time up to thirty seconds, until the asset closes. A later retry replaces an earlier one.
+   */
+  #retryLater(asset: OpenAsset, task: () => Promise<unknown>): void {
+    if (asset.closed) return;
+    asset.cancelRetry();
+    const delay = asset.retryDelayMs;
+    asset.retryDelayMs = Math.min(delay * 2, LAST_RETRY_MS);
+    asset.cancelRetry = this.#platform.clock.setTimer(delay, () => {
+      asset.cancelRetry = () => undefined;
+      void task().catch(() => undefined);
+    });
   }
 
   #fileChanged(asset: OpenAsset): void {
@@ -811,7 +867,11 @@ export class ArcueCore {
     for (const file of lost) asset.searched.add(file.path);
     const taken = new Set([asset.path, ...files.members.keys(), ...files.textures.map((texture) => texture.path)]);
     const relinked = this.#relinkLostFiles(asset, lost, taken).catch((error: unknown) => {
-      if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
+      if (hasCode(error, "timeout")) {
+        for (const file of lost) asset.searched.delete(file.path);
+      } else if (!hasCode(error, "conflict")) {
+        this.#onError(error);
+      }
     });
     void this.#track(relinked);
   }
@@ -850,7 +910,7 @@ export class ArcueCore {
    * The model stayed missing for `MISSING_MODEL_MS`, so an export did not replace it. When exactly one file in its
    * folder has the bytes of the version on screen or the model's Unity GUID, the asset follows that file; otherwise
    * the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a refused move are
-   * expected, so they only end the search.
+   * expected, so they only end the search. A reviews lock another Arcue kept busy makes it look again later.
    */
   async #modelGone(asset: OpenAsset): Promise<void> {
     try {
@@ -860,9 +920,11 @@ export class ArcueCore {
         return;
       }
     } catch (error) {
-      if (!(error instanceof ArcueError && (error.code === "conflict" || error.code === "not-found"))) {
-        this.#onError(error);
+      if (hasCode(error, "timeout")) {
+        this.#retryLater(asset, () => this.#track(this.#modelGone(asset)));
+        return;
       }
+      if (!hasCode(error, "conflict") && !hasCode(error, "not-found")) this.#onError(error);
     }
     if (asset.closed || asset.missing || (await this.#platform.exists(asset.path))) return;
     asset.missing = true;
@@ -970,7 +1032,28 @@ export class ArcueCore {
     return this.#track(asset.loads.run(() => this.#loadVersion(asset, force)));
   }
 
+  /**
+   * Reads and parses the asset's files and records the version, reading them again when they changed on disk before
+   * the version was recorded, so a version is never recorded for files that are gone. A version record that meets a
+   * reviews lock another Arcue kept busy leaves the asset as it is and tries again later.
+   */
   async #loadVersion(asset: OpenAsset, force: boolean): Promise<string> {
+    for (let pass = 1; ; pass++) {
+      const versionId = await this.#loadPass(asset, force);
+      if (versionId !== null) return versionId;
+      if (pass === VERSION_PASSES) {
+        const error = new ArcueError(
+          "conflict",
+          `${asset.name} keeps changing on disk; Arcue loads it once it settles.`,
+        );
+        this.#failed(asset, error);
+        throw error;
+      }
+    }
+  }
+
+  /** One read of the asset's files: the version on screen, or null when the files changed before it was recorded. */
+  async #loadPass(asset: OpenAsset, force: boolean): Promise<string | null> {
     if (asset.closed) throw new ArcueError("not-found", `${asset.name} is closed.`);
     let files: AssetFiles;
     try {
@@ -990,6 +1073,7 @@ export class ArcueCore {
     let versionId = this.#versionWithDependencies(asset, files);
     if (versionId === asset.version && !force) {
       this.#watchImportedFiles(asset, files);
+      asset.loadedStats = files.stats;
       if (asset.status !== "ready") {
         asset.status = "ready";
         asset.error = null;
@@ -1007,7 +1091,8 @@ export class ArcueCore {
       versionId = this.#versionWithDependencies(asset, files);
       this.#watchImportedFiles(asset, files);
       meshes = meshesOf(scene).map((entry) => ({ mesh: entry.path, topology: entry.mesh.topology }));
-      await asset.session.run((review) => {
+      const outcome = await asset.session.run(async (review) => {
+        if (!(await sameStats(this.#platform, files.stats))) return { next: null, result: "superseded" as const };
         const record: AssetVersion = {
           id: versionId,
           fileModifiedAt: new Date(files.model.modifiedMs).toISOString(),
@@ -1028,7 +1113,7 @@ export class ArcueCore {
             versions,
             comments: review.comments.map((comment) => reanchorer.reanchor(comment)),
           },
-          result: undefined,
+          result: "recorded" as const,
           apply: () => {
             asset.session.history.mapComments((comment) => reanchorer.reanchor(comment));
             asset.scene = scene;
@@ -1040,16 +1125,69 @@ export class ArcueCore {
             const kept = new Set([asset.path, ...files.members.keys()]);
             for (const path of asset.imported.keys()) if (!kept.has(path)) asset.imported.delete(path);
             asset.loadedFiles = kept;
+            asset.loadedStats = files.stats;
+            asset.retryDelayMs = FIRST_RETRY_MS;
           },
         };
       });
+      if (outcome === "superseded") return null;
     } catch (error) {
-      this.#failed(asset, error);
+      if (hasCode(error, "timeout")) {
+        this.#retryLater(asset, () => this.#load(asset, force));
+      } else {
+        this.#failed(asset, error);
+      }
       throw error;
     }
     this.registry.emit("asset.updated", { asset: asset.summary });
     this.#matchStructure(asset, meshes);
     return versionId;
+  }
+
+  /**
+   * Re-anchors the comments of a review another Arcue saved when it holds a pinned comment that is new or newly
+   * anchored, on another version than the one on screen, as when that Arcue still showed an older version.
+   */
+  #reanchorAdopted(asset: OpenAsset, review: ReviewFile, before: ReviewFile): void {
+    const version = asset.version;
+    if (asset.closed || version === null || asset.scene === null) return;
+    const earlier = new Map(before.comments.map((comment) => [comment.id, comment.anchorVersion]));
+    const stale = review.comments.some(
+      (comment) =>
+        comment.target !== null &&
+        comment.anchorVersion !== version &&
+        earlier.get(comment.id) !== comment.anchorVersion,
+    );
+    if (stale) void this.#track(asset.loads.run(() => this.#reanchorOnScreen(asset)));
+  }
+
+  /**
+   * Moves every comment's anchors onto the version on screen, while its files are still the ones it was read from;
+   * otherwise the load their change queued re-anchors them.
+   */
+  async #reanchorOnScreen(asset: OpenAsset): Promise<void> {
+    try {
+      await asset.session.run(async (review) => {
+        const { version, scene } = asset;
+        if (
+          asset.closed ||
+          version === null ||
+          scene === null ||
+          !(await sameStats(this.#platform, asset.loadedStats))
+        ) {
+          return { next: null, result: undefined };
+        }
+        const reanchorer = new Reanchorer(review.versions, version, scene);
+        return {
+          next: { ...review, comments: review.comments.map((comment) => reanchorer.reanchor(comment)) },
+          result: undefined,
+          apply: () => asset.session.history.mapComments((comment) => reanchorer.reanchor(comment)),
+        };
+      });
+    } catch (error) {
+      if (hasCode(error, "timeout")) this.#retryLater(asset, () => this.#load(asset, true));
+      else if (!asset.closed && !hasCode(error, "conflict")) this.#onError(error);
+    }
   }
 
   /** Parses one file of the asset, or takes the scene parsed from the same bytes before. */
@@ -1605,6 +1743,7 @@ export class ArcueCore {
   async #copyRound(assetId: string, author: Author | undefined): Promise<CommandOutput<"round.copy">> {
     const asset = this.#asset(assetId);
     const reviewFolder = asset.location.folder;
+    await this.#settings.reload();
     const { round, prompt } = await asset.session.run(async (review) => {
       const { scene, version } = asset.loaded();
       if (review.queue.length === 0) throw new ArcueError("conflict", "The queue has no comments to copy.");
@@ -1651,8 +1790,9 @@ export class ArcueCore {
       });
       const summary: RoundSummary = { number: round, createdAt: now, version, comments: [...review.queue] };
       if (author) summary.author = author;
+      const next: ReviewFile = { ...review, comments, queue: [], rounds: [...review.rounds, summary] };
       return {
-        next: { ...review, comments, queue: [], rounds: [...review.rounds, summary] },
+        next,
         result: { round, prompt },
         clearHistory: true,
         prepare: async () => {
@@ -1667,6 +1807,7 @@ export class ArcueCore {
           await writeReviewFile(this.#platform, asset.location, joinPath(folder, "prompt.md"), prompt);
         },
         rollback: () => removeReviewFile(this.#platform, asset.location, folder),
+        afterSave: () => this.#removeUnusedScreenshots(asset, next).catch((error: unknown) => this.#onError(error)),
       };
     });
     let copiedToClipboard = false;
@@ -1677,36 +1818,32 @@ export class ArcueCore {
       copiedToClipboard = false;
     }
     this.registry.emit("round.copied", { assetId: asset.id, round });
-    try {
-      await this.#removeUnusedScreenshots(asset);
-    } catch (error) {
-      this.#onError(error);
-    }
     return { round, prompt, copiedToClipboard };
   }
 
   /**
-   * Removes unsent screenshots that no comment uses and undo cannot bring back. It runs inside the asset's review
-   * changes, so no comment can be saving a screenshot meanwhile, and it removes only files named like screenshots.
+   * Removes unsent screenshots that no comment of the saved review uses and undo cannot bring back, and only files named
+   * like screenshots. Runs inside the round's save, under the reviews lock, so no core can be saving a screenshot
+   * meanwhile and nothing another core can undo still refers to one.
    */
-  #removeUnusedScreenshots(asset: OpenAsset): Promise<void> {
-    return asset.session.run(async (review) => {
-      const folder = joinPath(asset.location.folder, "screenshots");
-      await checkReviewPath(this.#platform, asset.location, folder);
-      const stat = await this.#platform.stat(folder);
-      if (stat?.kind !== "directory" || !(await insideWithoutLinks(this.#platform, asset.location.folder, folder))) {
-        return { next: null, result: undefined };
-      }
-      const kept = asset.session.history.screenshots();
-      for (const comment of review.comments) if (comment.context.screenshot) kept.add(comment.context.screenshot);
-      for (const entry of await this.#platform.list(folder)) {
-        if (entry.kind !== "file" || !UNSENT_SCREENSHOT_NAME.test(entry.name)) continue;
-        if (!kept.has(`screenshots/${entry.name}`))
-          await removeReviewFile(this.#platform, asset.location, joinPath(folder, entry.name));
-      }
-      return { next: null, result: undefined };
-    });
+  async #removeUnusedScreenshots(asset: OpenAsset, review: ReviewFile): Promise<void> {
+    const folder = joinPath(asset.location.folder, "screenshots");
+    await checkReviewPath(this.#platform, asset.location, folder);
+    const stat = await this.#platform.stat(folder);
+    if (stat?.kind !== "directory" || !(await insideWithoutLinks(this.#platform, asset.location.folder, folder)))
+      return;
+    const kept = asset.session.history.screenshots();
+    for (const comment of review.comments) if (comment.context.screenshot) kept.add(comment.context.screenshot);
+    for (const entry of await this.#platform.list(folder)) {
+      if (entry.kind !== "file" || !UNSENT_SCREENSHOT_NAME.test(entry.name)) continue;
+      if (!kept.has(`screenshots/${entry.name}`))
+        await removeReviewFile(this.#platform, asset.location, joinPath(folder, entry.name));
+    }
   }
+}
+
+function hasCode(error: unknown, code: ArcueError["code"]): boolean {
+  return error instanceof ArcueError && error.code === code;
 }
 
 function shownAs(place: Place): Shown {

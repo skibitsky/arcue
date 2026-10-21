@@ -1,9 +1,13 @@
+import type { ReviewFile } from "@arcue/protocol";
 import { REVIEW_FORMAT } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
+import { ManualClock } from "./manual-clock";
 import { MemoryPlatform } from "./memory-platform";
 import type { ComputeChange } from "./review-session";
 import { ReviewSession } from "./review-session";
+import type { ReviewLocation } from "./review-store";
 import { emptyReview, loadReview, reviewFilePath, serializeReview } from "./review-store";
+import { RecordingPlatform } from "./test-support";
 
 const location = {
   workspaceRoot: null,
@@ -147,5 +151,254 @@ describe("ReviewSession and the review format", () => {
     expect(saved).toMatchObject({ schemaVersion: 1, format: REVIEW_FORMAT, revision: 4, dismissedWarnings: ["a:b:c"] });
     expect(Object.keys(saved).slice(0, 2)).toEqual(["schemaVersion", "format"]);
     expect(session.review.format).toBe(REVIEW_FORMAT);
+  });
+});
+
+describe("ReviewSession and the reviews lock", () => {
+  const repository: ReviewLocation = {
+    workspaceRoot: "/work/game",
+    root: "/work/game/.arcue/reviews",
+    folder: "/work/game/.arcue/reviews/Hero.fbx",
+    assetPath: "Hero.fbx",
+  };
+  const MODEL = "/work/game/Hero.fbx";
+  const REVIEW = reviewFilePath(repository);
+  const dismiss = (review: ReviewFile) => ({ next: { ...review, dismissedWarnings: ["a:b:c"] }, result: "saved" });
+
+  async function lockedSession(
+    options: {
+      lockTimeoutMs?: number;
+      saved?: boolean;
+      adopted?: (review: ReviewFile, before: ReviewFile) => void;
+    } = {},
+  ) {
+    const clock = new ManualClock();
+    const platform = new RecordingPlatform({
+      files: { "/work/game/.git/HEAD": "ref", [MODEL]: "model" },
+      clock,
+      ...(options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs }),
+    });
+    const review = { ...emptyReview(repository.assetPath), revision: 3 };
+    const text = serializeReview(review);
+    if (options.saved !== false) await platform.writeFile(REVIEW, text);
+    const core = platform.forCore("core-1");
+    const loaded = { review, text: options.saved === false ? null : text };
+    const adopted = options.adopted ? { adopted: options.adopted } : {};
+    const session = new ReviewSession(core, repository, loaded, () => undefined, adopted);
+    const key = platform.lockKey("/work/game", "reviews");
+    const holds = () => platform.heldLocks().includes(key);
+    return { platform, clock, session, key, holds };
+  }
+
+  const ops = (platform: RecordingPlatform) =>
+    platform.log.filter((entry) => entry.actor === "core-1").map((entry) => entry.op);
+
+  it("takes the lock before the first read and lets go after the last write", async () => {
+    const { platform, session, key, holds } = await lockedSession();
+    const events: string[] = [];
+    platform.beforeRead = (path) => {
+      events.push(`read ${path === REVIEW ? "review" : path} ${holds()}`);
+    };
+    await session.run((review) => {
+      events.push(`compute ${holds()}`);
+      return dismiss(review);
+    });
+    expect(events).toEqual(["read review true", "compute true", "read review true"]);
+    expect(ops(platform)).toEqual(["lock", "writeAtomic", "unlock"]);
+    expect(platform.log.find((entry) => entry.op === "writeAtomic")).toMatchObject({ path: REVIEW, held: [key] });
+    expect(holds()).toBe(false);
+  });
+
+  it("lets go after a compute that throws, a failed save, a change that saves nothing and afterSave", async () => {
+    const { platform, session, holds } = await lockedSession();
+    await expect(
+      session.run(() => {
+        throw new Error("The compute failed.");
+      }),
+    ).rejects.toThrow("The compute failed.");
+    expect(holds()).toBe(false);
+
+    const rolledBack: string[] = [];
+    platform.fail = (operation, path) => operation === "write" && path === REVIEW;
+    await expect(
+      session.run((review) => ({
+        ...dismiss(review),
+        prepare: async () => undefined,
+        rollback: async () => {
+          rolledBack.push(`rollback ${holds()}`);
+        },
+      })),
+    ).rejects.toThrow(/refused/);
+    expect(rolledBack).toEqual(["rollback true"]);
+    expect(holds()).toBe(false);
+    platform.fail = null;
+
+    await expect(session.run(() => ({ next: null, result: "nothing" }))).resolves.toBe("nothing");
+    expect(holds()).toBe(false);
+
+    await expect(session.run((review) => ({ ...dismiss(review), afterSave: async () => undefined }))).resolves.toBe(
+      "saved",
+    );
+    expect(holds()).toBe(false);
+    expect(ops(platform).filter((op) => op === "lock")).toHaveLength(4);
+    expect(ops(platform).filter((op) => op === "unlock")).toHaveLength(4);
+  });
+
+  it("runs afterSave once the review is saved and before it lets go, and only when it saves", async () => {
+    const { platform, session, holds } = await lockedSession();
+    const events: string[] = [];
+    platform.beforeWrite = (path) => {
+      events.push(`write ${path === REVIEW ? "review" : path}`);
+    };
+    const afterSave = async () => {
+      events.push(`afterSave ${holds()}`);
+    };
+    await session.run((review) => ({ ...dismiss(review), afterSave }));
+    expect(events).toEqual(["write review", "afterSave true"]);
+
+    events.length = 0;
+    await session.run((review) => ({ next: { ...review }, result: undefined, afterSave }));
+    await session.run(() => ({ next: null, result: undefined, afterSave }));
+    expect(events).toEqual([]);
+  });
+
+  it("still saves and lets go when afterSave throws", async () => {
+    const { session, holds } = await lockedSession();
+    await expect(
+      session.run((review) => ({
+        ...dismiss(review),
+        afterSave: () => Promise.reject(new Error("The cleanup failed.")),
+      })),
+    ).resolves.toBe("saved");
+    expect(session.review.revision).toBe(4);
+    expect(holds()).toBe(false);
+  });
+
+  const movedAway = {
+    code: "conflict",
+    message:
+      "Hero.fbx and its review are gone from disk, so the change was not saved. If the model was renamed, Arcue follows it in a moment; otherwise open the model at its new path.",
+  };
+
+  it("refuses to recreate review.json while the model is gone, and recreates it while the model is there", async () => {
+    const { platform, session, holds } = await lockedSession();
+    await platform.rename(MODEL, "/work/game/Striker.fbx");
+    await platform.remove("/work/game/.arcue");
+    await session.refresh();
+    await expect(session.run(dismiss)).rejects.toMatchObject(movedAway);
+    await expect(platform.exists("/work/game/.arcue")).resolves.toBe(false);
+    expect(holds()).toBe(false);
+
+    await platform.rename("/work/game/Striker.fbx", MODEL);
+    const writes = platform.writes.length;
+    await expect(session.run(dismiss)).resolves.toBe("saved");
+    expect(platform.writes.slice(writes).map((write) => write.path)).toEqual(["/work/game/.arcue/.gitignore", REVIEW]);
+  });
+
+  it("refuses while an exporter has removed the model and the review is gone, and saves once the model is back", async () => {
+    const { platform, session } = await lockedSession();
+    await platform.remove(MODEL);
+    await platform.remove(REVIEW);
+    await expect(session.run(dismiss)).rejects.toMatchObject(movedAway);
+    await platform.writeFile(MODEL, "model again");
+    await expect(session.run(dismiss)).resolves.toBe("saved");
+    await expect(platform.exists(REVIEW)).resolves.toBe(true);
+  });
+
+  it("refuses for a session that never saw review.json once the model is gone", async () => {
+    const { platform, session } = await lockedSession({ saved: false });
+    await platform.remove(MODEL);
+    await expect(session.run(dismiss)).rejects.toMatchObject(movedAway);
+    await expect(platform.exists(REVIEW)).resolves.toBe(false);
+  });
+
+  it("fails only the change whose lock another holder keeps too long", async () => {
+    const { platform, clock, session, key, holds } = await lockedSession({ lockTimeoutMs: 15_000 });
+    const unlock = await platform.lock("/work/game", "reviews");
+    const waiting = session.run(dismiss).catch((error: unknown) => error);
+    const queued = session.run(dismiss);
+    while (platform.lockWaiters(key) === 0) await Promise.resolve();
+    clock.advance(15_000);
+    await expect(waiting).resolves.toMatchObject({ code: "timeout" });
+    await unlock();
+    await expect(queued).resolves.toBe("saved");
+    expect(session.review.revision).toBe(4);
+    expect(holds()).toBe(false);
+  });
+
+  it("refuses a change whose lock the host cannot create, and writes nothing", async () => {
+    const { platform, session } = await lockedSession();
+    const before = await platform.readText(REVIEW);
+    platform.fail = (operation) => operation === "lock";
+    await expect(session.run(dismiss)).rejects.toMatchObject({ code: "forbidden" });
+    platform.fail = null;
+    await expect(platform.readText(REVIEW)).resolves.toBe(before);
+    await expect(session.run(dismiss)).resolves.toBe("saved");
+  });
+
+  it("holds the lock around a move, and refuses a move to another reviews root without taking it", async () => {
+    const { platform, session, holds } = await lockedSession();
+    const striker = { ...repository, folder: "/work/game/.arcue/reviews/Striker.fbx", assetPath: "Striker.fbx" };
+    const during: boolean[] = [];
+    await session.moveTo(striker, async () => {
+      during.push(holds());
+      await platform.rename(repository.folder, striker.folder);
+    });
+    expect(during).toEqual([true]);
+    expect(holds()).toBe(false);
+
+    const locks = platform.log.filter((entry) => entry.op === "lock").length;
+    const elsewhere = {
+      workspaceRoot: "/work/other",
+      root: "/work/other/.arcue/reviews",
+      folder: "/work/other/.arcue/reviews/Hero.fbx",
+      assetPath: "Hero.fbx",
+    };
+    await expect(session.moveTo(elsewhere, async () => undefined)).rejects.toMatchObject({ code: "internal" });
+    expect(platform.log.filter((entry) => entry.op === "lock")).toHaveLength(locks);
+  });
+
+  it("holds the lock around a composition write in a compute that saves no review", async () => {
+    const { platform, session } = await lockedSession();
+    const composition = `${repository.folder}/composition.json`;
+    await session.run(async () => {
+      await platform.forCore("core-1").writeFileAtomic(composition, "{}");
+      return { next: null, result: undefined };
+    });
+    expect(platform.log.filter((entry) => entry.actor === "core-1").map(({ op, path }) => `${op} ${path}`)).toEqual([
+      "lock /work/game\nreviews",
+      `writeAtomic ${composition}`,
+      "unlock /work/game\nreviews",
+    ]);
+  });
+
+  it("keeps the lock while it starts over after outside writes, and lets go when it gives up", async () => {
+    const { platform, session, holds } = await lockedSession();
+    let writes = 0;
+    const computes: boolean[] = [];
+    await expect(
+      session.run(async (review) => {
+        computes.push(holds());
+        writes++;
+        await platform.writeFile(REVIEW, serializeReview({ ...review, revision: 10 + writes }));
+        return dismiss(review);
+      }),
+    ).rejects.toMatchObject({ code: "conflict", message: "review.json keeps changing on disk; try again." });
+    expect(computes).toEqual([true, true, true]);
+    expect(holds()).toBe(false);
+  });
+
+  it("tells about reviews another program saved, never about its own saves", async () => {
+    const adopted: [number, number][] = [];
+    const { platform, session } = await lockedSession({
+      adopted: (review, before) => adopted.push([review.revision, before.revision]),
+    });
+    await session.run(dismiss);
+    expect(adopted).toEqual([]);
+    await platform.writeFile(REVIEW, serializeReview({ ...emptyReview(repository.assetPath), revision: 9 }));
+    await session.refresh();
+    expect(adopted).toEqual([[9, 4]]);
+    await session.run(dismiss);
+    expect(adopted).toEqual([[9, 4]]);
   });
 });

@@ -1,6 +1,7 @@
 import type { AssetStatus, AssetSummary, Comment, ReviewCandidate, ReviewFile, ViewState } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
+import type { FileStats } from "./composition-load";
 import type { ImportFiles } from "./import-files";
 import { basename, dirname } from "./paths";
 import type { EarlierReview } from "./relink";
@@ -8,6 +9,12 @@ import type { ReviewSession } from "./review-session";
 import type { ReviewLocation } from "./review-store";
 import { compositionFilePath } from "./review-store";
 import { Serial } from "./serial";
+
+/** How long background work that met a held reviews lock waits before its first retry. */
+export const FIRST_RETRY_MS = 1000;
+
+/** The longest wait between two retries. */
+export const LAST_RETRY_MS = 30_000;
 
 /** Where to show an asset in its tab, as `asset.open` asks. */
 export interface ShowAt {
@@ -67,6 +74,12 @@ export class OpenAsset {
   readonly imported = new Map<string, { id: string; scene: SceneDescription; files: ImportFiles }>();
   /** The model and the files of its composition, by path, as the version on screen loaded them. */
   loadedFiles: ReadonlySet<string> = new Set();
+  /** The sizes and modification times of the files the version on screen was read from, by path. */
+  loadedStats: FileStats = new Map();
+  /** Cancels the retry of background work that met a held reviews lock. */
+  cancelRetry: () => void = () => undefined;
+  /** How long until that work is tried again, doubling with each try. */
+  retryDelayMs = FIRST_RETRY_MS;
   /** The file `composition.fileRoles` read last, whose parse stays until the next question so adding it reads it once. */
   asked: string | null = null;
   /** Serializes edits of the composition file. */

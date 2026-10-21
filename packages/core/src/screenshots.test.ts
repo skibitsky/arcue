@@ -166,7 +166,7 @@ describe("screenshots named by a hand-edited review.json", () => {
   it("cleans up only plain files named like screenshots", async () => {
     const test = await startTestCore({ ...heroFiles(), "/outside/c9.png": "outside" });
     const assetId = await openAsset(test);
-    await test.core.client.execute("comment.create", pinComment(assetId));
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
     await test.platform.writeFile(`${HERO_REVIEW}/screenshots/c8.png`, "orphan");
     await test.platform.writeFile(`${HERO_REVIEW}/screenshots/${RANDOM_ID}-2.png`, "orphan");
     await test.platform.writeFile(`${HERO_REVIEW}/screenshots/${RANDOM_ID.toUpperCase()}.png`, "not ours");
@@ -181,5 +181,12 @@ describe("screenshots named by a hand-edited review.json", () => {
       { name: "notes.txt", kind: "file" },
     ]);
     await expect(test.platform.readText("/outside/c9.png")).resolves.toBe("outside");
+    const removals = test.platform.log.filter((entry) => entry.op === "remove");
+    expect(removals.map((entry) => entry.path).sort()).toEqual(
+      [`${commentId}.png`, `${RANDOM_ID}-2.png`, "c8.png"].map((name) => `${HERO_REVIEW}/screenshots/${name}`),
+    );
+    for (const removal of removals) {
+      expect(removal).toMatchObject({ actor: "core-1", held: [test.platform.lockKey("/work/game", "reviews")] });
+    }
   });
 });
