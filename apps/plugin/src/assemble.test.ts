@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,6 +114,7 @@ describe("assemblePlugin", () => {
       "arcue.js",
       "import-worker.js",
       "node-sha256sums.txt",
+      "package.json",
       "web",
     ]);
     expect((await readdir(join(copied, "scripts", "web"), { recursive: true })).sort()).toEqual([
@@ -131,6 +133,18 @@ describe("assemblePlugin", () => {
         ".gitattributes",
       ]),
     );
+  });
+
+  it("has Node load the command line as ES modules under a parent folder's CommonJS package.json", async () => {
+    await writeFile(join(cli, "arcue.js"), 'import { argv } from "node:process";\nconsole.log(argv.length);\n');
+    await writeFile(join(temp, "package.json"), '{ "type": "commonjs" }\n');
+    await assemblePlugin(sources(), out);
+
+    const scripts = join(out, PLUGIN_PATH, "skills", PLUGIN.name, "scripts");
+    expect(await readJson(join(scripts, "package.json"))).toEqual({ type: "module" });
+    const result = spawnSync(process.execPath, [join(scripts, "arcue.js")], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
   });
 
   it("ships the shell launcher executable with LF endings and the Windows launchers with CRLF", async () => {
@@ -208,8 +222,8 @@ describe("assemblePlugin", () => {
     await expect(assemblePlugin({ ...sources(), launcher: copy }, out)).rejects.toThrow("arcue-node.cmd must be ASCII");
   });
 
-  it("refuses a command line build that holds a file named like a launcher or node", async () => {
-    for (const name of ["arcue", "node", "node.exe"]) {
+  it("refuses a command line build that holds a file named like a launcher, package.json or node", async () => {
+    for (const name of ["arcue", "package.json", "node", "node.exe"]) {
       await writeFile(join(cli, name), "");
 
       await expect(assemblePlugin(sources(), out), name).rejects.toThrow(

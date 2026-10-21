@@ -8,10 +8,12 @@ license: MIT
 
 ## The arcue command
 
-In bash, zsh or Git Bash, use `arcue` when it is on PATH. Otherwise, and always in PowerShell, run the launcher in this skill's `scripts` folder in its place:
+When this skill has a `scripts` folder, as it does in the plugin, run the launcher there, which matches this skill's version:
 
 - bash, zsh or Git Bash: `sh "<this skill's folder>/scripts/arcue" <arguments>`
 - PowerShell: `& (& "<this skill's folder>\scripts\arcue-node.cmd") "<this skill's folder>\scripts\arcue.js" <arguments>`. Never give a `.cmd` file arguments: cmd.exe would run a `|` or `&` in them as a command.
+
+Otherwise use the desktop app's own command: `arcue` when it is on PATH, where the app installs it, and in PowerShell only when `(Get-Command arcue).Source` ends in `arcue.exe`. When PATH does not have it yet, use `/Applications/Arcue.app/Contents/Resources/bin/arcue <arguments>` on macOS, and on Windows `"$LOCALAPPDATA/Programs/Arcue/bin/arcue.exe" <arguments>` in Git Bash or `& "$env:LOCALAPPDATA\Programs\Arcue\bin\arcue.exe" <arguments>` in PowerShell. When there is none of these, ask the user to install the desktop app as https://github.com/skibitsky/arcue/blob/main/INSTALL.md#desktop-app describes.
 
 The launcher runs Arcue on Node 24 or later from PATH, or on the Node that setup downloaded. When it says Arcue needs Node 24 or later, ask the user before you run `arcue setup` through it, which in PowerShell is `& "<this skill's folder>\scripts\arcue-setup.cmd"`. Setup downloads Node from nodejs.org once, about 30 MB; it needs network access, so allow it in a sandbox, and can take a few minutes.
 
@@ -32,7 +34,7 @@ Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 
 A model shows in one view at a time. When `arcue open` says another session's view has it, add `--move` only if the user wants it here.
 
-Without a built-in browser, `arcue open` starts the desktop app. If it says Arcue has not been started on this computer yet, run `arcue serve` and give the user the address to open.
+Without a built-in browser, `arcue open` starts the desktop app. When it says Arcue has not been started on this computer yet, or is no longer where it was, and the desktop app is installed, run the same `arcue open` once with the app's own command, above, which starts it. Otherwise, when it says to run `arcue serve`, do that and give the user the address to open.
 
 Name a clip as the file does, from `inspect` or `time.clip`: `--clip 'Armature|Walk'` for an FBX take, `--clip 'Walk'` for the action `Walk` in a .blend. The name comes from the file, so keep it literal: in single quotes, with each `'` in it written as `'\''` in sh, or in PowerShell with each `'`, `‘`, `’`, `‚` and `‛` doubled. Quote file paths the same way. Any other name, such as the display name `Walk` of `Armature|Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
 

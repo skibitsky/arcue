@@ -57,7 +57,7 @@ export function crlf(text: string): string {
  * Replaces `out` with a marketplace that lists the plugin, and the plugin itself. Claude Code and Codex both read
  * `.claude-plugin/marketplace.json`, and each reads its own plugin manifest. The command line goes into the skill's
  * `scripts` folder, where the skill looks for it, with its launchers and the page `arcue serve` serves in its `web`
- * folder.
+ * folder. A `package.json` there has Node load it as ES modules, whatever `type` a parent folder's `package.json` sets.
  */
 export async function assemblePlugin(sources: PluginSources, out: string): Promise<void> {
   await access(join(sources.cliBuild, "arcue.js")).catch(() => {
@@ -75,7 +75,7 @@ export async function assemblePlugin(sources: PluginSources, out: string): Promi
   if (/[^\p{ASCII}]/u.test(launchers.get("arcue-node.cmd") ?? "")) {
     throw new Error("arcue-node.cmd must be ASCII: cmd.exe reads it in the console's code page.");
   }
-  const forbidden = new Set<string>([...LAUNCHER_FILES.map((file) => file.name), "node", "node.exe"]);
+  const forbidden = new Set<string>([...LAUNCHER_FILES.map((file) => file.name), "package.json", "node", "node.exe"]);
   for (const name of await readdir(sources.cliBuild)) {
     if (forbidden.has(name)) {
       throw new Error(`${sources.cliBuild} has ${name}, which the plugin's scripts folder must not hold.`);
@@ -89,6 +89,7 @@ export async function assemblePlugin(sources: PluginSources, out: string): Promi
   await writeJson(join(plugin, ".codex-plugin", "plugin.json"), codexManifest());
   await cp(sources.skill, skill, { recursive: true, dereference: true });
   await cp(sources.cliBuild, join(skill, "scripts"), { recursive: true, dereference: true });
+  await writeJson(join(skill, "scripts", "package.json"), { type: "module" });
   for (const file of LAUNCHER_FILES) {
     const text = launchers.get(file.source) ?? "";
     const path = join(skill, "scripts", file.name);

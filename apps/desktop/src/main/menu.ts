@@ -1,5 +1,6 @@
 import type { MenuItemConstructorOptions } from "electron";
 import { app, Menu } from "electron";
+import { installCommand } from "./install-command";
 import type { WindowManager } from "./windows";
 
 /**
@@ -17,6 +18,12 @@ export function installMenu(windows: WindowManager): void {
             role: "appMenu" as const,
             submenu: [
               { role: "about" as const },
+              ...(developer
+                ? []
+                : [
+                    { type: "separator" as const },
+                    { id: "install-command", label: "Install arcue Command…", click: () => void installCommand() },
+                  ]),
               { type: "separator" as const },
               { role: "services" as const },
               { type: "separator" as const },

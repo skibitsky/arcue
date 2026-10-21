@@ -1,0 +1,546 @@
+name: Release
+
+# Builds the desktop app, with the arcue command, for macOS, Windows and Linux on Arm and x64. Windows and Linux build
+# on a runner of each architecture. Both macOS apps build on Apple silicon, as pnpm has no Intel macOS build, and the
+# Intel app runs there under Rosetta. Each job installs what it built, checks that arcue runs from PATH on the app's
+# own Node and opens models in the app, and uninstalls it again. A tag v<version> on a commit on main, where <version>
+# is the version in apps/desktop/package.json, then publishes a GitHub release with the installers, SHA256SUMS.txt and
+# build provenance attestations. Pull requests that change the packaging, and manual runs, build unsigned and keep the
+# installers as workflow artifacts instead.
+#
+# Only a tag push signs. Its builds run in the release environment, which holds the signing secrets and variables and
+# which only v* tags can deploy from. A tag runs its own commit's workflow with them, so only the maintainer may push
+# v* tags or approve their runs, as CONTRIBUTING.md describes. A platform signs with all of its values, builds unsigned
+# with none, and fails with only some:
+# - macOS: MACOS_CERTIFICATE, a base64 .p12 of a Developer ID Application certificate, and MACOS_CERTIFICATE_PASSWORD
+#   sign the app and its disk image, and APPLE_API_KEY, the text of an App Store Connect API key's .p8 file, with
+#   APPLE_API_KEY_ID and APPLE_API_ISSUER, notarizes both. Without them the app is signed ad hoc.
+# - Windows: the AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET secrets of an app registration, with the
+#   variables ARTIFACT_SIGNING_ENDPOINT, ARTIFACT_SIGNING_ACCOUNT and ARTIFACT_SIGNING_PROFILE, sign the app and its
+#   setup program with Azure Artifact Signing.
+# - Linux packages are not signed. The checksums and attestations cover every platform's files.
+# Each macOS and Windows build checks and records how its app is signed, and the release notes say what they found.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - apps/cli/**
+      - assets/branding/**
+      - pnpm-workspace.yaml
+      - pnpm-lock.yaml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build for ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: mac-arm64, platform: darwin, arch: arm64, runner: macos-latest }
+          - { target: mac-x64, platform: darwin, arch: x64, runner: macos-latest }
+          - { target: win-x64, platform: win32, arch: x64, runner: windows-latest }
+          - { target: win-arm64, platform: win32, arch: arm64, runner: windows-11-arm }
+          - { target: linux-x64, platform: linux, arch: x64, runner: ubuntu-latest }
+          - { target: linux-arm64, platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
+    environment: ${{ github.event_name == 'push' && github.ref_type == 'tag' && 'release' || '' }}
+    env:
+      TARGET: ${{ matrix.target }}
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+      SIGN: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: ${{ env.SIGN != 'true' && 'pnpm' || '' }}
+      - name: Check that the tag names the app's version and is on main
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node apps/desktop/scripts/version.ts "$GITHUB_REF_NAME"
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
+          if [ "$status" != identical ] && [ "$status" != behind ]; then
+            echo "::error::The tag $GITHUB_REF_NAME is on a commit that is not on main."
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+
+      - name: Note that only a tag push signs
+        if: env.SIGN != 'true' && runner.os != 'Linux'
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            echo "::notice::Signing the macOS app ad hoc, without notarizing it: only a tag push signs."
+          else
+            echo "::notice::Not signing the Windows app: only a tag push signs."
+          fi
+      - name: Set up macOS signing
+        if: runner.os == 'macOS' && env.SIGN == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          names=(MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER)
+          missing=()
+          for name in "${names[@]}"; do [ -n "${!name}" ] || missing+=("$name"); done
+          if [ "${#missing[@]}" = "${#names[@]}" ]; then
+            echo "::notice::Signing the macOS app ad hoc, without notarizing it: its signing secrets are not set."
+            exit 0
+          fi
+          if [ "${#missing[@]}" != 0 ]; then
+            echo "::error::Set all of the macOS signing secrets or none. Not set: ${missing[*]}."
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -base64 32)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -x
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          existing=$(security list-keychains -d user | tr -d '"' | xargs)
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$keychain" $existing
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -n 1)
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERTIFICATE holds no Developer ID Application identity."
+            exit 1
+          fi
+          printf '%s\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          {
+            echo "ARCUE_MACOS_IDENTITY=$identity"
+            echo "ARCUE_MACOS_KEYCHAIN=$keychain"
+            echo "ARCUE_APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8"
+            echo "ARCUE_APPLE_API_KEY_ID=$APPLE_API_KEY_ID"
+            echo "ARCUE_APPLE_API_ISSUER=$APPLE_API_ISSUER"
+          } >> "$GITHUB_ENV"
+
+      - name: Package the app with its arcue command
+        run: pnpm --filter @arcue/desktop package "$PLATFORM" "$ARCH"
+
+      - name: Check for Windows signing
+        id: windows-signing
+        if: runner.os == 'Windows' && env.SIGN == 'true'
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          names=(AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET ARTIFACT_SIGNING_ENDPOINT ARTIFACT_SIGNING_ACCOUNT ARTIFACT_SIGNING_PROFILE)
+          missing=()
+          for name in "${names[@]}"; do [ -n "${!name}" ] || missing+=("$name"); done
+          if [ "${#missing[@]}" = "${#names[@]}" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not signing the Windows app: its signing secrets and variables are not set."
+            exit 0
+          fi
+          if [ "${#missing[@]}" != 0 ]; then
+            echo "::error::Set all of the Windows signing secrets and variables or none. Not set: ${missing[*]}."
+            exit 1
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+      - name: Sign the Windows app
+        if: steps.windows-signing.outputs.present == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\apps\desktop\out\Arcue-win32-${{ matrix.arch }}
+          files-folder-filter: exe,dll,node
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          cache-dependencies: false
+
+      - name: Make the installers
+        run: pnpm --filter @arcue/desktop make "$PLATFORM" "$ARCH"
+
+      - name: Sign the Windows setup program
+        if: steps.windows-signing.outputs.present == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\apps\desktop\out\make
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          cache-dependencies: false
+      - name: Check and record the Windows signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIGNED: ${{ steps.windows-signing.outputs.present }}
+        run: |
+          $state = 'unsigned'
+          if ($env:SIGNED -eq 'true') {
+            $app = "apps/desktop/out/Arcue-win32-$env:ARCH"
+            $files = @("$app/Arcue.exe", "$app/bin/arcue.exe") + (Get-ChildItem apps/desktop/out/make/*-setup.exe).FullName
+            foreach ($file in $files) {
+              $signature = Get-AuthenticodeSignature -LiteralPath $file
+              if ($signature.Status -ne 'Valid') { throw "$file is not validly signed: $($signature.Status). $($signature.StatusMessage)" }
+            }
+            $state = 'signed'
+          }
+          $folder = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'signing')).FullName
+          Set-Content -LiteralPath (Join-Path $folder $env:TARGET) -Value $state -NoNewline
+
+      - name: Install from the disk image and run arcue through a link on PATH
+        if: runner.os == 'macOS'
+        run: |
+          image=$(echo apps/desktop/out/make/*.dmg)
+          mount=$(mktemp -d)
+          hdiutil attach "$image" -nobrowse -readonly -mountpoint "$mount"
+          mkdir -p "$RUNNER_TEMP/Applications" "$RUNNER_TEMP/bin"
+          ditto "$mount/Arcue.app" "$RUNNER_TEMP/Applications/Arcue.app"
+          hdiutil detach "$mount"
+          app="$RUNNER_TEMP/Applications/Arcue.app"
+          if [ "$ARCH" = x64 ]; then want=x86_64; else want=arm64; fi
+          [ "$(lipo -archs "$app/Contents/MacOS/Arcue")" = "$want" ]
+          codesign --verify --deep --strict "$app"
+          signature=$(codesign -dv --verbose=2 "$app" 2>&1)
+          if ! grep -q '^Authority=Developer ID Application: ' <<< "$signature"; then
+            state="ad hoc"
+          elif xcrun stapler validate "$app" && xcrun stapler validate "$image"; then
+            state=notarized
+            spctl --assess --type execute "$app"
+          else
+            state=signed
+          fi
+          if [ -n "${ARCUE_MACOS_IDENTITY:-}" ] && [ "$state" != notarized ]; then
+            echo "::error::The macOS app should be notarized, but codesign and stapler find it $state."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/signing"
+          echo "$state" > "$RUNNER_TEMP/signing/$TARGET"
+          ln -s "$app/Contents/Resources/bin/arcue" "$RUNNER_TEMP/bin/arcue"
+          PATH="$RUNNER_TEMP/bin:$PATH" node apps/desktop/scripts/smoke.ts arcue "$app/Contents/MacOS/Arcue"
+
+      - name: Install with the setup program and run arcue from PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem apps/desktop/out/make/*-setup.exe).FullName
+          $log = Join-Path $env:RUNNER_TEMP 'setup.log'
+          $installer = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { Get-Content $log; throw "The setup program exited with $($installer.ExitCode)." }
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Arcue'
+          $bin = Join-Path $app 'bin'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not (($userPath -split ';') -contains $bin)) { throw "Setup did not add $bin to the user's PATH: $userPath" }
+          $env:Path = "$userPath;$env:Path"
+          $found = (Get-Command arcue).Source
+          if ($found -ne (Join-Path $bin 'arcue.exe')) { throw "arcue on PATH is $found." }
+          arcue help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "arcue help exited with $LASTEXITCODE in PowerShell 7." }
+          powershell.exe -NoProfile -NonInteractive -Command 'arcue help | Out-Null; exit $LASTEXITCODE'
+          if ($LASTEXITCODE -ne 0) { throw "arcue help exited with $LASTEXITCODE in Windows PowerShell." }
+          node apps/desktop/scripts/smoke.ts arcue (Join-Path $app 'Arcue.exe')
+          if ($LASTEXITCODE -ne 0) { throw "The smoke test failed." }
+      - name: Upgrade and uninstall while the app and arcue serve run
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem apps/desktop/out/make/*-setup.exe).FullName
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Arcue'
+          $bin = Join-Path $app 'bin'
+          $env:Path = "$([Environment]::GetEnvironmentVariable('Path', 'User'));$env:Path"
+          $windowData = Join-Path $env:RUNNER_TEMP 'arcue-window'
+          $serveData = Join-Path $env:RUNNER_TEMP 'arcue-serve'
+          $started = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+          function Wait-Running($process, [string] $userData) {
+            $env:ARCUE_USER_DATA = $userData
+            $deadline = (Get-Date).AddMinutes(2)
+            while ($true) {
+              $status = arcue status
+              if ($LASTEXITCODE -eq 0) { return }
+              if ($process.HasExited) { throw "Process $($process.Id) exited with $($process.ExitCode) before Arcue ran." }
+              if ((Get-Date) -gt $deadline) { throw "Arcue did not start with ${userData}: $status" }
+              Start-Sleep -Seconds 1
+            }
+          }
+          function Start-Window {
+            $env:ARCUE_USER_DATA = $windowData
+            $window = Start-Process -FilePath (Join-Path $app 'Arcue.exe') -PassThru
+            $started.Add($window)
+            Wait-Running $window $windowData
+          }
+          # Like an agent's, this arcue serve runs in a console that it does not own, so it has no window to close.
+          function Start-Server {
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $listener.Start()
+            $port = $listener.LocalEndpoint.Port
+            $listener.Stop()
+            $env:ARCUE_USER_DATA = $serveData
+            $output = Join-Path $env:RUNNER_TEMP "arcue-serve-$port"
+            $server = Start-Process -FilePath (Join-Path $bin 'arcue.exe') -ArgumentList 'serve', '--port', $port -NoNewWindow -RedirectStandardOutput "$output.out" -RedirectStandardError "$output.err" -PassThru
+            $started.Add($server)
+            Wait-Running $server $serveData
+            Remove-Item Env:ARCUE_USER_DATA
+          }
+          function Assert-Closed([string] $by, [string] $log) {
+            $left = @($started | Where-Object { -not $_.HasExited } | ForEach-Object { $_.Id })
+            $left += @(Get-CimInstance Win32_Process -Filter "Name = 'arcue.exe'" | Where-Object { $_.ExecutablePath -like "$app\*" } | ForEach-Object { $_.ProcessId })
+            if ($left) { Get-Content $log; throw "$by left Arcue running: process $(($left | Sort-Object -Unique) -join ', ')." }
+            $taskkills = @(Select-String -LiteralPath $log -Pattern '^(\S+ \S+) +Running taskkill (/F)?' | ForEach-Object {
+              $at = [datetime]::ParseExact($_.Matches[0].Groups[1].Value, 'yyyy-MM-dd HH:mm:ss.fff', [cultureinfo]::InvariantCulture)
+              [pscustomobject]@{ At = $at; Forced = $_.Matches[0].Groups[2].Success }
+            })
+            if ($taskkills.Count -eq 0 -or $taskkills[0].Forced) { Get-Content $log; throw "$by did not ask Arcue to close." }
+            $ended = @($taskkills | Where-Object Forced)
+            $waited = if ($ended) { ($ended[0].At - $taskkills[0].At).TotalSeconds } else { 0 }
+            if ($waited -ge 10) { Get-Content $log; throw "$by waited $waited s before it ended Arcue. It should wait only for the window: arcue serve has none to close." }
+          }
+          try {
+            Start-Window
+            Start-Server
+            $stale = Join-Path $app 'resources\cli\stale.js'
+            Set-Content -LiteralPath $stale -Value ''
+            $log = Join-Path $env:RUNNER_TEMP 'upgrade.log'
+            $installer = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log" -Wait -PassThru
+            if ($installer.ExitCode -ne 0) { Get-Content $log; throw "The setup program exited with $($installer.ExitCode) while Arcue ran." }
+            Assert-Closed 'The setup program' $log
+            foreach ($file in 'Arcue.exe', 'bin\arcue.exe') { if (-not (Test-Path (Join-Path $app $file))) { throw "The upgrade left no $file." } }
+            if (Test-Path $stale) { throw "The upgrade left $stale." }
+            $entries = @(([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -eq $bin)
+            if ($entries.Count -ne 1) { throw "The user's PATH holds $bin $($entries.Count) times." }
+            arcue help | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "arcue help exited with $LASTEXITCODE after the upgrade." }
+
+            Start-Window
+            Start-Server
+            $log = Join-Path $env:RUNNER_TEMP 'uninstall.log'
+            $uninstaller = Start-Process -FilePath (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log" -Wait -PassThru
+            if ($uninstaller.ExitCode -ne 0) { Get-Content $log; throw "The uninstaller exited with $($uninstaller.ExitCode) while Arcue ran." }
+            $deadline = (Get-Date).AddMinutes(2)
+            $onPath = { ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -contains $bin }
+            while (((Test-Path $app) -or (& $onPath)) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+            if (Test-Path $app) { Get-Content $log; Get-ChildItem -Recurse -Name $app; throw "The uninstaller left $app." }
+            if (& $onPath) { throw "The uninstaller left $bin on the user's PATH." }
+            Assert-Closed 'The uninstaller' $log
+          } finally {
+            $started | Where-Object { -not $_.HasExited } | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+      - name: Install and upgrade in a folder that holds other programs, and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem apps/desktop/out/make/*-setup.exe).FullName
+          $folder = Join-Path $env:RUNNER_TEMP 'Tools'
+          $bin = Join-Path $folder 'bin'
+          $kept = (Join-Path $bin 'keep.txt'), (Join-Path $folder 'resources\keep.txt')
+          foreach ($file in $kept) {
+            New-Item -ItemType Directory -Force (Split-Path $file) | Out-Null
+            Set-Content -LiteralPath $file -Value 'kept'
+          }
+          $other = Join-Path $folder 'other\node.exe'
+          New-Item -ItemType Directory -Force (Split-Path $other) | Out-Null
+          Copy-Item -LiteralPath (Get-Command node).Source -Destination $other
+          $program = Start-Process -FilePath $other -ArgumentList '-e', 'setTimeout(()=>{},600000)' -WindowStyle Hidden -PassThru
+          function Assert-Kept([string] $by, [string] $log) {
+            foreach ($file in $kept) { if (-not (Test-Path $file)) { Get-Content $log; throw "$by deleted $file." } }
+            if ($program.HasExited) { Get-Content $log; throw "$by ended $other, which is not Arcue's." }
+          }
+          try {
+            Start-Sleep -Seconds 1
+            if ($program.HasExited) { throw "$other exited with $($program.ExitCode) as it started." }
+            foreach ($run in 'install', 'upgrade') {
+              $log = Join-Path $env:RUNNER_TEMP "setup-folder-$run.log"
+              $installer = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$folder`"", "/LOG=$log" -Wait -PassThru
+              if ($installer.ExitCode -ne 0) { Get-Content $log; throw "The setup program's $run exited with $($installer.ExitCode)." }
+              if (-not (Test-Path (Join-Path $folder 'Arcue.exe'))) { Get-Content $log; throw "The setup program's $run left no Arcue in $folder." }
+              Assert-Kept "The setup program's $run" $log
+            }
+            $log = Join-Path $env:RUNNER_TEMP 'uninstall-folder.log'
+            $uninstaller = Start-Process -FilePath (Join-Path $folder 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log" -Wait -PassThru
+            if ($uninstaller.ExitCode -ne 0) { Get-Content $log; throw "The uninstaller exited with $($uninstaller.ExitCode)." }
+            $deadline = (Get-Date).AddMinutes(2)
+            $onPath = { ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -contains $bin }
+            while (((Test-Path (Join-Path $folder 'Arcue.exe')) -or (& $onPath)) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+            if (Test-Path (Join-Path $folder 'Arcue.exe')) { Get-Content $log; throw "The uninstaller left Arcue in $folder." }
+            if (& $onPath) { throw "The uninstaller left $bin on the user's PATH." }
+            Assert-Kept 'The uninstaller' $log
+          } finally {
+            if (-not $program.HasExited) { Stop-Process -Id $program.Id -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Install the Debian package, run arcue from PATH, and remove it
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+          sudo apt-get install -y "$(echo "$PWD"/apps/desktop/out/make/*.deb)"
+          [ "$(command -v arcue)" = /usr/bin/arcue ]
+          [ "$(stat -c %a /usr/lib/arcue/chrome-sandbox)" = 4755 ]
+          xvfb-run -a node apps/desktop/scripts/smoke.ts arcue /usr/lib/arcue/Arcue
+          sudo apt-get remove -y arcue
+          [ ! -e /usr/bin/arcue ] && [ ! -e /usr/lib/arcue ]
+      - name: Run arcue from the tarball
+        if: runner.os == 'Linux'
+        run: |
+          mkdir "$RUNNER_TEMP/tarball"
+          tar -xzf apps/desktop/out/make/*.tar.gz -C "$RUNNER_TEMP/tarball"
+          app=$(echo "$RUNNER_TEMP"/tarball/Arcue-*)
+          echo '{"type":"commonjs"}' > "$RUNNER_TEMP/tarball/package.json"
+          out=$("$app/bin/arcue" setup)
+          echo "$out"
+          [[ $out == "Arcue runs on Node "*" at $app/Arcue, so there is nothing to set up." ]]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installers-${{ matrix.target }}
+          path: apps/desktop/out/make/*
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: runner.os != 'Linux'
+        with:
+          name: signing-${{ matrix.target }}
+          path: ${{ runner.temp }}/signing
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove the signing keychain and API key
+        if: always() && runner.os == 'macOS'
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+  release:
+    name: Publish the release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Read the version
+        id: version
+        run: |
+          node apps/desktop/scripts/version.ts "$GITHUB_REF_NAME" > "$RUNNER_TEMP/version.json"
+          echo "version=$(jq -r .version "$RUNNER_TEMP/version.json")" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$(jq -r .prerelease "$RUNNER_TEMP/version.json")" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: signing-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/signing
+      - name: Write the checksums
+        working-directory: ${{ runner.temp }}/release
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Check that the tag has not moved and is not released yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$TAG" --jq .sha)
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::The tag $TAG has moved to $tagged since this run built $GITHUB_SHA."
+            exit 1
+          fi
+          releases="$RUNNER_TEMP/releases.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$releases"
+          if jq -e --arg tag "$TAG" 'add | any(.tag_name == $tag and (.draft | not))' "$releases" > /dev/null; then
+            echo "::error::The release $TAG is already published."
+            exit 1
+          fi
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release/*
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          releases="$RUNNER_TEMP/releases.json"
+          signing() { cat "$RUNNER_TEMP/signing/$1"; }
+          mac_arm64=$(signing mac-arm64)
+          mac_x64=$(signing mac-x64)
+          win_x64=$(signing win-x64)
+          win_arm64=$(signing win-arm64)
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "Install the desktop app as [INSTALL.md](https://github.com/$GITHUB_REPOSITORY/blob/$TAG/INSTALL.md#desktop-app) describes. It puts the \`arcue\` command on PATH."
+            echo
+            if [ "$mac_arm64" = notarized ] && [ "$mac_x64" = notarized ]; then
+              echo "- macOS: signed with a Developer ID and notarized."
+            else
+              echo "- macOS: not notarized. Open Arcue once from System Settings > Privacy & Security > Open Anyway."
+            fi
+            if [ "$win_x64" = signed ] && [ "$win_arm64" = signed ]; then
+              echo "- Windows: signed."
+            else
+              echo "- Windows: not signed. In the SmartScreen warning, choose More info > Run anyway."
+            fi
+            echo "- Every file: checked by SHA256SUMS.txt, and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml\` proves this workflow built it."
+            echo
+          } > "$notes"
+
+          latest=false
+          if [ "$PRERELEASE" != true ]; then
+            highest=$(jq -r --arg version "$VERSION" '[$version] + [add | .[] | select((.draft or .prerelease) | not)
+              | .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")] | .[]' "$releases" | sort -V | tail -n 1)
+            if [ "$highest" = "$VERSION" ]; then latest=true; fi
+          fi
+          for id in $(jq -r --arg tag "$TAG" 'add | .[] | select(.tag_name == $tag and .draft) | .id' "$releases"); do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --prerelease="$PRERELEASE" \
+            --title "Arcue $VERSION" --notes-file "$notes" --generate-notes "$RUNNER_TEMP"/release/*
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"

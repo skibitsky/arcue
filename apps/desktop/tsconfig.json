@@ -4,5 +4,5 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src/main", "src/core", "src/shared", "scripts", "e2e", "*.ts", "../../types/runtime.d.ts"]
+  "include": ["src/main", "src/core", "src/shared", "packaging", "scripts", "e2e", "*.ts", "../../types/runtime.d.ts"]
 }

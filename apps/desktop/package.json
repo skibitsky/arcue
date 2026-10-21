@@ -1,14 +1,16 @@
 {
   "name": "@arcue/desktop",
   "productName": "Arcue",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
   "main": "dist/main.js",
   "scripts": {
     "build": "node scripts/build.ts",
-    "package": "node scripts/package.ts",
+    "package": "pnpm --filter @arcue/cli build && pnpm --filter @arcue/web build:local && node scripts/package.ts",
+    "make": "node scripts/make.ts",
+    "smoke": "node scripts/smoke.ts",
     "dev": "node scripts/dev.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.renderer.json",
     "test:e2e": "pnpm --filter @arcue/cli build && node scripts/build.ts && vitest run --config vitest.e2e.config.ts"
@@ -26,6 +28,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@electron/fuses": "^2.1.3",
     "@electron/packager": "^20.3.0",
     "@types/node": "catalog:",
     "@types/react": "^19.3.0",
