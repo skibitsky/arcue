@@ -1,11 +1,20 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import { rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileChange, ImportWorker } from "@arcue/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fromNativePath, toNativePath } from "./native-paths";
 import { NodePlatform } from "./node-platform";
+import type { Fixture } from "./test-children";
+import { buildFixture } from "./test-children";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
 
 let root: string;
 let native: string;
@@ -270,6 +279,161 @@ describe("NodePlatform environment", () => {
 
   it("uses / separators for the app data folder", () => {
     expect(platform.appDataDir).toBe(`${root}/app-data`);
+  });
+});
+
+/** Whether the promise is still pending after `ms`. */
+async function pendingAfter(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let settled = false;
+  void promise.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  return !settled;
+}
+
+/** Holds the lock of `first`, checks that a lock of `second` waits for it, then lets both go. */
+async function excludeEachOther(first: () => Promise<() => Promise<void>>, second: () => Promise<() => Promise<void>>) {
+  const unlock = await first();
+  const waiting = second();
+  expect(await pendingAfter(waiting, 200)).toBe(true);
+  await unlock();
+  await (await waiting)();
+}
+
+function listAll(folder: string): string[] {
+  return readdirSync(folder, { recursive: true, encoding: "utf8" }).sort();
+}
+
+describe("NodePlatform locks", () => {
+  it("keeps out a second NodePlatform on the same data folder", async () => {
+    const other = new NodePlatform({ appDataDir: join(native, "app-data"), startImportWorker: noWorker });
+    await platform.mkdir(at("game"));
+    await excludeEachOther(
+      () => platform.lock(at("game"), "reviews"),
+      () => other.lock(at("game"), "reviews"),
+    );
+    const unlock = await platform.lock(at("game"), "reviews");
+    await (await other.lock(at("game"), "settings"))();
+    await (await other.lock(at("other"), "reviews"))();
+    await unlock();
+  });
+
+  it("locks a folder the same through a link, in another case and in decomposed Unicode", async () => {
+    mkdirSync(join(native, "game"));
+    mkdirSync(join(native, "café"));
+    symlinkSync(join(native, "game"), join(native, "link"), "junction");
+    for (const [first, second] of [
+      ["game", "link"],
+      ["game", "GAME"],
+      ["café", "cafe\u0301"],
+    ] as const) {
+      await excludeEachOther(
+        () => platform.lock(at(first), "reviews"),
+        () => platform.lock(at(second), "reviews"),
+      );
+    }
+  });
+
+  it("locks a folder that does not exist yet behind a link the same as once it exists", async () => {
+    mkdirSync(join(native, "real"));
+    symlinkSync(join(native, "real"), join(native, "link"), "junction");
+    const unlock = await platform.lock(at("link/missing"), "reviews");
+    mkdirSync(join(native, "real", "missing"));
+    const waiting = platform.lock(at("real/missing"), "reviews");
+    expect(await pendingAfter(waiting, 200)).toBe(true);
+    await unlock();
+    await (await waiting)();
+  });
+
+  it("keeps its lock files in the data folder and leaves the repository alone", async () => {
+    await platform.writeFile(at("repo/.git/HEAD"), "ref: refs/heads/main");
+    await platform.writeFile(at("repo/Hero.fbx"), "fbx");
+    await platform.writeFile(at("repo/.arcue/reviews/Hero.fbx/review.json"), "{}");
+    const before = listAll(join(native, "repo"));
+
+    const unlock = await platform.lock(at("repo"), "reviews");
+
+    expect(listAll(join(native, "repo"))).toEqual(before);
+    expect(readdirSync(join(native, "app-data", "locks"))).toEqual([expect.stringMatching(/^[0-9a-f]{32}\.lock$/)]);
+    await unlock();
+    expect(readdirSync(join(native, "app-data", "locks"))).toEqual([]);
+  });
+
+  it("refuses as forbidden when a file is in the way of its locks folder", async () => {
+    mkdirSync(join(native, "app-data"));
+    writeFileSync(join(native, "app-data", "locks"), "");
+    await expect(platform.lock(at("game"), "reviews")).rejects.toMatchObject({
+      code: "forbidden",
+      message: `Arcue cannot lock the reviews of ${at("game")}: ${join(native, "app-data", "locks")} cannot be written.`,
+    });
+  });
+
+  it("refuses a write on a read-only file system as forbidden", async () => {
+    vi.mocked(fs.writeFile).mockImplementationOnce(() =>
+      Promise.reject(Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" })),
+    );
+    await expect(platform.writeFile(at("a.txt"), "x")).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it.skipIf(process.platform !== "win32")("locks a folder the same through a junction and a subst drive", async () => {
+    mkdirSync(join(native, "game"));
+    symlinkSync(join(native, "game"), join(native, "junction"), "junction");
+    await excludeEachOther(
+      () => platform.lock(at("game"), "reviews"),
+      () => platform.lock(at("junction"), "reviews"),
+    );
+    const letter = [..."ZYXWVUTSRQPONMLKJ"].find(
+      (candidate) => spawnSync("subst", [`${candidate}:`, native]).status === 0,
+    );
+    if (!letter) return;
+    try {
+      await excludeEachOther(
+        () => platform.lock(at("game"), "reviews"),
+        () => platform.lock(`${letter}:/game`, "reviews"),
+      );
+    } finally {
+      spawnSync("subst", [`${letter}:`, "/D"]);
+    }
+  });
+
+  describe("beside another process", () => {
+    let fixture: Fixture;
+
+    beforeAll(async () => {
+      fixture = await buildFixture();
+    }, 60_000);
+
+    afterAll(async () => {
+      await fixture.stopAll();
+      fixture.remove();
+    });
+
+    it("moves a review folder that another process watches, or leaves it where it was", async () => {
+      const from = at("repo/.arcue/reviews/Hero.fbx");
+      await platform.writeFile(`${from}/review.json`, "{}");
+      await platform.writeFile(`${from}/c1.png`, "png");
+      const watcher = fixture.start({ mode: "watch", folder: toNativePath(from) }, native);
+      await watcher.message((message) => message === "watching");
+
+      const moved = await platform.rename(from, at("repo/.arcue/reviews/Striker.fbx")).then(
+        () => true,
+        (error: unknown) => {
+          expect(error).toMatchObject({ code: expect.any(String) });
+          return false;
+        },
+      );
+
+      const folder = moved ? at("repo/.arcue/reviews/Striker.fbx") : from;
+      await expect(platform.list(folder)).resolves.toEqual([
+        { name: "c1.png", kind: "file" },
+        { name: "review.json", kind: "file" },
+      ]);
+      if (process.platform !== "win32") expect(moved).toBe(true);
+      watcher.send("release");
+      await watcher.exited;
+    });
   });
 });
 

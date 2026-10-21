@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   }
 }
