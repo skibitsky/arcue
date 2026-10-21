@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import { unwatchFile, watchFile } from "node:fs";
-import { lstat, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import type {
   Clock,
   DirectoryEntry,
@@ -13,10 +13,11 @@ import type {
   Unlock,
 } from "@arcue/core";
 import { basename, dirname, findGitRoot, joinPath, normalizePath } from "@arcue/core";
-import { ArcueError } from "@arcue/protocol";
+import { ArcueError, LOCKS_FOLDER } from "@arcue/protocol";
+import { acquireFileLock } from "./file-lock";
 import { FolderWatchers, isFolder } from "./folder-watchers";
 import type { PathStyle } from "./native-paths";
-import { hostPathStyle, toNativePath } from "./native-paths";
+import { fromNativePath, hostPathStyle, toNativePath } from "./native-paths";
 
 export interface NodePlatformOptions {
   /** Holds settings, and review data for assets outside a git repository, such as the desktop app's user data. */
@@ -27,6 +28,8 @@ export interface NodePlatformOptions {
   clock?: Clock;
   /** Defaults to the host's. Tests use it to check Windows path handling. */
   pathStyle?: PathStyle;
+  /** How long one other holder may keep a lock before `lock` rejects as "timeout". Defaults to 15 seconds. */
+  lockTimeoutMs?: number;
 }
 
 export const systemClock: Clock = {
@@ -39,9 +42,7 @@ export const systemClock: Clock = {
 
 const RENAME_ATTEMPTS = 5;
 const POLL_INTERVAL_MS = 1000;
-
-/** The last turn queued for each lock in this process, by lock name and folder. */
-const lockTurns = new Map<string, Promise<void>>();
+const LOCK_TIMEOUT_MS = 15_000;
 
 /** The `Platform` on Node's file system. Paths use "/" separators on every system and are converted at the edge. */
 export class NodePlatform implements Platform {
@@ -51,6 +52,7 @@ export class NodePlatform implements Platform {
   readonly #writeClipboard: ((text: string) => Promise<void>) | null;
   readonly #style: PathStyle;
   readonly #folders = new FolderWatchers();
+  readonly #lockTimeoutMs: number;
 
   constructor(options: NodePlatformOptions) {
     this.#style = options.pathStyle ?? hostPathStyle;
@@ -58,6 +60,7 @@ export class NodePlatform implements Platform {
     this.clock = options.clock ?? systemClock;
     this.#startImportWorker = options.startImportWorker;
     this.#writeClipboard = options.writeClipboard ?? null;
+    this.#lockTimeoutMs = options.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
   }
 
   async readFile(path: string): Promise<Uint8Array> {
@@ -132,21 +135,14 @@ export class NodePlatform implements Platform {
     return findGitRoot(path, (candidate) => this.exists(candidate));
   }
 
-  /** For now an in-process queue only: it keeps out holders in this process, not other processes. */
+  /** Takes a lock file in the app data folder's `locks` folder, named after the canonical folder and the lock's name. */
   async lock(folder: string, name: string): Promise<Unlock> {
-    const key = `${name}\n${normalizePath(folder)}`;
-    const previous = lockTurns.get(key) ?? Promise.resolve();
-    const turn = Promise.withResolvers<void>();
-    const queued = previous.then(() => turn.promise);
-    lockTurns.set(key, queued);
-    await previous;
-    let released = false;
-    return async () => {
-      if (released) return;
-      released = true;
-      turn.resolve();
-      if (lockTurns.get(key) === queued) lockTurns.delete(key);
-    };
+    const key = createHash("sha256")
+      .update(`${await this.#canonical(folder)}\n${name}`)
+      .digest("hex")
+      .slice(0, 32);
+    const file = joinPath(this.appDataDir, LOCKS_FOLDER, `${key}.lock`);
+    return acquireFileLock(this.#native(file), { timeoutMs: this.#lockTimeoutMs, label: `the ${name} of ${folder}` });
   }
 
   startImportWorker(): ImportWorker {
@@ -160,6 +156,29 @@ export class NodePlatform implements Platform {
 
   #native(path: string): string {
     return toNativePath(path, this.#style);
+  }
+
+  /**
+   * The folder with the links in it resolved as far as it exists, in Unicode NFC and lower case, so that every
+   * spelling of one folder, and a folder that does not exist yet behind a link, locks the same.
+   */
+  async #canonical(folder: string): Promise<string> {
+    const missing: string[] = [];
+    let existing = normalizePath(folder);
+    for (;;) {
+      const real = await realpath(this.#native(existing)).catch(() => null);
+      if (real !== null) {
+        existing = fromNativePath(real, this.#style);
+        break;
+      }
+      const parent = dirname(existing);
+      if (parent === existing) break;
+      missing.unshift(basename(existing));
+      existing = parent;
+    }
+    return joinPath(existing, ...missing)
+      .normalize("NFC")
+      .toLowerCase();
   }
 
   async #lstat(path: string): Promise<Stats | null> {
@@ -204,7 +223,7 @@ function toArcueError(error: unknown, path: string): ArcueError {
   if (code === "EISDIR" || code === "EEXIST" || code === "ENOTEMPTY") {
     return new ArcueError("conflict", `${path}: ${message}`, { cause: error });
   }
-  if (code === "EACCES" || code === "EPERM")
+  if (code === "EACCES" || code === "EPERM" || code === "EROFS")
     return new ArcueError("forbidden", `${path}: ${message}`, { cause: error });
   return new ArcueError("internal", `${path}: ${message}`, { cause: error });
 }

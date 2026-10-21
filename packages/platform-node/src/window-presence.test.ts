@@ -77,4 +77,22 @@ describe("WindowPresence", () => {
     void windows.ensure();
     expect(requests()).toBe(1);
   });
+
+  it("rejects its waiters as disconnected and cancels their timers once disposed", async () => {
+    const { clock, windows, requests } = presence();
+    const first = windows.ensure();
+    const second = windows.ensure("a");
+    expect(clock.pendingTimers).toBe(2);
+
+    windows.dispose();
+
+    await expect(first).rejects.toMatchObject({ code: "disconnected" });
+    await expect(second).rejects.toMatchObject({ code: "disconnected" });
+    expect(clock.pendingTimers).toBe(0);
+    await expect(windows.ensure("b")).rejects.toMatchObject({ code: "disconnected" });
+    expect(clock.pendingTimers).toBe(0);
+    expect(requests()).toBe(1);
+    windows.added();
+    await expect(windows.ensure()).resolves.toBeUndefined();
+  });
 });

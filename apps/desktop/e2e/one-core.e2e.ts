@@ -46,6 +46,7 @@ beforeEach(async () => {
   other = await startBridgeServer({
     core,
     userData,
+    kind: "desktop",
     ensureWindow: async () => undefined,
     onError: () => undefined,
     url: ADDRESS,
@@ -76,7 +77,7 @@ describe("the desktop app beside another core", () => {
     await electron.close();
     app = null;
     expect(JSON.parse(readFileSync(join(userData, BRIDGE_INFO_FILE), "utf8"))).toEqual(running);
-    await expect(runningCore(userData)).resolves.toEqual(running);
+    await expect(runningCore(userData, "desktop")).resolves.toEqual(running);
   });
 
   it("starts its own core in place of one that stopped without removing bridge.json", async () => {
@@ -96,7 +97,7 @@ describe("the desktop app beside another core", () => {
       { timeout: 20_000 },
     );
 
-    const started = await runningCore(userData);
+    const started = await runningCore(userData, "desktop");
     expect(started?.pid).not.toBe(stopped.pid);
     expect(started?.url).toBeUndefined();
     await electron.close();

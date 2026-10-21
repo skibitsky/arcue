@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { Server, Socket } from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,20 +7,23 @@ import { join } from "node:path";
 import type { ArcueCore } from "@arcue/core";
 import type { BridgeInfo, ListenerErrorHandler, MessageEndpoint } from "@arcue/protocol";
 import {
-  ArcueError,
   acceptBridge,
-  BRIDGE_INFO_FILE,
-  bridgeInfoSchema,
+  bridgeInfoFile,
   framedChannel,
   HANDSHAKE_MAX_FRAME_BYTES,
   isEnvelope,
   jsonFrameCodec,
+  LOCK_PROTOCOL,
   viewNameSchema,
 } from "@arcue/protocol";
-import { runningCore } from "./core-connection";
+import { listens, readBridgeFile } from "./core-connection";
+import { isRunning } from "./file-lock";
+import { writeLastCore } from "./last-core";
 import { socketStream } from "./node-socket";
+import type { StartClaim } from "./start-claim";
+import { claimStart, takeStartLock } from "./start-claim";
 
-export interface BridgeServerOptions {
+interface CommonBridgeOptions {
   core: ArcueCore;
   userData: string;
   /**
@@ -31,25 +34,43 @@ export interface BridgeServerOptions {
   ensureWindow: (view: string | null) => Promise<void>;
   onError: ListenerErrorHandler;
   handshakeTimeoutMs?: number;
-  /** Where a browser shows this core's window, for `bridge.json`. */
-  url?: string;
+  /** The start lock the host already holds, which the server lets go once its bridge file is written. */
+  claim?: StartClaim;
 }
+
+export type BridgeServerOptions = CommonBridgeOptions &
+  (
+    | {
+        kind: "desktop";
+        /** Where a browser shows this core's window, when one does. */
+        url?: string;
+      }
+    | {
+        kind: "serve";
+        /** Where a browser shows this core's pages, for `serve.json`. */
+        url: string;
+        /** Which arcue.js runs the core: the first 16 hex digits of its SHA-256. */
+        build?: string;
+      }
+  );
 
 export interface BridgeServer {
   readonly info: BridgeInfo;
+  /**
+   * Writes the bridge file again, under the start lock, when it is gone or names a core that no longer listens. It
+   * leaves the file of another core that listens, and never rejects.
+   */
+  rewriteInfo(): Promise<void>;
+  /** Whether the bridge file names this server, another core that listens, or neither. */
+  holdsInfo(): Promise<"own" | "other-live" | "missing">;
+  /**
+   * Stops listening and ends the open connections, then removes the bridge file while it still names this server. A
+   * rewrite that runs meanwhile leaves no file behind.
+   */
   close(): Promise<void>;
 }
 
-/** Another core answers at `bridge.json`. */
-export class CoreRunningError extends ArcueError {
-  readonly running: BridgeInfo;
-
-  constructor(running: BridgeInfo) {
-    const where = running.url ? ` at ${running.url}` : "";
-    super("conflict", `Arcue is already running${where} (process ${running.pid}).`);
-    this.running = running;
-  }
-}
+const REWRITE_TIMEOUT_MS = 2_000;
 
 /** macOS limits a Unix socket path to 104 bytes, Linux to 108. */
 const MAX_SOCKET_PATH = 100;
@@ -96,15 +117,6 @@ async function removeEndedSockets(folder: string): Promise<void> {
   }
 }
 
-function isRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 async function privateFolder(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   const stats = await lstat(path);
@@ -115,20 +127,29 @@ async function privateFolder(path: string): Promise<void> {
 }
 
 /**
- * Listens for the command line on a local socket. Each connection must present the token from `bridge.json`, which
- * only the user can read, and is then served with the caller "bridge", so internal commands are refused. A hello
- * that names a user makes that user the author of what the connection does.
+ * Listens for the command line on a local socket. Each connection must present the token from the core's bridge file,
+ * `bridge.json` for the desktop app and `serve.json` for Arcue in the browser, which only the user can read, and is
+ * then served with the caller "bridge", so internal commands are refused. A hello that names a user makes that user
+ * the author of what the connection does.
  *
- * Only one core may run for a data folder, since two would overwrite each other's review files. While another core
- * answers at `bridge.json`, this throws a `CoreRunningError` and leaves that core's file alone.
+ * Cores of both kinds run side by side on one data folder, since both take the review locks. Each kind refuses only a
+ * second core of its own kind, or a core that takes no review locks: it checks under the start lock, which it holds
+ * until its bridge file is written, and throws a `CoreRunningError` that leaves the other core's file alone.
  */
 export async function startBridgeServer(options: BridgeServerOptions): Promise<BridgeServer> {
-  const infoPath = join(options.userData, BRIDGE_INFO_FILE);
-  await mkdir(options.userData, { recursive: true, mode: 0o700 });
-  const running = await runningCore(options.userData);
-  if (running) throw new CoreRunningError(running);
+  const claim = options.claim ?? (await claimStart(options.userData, options.kind));
+  try {
+    return await listenForBridges(options);
+  } finally {
+    await claim.release();
+  }
+}
+
+async function listenForBridges(options: BridgeServerOptions): Promise<BridgeServer> {
+  const { userData, kind } = options;
+  const infoPath = join(userData, bridgeInfoFile(kind));
   await rm(infoPath, { force: true });
-  const address = await bridgeAddress(options.userData);
+  const address = await bridgeAddress(userData);
   const token = randomBytes(32).toString("base64url");
   let next = 1;
   const open = new Set<Socket>();
@@ -171,34 +192,66 @@ export async function startBridgeServer(options: BridgeServerOptions): Promise<B
     token,
     pid: process.pid,
     ...(options.url !== undefined ? { url: options.url } : {}),
+    kind,
+    locks: LOCK_PROTOCOL,
+    ...(options.kind === "serve" && options.build !== undefined ? { build: options.build } : {}),
   };
-  const temporary = `${infoPath}.${process.pid}.tmp`;
   try {
-    await writeFile(temporary, `${JSON.stringify(info)}\n`, { mode: 0o600 });
-    await rename(temporary, infoPath);
+    await writeBridgeFile(infoPath, info);
   } catch (error) {
     await stopListening();
     await address.remove();
-    await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
   }
+  await writeLastCore(userData, kind, options.url);
+
+  const holdsInfo = async (): Promise<"own" | "other-live" | "missing"> => {
+    const current = await readBridgeFile(infoPath);
+    if (current?.token === token) return "own";
+    return current && (await listens(current, options.handshakeTimeoutMs)) ? "other-live" : "missing";
+  };
+  let closing: Promise<void> | null = null;
+  let writing: Promise<void> | null = null;
   return {
     info,
-    async close() {
-      await stopListening();
-      if ((await readBridgeFile(infoPath))?.token === token) await rm(infoPath, { force: true });
-      await address.remove();
+    holdsInfo,
+    async rewriteInfo() {
+      if (closing || !(await stat(userData).catch(() => null))) return;
+      const release = await takeStartLock(userData, REWRITE_TIMEOUT_MS).catch(() => null);
+      if (!release) return;
+      try {
+        if (!closing && (await holdsInfo()) === "missing" && !closing) {
+          writing = writeBridgeFile(infoPath, info);
+          await writing;
+        }
+      } catch (error) {
+        options.onError(error);
+      } finally {
+        writing = null;
+        await release();
+      }
+    },
+    close() {
+      closing ??= (async () => {
+        await stopListening();
+        await writing?.catch(() => undefined);
+        if ((await readBridgeFile(infoPath))?.token === token) await rm(infoPath, { force: true });
+        await address.remove();
+      })();
+      return closing;
     },
   };
 }
 
-/** What `bridge.json` holds now. Another core may have written it since. */
-async function readBridgeFile(path: string): Promise<BridgeInfo | null> {
+/** Writes a bridge file that only the user can read, through a temporary file so that no reader sees half of it. */
+async function writeBridgeFile(path: string, info: BridgeInfo): Promise<void> {
+  const temporary = `${path}.${process.pid}.tmp`;
   try {
-    const parsed = bridgeInfoSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
+    await writeFile(temporary, `${JSON.stringify(info)}\n`, { mode: 0o600 });
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
   }
 }
 

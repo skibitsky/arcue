@@ -74,7 +74,7 @@ async function run(): Promise<void> {
   process.on("uncaughtException", (error) => log.error("Uncaught exception in the main process", error));
   process.on("unhandledRejection", (error) => log.error("Unhandled rejection in the main process", error));
 
-  const running = await runningCore(userData);
+  const running = await runningCore(userData, "desktop");
   if (running) {
     await quitBeside({ pid: running.pid, url: running.url ?? null }, log);
     return;

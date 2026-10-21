@@ -92,7 +92,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   if (!webUi || !(await stat(resolve(webUi, "index.html")).catch(() => null))?.isFile()) {
     throw new Error(`This arcue has no web UI in ${options.webUi}.`);
   }
-  const running = await runningCore(options.userData);
+  const running = await runningCore(options.userData, "serve");
   if (running) {
     const where = running.url ? ` at ${running.url}` : "";
     throw new Error(`Arcue is already running${where} (process ${running.pid}). "arcue open" shows models there.`);
@@ -118,6 +118,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
     bridge = await startBridgeServer({
       core,
       userData: options.userData,
+      kind: "serve",
       ensureWindow: (view) => (view === null ? windows.ensure(null) : Promise.resolve()),
       onError: options.onError,
       url,
