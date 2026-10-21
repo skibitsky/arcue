@@ -32,6 +32,7 @@ const MARK_WAITING_AFTER_MS = 50;
 const WAITING_FRESH_MS = 2_000;
 const YIELD_MS = 200;
 const UNLINK_ATTEMPTS = 5;
+const REFUSALS_BEFORE_FORBIDDEN = 5;
 const BUSY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
 
 interface Lease {
@@ -57,6 +58,11 @@ interface Snapshot {
 
 type Seen = Snapshot | "gone" | "busy";
 
+/** Windows refused to create the file, which it does while a removed file is still open somewhere, and why. */
+interface Refusal {
+  refused: unknown;
+}
+
 /** This copy of the module, which a later process with the same pid does not share. */
 const INSTANCE = randomHex();
 const HOST = hostname().slice(0, 255);
@@ -78,7 +84,7 @@ let exitWatched = false;
  * this process whose acquire has ended, a record of a process on this computer, in the same pid namespace and boot,
  * that no longer runs, or a file that went without a refresh for `staleAfterMs` and then `confirmStaleMs` more. Rejects
  * with "timeout" when one other holder keeps it longer than `timeoutMs`, and with "forbidden" when it cannot create the
- * file.
+ * file or read the file another holder left.
  */
 export async function acquireFileLock(nativePath: string, options: FileLockOptions): Promise<ReleaseLock> {
   const lease: Lease = {
@@ -107,16 +113,23 @@ export async function acquireFileLock(nativePath: string, options: FileLockOptio
   let marked = false;
   try {
     const started = performance.now();
+    let vanished = 0;
     for (let tries = 0; ; tries++) {
-      if ((await create(nativePath, attempt.record, attempt.label)) === "created") {
+      const created = await create(nativePath, attempt.record, attempt.label);
+      if (created === "created") {
         foreign.delete(nativePath);
         if (marked) await clearWaiting(attempt);
         return holding(attempt);
       }
       const seen = await inspect(nativePath, attempt.label);
-      if (seen === "gone") continue;
+      const refusal = seen === "gone" && typeof created === "object" ? created : null;
+      vanished = seen === "gone" ? vanished + 1 : 0;
+      if (refusal && vanished >= REFUSALS_BEFORE_FORBIDDEN) {
+        throw cannotLock(attempt.label, nativePath, refusal.refused);
+      }
+      if (vanished === 1) continue;
       let holder: LockRecord | null = null;
-      if (seen !== "busy") {
+      if (typeof seen === "object") {
         const judged = judge(seen, lease);
         holder = judged.record;
         if (judged.verdict === "stale" && (await breakLock(attempt, seen, holder))) continue;
@@ -129,13 +142,15 @@ export async function acquireFileLock(nativePath: string, options: FileLockOptio
           }
         }
       }
-      const identity = seen === "busy" ? "busy" : (holder?.token ?? `x${digest(seen.text)}`);
+      const identity = typeof seen === "object" ? (holder?.token ?? `x${digest(seen.text)}`) : seen;
       let watched = foreign.get(nativePath);
       if (watched?.identity !== identity) {
         watched = { identity, since: performance.now() };
         foreign.set(nativePath, watched);
       }
-      if (performance.now() - watched.since >= options.timeoutMs) throw lockTimeout(options, holder);
+      if (performance.now() - watched.since >= options.timeoutMs) {
+        throw refusal ? cannotLock(attempt.label, nativePath, refusal.refused) : lockTimeout(options, holder);
+      }
       if (performance.now() - started >= MARK_WAITING_AFTER_MS) {
         await markWaiting(attempt);
         marked = true;
@@ -197,8 +212,8 @@ function passTurn(path: string, delayMs: number): void {
   else next();
 }
 
-/** Creates the file with the record, unless it exists. */
-async function create(path: string, record: string, label: string): Promise<"created" | "held"> {
+/** Creates the file with the record, unless it exists or Windows refuses it. */
+async function create(path: string, record: string, label: string): Promise<"created" | "held" | Refusal> {
   for (let tries = 0; ; tries++) {
     let handle: fs.FileHandle;
     try {
@@ -206,7 +221,7 @@ async function create(path: string, record: string, label: string): Promise<"cre
     } catch (error) {
       const code = codeOf(error);
       if (code === "EEXIST") return "held";
-      if (process.platform === "win32" && code !== undefined && BUSY_CODES.has(code)) return "held";
+      if (busyOnWindows(code)) return { refused: error };
       if (code === "ENOENT" && tries === 0) {
         await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 }).catch((cause: unknown) => {
           throw cannotLock(label, path, cause);
@@ -235,7 +250,7 @@ async function inspect(path: string, label: string): Promise<Seen> {
   } catch (error) {
     const code = codeOf(error);
     if (code === "ENOENT" || code === "ENOTDIR") return "gone";
-    if (code !== undefined && BUSY_CODES.has(code)) return "busy";
+    if (busyOnWindows(code)) return "busy";
     throw cannotLock(label, path, error);
   }
   try {
@@ -267,7 +282,7 @@ function judge(seen: Snapshot, lease: Lease): { verdict: "alive" | "stale" | "ma
 async function breakLock(attempt: Attempt, seen: Snapshot, record: LockRecord | null): Promise<boolean> {
   const id = record?.token ?? `x${digest(`${seen.text}${seen.mtimeMs}`)}`;
   const claim = `${attempt.path}.${id}.break`;
-  if ((await create(claim, attempt.record, attempt.label)) === "held") {
+  if ((await create(claim, attempt.record, attempt.label)) !== "created") {
     await clearDeadClaim(claim, attempt);
     return false;
   }
@@ -411,6 +426,11 @@ function lockTimeout(options: FileLockOptions, holder: LockRecord | null): Arcue
 
 function cannotLock(label: string, path: string, cause: unknown): ArcueError {
   return new ArcueError("forbidden", `Arcue cannot lock ${label}: ${dirname(path)} cannot be written.`, { cause });
+}
+
+/** Windows refuses to open a file that is being removed, or that another program holds, for a while. */
+function busyOnWindows(code: string | undefined): boolean {
+  return process.platform === "win32" && code !== undefined && BUSY_CODES.has(code);
 }
 
 function codeOf(error: unknown): string | undefined {

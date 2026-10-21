@@ -1,20 +1,39 @@
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { LAST_CORE_FILE, lastCoreSchema } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readLastCore, writeLastCore } from "./last-core";
 import { recordLastCore } from "./start-claim";
+import { holdStartLock } from "./test-cores";
 
 let userData: string;
+const killing: { kill(): void }[] = [];
 
 beforeEach(() => {
   userData = realpathSync(mkdtempSync(join(tmpdir(), "arcue-last-core-")));
 });
 
 afterEach(() => {
+  for (const holder of killing.splice(0)) holder.kill();
   rmSync(userData, { recursive: true, force: true });
 });
+
+function holdElsewhere(): { release(): void } {
+  const holder = holdStartLock(userData);
+  killing.push(holder);
+  return holder;
+}
 
 const ADDRESS = "http://localhost:4530";
 
@@ -63,5 +82,24 @@ describe("the last core", () => {
 
     expect(lastCoreSchema.parse(onDisk()).serveUrl).toBe(ADDRESS);
     expect(readdirSync(userData).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("waits for another Arcue that holds the start lock, so it keeps the address that one records meanwhile", async () => {
+    await writeLastCore(userData, "serve", ADDRESS);
+    const other = holdElsewhere();
+
+    const recording = recordLastCore(userData, "desktop");
+    await sleep(200);
+    await writeLastCore(userData, "serve", "http://localhost:4600");
+    other.release();
+    await recording;
+
+    expect(onDisk()).toEqual({ version: 1, kind: "desktop", serveUrl: "http://localhost:4600" });
+  });
+
+  it("skips the record when another Arcue holds the start lock past its timeout", async () => {
+    holdElsewhere();
+    await recordLastCore(userData, "desktop", undefined, 200);
+    expect(existsSync(join(userData, LAST_CORE_FILE))).toBe(false);
   });
 });

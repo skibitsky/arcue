@@ -1,12 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { rename, rm, writeFile } from "node:fs/promises";
 import type { Socket } from "node:net";
 import { createServer } from "node:net";
-import { join } from "node:path";
-import type { BridgeInfo, CoreKind, IncomingRequest, LastCore, LaunchInfo } from "@arcue/protocol";
+import { hostname } from "node:os";
+import { dirname, join } from "node:path";
+import type { BridgeInfo, CoreKind, IncomingRequest, LastCore, LaunchInfo, LockRecord } from "@arcue/protocol";
 import {
   ArcueError,
   acceptBridge,
@@ -19,7 +20,9 @@ import {
 } from "@arcue/protocol";
 import { bridgeAddress } from "./bridge-server";
 import { readBridgeFile } from "./core-connection";
+import { lockNamespace } from "./file-lock";
 import { socketStream } from "./node-socket";
+import { startLockPath } from "./start-claim";
 
 /** The variables that tie a process to an agent session or its view, which no child of a test may inherit. */
 const SESSION_VARIABLES = ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "ARCUE_VIEW"];
@@ -155,6 +158,28 @@ export function sleeper(): { pid: number; kill(): void } {
   const pid = child.pid;
   if (pid === undefined) throw new Error("The sleeper did not start.");
   return { pid, kill: () => child.kill("SIGKILL") };
+}
+
+/**
+ * Writes the start lock of the data folder as another Arcue that holds it would, naming a child this test owns, so
+ * nothing in this process takes it for its own. `release` removes the lock file as that Arcue would; `kill` ends the
+ * child.
+ */
+export function holdStartLock(userData: string): { pid: number; release(): void; kill(): void } {
+  const holder = sleeper();
+  const record: LockRecord = {
+    arcueLock: 1,
+    token: randomBytes(16).toString("hex"),
+    instance: randomBytes(16).toString("hex"),
+    pid: holder.pid,
+    host: hostname().slice(0, 255),
+    ns: lockNamespace(),
+    acquiredAt: Date.now(),
+  };
+  const path = startLockPath(userData);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(record));
+  return { pid: holder.pid, release: () => rmSync(path, { force: true }), kill: holder.kill };
 }
 
 /** The pid of a process that has ended. */

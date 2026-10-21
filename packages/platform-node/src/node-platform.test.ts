@@ -1,10 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import * as fs from "node:fs/promises";
 import { rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { FileChange, ImportWorker } from "@arcue/core";
+import { ArcueCore, MemoryPlatform } from "@arcue/core";
+import { fbxImporter } from "@arcue/import-fbx";
+import { createMemoryChannel, createPeer, createRemoteClient } from "@arcue/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fromNativePath, toNativePath } from "./native-paths";
 import { NodePlatform } from "./node-platform";
@@ -15,6 +28,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return { ...actual, writeFile: vi.fn(actual.writeFile) };
 });
+
+const CRATE = fileURLToPath(new URL("../../../samples/crate.fbx", import.meta.url));
 
 let root: string;
 let native: string;
@@ -410,29 +425,76 @@ describe("NodePlatform locks", () => {
       fixture.remove();
     });
 
-    it("moves a review folder that another process watches, or leaves it where it was", async () => {
-      const from = at("repo/.arcue/reviews/Hero.fbx");
-      await platform.writeFile(`${from}/review.json`, "{}");
-      await platform.writeFile(`${from}/c1.png`, "png");
-      const watcher = fixture.start({ mode: "watch", folder: toNativePath(from) }, native);
-      await watcher.message((message) => message === "watching");
+    it("moves a review that another process watches with its model, or leaves it whole where it ends up", async () => {
+      const imports = new MemoryPlatform({ importers: [fbxImporter] });
+      const reviewing = new NodePlatform({
+        appDataDir: join(native, "app-data"),
+        startImportWorker: () => imports.startImportWorker(),
+      });
+      mkdirSync(join(native, "repo", ".git"), { recursive: true });
+      copyFileSync(CRATE, join(native, "repo", "Crate.fbx"));
+      const errors: unknown[] = [];
+      const core = await ArcueCore.start({ platform: reviewing, onError: (error) => errors.push(error) });
+      const [coreSide, windowSide] = createMemoryChannel();
+      const window = createRemoteClient(createPeer(windowSide, { handleRequest: () => undefined }));
+      core.connect(coreSide, { connection: "window-1", caller: "window" });
+      try {
+        const { assetId } = await window.execute("asset.open", { path: at("repo/Crate.fbx") });
+        await core.idle();
+        const { version } = await window.query("scene.get", { assetId });
+        const { commentId } = await window.execute("comment.create", {
+          assetId,
+          text: "The lid sits too high.",
+          version,
+          time: { kind: "none" },
+          target: null,
+          camera: { position: [0, 1, 3], target: [0, 1, 0], up: [0, 1, 0], fov: 30 },
+          context: { vertexCount: 0, bones: [], centroid: null, joints: [], viewLabel: "front" },
+          screenshot: Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 1),
+        });
+        const from = at("repo/.arcue/reviews/Crate.fbx");
+        const to = at("repo/.arcue/reviews/Box.fbx");
+        const watcher = fixture.start({ mode: "watch", folder: toNativePath(from) }, native);
+        await watcher.message((message) => message === "watching");
 
-      const moved = await platform.rename(from, at("repo/.arcue/reviews/Striker.fbx")).then(
-        () => true,
-        (error: unknown) => {
-          expect(error).toMatchObject({ code: expect.any(String) });
-          return false;
-        },
-      );
+        await rename(join(native, "repo", "Crate.fbx"), join(native, "repo", "Box.fbx"));
+        const failure = await window.execute("asset.relink", { assetId, path: at("repo/Box.fbx") }).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        await core.idle();
+        watcher.send("release");
+        await watcher.exited;
 
-      const folder = moved ? at("repo/.arcue/reviews/Striker.fbx") : from;
-      await expect(platform.list(folder)).resolves.toEqual([
-        { name: "c1.png", kind: "file" },
-        { name: "review.json", kind: "file" },
-      ]);
-      if (process.platform !== "win32") expect(moved).toBe(true);
-      watcher.send("release");
-      await watcher.exited;
+        const folder = (await reviewing.exists(`${to}/review.json`)) ? to : from;
+        await expect(reviewing.exists(folder === to ? from : to)).resolves.toBe(false);
+        await expect(reviewing.list(folder)).resolves.toEqual([
+          { name: "review.json", kind: "file" },
+          { name: "screenshots", kind: "directory" },
+        ]);
+        await expect(reviewing.list(`${folder}/screenshots`)).resolves.toEqual([
+          { name: `${commentId}.png`, kind: "file" },
+        ]);
+        const saved = JSON.parse(await reviewing.readText(`${folder}/review.json`));
+        expect(saved).toMatchObject({ comments: [{ id: commentId, text: "The lid sits too high." }] });
+        if (failure === null) {
+          expect(folder).toBe(to);
+          expect(saved).toMatchObject({ asset: { path: "Box.fbx" } });
+          await expect(window.query("review.get", { assetId })).resolves.toMatchObject({
+            comments: [{ id: commentId }],
+          });
+        } else if (folder === to) {
+          await expect(window.execute("comment.delete", { assetId, commentId })).rejects.toMatchObject({
+            message: expect.stringContaining("could not be finished"),
+          });
+        } else {
+          expect(saved).toMatchObject({ asset: { path: "Crate.fbx" } });
+        }
+        if (process.platform !== "win32") expect(failure).toBeNull();
+        expect(errors).toEqual([]);
+      } finally {
+        core.dispose();
+      }
     });
   });
 });

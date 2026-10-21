@@ -1,14 +1,11 @@
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import type { LockRecord } from "@arcue/protocol";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SERVE_INFO_FILE } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { lockNamespace } from "./file-lock";
 import { CoreRunningError, claimStart, startLockPath, waitForStarts } from "./start-claim";
 import type { FakeCore } from "./test-cores";
-import { sleeper, startFakeCore } from "./test-cores";
+import { holdStartLock, startFakeCore } from "./test-cores";
 
 let userData: string;
 const closing: { close(): Promise<void> }[] = [];
@@ -40,19 +37,7 @@ async function liveServe(): Promise<FakeCore> {
 
 /** Writes a start lock that a live process in another Arcue holds. */
 function holdElsewhere(): void {
-  const holder = sleeper();
-  killing.push(holder);
-  const record: LockRecord = {
-    arcueLock: 1,
-    token: randomBytes(16).toString("hex"),
-    instance: randomBytes(16).toString("hex"),
-    pid: holder.pid,
-    host: hostname().slice(0, 255),
-    ns: lockNamespace(),
-    acquiredAt: Date.now(),
-  };
-  mkdirSync(dirname(startLockPath(userData)), { recursive: true });
-  writeFileSync(startLockPath(userData), JSON.stringify(record));
+  killing.push(holdStartLock(userData));
 }
 
 function settled(promise: Promise<unknown>): () => boolean {

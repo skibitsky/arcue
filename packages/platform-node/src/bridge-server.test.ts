@@ -32,7 +32,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { BridgeServer } from "./bridge-server";
 import { bridgeAddress, startBridgeServer } from "./bridge-server";
 import { socketStream } from "./node-socket";
-import { CoreRunningError, claimStart, recordLastCore } from "./start-claim";
+import { CoreRunningError, claimStart, recordLastCore, takeStartLock } from "./start-claim";
 import type { Fixture, FixtureChild } from "./test-children";
 import { buildFixture } from "./test-children";
 import type { FakeCore } from "./test-cores";
@@ -474,6 +474,25 @@ describe("cores of both kinds", () => {
     expect(readInfo(SERVE_INFO_FILE)).toEqual(other.info);
     await browser.close();
     expect(readInfo(SERVE_INFO_FILE)).toEqual(other.info);
+  });
+
+  it("writes no bridge file once it closes, also from a rewrite that waited for the start lock meanwhile", async () => {
+    const browser = await startServe();
+    await browser.close();
+    await browser.rewriteInfo();
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
+
+    const again = await startServe();
+    rmSync(join(userData, SERVE_INFO_FILE));
+    const release = await takeStartLock(userData, 1000);
+    const rewrite = again.rewriteInfo();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await again.close();
+    await release();
+    await rewrite;
+
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
+    await startLockFree();
   });
 
   it("does not bring back a data folder that was removed", async () => {

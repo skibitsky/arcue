@@ -63,7 +63,10 @@ export interface BridgeServer {
   rewriteInfo(): Promise<void>;
   /** Whether the bridge file names this server, another core that listens, or neither. */
   holdsInfo(): Promise<"own" | "other-live" | "missing">;
-  /** Stops listening and ends the open connections, then removes the bridge file while it still names this server. */
+  /**
+   * Stops listening and ends the open connections, then removes the bridge file while it still names this server. A
+   * rewrite that runs meanwhile leaves no file behind.
+   */
   close(): Promise<void>;
 }
 
@@ -208,24 +211,30 @@ async function listenForBridges(options: BridgeServerOptions): Promise<BridgeSer
     return current && (await listens(current, options.handshakeTimeoutMs)) ? "other-live" : "missing";
   };
   let closing: Promise<void> | null = null;
+  let writing: Promise<void> | null = null;
   return {
     info,
     holdsInfo,
     async rewriteInfo() {
-      if (!(await stat(userData).catch(() => null))) return;
+      if (closing || !(await stat(userData).catch(() => null))) return;
       const release = await takeStartLock(userData, REWRITE_TIMEOUT_MS).catch(() => null);
       if (!release) return;
       try {
-        if ((await holdsInfo()) === "missing") await writeBridgeFile(infoPath, info);
+        if (!closing && (await holdsInfo()) === "missing" && !closing) {
+          writing = writeBridgeFile(infoPath, info);
+          await writing;
+        }
       } catch (error) {
         options.onError(error);
       } finally {
+        writing = null;
         await release();
       }
     },
     close() {
       closing ??= (async () => {
         await stopListening();
+        await writing?.catch(() => undefined);
         if ((await readBridgeFile(infoPath))?.token === token) await rm(infoPath, { force: true });
         await address.remove();
       })();

@@ -8,6 +8,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   watch,
   writeFileSync,
@@ -207,6 +208,79 @@ describe("a file lock in one process", () => {
 
     vi.mocked(fs.open).mockImplementationOnce(() => Promise.reject(failure("EPERM")));
     await expect(acquireFileLock(lock, options())).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("refuses as forbidden, soon and without spinning, when Windows keeps refusing to create the file", async () => {
+    mkdirSync(join(temp, "locks"));
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(fs.open).mockImplementation((path, flags, mode) =>
+      flags === "wx" ? Promise.reject(failure("EPERM")) : actual.open(path, flags, mode),
+    );
+    try {
+      for (const timeoutMs of [15_000, 0]) {
+        vi.mocked(fs.open).mockClear();
+        const { value: outcome, ms } = await timed(() =>
+          acquireFileLock(lock, options({ timeoutMs })).then(
+            () => null,
+            (error: unknown) => error,
+          ),
+        );
+        expect(outcome).toMatchObject({
+          code: "forbidden",
+          message: `Arcue cannot lock the test lock: ${join(temp, "locks")} cannot be written.`,
+        });
+        expect(ms).toBeLessThan(1000);
+        expect(creates()).toBeLessThanOrEqual(5);
+      }
+    } finally {
+      vi.mocked(fs.open).mockImplementation(actual.open);
+      if (platform) Object.defineProperty(process, "platform", platform);
+    }
+    await (await acquireFileLock(lock, options()))();
+  });
+
+  it.skipIf(!posix)("times out without spinning on a link at the lock file that leads nowhere", async () => {
+    mkdirSync(join(temp, "locks"));
+    symlinkSync(join(temp, "nowhere"), lock);
+
+    const { value: outcome, ms } = await timed(() =>
+      acquireFileLock(lock, options({ timeoutMs: 300 })).then(
+        () => null,
+        (error: unknown) => error,
+      ),
+    );
+
+    expect(outcome).toMatchObject({
+      code: "timeout",
+      message: "Another Arcue kept the test lock busy for 0.3 seconds, so nothing was changed. Try again.",
+    });
+    expect(ms).toBeLessThan(1500);
+    expect(creates()).toBeLessThan(50);
+  });
+
+  it.skipIf(!posix)("refuses as forbidden a lock file it may not read, which no lease could break", async () => {
+    writeRecord(lock, record({ pid: process.ppid }));
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(fs.open).mockImplementation((path, flags, mode) =>
+      flags === "r" ? Promise.reject(failure("EACCES")) : actual.open(path, flags, mode),
+    );
+    try {
+      const { value: outcome, ms } = await timed(() =>
+        acquireFileLock(lock, options()).then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(outcome).toMatchObject({
+        code: "forbidden",
+        message: `Arcue cannot lock the test lock: ${join(temp, "locks")} cannot be written.`,
+      });
+      expect(ms).toBeLessThan(1000);
+    } finally {
+      vi.mocked(fs.open).mockImplementation(actual.open);
+    }
   });
 
   it("reads a lock file's text and age through one descriptor", async () => {

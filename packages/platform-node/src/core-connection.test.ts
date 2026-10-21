@@ -1,15 +1,21 @@
 import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { connect, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
 import type { BridgeInfo, CoreKind } from "@arcue/protocol";
 import { BRIDGE_INFO_FILE, SERVE_INFO_FILE } from "@arcue/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeServer } from "./bridge-server";
 import { startBridgeServer } from "./bridge-server";
 import { blockingCore, connectToCore, readBridgeInfo, runningCore } from "./core-connection";
 import type { FakeCore, FakeCoreOptions } from "./test-cores";
 import { deadPid, startFakeCore } from "./test-cores";
+
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  return { ...actual, connect: vi.fn(actual.connect) };
+});
 
 let userData: string;
 let core: ArcueCore;
@@ -25,6 +31,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.mocked(connect).mockReset();
   for (const server of started.splice(0)) await server.close();
   core.dispose();
   rmSync(userData, { recursive: true, force: true });
@@ -45,6 +52,13 @@ async function fake(options: FakeCoreOptions): Promise<FakeCore> {
 
 function writeInfo(file: string, info: BridgeInfo): void {
   writeFileSync(join(userData, file), JSON.stringify(info));
+}
+
+/** A socket whose connect fails with this code, as a socket this user may not reach does. */
+function failingSocket(code: string): Socket {
+  const socket = new Socket();
+  process.nextTick(() => socket.destroy(Object.assign(new Error(`connect ${code}`), { code })));
+  return socket;
 }
 
 const stale = (more: Partial<BridgeInfo> = {}): BridgeInfo => ({
@@ -88,6 +102,28 @@ describe("connecting to a core", () => {
     await expect(readBridgeInfo(userData, "desktop")).resolves.toBeNull();
     await expect(connectToCore(userData, "desktop")).resolves.toBeNull();
   });
+
+  it("rejects when connecting fails other than because nothing listens, and counts that core as live", async () => {
+    const unreachable = await fake({ file: SERVE_INFO_FILE, kind: "serve", locks: 1, url: ADDRESS });
+    for (let call = 0; call < 3; call++) vi.mocked(connect).mockImplementationOnce(() => failingSocket("EACCES"));
+
+    await expect(connectToCore(userData, "serve")).rejects.toMatchObject({ code: "EACCES" });
+    await expect(runningCore(userData, "serve")).resolves.toEqual(unreachable.info);
+    await expect(blockingCore(userData, "serve")).resolves.toEqual({ info: unreachable.info, reason: "same" });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects when the socket's path runs through a file, and counts that core as live",
+    async () => {
+      writeFileSync(join(userData, "in-the-way"), "");
+      const info = stale({ socket: join(userData, "in-the-way", "arcue.sock"), kind: "serve", locks: 1, url: ADDRESS });
+      writeInfo(SERVE_INFO_FILE, info);
+
+      await expect(connectToCore(userData, "serve")).rejects.toMatchObject({ code: "ENOTDIR" });
+      await expect(runningCore(userData, "serve")).resolves.toEqual(info);
+      await expect(blockingCore(userData, "serve")).resolves.toEqual({ info, reason: "same" });
+    },
+  );
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "rejects when it may not reach the socket, and counts that core as running",
