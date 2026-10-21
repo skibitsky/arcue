@@ -210,6 +210,27 @@ describe("a file lock in one process", () => {
     await expect(acquireFileLock(lock, options())).rejects.toMatchObject({ code: "forbidden" });
   });
 
+  it("takes the lock after one refused create on Windows that follows creates which met holders releasing it", async () => {
+    mkdirSync(join(temp, "locks"));
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const failures = ["EEXIST", "EEXIST", "EEXIST", "EEXIST", "EPERM"];
+    vi.mocked(fs.open).mockImplementation((path, flags, mode) => {
+      const code = path === lock && flags === "wx" ? failures.shift() : undefined;
+      return code === undefined ? actual.open(path, flags, mode) : Promise.reject(failure(code));
+    });
+    try {
+      const release = await acquireFileLock(lock, options());
+      expect(failures).toEqual([]);
+      expect(creates()).toBe(6);
+      await release();
+    } finally {
+      vi.mocked(fs.open).mockImplementation(actual.open);
+      if (platform) Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it("refuses as forbidden, soon and without spinning, when Windows keeps refusing to create the file", async () => {
     mkdirSync(join(temp, "locks"));
     const platform = Object.getOwnPropertyDescriptor(process, "platform");

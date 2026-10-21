@@ -76,7 +76,9 @@ export class TabRestore {
 
   /**
    * Opens the pending tabs one by one, keeping the rest when the generation changes or the client is not connected,
-   * runs `adopt`, then activates the saved active tab.
+   * runs `adopt`, then activates the saved active tab. Errors from `open` and `adopt` do not reject it: each becomes an
+   * alert unless `quiet` drops it, and ends the reopen, without activating the saved tab, when the generation changed
+   * or the connection dropped meanwhile.
    */
   async reopen(generation: number, { open, quiet, adopt }: ReopenOptions): Promise<void> {
     for (;;) {
@@ -85,14 +87,17 @@ export class TabRestore {
       try {
         await open(tab);
       } catch (error) {
-        if (generation !== this.#generation || this.#client.connectionState !== "connected") return;
-        if (!quiet?.(error)) this.#store.notify({ message: messageOf(error), kind: "alert" });
+        if (!this.#reported(generation, error, quiet)) return;
       }
       if (generation !== this.#generation) return;
       this.#unopened = this.#unopened.filter((pending) => pending !== tab);
     }
     if (generation !== this.#generation) return;
-    await adopt?.();
+    try {
+      await adopt?.();
+    } catch (error) {
+      if (!this.#reported(generation, error, quiet)) return;
+    }
     if (generation !== this.#generation) return;
     const wanted = this.#wantActive;
     this.#wantActive = null;
@@ -100,5 +105,12 @@ export class TabRestore {
       .get()
       .tabs.find((tab) => tab.kind === "asset" && this.#store.session(tab.id)?.state.get().summary.path === wanted);
     if (active) this.#store.activate(active.id);
+  }
+
+  /** Alerts the error unless `quiet` drops it; false, with no alert, once the generation or the connection changed. */
+  #reported(generation: number, error: unknown, quiet: ReopenOptions["quiet"]): boolean {
+    if (generation !== this.#generation || this.#client.connectionState !== "connected") return false;
+    if (!quiet?.(error)) this.#store.notify({ message: messageOf(error), kind: "alert" });
+    return true;
   }
 }

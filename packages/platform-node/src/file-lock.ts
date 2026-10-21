@@ -114,6 +114,7 @@ export async function acquireFileLock(nativePath: string, options: FileLockOptio
   try {
     const started = performance.now();
     let vanished = 0;
+    let refusals = 0;
     for (let tries = 0; ; tries++) {
       const created = await create(nativePath, attempt.record, attempt.label);
       if (created === "created") {
@@ -124,7 +125,8 @@ export async function acquireFileLock(nativePath: string, options: FileLockOptio
       const seen = await inspect(nativePath, attempt.label);
       const refusal = seen === "gone" && typeof created === "object" ? created : null;
       vanished = seen === "gone" ? vanished + 1 : 0;
-      if (refusal && vanished >= REFUSALS_BEFORE_FORBIDDEN) {
+      refusals = refusal ? refusals + 1 : 0;
+      if (refusal && refusals >= REFUSALS_BEFORE_FORBIDDEN) {
         throw cannotLock(attempt.label, nativePath, refusal.refused);
       }
       if (vanished === 1) continue;
