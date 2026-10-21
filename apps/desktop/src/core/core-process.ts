@@ -94,6 +94,7 @@ async function start(userData: string, logFile: string): Promise<void> {
       bridge = await startBridgeServer({
         core: started,
         userData,
+        kind: "desktop",
         ensureWindow: (view) => windows.ensure(view),
         onError,
       });

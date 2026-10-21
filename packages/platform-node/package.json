@@ -6,7 +6,8 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
-    "./import-worker": "./src/import-worker.ts"
+    "./import-worker": "./src/import-worker.ts",
+    "./test": "./src/test-cores.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

@@ -58,7 +58,7 @@ export async function connectOrLaunch(
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown = null;
   const attempt = () =>
-    connectToCore(userData).catch((error: unknown) => {
+    connectToCore(userData, "desktop").catch((error: unknown) => {
       lastError = error;
       return null;
     });

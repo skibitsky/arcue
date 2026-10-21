@@ -22,7 +22,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { FileLockOptions } from "./file-lock";
 import { acquireFileLock, isRunning, lockNamespace } from "./file-lock";
 import type { Fixture, FixtureChild } from "./test-children";
-import { buildFixture, deadPid } from "./test-children";
+import { buildFixture } from "./test-children";
+import { deadPid } from "./test-cores";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();

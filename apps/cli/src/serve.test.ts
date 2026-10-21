@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { connectToCore } from "@arcue/platform-node";
 import type { CoreClient, IncomingRequest } from "@arcue/protocol";
 import {
-  BRIDGE_INFO_FILE,
   binaryFrameCodec,
   bridgeInfoSchema,
   createPeer,
@@ -15,6 +14,7 @@ import {
   framedEndpoint,
   messageChannel,
   SERVE_CORE_PATH,
+  SERVE_INFO_FILE,
 } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
@@ -238,7 +238,7 @@ describe("arcue serve", () => {
     const outside: IncomingRequest[] = [];
     windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=3f9a0c1d2b4e`), viewed);
     windowClient(await openSocket(url, url), outside);
-    const connection = await connectToCore(userData);
+    const connection = await connectToCore(userData, "serve");
 
     await expect(
       connection?.client.execute("asset.openInView", { path: model, view: "3f9a0c1d2b4e" }),
@@ -256,7 +256,7 @@ describe("arcue serve", () => {
     writeFileSync(model, "fbx");
     const other: IncomingRequest[] = [];
     windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=b`), other);
-    const connection = await connectToCore(userData);
+    const connection = await connectToCore(userData, "serve");
 
     await expect(connection?.client.execute("asset.openInView", { path: model, view: "a" })).resolves.toMatchObject({
       shown: "held",
@@ -322,9 +322,9 @@ describe("arcue serve", () => {
   it("takes the desktop app's place for the command line, and names its address", async () => {
     const { url } = await serve();
 
-    const info = bridgeInfoSchema.parse(JSON.parse(readFileSync(join(userData, BRIDGE_INFO_FILE), "utf8")));
+    const info = bridgeInfoSchema.parse(JSON.parse(readFileSync(join(userData, SERVE_INFO_FILE), "utf8")));
     expect(info.url).toBe(url);
-    const connection = await connectToCore(userData);
+    const connection = await connectToCore(userData, "serve");
     expect(connection?.info.url).toBe(url);
     await expect(connection?.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
     connection?.close();
@@ -340,7 +340,7 @@ describe("arcue serve", () => {
     await (await serve()).close();
     server = null;
 
-    expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
   });
 
   it("asks for another port when its port is taken", async () => {
@@ -350,7 +350,7 @@ describe("arcue serve", () => {
     const port = typeof address === "object" && address ? address.port : 0;
 
     await expect(serve({ port })).rejects.toThrow(`Port ${port} is in use. Choose another with --port.`);
-    expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
     taken.close();
   });
 

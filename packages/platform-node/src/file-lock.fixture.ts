@@ -1,8 +1,14 @@
 import { closeSync, openSync, readFileSync, readSync, watch, writeSync } from "node:fs";
 import { open } from "node:fs/promises";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
+import { BRIDGE_INFO_FILE, LOCKS_FOLDER, START_LOCK_FILE } from "@arcue/protocol";
+import { startBridgeServer } from "./bridge-server";
+import { runningCore } from "./core-connection";
 import type { FileLockOptions } from "./file-lock";
 import { acquireFileLock } from "./file-lock";
+import { startFakeCore } from "./test-cores";
 
 type LockSettings = Partial<Omit<FileLockOptions, "label" | "now">>;
 
@@ -23,7 +29,14 @@ export type FixtureCommand =
   | { mode: "spam"; lock: string; ms: number; waiters: number; holdMs: number; options?: LockSettings }
   | { mode: "exit"; lock: string; options?: LockSettings }
   | { mode: "open-handle"; path: string }
-  | { mode: "watch"; folder: string };
+  | { mode: "watch"; folder: string }
+  /** Starts the bridge of Arcue in the browser on a core in memory once it gets "go". */
+  | { mode: "serve-start"; userData: string; url: string }
+  /**
+   * Once it gets "go", starts as a desktop core of a future build would, one that takes other locks: under the start
+   * lock every Arcue shares, it refuses beside any live core, waits a moment, and writes `bridge.json` with `locks: 2`.
+   */
+  | { mode: "future-desktop"; userData: string };
 
 const command: FixtureCommand = JSON.parse(process.argv[2] ?? "{}");
 
@@ -33,6 +46,13 @@ function send(message: unknown): Promise<void> {
     if (!process.send) resolve();
     else process.send(message, () => resolve());
   });
+}
+
+/** Tells the test the child is ready and waits for its "go", so that children act at the same moment. */
+async function ready(): Promise<void> {
+  const go = received("go");
+  void send("ready");
+  await go;
 }
 
 function received(expected: string): Promise<void> {
@@ -70,11 +90,7 @@ function increment(path: string): void {
 async function main(): Promise<void> {
   switch (command.mode) {
     case "loop": {
-      if (command.together) {
-        const go = received("go");
-        void send("ready");
-        await go;
-      }
+      if (command.together) await ready();
       for (let index = 0; index < command.iterations; index++) {
         const release = await acquireFileLock(command.lock, lockOptions(command.options));
         const entered = `${process.pid}:${index}:enter`;
@@ -134,6 +150,51 @@ async function main(): Promise<void> {
       void send("watching");
       await done;
       watcher.close();
+      return;
+    }
+    case "serve-start": {
+      const core = await ArcueCore.start({ platform: new MemoryPlatform({ clock: new ManualClock() }) });
+      await ready();
+      const done = received("release");
+      try {
+        const server = await startBridgeServer({
+          core,
+          userData: command.userData,
+          kind: "serve",
+          url: command.url,
+          ensureWindow: async () => undefined,
+          onError: () => undefined,
+        });
+        void send({ started: server.info });
+        await done;
+        await server.close();
+      } catch (error) {
+        void send({ refused: error instanceof Error ? error.message : String(error) });
+        await done;
+      }
+      core.dispose();
+      return;
+    }
+    case "future-desktop": {
+      await ready();
+      const done = received("release");
+      const release = await acquireFileLock(join(command.userData, LOCKS_FOLDER, START_LOCK_FILE), lockOptions());
+      let started: { close(): Promise<void> } | null = null;
+      try {
+        const live = (await runningCore(command.userData, "serve")) ?? (await runningCore(command.userData, "desktop"));
+        if (live) {
+          void send({ refused: `Arcue runs (process ${live.pid})` });
+        } else {
+          await sleep(300);
+          const fake = await startFakeCore(command.userData, { file: BRIDGE_INFO_FILE, kind: "desktop", locks: 2 });
+          started = fake;
+          void send({ started: fake.info });
+        }
+      } finally {
+        await release();
+      }
+      await done;
+      await started?.close();
       return;
     }
     case "exit": {

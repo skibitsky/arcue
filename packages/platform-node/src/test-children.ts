@@ -1,28 +1,12 @@
 import type { ChildProcess } from "node:child_process";
-import { fork, spawnSync } from "node:child_process";
+import { fork } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 import type { FixtureCommand } from "./file-lock.fixture";
-
-/** The variables that tie a process to an agent session or its view, which no child of a test may inherit. */
-const SESSION_VARIABLES = ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "ARCUE_VIEW"];
-
-/** This process's environment outside any agent session, with the test's own data folder. */
-export function childEnv(userData: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, ARCUE_USER_DATA: userData };
-  for (const name of SESSION_VARIABLES) delete env[name];
-  return env;
-}
-
-/** The pid of a process that has ended. */
-export function deadPid(): number {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of SESSION_VARIABLES) delete env[name];
-  return spawnSync(process.execPath, ["-e", ""], { env }).pid;
-}
+import { outsideSessions } from "./test-cores";
 
 export interface FixtureChild {
   readonly process: ChildProcess;
@@ -79,7 +63,7 @@ export async function buildFixture(): Promise<Fixture> {
 
 function startChild(script: string, command: FixtureCommand, userData: string): FixtureChild {
   const child = fork(script, [JSON.stringify(command)], {
-    env: childEnv(userData),
+    env: { ...outsideSessions(), ARCUE_USER_DATA: userData },
     execArgv: [],
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });

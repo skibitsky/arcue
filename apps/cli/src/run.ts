@@ -85,7 +85,7 @@ async function status(
   env: NodeJS.ProcessEnv,
   output: Output,
 ): Promise<number> {
-  const connection = await connectToCore(userDataDir(env));
+  const connection = await connectToCore(userDataDir(env), "desktop");
   if (!connection) {
     output.out("Arcue is not running.\n");
     return 1;
