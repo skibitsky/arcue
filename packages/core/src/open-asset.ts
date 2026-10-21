@@ -80,6 +80,11 @@ export class OpenAsset {
   cancelRetry: () => void = () => undefined;
   /** How long until that work is tried again, doubling with each try. */
   retryDelayMs = FIRST_RETRY_MS;
+  /**
+   * Comments another Arcue saved wait to move onto the version on screen, because its files changed on disk; the next
+   * load moves them, even when it reads the same version.
+   */
+  reanchorPending = false;
   /** The file `composition.fileRoles` read last, whose parse stays until the next question so adding it reads it once. */
   asked: string | null = null;
   /** Serializes edits of the composition file. */

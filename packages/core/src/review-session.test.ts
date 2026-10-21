@@ -400,5 +400,14 @@ describe("ReviewSession and the reviews lock", () => {
     expect(adopted).toEqual([[9, 4]]);
     await session.run(dismiss);
     expect(adopted).toEqual([[9, 4]]);
+
+    const striker = { ...repository, folder: "/work/game/.arcue/reviews/Striker.fbx", assetPath: "Striker.fbx" };
+    await session.moveTo(striker, async () => {
+      const moved = { ...emptyReview(striker.assetPath), revision: 11 };
+      await platform.forCore("core-1").writeFileAtomic(reviewFilePath(striker), serializeReview(moved));
+      await platform.forCore("core-1").remove(REVIEW);
+    });
+    expect(session.review.revision).toBe(11);
+    expect(adopted).toEqual([[9, 4]]);
   });
 });

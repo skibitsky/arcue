@@ -43,7 +43,10 @@ export interface ReviewChange<Result> {
 }
 
 export interface ReviewSessionOptions {
-  /** Called when the session takes in a review another program saved, with the review it replaced. */
+  /**
+   * Called when the session takes in a review another program saved, with the review it replaced; never for the
+   * session's own saves and moves.
+   */
   adopted?: (review: ReviewFile, before: ReviewFile) => void;
 }
 
@@ -172,7 +175,8 @@ export class ReviewSession {
 
   /**
    * Runs `move`, which moves or replaces the review folder on disk, between two changes, then takes in the review at
-   * `location`, where it lives from now on. The undo history ends, because its steps name files by their old paths.
+   * `location`, where it lives from now on, as this session's own change rather than another program's. The undo
+   * history ends, because its steps name files by their old paths.
    * When `move` fails and leaves the review at `location` rather than in its old place, the session stops saving, so
    * it never writes a second copy of the review into the old folder.
    */
@@ -195,7 +199,7 @@ export class ReviewSession {
         this.#location = location;
         this.#path = reviewFilePath(location);
         this.history.clear();
-        await this.#sync();
+        await this.#sync({ adopt: false });
       } finally {
         await unlock();
       }
@@ -234,7 +238,7 @@ export class ReviewSession {
     return this.#diskHash !== null && textHash(text) === this.#diskHash;
   }
 
-  async #sync(): Promise<void> {
+  async #sync({ adopt = true }: { adopt?: boolean } = {}): Promise<void> {
     const disk = await this.#readDisk();
     if (disk.hash === this.#diskHash) return;
     if (disk.text === null) {
@@ -247,7 +251,7 @@ export class ReviewSession {
     this.#review = { ...external, asset: { ...external.asset, path: this.#location.assetPath } };
     this.history.clear();
     this.#changed(this.#review);
-    this.#adopted?.(this.#review, before);
+    if (adopt) this.#adopted?.(this.#review, before);
   }
 
   async #readDisk(): Promise<{ text: string | null; hash: string | null }> {

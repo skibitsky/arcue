@@ -2,6 +2,7 @@ import type { CompositionFile, ReviewFile, RoundData } from "@arcue/protocol";
 import type { Importer } from "@arcue/scene";
 import { describe, expect, it, vi } from "vitest";
 import type { ArcueCore } from "./core";
+import { emptyReview, serializeReview } from "./review-store";
 import type { FakeWindow, SecondCore, TestCore } from "./test-support";
 import {
   fakeAsset,
@@ -342,7 +343,21 @@ describe("two cores copying rounds", () => {
     const { a, b } = cores;
     const assetA = await openIn(a);
     await a.core.client.execute("comment.create", pinComment(assetA));
+    let refusing = false;
+    let refused = 0;
+    a.platform.beforeWrite = (path, _op, actor) => {
+      if (path === SETTINGS && actor === "core-2") refusing = true;
+    };
+    a.platform.beforeRead = (path) => {
+      if (!refusing || path !== SETTINGS) return;
+      refused++;
+      throw new Error("The watchers read settings.json too early.");
+    };
     await b.core.client.execute("settings.set", { coordinates: "z-up-blender" });
+    await vi.waitFor(() => expect(refused).toBe(2));
+    await expect(a.core.client.query("settings.get", {})).resolves.toEqual({ coordinates: "y-up" });
+
+    refusing = false;
     const { prompt } = await a.core.client.execute("round.copy", { assetId: assetA });
     expect(prompt).toContain("Meters, right-handed, Z up as in Blender.");
   });
@@ -515,7 +530,15 @@ describe("two cores and a renamed model", () => {
       assets: [{ assetId: assetB, error: "Model not found: Hero.fbx" }],
     });
     const assetA = await openIn(a, STRIKER);
+    const changes: ReviewFile[] = [];
+    a.core.client.subscribe("review.changed", ({ review }) => changes.push(review));
     await a.core.client.execute("review.relink", { assetId: assetA, from: HERO });
+    await a.core.idle();
+    expect(changes.length).toBeGreaterThan(0);
+    for (const review of changes) {
+      const recorded = new Set(review.versions.map((version) => version.id));
+      expect(review.comments.filter((comment) => !recorded.has(comment.anchorVersion))).toEqual([]);
+    }
     await expect(b.core.client.execute("comment.create", pinComment(assetB))).rejects.toMatchObject({
       code: "conflict",
       message: expect.stringContaining("Hero.fbx and its review are gone from disk"),
@@ -718,6 +741,62 @@ describe("two cores loading versions", () => {
     expect(data.comments[0]).toMatchObject({ id: commentId, anchorVersion: latest, anchorState: "moved" });
   });
 
+  it("re-anchors a comment another core saved on an older version once the model, rewritten as it was, settles", async () => {
+    const gate = gatedImporter();
+    const cores = await twoCores(heroFiles(), { importers: [gate.importer] });
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    const assetB = await openIn(b);
+    gate.hold("Hero.fbx");
+    await a.platform.writeFile(HERO, finer);
+    await settleA(cores);
+    const latest = await versionOf(a, assetA);
+    a.clock.advance(10);
+    await a.platform.writeFile(HERO, finer);
+
+    const { commentId } = await b.core.client.execute("comment.create", pinComment(assetB));
+    await flush();
+    await a.core.idle();
+    expect((await saved(a)).comments[0]?.anchorVersion).toBe(HERO_VERSION);
+    await settleA(cores);
+    await b.core.client.execute("asset.close", { assetId: assetB });
+    gate.release("Hero.fbx");
+    await idle(cores);
+    expect((await saved(a)).comments[0]).toMatchObject({ id: commentId, anchorVersion: latest });
+    const comment = (await a.core.client.query("review.get", { assetId: assetA })).comments[0];
+    expect(comment).toMatchObject({ id: commentId, anchorVersion: latest, anchorState: "moved" });
+  });
+
+  it("leaves comments on the version another core read after a texture changed, so neither moves them back", async () => {
+    const skin = `${ART}/skin.png`;
+    const cores = await twoCores({ ...heroFiles({ ...heroSpec, textures: ["skin.png"] }), [skin]: png });
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    const assetB = await openIn(b);
+    const first = await versionOf(a, assetA);
+    await a.core.client.execute("comment.create", pinComment(assetA, "On the skin.", first));
+    await idle(cores);
+    let writes = 0;
+    a.platform.beforeWrite = (path, _op, actor) => {
+      if (path !== REVIEW_JSON || actor === null) return;
+      writes++;
+      if (writes > 10) throw new Error("The cores keep rewriting review.json.");
+    };
+    await a.platform.writeFile(skin, Uint8Array.of(9, 9));
+    const { version: latest } = await a.core.client.execute("asset.reload", { assetId: assetA });
+    expect(latest).not.toBe(first);
+    await idle(cores);
+    expect(writes).toBe(1);
+    expect((await saved(a)).comments[0]?.anchorVersion).toBe(latest);
+
+    await settle(cores);
+    expect(await versionOf(b, assetB)).toBe(latest);
+    expect(writes).toBe(1);
+    expect((await saved(a)).comments[0]?.anchorVersion).toBe(latest);
+    expect(a.errors).toEqual([]);
+    expect(b.errors).toEqual([]);
+  });
+
   it("does not re-anchor a detached comment again on every change another program saves", async () => {
     const cores = await twoCores();
     const { a } = cores;
@@ -771,27 +850,73 @@ describe("two cores loading versions", () => {
 });
 
 describe("a reviews lock another holder keeps", () => {
-  it("leaves a version record waiting to try again, and records it once the lock is free", async () => {
+  it("leaves a version record waiting to try again, longer each time, and records it once the lock is free", async () => {
     const test = await startTestCore(heroFiles(), { lockTimeoutMs: 15_000 });
     const key = test.platform.lockKey("/work/game", "reviews");
-    const unlock = await test.platform.lock("/work/game", "reviews");
+    const waiting = () => test.platform.lockWaiters(key);
+    const timeOut = async () => {
+      await vi.waitFor(() => expect(waiting()).toBe(1));
+      test.clock.advance(15_000);
+      await flush();
+      await test.core.idle();
+      expect(waiting()).toBe(0);
+    };
+    const retriesAfter = async (ms: number) => {
+      test.clock.advance(ms - 1);
+      await flush();
+      expect(waiting()).toBe(0);
+      test.clock.advance(1);
+      await vi.waitFor(() => expect(waiting()).toBe(1));
+    };
+    let unlock = await test.platform.lock("/work/game", "reviews");
     const { assetId } = await test.window.client.execute("asset.open", { path: HERO });
-    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
-    test.clock.advance(15_000);
-    await test.core.idle();
+    await timeOut();
     await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
-      assets: [{ assetId, status: "loading" }],
+      assets: [{ assetId, status: "loading", error: null }],
     });
     expect(test.clock.pendingTimers).toBe(1);
+    await retriesAfter(1000);
+    await timeOut();
+    await retriesAfter(2000);
 
     await unlock();
-    test.clock.advance(1000);
     await flush();
     await test.core.idle();
     await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
       assets: [{ assetId, status: "ready", version: HERO_VERSION }],
     });
     expect(test.clock.pendingTimers).toBe(0);
+
+    unlock = await test.platform.lock("/work/game", "reviews");
+    await test.platform.writeFile(HERO, finer);
+    for (let check = 0; check < 10 && waiting() === 0; check++) {
+      await flush();
+      test.clock.advance(300);
+    }
+    await timeOut();
+    await retriesAfter(1000);
+    await timeOut();
+    expect(test.clock.pendingTimers).toBe(1);
+    await test.core.client.execute("asset.close", { assetId });
+    expect(test.clock.pendingTimers).toBe(0);
+    await unlock();
+  });
+
+  it("fails a load whose parse times out instead of trying it again", async () => {
+    const gate = gatedImporter();
+    gate.hold("Hero.fbx");
+    const test = await startTestCore(heroFiles());
+    const other = await startSecondCore(test, { importers: [gate.importer], core: { importTimeoutMs: 1000 } });
+    const { assetId } = await other.window.client.execute("asset.open", { path: HERO });
+    await vi.waitFor(() => expect(test.clock.pendingTimers).toBe(1));
+    test.clock.advance(1000);
+    await flush();
+    await other.core.idle();
+    await expect(other.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, status: "failed", error: '"import.run" got no response within 1000 ms.' }],
+    });
+    expect(test.clock.pendingTimers).toBe(0);
+    gate.release("Hero.fbx");
   });
 
   it("follows a renamed model later instead of reporting it not found", async () => {
@@ -846,6 +971,56 @@ describe("a reviews lock another holder keeps while a file is opened or relinked
     });
     await expect(test.platform.exists(REVIEW_JSON)).resolves.toBe(true);
     expect(test.errors).toEqual([]);
+  });
+
+  it("opens a renamed model with the review another core gave it while the open waited for the lock", async () => {
+    const test = await startTestCore(heroFiles());
+    const first = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(first));
+    await test.core.client.execute("asset.close", { assetId: first });
+    await test.platform.rename(HERO, STRIKER);
+    const offered: unknown[] = [];
+    test.core.client.subscribe("review.offered", (payload) => offered.push(payload));
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    const opening = test.window.client.execute("asset.open", { path: STRIKER });
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    await test.platform.writeFile(
+      `${STRIKER_REVIEW}/review.json`,
+      serializeReview({ ...emptyReview("Assets/Art/Striker.fbx"), revision: 7 }),
+    );
+    await unlock();
+    const { assetId } = await opening;
+    await test.core.idle();
+    expect(offered).toEqual([]);
+    await expect(test.core.client.query("review.candidates", { assetId })).resolves.toEqual({ candidates: [] });
+    expect((await saved(test)).comments).toHaveLength(1);
+    const review = await test.core.client.query("review.get", { assetId });
+    expect(review).toMatchObject({ comments: [], revision: 8 });
+    expect(test.errors).toEqual([]);
+  });
+
+  it("keeps the earlier review where it is when its model comes back while a relink waits for the lock", async () => {
+    const test = await startTestCore(heroFiles());
+    const first = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(first));
+    await test.core.client.execute("asset.close", { assetId: first });
+    const hero = await test.platform.readText(HERO);
+    await test.platform.remove(HERO);
+    await test.platform.writeFile(STRIKER, coarser);
+    const assetId = await openAsset(test, STRIKER);
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    const relink = test.core.client.execute("review.relink", { assetId, from: HERO }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    await test.platform.writeFile(HERO, hero);
+    await unlock();
+    await expect(relink).resolves.toMatchObject({
+      code: "conflict",
+      message: "Hero.fbx still exists, so its review stays with it.",
+    });
+    expect((await saved(test)).comments).toHaveLength(1);
+    await expect(test.platform.exists(`${STRIKER_REVIEW}/review.json`)).resolves.toBe(true);
   });
 
   it("looks for a lost file of the composition again once the lock is free", async () => {
@@ -908,7 +1083,11 @@ const variants: readonly string[] = [
 interface Acknowledged {
   creates: { id: string; side: number; answered: number }[];
   deletes: Set<string>;
-  undos: { side: number; answered: number }[];
+  /**
+   * The comments gone after each undo that changed something, of those there before it or answered while it ran, which
+   * that undo may have removed.
+   */
+  undone: { id: string; side: number }[];
 }
 
 /** One run of random commands from both cores, with random pauses in their writes, then a check of every invariant. */
@@ -922,8 +1101,9 @@ async function fuzzRun(seed: number): Promise<void> {
   };
   const cores = await twoCores(animated());
   const { a, b } = cores;
+  const assetA = await openIn(a);
   const sides = [
-    { ...a, assetId: await openIn(a) },
+    { ...a, assetId: assetA },
     { ...b, assetId: await openIn(b) },
   ];
   const revisions: number[] = [];
@@ -933,11 +1113,13 @@ async function fuzzRun(seed: number): Promise<void> {
     if (path === REVIEW_JSON && (await a.platform.exists(path))) revisions.push((await saved(a)).revision);
     if (pausing && chance(0.3)) for (let turn = Math.floor(random() * 25); turn > 0; turn--) await Promise.resolve();
   };
-  const acknowledged: Acknowledged = { creates: [], deletes: new Set(), undos: [] };
+  const acknowledged: Acknowledged = { creates: [], deletes: new Set(), undone: [] };
   let answers = 0;
+  const commentIds = async (side: Side, assetId: string): Promise<string[]> =>
+    (await side.core.client.query("review.get", { assetId })).comments.map((comment) => comment.id);
   const anyComment = async (side: Side, assetId: string): Promise<string> => {
-    const { comments } = await side.core.client.query("review.get", { assetId });
-    return pick(comments.length > 0 ? comments.map((comment) => comment.id) : ["c0"]);
+    const ids = await commentIds(side, assetId);
+    return pick(ids.length > 0 ? ids : ["c0"]);
   };
   const failures: unknown[] = [];
   const pending: Promise<unknown>[] = [];
@@ -994,8 +1176,13 @@ async function fuzzRun(seed: number): Promise<void> {
           return;
         }
         case "undo": {
+          const before = await commentIds(side, assetId);
+          const answered = acknowledged.creates.length;
           const { changed } = await client.execute("review.undo", { assetId });
-          if (changed) acknowledged.undos.push({ side: index, answered: ++answers });
+          if (!changed) return;
+          const after = new Set(await commentIds(side, assetId));
+          const meanwhile = acknowledged.creates.slice(answered).map((create) => create.id);
+          for (const id of [...before, ...meanwhile]) if (!after.has(id)) acknowledged.undone.push({ id, side: index });
           return;
         }
         case "redo":
@@ -1036,7 +1223,7 @@ async function fuzzRun(seed: number): Promise<void> {
   const review = await saved(a);
   const ids = new Set(review.comments.map((comment) => comment.id));
   for (const create of acknowledged.creates) {
-    const undone = acknowledged.undos.some((undo) => undo.side === create.side && undo.answered > create.answered);
+    const undone = acknowledged.undone.some((undo) => undo.side === create.side && undo.id === create.id);
     if (!ids.has(create.id) && !acknowledged.deletes.has(create.id) && !undone) {
       throw new Error(`Comment ${create.id}, the answer of command ${create.answered}, is gone.`);
     }
@@ -1051,8 +1238,10 @@ async function fuzzRun(seed: number): Promise<void> {
   for (const { assets } of shown) expect(assets.map((asset) => asset.status)).toEqual(["ready"]);
   const [versionA, versionB] = await Promise.all(sides.map((side) => versionOf(side, side.assetId)));
   expect(versionB).toBe(versionA);
+  const { version: onDisk } = await a.core.client.execute("asset.reload", { assetId: assetA });
+  expect(onDisk).toBe(versionA);
   for (const comment of review.comments) {
-    if (comment.target !== null) expect(comment.anchorVersion).toBe(versionA);
+    if (comment.target !== null) expect(comment.anchorVersion).toBe(onDisk);
   }
   for (const failure of failures) {
     expect(failure).toMatchObject({ code: expect.stringMatching(/^(conflict|not-found|unavailable)$/) });

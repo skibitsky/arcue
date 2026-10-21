@@ -1074,6 +1074,7 @@ export class ArcueCore {
     if (versionId === asset.version && !force) {
       this.#watchImportedFiles(asset, files);
       asset.loadedStats = files.stats;
+      if (asset.reanchorPending) await this.#reanchorOnScreen(asset);
       if (asset.status !== "ready") {
         asset.status = "ready";
         asset.error = null;
@@ -1084,6 +1085,7 @@ export class ArcueCore {
     asset.status = "loading";
     this.registry.emit("asset.updated", { asset: asset.summary });
     let meshes: MeshTopology[] = [];
+    let recording = false;
     try {
       const scene = await buildAssetScene(files, (file) => this.#importFile(asset, file), {
         parsed: (file) => asset.parsed(file.path, file.id),
@@ -1091,6 +1093,7 @@ export class ArcueCore {
       versionId = this.#versionWithDependencies(asset, files);
       this.#watchImportedFiles(asset, files);
       meshes = meshesOf(scene).map((entry) => ({ mesh: entry.path, topology: entry.mesh.topology }));
+      recording = true;
       const outcome = await asset.session.run(async (review) => {
         if (!(await sameStats(this.#platform, files.stats))) return { next: null, result: "superseded" as const };
         const record: AssetVersion = {
@@ -1126,13 +1129,14 @@ export class ArcueCore {
             for (const path of asset.imported.keys()) if (!kept.has(path)) asset.imported.delete(path);
             asset.loadedFiles = kept;
             asset.loadedStats = files.stats;
+            asset.reanchorPending = false;
             asset.retryDelayMs = FIRST_RETRY_MS;
           },
         };
       });
       if (outcome === "superseded") return null;
     } catch (error) {
-      if (hasCode(error, "timeout")) {
+      if (recording && hasCode(error, "timeout")) {
         this.#retryLater(asset, () => this.#load(asset, force));
       } else {
         this.#failed(asset, error);
@@ -1146,7 +1150,7 @@ export class ArcueCore {
 
   /**
    * Re-anchors the comments of a review another Arcue saved when it holds a pinned comment that is new or newly
-   * anchored, on another version than the one on screen, as when that Arcue still showed an older version.
+   * anchored and should move onto the version on screen, as when that Arcue still showed an older version.
    */
   #reanchorAdopted(asset: OpenAsset, review: ReviewFile, before: ReviewFile): void {
     const version = asset.version;
@@ -1155,35 +1159,36 @@ export class ArcueCore {
     const stale = review.comments.some(
       (comment) =>
         comment.target !== null &&
-        comment.anchorVersion !== version &&
+        movesOnto(comment, version, review.versions) &&
         earlier.get(comment.id) !== comment.anchorVersion,
     );
     if (stale) void this.#track(asset.loads.run(() => this.#reanchorOnScreen(asset)));
   }
 
   /**
-   * Moves every comment's anchors onto the version on screen, while its files are still the ones it was read from;
-   * otherwise the load their change queued re-anchors them.
+   * Moves the comments that should move onto the version on screen, while its files are still the ones it was read
+   * from. Otherwise it waits for the files to be read again: the load their change queued re-anchors them, even when
+   * the files turn out to hold the version on screen.
    */
   async #reanchorOnScreen(asset: OpenAsset): Promise<void> {
     try {
-      await asset.session.run(async (review) => {
+      const outcome = await asset.session.run<"unchanged" | "stale" | "reanchored">(async (review) => {
         const { version, scene } = asset;
-        if (
-          asset.closed ||
-          version === null ||
-          scene === null ||
-          !(await sameStats(this.#platform, asset.loadedStats))
-        ) {
-          return { next: null, result: undefined };
-        }
+        if (asset.closed || version === null || scene === null) return { next: null, result: "unchanged" };
+        if (!(await sameStats(this.#platform, asset.loadedStats))) return { next: null, result: "stale" };
         const reanchorer = new Reanchorer(review.versions, version, scene);
+        const reanchor = (comment: Comment) =>
+          movesOnto(comment, version, review.versions) ? reanchorer.reanchor(comment) : comment;
         return {
-          next: { ...review, comments: review.comments.map((comment) => reanchorer.reanchor(comment)) },
-          result: undefined,
-          apply: () => asset.session.history.mapComments((comment) => reanchorer.reanchor(comment)),
+          next: { ...review, comments: review.comments.map(reanchor) },
+          result: "reanchored",
+          apply: () => {
+            asset.session.history.mapComments(reanchor);
+            asset.reanchorPending = false;
+          },
         };
       });
+      if (outcome === "stale") asset.reanchorPending = true;
     } catch (error) {
       if (hasCode(error, "timeout")) this.#retryLater(asset, () => this.#load(asset, true));
       else if (!asset.closed && !hasCode(error, "conflict")) this.#onError(error);
@@ -1873,6 +1878,24 @@ function offered(matches: Parameters<typeof rankCandidates>[0]): ReviewCandidate
 
 function replaceComment(review: ReviewFile, updated: Comment): ReviewFile {
   return { ...review, comments: review.comments.map((comment) => (comment.id === updated.id ? updated : comment)) };
+}
+
+/**
+ * Whether a comment another Arcue saved moves onto the version on screen. Nothing moves onto a version the review does
+ * not record. A comment moves from any version recorded before that one, and from a later one read from other model
+ * bytes, as after the model went back to an earlier version. It stays on a later version read from the same model
+ * bytes, as when the other Arcue read a texture this one has not read again yet, or names versions another way, so two
+ * Arcues never move comments to and fro.
+ */
+function movesOnto(comment: Comment, version: string, versions: readonly AssetVersion[]): boolean {
+  if (comment.anchorVersion === version) return false;
+  const shown = versions.findIndex((entry) => entry.id === version);
+  const anchored = versions.findIndex((entry) => entry.id === comment.anchorVersion);
+  const onScreen = versions[shown];
+  const anchoredOn = versions[anchored];
+  if (onScreen === undefined) return false;
+  if (anchoredOn === undefined || anchored < shown) return true;
+  return anchoredOn.hash !== onScreen.hash || anchoredOn.size !== onScreen.size;
 }
 
 /**
