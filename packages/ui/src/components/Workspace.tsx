@@ -35,6 +35,8 @@ export interface WorkspaceProps extends TabDragHandlers {
   dropHint?: string;
   /** Why the host can't open dropped files, for a host without `onDropFiles`. A drop on the empty state shows it. */
   dropRefusal?: string;
+  /** The status bar's tip while the window reconnects to the core, in place of saying that the core restarted. */
+  reconnectingTip?: string;
   /** Replaces the "+" button's default, which adds an empty tab. */
   onNewTab?: () => void;
   /** Drawn at the left of the title bar, such as window buttons or the space macOS keeps for its own. */
@@ -97,6 +99,7 @@ export function Workspace(props: WorkspaceProps) {
               createViewport={createViewport}
               now={now}
               historyKeys={historyKeys}
+              reconnectingTip={props.reconnectingTip}
             />
           ) : null;
         })}
@@ -128,6 +131,7 @@ function AssetView({
   createViewport,
   now,
   historyKeys,
+  reconnectingTip,
 }: {
   store: WorkspaceStore;
   session: AssetSession;
@@ -136,6 +140,7 @@ function AssetView({
   createViewport: CreateViewport;
   now: () => Date;
   historyKeys: boolean;
+  reconnectingTip: string | undefined;
 }) {
   const rootRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -174,7 +179,7 @@ function AssetView({
       <Stage store={store} session={session} active={active} createViewport={createViewport} />
       <Timeline store={store} session={session} />
       <CommentsPanel session={session} now={now} />
-      <StatusBar store={store} session={session} connection={connection} />
+      <StatusBar store={store} session={session} connection={connection} reconnectingTip={reconnectingTip} />
     </main>
   );
 }

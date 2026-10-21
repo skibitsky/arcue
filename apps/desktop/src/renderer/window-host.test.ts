@@ -196,6 +196,35 @@ describe("WindowHost", () => {
     expect(desktop.readyCount).toBe(1);
   });
 
+  it("never labels a tab with the asset a lost core gave the same id", async () => {
+    const desktop = new FakeDesktop({ platform: "linux", restore: null, adopt: null });
+    const window = await startHost(desktop);
+    await vi.waitFor(() => expect(desktop.readyCount).toBe(1));
+    await window.store.openPath(HERO);
+    await window.store.openPath(CRATE);
+    await vi.waitFor(() => expect(paths(window)).toEqual([HERO, CRATE]));
+    const ids = () => window.store.state.get().tabs.map((tab) => tab.id);
+    expect(ids()).toEqual(["a1", "a2"]);
+    window.store.moveTab("a2", 0);
+
+    const labels: string[] = [];
+    let detached = false;
+    window.store.state.subscribe(() => {
+      const { tabs } = window.store.state.get();
+      if (tabs.length === 0) detached = true;
+      if (!detached) return;
+      for (const tab of tabs) labels.push(`${tab.id} ${window.store.session(tab.id)?.state.get().summary.name}`);
+    });
+    desktop.crash();
+    await vi.waitFor(() => {
+      expect(detached).toBe(true);
+      expect(paths(window)).toEqual([CRATE, HERO]);
+    });
+    expect(ids()).toEqual(["a1", "a2"]);
+    expect(labels).not.toContain("a1 Hero.fbx");
+    expect(labels).not.toContain("a2 Crate.fbx");
+  });
+
   it("keeps every tab when the core crashes again while the window reopens them", async () => {
     const all = [HERO, CRATE, GOLEM, BLOB];
     const desktop = new FakeDesktop({

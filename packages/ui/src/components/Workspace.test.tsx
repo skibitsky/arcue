@@ -282,6 +282,21 @@ describe("Workspace", () => {
     expect(screen.queryByText("Drop an FBX or Blender file")).toBeNull();
   });
 
+  it("shows the host's tip while it reconnects", async () => {
+    const { client, store } = setup();
+    const tip = "Arcue in the browser isn't answering. This page reconnects by itself; your comments are saved.";
+    render(<Workspace store={store} createViewport={() => new TestViewport()} now={() => NOW} reconnectingTip={tip} />);
+    await act(async () => {
+      await client.execute("asset.open", { path: STONE_RESONATOR_PATH });
+      await flush(10);
+    });
+    act(() => client.setConnectionState("reconnecting"));
+    const user = userEvent.setup();
+    await user.hover(screen.getByText("Reconnecting"));
+    expect((await screen.findByRole("tooltip", {}, { timeout: 2000 })).textContent).toBe(tip);
+    expect(screen.queryByText("The core restarted. Your comments are saved.")).toBeNull();
+  });
+
   it("says why when the host can't open dropped files, without inviting the drop", () => {
     render(
       <Workspace

@@ -17,6 +17,8 @@ export { AssetSession, NEW_COMMENT_OVERLAY } from "./store/asset-session";
 export type { HistoryAction, HistoryItem, HistoryRound, HistoryStatus } from "./store/history";
 export type { Readable } from "./store/observable";
 export { Store, useSelect } from "./store/observable";
+export type { ReopenOptions } from "./store/tab-restore";
+export { TabRestore } from "./store/tab-restore";
 export type { ClipGroup, DropChoice, DropPrompt, FileHost, FileKind, PickedFiles } from "./store/view-files";
 export { besideModel, clipGroups, isImageFile, isModelFile, slotLabel, sortDropped } from "./store/view-files";
 export type {
