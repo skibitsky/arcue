@@ -166,6 +166,7 @@ export class WorkspaceStore {
       client.subscribe("review.changed", ({ assetId, review }) => this.#sessions.get(assetId)?.setReview(review)),
       client.subscribe("review.relinked", ({ assetId, from, automatic }) => this.#onRelinked(assetId, from, automatic)),
       client.subscribe("review.offered", ({ assetId, candidate }) => this.#sessions.get(assetId)?.setOffer(candidate)),
+      client.subscribe("settings.changed", ({ settings }) => this.state.patch({ settings })),
       client.onConnectionChange((connection) => this.#onConnection(connection)),
     ];
     this.#stop = () => {
@@ -213,6 +214,14 @@ export class WorkspaceStore {
   #onSummary(asset: AssetSummary): void {
     this.#summaries.set(asset.assetId, asset);
     this.#sessions.get(asset.assetId)?.setSummary(asset);
+  }
+
+  /**
+   * Forgets the summaries of every asset the core announced. Call it when the window may reach a new core, which
+   * numbers its assets from a1 again, so a new tab never starts with another asset's name.
+   */
+  forgetSummaries(): void {
+    this.#summaries.clear();
   }
 
   activate(id: string): void {
@@ -437,11 +446,12 @@ export class WorkspaceStore {
   async setCoordinates(coordinates: CoordinateConvention): Promise<void> {
     const previous = this.state.get().settings;
     if (!previous || previous.coordinates === coordinates) return;
-    this.state.patch({ settings: { ...previous, coordinates } });
+    const optimistic = { ...previous, coordinates };
+    this.state.patch({ settings: optimistic });
     try {
       this.state.patch({ settings: await this.client.execute("settings.set", { coordinates }) });
     } catch (error) {
-      this.state.patch({ settings: previous });
+      if (this.state.get().settings === optimistic) this.state.patch({ settings: previous });
       this.notify({ message: messageOf(error), kind: "alert" });
     }
   }
