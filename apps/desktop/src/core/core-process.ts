@@ -5,6 +5,7 @@ import {
   CoreRunningError,
   fromNativePath,
   NodePlatform,
+  recordLastCore,
   startBridgeServer,
   startNodeImportWorker,
   systemClock,
@@ -24,8 +25,10 @@ const importWorkerEntry = fileURLToPath(new URL("./import-worker.js", import.met
 
 let log: Log = { info: () => undefined, error: (message, error) => console.error(message, error) };
 let core: ArcueCore | null = null;
+let servedFrom: string | null = null;
 let bridge: BridgeServer | null = null;
 let starting = false;
+let stopping = false;
 const waitingPorts: { connection: string; port: MessagePortMain }[] = [];
 const clipboardRequests = new Map<number, (ok: boolean) => void>();
 let nextClipboardRequest = 1;
@@ -103,7 +106,12 @@ async function start(userData: string, logFile: string): Promise<void> {
       if (error instanceof CoreRunningError) {
         started.dispose();
         log.info(`${error.message} This core stops.`);
-        post({ type: "already-running", pid: error.running.pid, url: error.running.url ?? null });
+        post({
+          type: "already-running",
+          pid: error.running.pid,
+          url: error.running.url ?? null,
+          reason: error.reason,
+        });
         return;
       }
       log.error("The bridge for the command line could not start; windows work without it", error);
@@ -113,6 +121,7 @@ async function start(userData: string, logFile: string): Promise<void> {
         log.error(`${asset.path} could not be opened: ${asset.error ?? "no reason given"}`);
     });
     core = started;
+    servedFrom = userData;
     for (const { connection, port } of waitingPorts.splice(0)) connectWindow(started, connection, port);
     post({ type: "started", socket: bridge?.info.socket ?? null });
   } catch (error) {
@@ -148,14 +157,27 @@ function writeClipboard(text: string): Promise<void> {
   });
 }
 
+/**
+ * Lets no command line in, closes every asset once its changes in flight are saved, and exits. A core that served
+ * windows records that the desktop app ran last; one that never started leaves last-core.json alone.
+ */
 async function stop(): Promise<void> {
+  if (stopping) return;
+  stopping = true;
   log.info("The core stops");
-  try {
-    await core?.idle();
-    await bridge?.close();
-    core?.dispose();
-  } catch (error) {
-    log.error("The core did not stop cleanly", error);
-  }
+  await stopStep("close the bridge", () => bridge?.close());
+  await stopStep("save the changes in flight", () => core?.shutdown());
+  await stopStep("cancel the opens waiting for a window", () => windows.dispose());
+  const folder = servedFrom;
+  if (folder) await stopStep("record that the app ran last", () => recordLastCore(folder, "desktop"));
   process.exit(0);
+}
+
+/** Runs one step of a stop, logging a failure so that the next step still runs. */
+async function stopStep(step: string, run: () => unknown): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    log.error(`The core could not ${step} as it stopped`, error);
+  }
 }
