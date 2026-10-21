@@ -4,17 +4,20 @@ export const DEFAULT_SERVE_PORT = 4530;
 export type Command =
   | { command: "open"; path: string; clip?: string; frame?: number; view?: string; move?: boolean }
   | { command: "inspect"; path: string; json: boolean }
-  | { command: "serve"; port?: number }
+  | { command: "serve"; port?: number; detach?: boolean; idleStopMs?: number }
+  | { command: "stop" }
   | { command: "status"; view?: string }
   | { command: "setup" }
   | { command: "help" };
 
 export const USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>] [--view <name>] [--move]
-      Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
-      files its composition lists. Run by an agent, it shows the model in that agent session's view: the page whose
-      address "arcue status" prints, and until that page is open Arcue holds the model for it. The desktop app, which
-      has no such pages, shows it in its window. Run by a person, it shows the model only outside views.
+      Opens a model in Arcue. The model loads with the files its composition lists. Run by an agent, it shows the
+      model in that agent session's view: the page of Arcue in the browser whose address "arcue status" prints, which
+      holds the model until that page is open. Without Arcue in the browser, the desktop app shows it in its window,
+      starting when it is not running, unless Arcue last ran in a browser: then it says to run "arcue serve --detach".
+      Run by a person, it shows the model in the desktop app, starting the app when it is not running, or, where the
+      app has never run or cannot start, in Arcue in the browser.
       --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
       --frame is a whole frame number from 0.
       --view names the session, in place of ARCUE_VIEW, CLAUDE_CODE_SESSION_ID, CODEX_SESSION_ID or CODEX_THREAD_ID,
@@ -24,13 +27,19 @@ export const USAGE = `Usage:
       Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
       composed with the files its composition lists, as opening it would.
       --json prints the full result for scripts and agents. Exits with 1 when the file cannot be read or parsed.
-  arcue serve [--port <number>]
-      Runs Arcue in a browser instead of the desktop app, until stopped: serves its window at
-      http://localhost:${DEFAULT_SERVE_PORT}, or at the given port, to this computer only. "arcue open" then shows models
-      there. Exits with 1 when Arcue already runs.
+  arcue serve [--detach] [--port <number>]
+      Runs Arcue in a browser beside the desktop app, serving its pages at http://localhost:${DEFAULT_SERVE_PORT}, or at the given
+      port, to this computer only. Agents' "arcue open" shows their models there. It runs until stopped, and exits
+      with 1 when Arcue already runs in a browser or an Arcue that can't share reviews runs.
+      --detach runs it in the background: it returns once Arcue answers and prints its address, and Arcue stops by
+      itself after 30 minutes with no page open. When Arcue already runs in a browser, it prints that address
+      instead. Without --port it uses the port Arcue in the browser ran on last, when that port is free.
+  arcue stop
+      Stops Arcue in the browser for every agent session, once its changes in flight are saved. The desktop app
+      keeps running. Exits with 1 when it does not stop.
   arcue status [--view <name>]
-      Reports whether Arcue is running, where a browser shows it and this session's view, and which assets it has open.
-      Exits with 1 when it is not running.
+      Reports whether Arcue runs in a browser and in the desktop app, this session's view, and which assets each has
+      open. Exits with 1 when neither runs.
   arcue setup
       Through the agent plugin's launcher, on a computer without Node 24 or later: downloads the Node build the
       plugin pins from nodejs.org once, checks its SHA-256 checksum, and keeps it in this user's cache. No other
@@ -54,6 +63,10 @@ export function parseArgs(args: readonly string[]): Command {
     return { command: "help" };
   }
   if (command === "status") return parseStatus(rest);
+  if (command === "stop") {
+    if (rest.length > 0) throw new UsageError(`"arcue stop" takes no arguments, got "${rest.join(" ")}".`);
+    return { command: "stop" };
+  }
   if (command === "setup") {
     if (rest.length > 0) throw new UsageError(`"arcue setup" takes no arguments, got "${rest.join(" ")}".`);
     return { command: "setup" };
@@ -130,25 +143,47 @@ function parseInspect(args: readonly string[]): Command {
 
 function parseServe(args: readonly string[]): Command {
   let port: number | undefined;
+  let detach = false;
+  let idleStopMs: number | undefined;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] ?? "";
     const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, undefined];
-    if (flag !== "--port") {
+    if (flag === "--detach") {
+      if (inline !== undefined) throw new UsageError("--detach takes no value.");
+      detach = true;
+      continue;
+    }
+    if (flag !== "--port" && flag !== "--idle-stop-ms") {
       throw new UsageError(
         arg.startsWith("--") ? `Unknown option "${arg}".` : `"arcue serve" takes no file, got "${arg}".`,
       );
     }
     const value = inline ?? args[++index];
-    if (value === undefined || value === "") throw new UsageError("--port needs a value.");
-    port = parsePort(value);
+    if (value === undefined || value === "") throw new UsageError(`${flag} needs a value.`);
+    if (flag === "--port") port = parsePort(value);
+    else idleStopMs = parseIdleStop(value);
   }
-  return { command: "serve", ...(port !== undefined ? { port } : {}) };
+  if (detach && idleStopMs !== undefined) throw new UsageError("--idle-stop-ms is set by --detach.");
+  return {
+    command: "serve",
+    ...(port !== undefined ? { port } : {}),
+    ...(detach ? { detach } : {}),
+    ...(idleStopMs !== undefined ? { idleStopMs } : {}),
+  };
 }
 
 function parsePort(value: string): number {
   const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
   if (!(port >= 1 && port <= 65535)) throw new UsageError(`--port takes a port from 1 to 65535, got "${value}".`);
   return port;
+}
+
+function parseIdleStop(value: string): number {
+  const ms = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!(ms >= 1 && Number.isSafeInteger(ms))) {
+    throw new UsageError(`--idle-stop-ms takes a whole number of milliseconds from 1, got "${value}".`);
+  }
+  return ms;
 }
 
 function parseFrame(value: string): number {

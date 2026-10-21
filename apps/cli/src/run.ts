@@ -1,14 +1,18 @@
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { connectToCore } from "@arcue/platform-node";
-import type { BridgeInfo, CommandOutput } from "@arcue/protocol";
-import { ArcueError, viewAddress } from "@arcue/protocol";
-import { connectOrLaunch, userDataDir } from "./app-connection";
+import type { CoreConnection } from "@arcue/platform-node";
+import { connectToCore, readBridgeInfo } from "@arcue/platform-node";
+import type { BridgeInfo, CommandOutput, CoreKind } from "@arcue/protocol";
+import { ArcueError, coreKindOf, SERVE_STOPPED_CLOSE_CODE, sharesReviews, viewAddress } from "@arcue/protocol";
+import { userDataDir } from "./app-connection";
 import type { Command } from "./args";
 import { DEFAULT_SERVE_PORT, parseArgs, USAGE, UsageError } from "./args";
+import { buildOf, detachServe, OTHER_BUILD, otherBuild } from "./detach";
 import { bundledImportWorker, formatInspection, inspectFile } from "./inspect";
+import { connectForOpen } from "./routing";
 import { bundledWebUi, startServer } from "./serve";
 import { sessionView } from "./session-view";
+import { stopServe } from "./stop";
 
 const NODE_MAJOR = 24;
 
@@ -26,6 +30,20 @@ export interface RunOptions {
   stop?: Promise<void>;
   /** The Node that runs `arcue.js`. Defaults to this process's. */
   node?: { version: string; execPath: string };
+  /** The Node and the arcue.js that `serve --detach` runs. Defaults to this process's Node and the bundled `arcue.js`. */
+  self?: { execPath: string; script: string };
+  /** Which arcue.js this is, for `serve.json` and `status`. Defaults to the build id of `self.script`. */
+  build?: string | null;
+  /** How long `serve --detach` waits for Arcue in the browser to answer. Defaults to 30 seconds. */
+  detachTimeoutMs?: number;
+  /** How long `stop` waits for Arcue in the browser to stop. Defaults to 30 seconds. */
+  stopTimeoutMs?: number;
+  /** Sends a signal to a process, as `stop` does to an older `arcue serve`. Defaults to `process.kill`. */
+  signal?: (pid: number, signal: NodeJS.Signals) => void;
+  /** The system `stop` runs on, which decides whether it can stop an older `arcue serve`. */
+  platform?: NodeJS.Platform;
+  /** Called once a foreground `arcue serve` knows why it stops, before it closes. */
+  onStopping?: () => void;
 }
 
 /**
@@ -53,13 +71,15 @@ export async function run(
         output.out(USAGE);
         return 0;
       case "status":
-        return await status(command, env, output);
+        return await status(command, env, output, options);
       case "open":
         return await open(command, env, cwd, output);
       case "inspect":
         return await inspect(command, env, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
       case "serve":
         return await serve(command, env, output, options);
+      case "stop":
+        return await stopServe(env, output, options);
       case "setup":
         return setup(output, options.node ?? { version: process.versions.node, execPath: process.execPath });
     }
@@ -84,31 +104,85 @@ async function status(
   command: Extract<Command, { command: "status" }>,
   env: NodeJS.ProcessEnv,
   output: Output,
+  options: RunOptions,
 ): Promise<number> {
-  const connection = await connectToCore(userDataDir(env), "desktop");
-  if (!connection) {
-    output.out("Arcue is not running.\n");
-    return 1;
-  }
+  const userData = userDataDir(env);
+  const view = sessionView(env, command.view);
+  const cores = await Promise.all(
+    (["serve", "desktop"] as const).map((file) =>
+      connectToCore(userData, file).then(
+        (connection) => ({ file, connection, error: null }),
+        (error: unknown) => ({ file, connection: null, error }),
+      ),
+    ),
+  );
   try {
-    const { assets } = await connection.client.query("asset.list", {});
-    const { url, pid } = connection.info;
-    const view = sessionView(env, command.view);
-    const lines = [
-      url ? `Arcue is running in a browser at ${url} (process ${pid}).` : `Arcue is running (process ${pid}).`,
-    ];
-    if (url && view !== null) lines.push(`This session's view: ${viewAddress(url, view)}`);
-    if (assets.length === 0) lines.push("No assets are open.");
-    else
-      lines.push(
-        `Open assets:`,
-        ...assets.map((asset) => `  ${asset.assetId}  ${asset.status.padEnd(7)}  ${asset.path}`),
-      );
-    output.out(`${lines.join("\n")}\n`);
-    return 0;
+    const build = cores.some(({ connection }) => connection?.info.build !== undefined) ? await buildOf(options) : null;
+    const blocks: string[] = [];
+    for (const { file, connection, error } of cores) {
+      if (connection) {
+        blocks.push(await describeCore(connection, file, view, build));
+      } else if (error !== null) {
+        const info = await readBridgeInfo(userData, file);
+        output.err(`${doesNotAnswer(info, file)}: ${messageOf(error)}\n`);
+      }
+    }
+    if (blocks.length > 0) output.out(`${blocks.join("\n\n")}\n`);
+    else if (cores.every(({ error }) => error === null)) output.out("Arcue is not running.\n");
+    return blocks.length > 0 ? 0 : 1;
   } finally {
-    connection.close();
+    for (const { connection } of cores) connection?.close();
   }
+}
+
+/** Whether the core a bridge file names is Arcue in the browser: in `serve.json`, or an older `arcue serve`. */
+function inBrowser(info: BridgeInfo, file: CoreKind): info is BridgeInfo & { url: string } {
+  return (file === "serve" || coreKindOf(info) === "serve") && info.url !== undefined;
+}
+
+/** One core's lines in `status`: where it runs, this session's view in a browser, and its assets. */
+async function describeCore(
+  connection: CoreConnection,
+  file: CoreKind,
+  view: string | null,
+  build: string | null,
+): Promise<string> {
+  const { info } = connection;
+  const { assets } = await connection.client.query("asset.list", {});
+  const lines: string[] = [];
+  if (inBrowser(info, file)) {
+    lines.push(`Arcue is running in a browser at ${info.url} (process ${info.pid}).`);
+    if (!sharesReviews(info)) {
+      lines.push("It is older than this arcue command: run arcue stop, then arcue serve --detach.");
+    } else if (otherBuild(info, build)) {
+      lines.push(OTHER_BUILD);
+    }
+    if (view !== null) lines.push(`This session's view: ${viewAddress(info.url, view)}`);
+  } else {
+    lines.push(
+      sharesReviews(info)
+        ? `The Arcue app is running (process ${info.pid}).`
+        : `An older Arcue app is running (process ${info.pid}).`,
+    );
+  }
+  if (assets.length === 0) lines.push("No assets are open.");
+  else
+    lines.push(
+      "Open assets:",
+      ...assets.map((asset) => `  ${asset.assetId}  ${asset.status.padEnd(7)}  ${asset.path}`),
+    );
+  return lines.join("\n");
+}
+
+/** What `status` says on stderr about a core that listens but does not answer. */
+function doesNotAnswer(info: BridgeInfo | null, file: CoreKind): string {
+  if (!info) return file === "serve" ? "Arcue in the browser does not answer" : "The Arcue app does not answer";
+  if (inBrowser(info, file)) return `Arcue in the browser at ${info.url} (process ${info.pid}) does not answer`;
+  return `The Arcue app (process ${info.pid}) does not answer`;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function existingFile(cwd: string, relative: string): Promise<string> {
@@ -151,8 +225,8 @@ async function open(
     throw new Error("--move takes a model into an agent session's view, and no session names one. Give --view <name>.");
   }
   const path = await existingFile(cwd, command.path);
-  const connection = await connectOrLaunch(userDataDir(env));
-  const { url } = connection.info;
+  const { connection, kind } = await connectForOpen(userDataDir(env), view);
+  const url = kind === "serve" ? connection.info.url : undefined;
   const at = {
     path,
     ...(command.clip !== undefined ? { clip: command.clip } : {}),
@@ -170,7 +244,12 @@ async function open(
     return shown ? 0 : 1;
   } catch (error) {
     if (!(error instanceof ArcueError)) throw error;
-    if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info));
+    if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info, kind));
+    if (kind === "serve" && error.code === "disconnected") {
+      throw new Error(
+        `Arcue in the browser stopped while opening ${path}. Run arcue serve --detach, then arcue open again.`,
+      );
+    }
     if (url && error.code === "unavailable") {
       throw new Error(`${error.message} Arcue runs in a browser: open ${url} first.`);
     }
@@ -184,10 +263,11 @@ async function open(
 }
 
 /** What `arcue open` says when the running core predates agent sessions' views. */
-function olderCore({ url, pid }: BridgeInfo): string {
-  const [running, restart] = url
-    ? [`The Arcue at ${url}`, "stop that arcue serve and run arcue serve again"]
-    : ["The Arcue app", "quit the app and run arcue open again"];
+function olderCore({ url, pid }: BridgeInfo, kind: CoreKind): string {
+  const [running, restart] =
+    kind === "serve"
+      ? [`The Arcue at ${url}`, "run arcue stop, then arcue serve --detach"]
+      : ["The Arcue app", "quit the app and run arcue open again"];
   return `${running} (process ${pid}) is older than this arcue command and cannot show models in a session's view. Restart it: ${restart}.`;
 }
 
@@ -226,27 +306,42 @@ async function serve(
   output: Output,
   options: RunOptions,
 ): Promise<number> {
+  if (command.detach) return detachServe(command, env, output, options);
+  const view = sessionView(env);
+  const build = await buildOf(options);
   const server = await startServer({
     userData: userDataDir(env),
     importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
     webUi: options.webUi ?? bundledWebUi,
     port: command.port ?? DEFAULT_SERVE_PORT,
+    idleStopMs: command.idleStopMs,
+    build: build ?? undefined,
     onError: (error) => output.err(`${error instanceof Error ? error.message : String(error)}\n`),
     onWaitingForWindow: () => output.err(`Waiting for a browser to open ${server.url}.\n`),
   });
-  output.out(`Arcue runs at ${server.url}. Open it in a browser; "arcue open" shows models there.\n`);
-  await (options.stop ?? signalled());
-  await server.close();
+  output.out(`Arcue runs at ${server.url}. Open it in a browser; agents' "arcue open" shows their models there.\n`);
+  if (view !== null) output.out(`This session's view: ${viewAddress(server.url, view)}\n`);
+  const signals = stopSignal(options.stop);
+  const stop = await Promise.race([signals.stopped.then(() => null), server.stopped]);
+  signals.dispose();
+  options.onStopping?.();
+  if (stop) output.out(`${stop.message}\n`);
+  await server.close(SERVE_STOPPED_CLOSE_CODE);
   return 0;
 }
 
-function signalled(): Promise<void> {
-  return new Promise((resolve) => {
-    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-    const stop = () => {
-      for (const signal of signals) process.off(signal, stop);
-      resolve();
-    };
-    for (const signal of signals) process.on(signal, stop);
-  });
+/** The stop a caller gives, or else one that resolves when the process receives SIGINT, SIGTERM or SIGHUP. */
+function stopSignal(given: Promise<void> | undefined): { stopped: Promise<void>; dispose(): void } {
+  if (given) return { stopped: given, dispose: () => undefined };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const { promise, resolve: stopped } = Promise.withResolvers<void>();
+  const dispose = () => {
+    for (const signal of signals) process.off(signal, stop);
+  };
+  const stop = () => {
+    dispose();
+    stopped();
+  };
+  for (const signal of signals) process.on(signal, stop);
+  return { stopped: promise, dispose };
 }

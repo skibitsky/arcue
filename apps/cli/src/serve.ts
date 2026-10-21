@@ -3,27 +3,33 @@ import { realpath, stat } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { extname, resolve, sep } from "node:path";
+import { dirname, extname, resolve, sep } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { ArcueCore } from "@arcue/core";
 import type { BridgeServer } from "@arcue/platform-node";
 import {
+  claimStart,
   fromNativePath,
   NodePlatform,
+  readBridgeInfo,
+  recordLastCore,
   runningCore,
   startBridgeServer,
   startNodeImportWorker,
   systemClock,
   WindowPresence,
 } from "@arcue/platform-node";
-import type { ByteStream, ListenerErrorHandler } from "@arcue/protocol";
+import type { ByteStream, ListenerErrorHandler, SetTimer } from "@arcue/protocol";
 import {
+  ArcueError,
   binaryFrameCodec,
   framedEndpoint,
   MAX_FRAME_BYTES,
   messageChannel,
   SERVE_CORE_PATH,
+  SERVE_STOPPED_CLOSE_CODE,
+  sharesReviews,
   VIEW_PARAMETER,
   viewNameSchema,
 } from "@arcue/protocol";
@@ -65,18 +71,53 @@ export interface ServeOptions {
   onError: ListenerErrorHandler;
   /** Called when the command line opens a model without a view and no page outside views is open. */
   onWaitingForWindow?: () => void;
+  /** Stops the core after this long with no page connected. Without it, the core never stops by itself for that. */
+  idleStopMs?: number;
+  /** The timers of the idle stop, the pages' heartbeat and the checks. */
+  setTimer?: SetTimer;
+  /** How often pages are pinged. A page that has not answered by the next ping is dropped. Defaults to 30 seconds. */
+  heartbeatMs?: number;
+  /** How often the core checks its files, its data folder and the bridge files. Defaults to 5 seconds. */
+  checkMs?: number;
+  /** How long one other holder may keep a lock, for `NodePlatform`. */
+  lockTimeoutMs?: number;
+  /** Which arcue.js runs the core, for `serve.json`: the first 16 hex digits of its SHA-256. */
+  build?: string;
+}
+
+/** Why Arcue in the browser stops by itself, or because `arcue stop` asked it to. */
+export type ServeStopReason = "idle" | "requested" | "unshared" | "replaced" | "removed" | "data-gone";
+
+export interface ServeStop {
+  reason: ServeStopReason;
+  /** The line that says why, for the log. */
+  message: string;
 }
 
 export interface ArcueServer {
   /** The address to open, such as "http://localhost:4530". */
   readonly url: string;
-  close(): Promise<void>;
+  readonly pid: number;
+  /** Resolves once the core should stop: it stops only once `close` is called. */
+  readonly stopped: Promise<ServeStop>;
+  /**
+   * Stops the core: it closes the command line's connections and removes `serve.json`, closes the pages' sockets with
+   * `code`, frees the port, and shuts the core down once the changes in flight are saved. A second call waits for the
+   * first.
+   */
+  close(code?: number): Promise<void>;
 }
 
+const HEARTBEAT_MS = 30_000;
+const CHECK_MS = 5_000;
+const PAGE_CLOSE_MS = 1_000;
+
 /**
- * Runs a core on this computer's files and serves its window to a browser on localhost, as the desktop app shows it in
- * its own window. The core takes the desktop app's place: it writes `bridge.json`, so `arcue open` and `arcue status`
- * reach it, and it refuses to start while another core runs.
+ * Runs a core on this computer's files beside the desktop app's, on the same reviews, which both change only under
+ * `Platform.lock`. It answers the command line at `serve.json`, refuses to start beside another `arcue serve` or a
+ * core that takes no review locks, and stops itself when one starts or its files are removed. A detached one stops
+ * after `idleStopMs` with no page connected. It serves its window to a browser on localhost, as the desktop app shows
+ * it in its own window.
  *
  * A page whose address names an agent session's view, `/?view=<name>`, connects as that view's page and shows the
  * models that session opens. While that page is not open, the core holds them for the page rather than show them in a
@@ -89,50 +130,99 @@ export interface ArcueServer {
  */
 export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   const webUi = await realpath(options.webUi).catch(() => null);
-  if (!webUi || !(await stat(resolve(webUi, "index.html")).catch(() => null))?.isFile()) {
+  if (!webUi || !(await isFile(resolve(webUi, "index.html")))) {
     throw new Error(`This arcue has no web UI in ${options.webUi}.`);
   }
-  const running = await runningCore(options.userData, "serve");
-  if (running) {
-    const where = running.url ? ` at ${running.url}` : "";
-    throw new Error(`Arcue is already running${where} (process ${running.pid}). "arcue open" shows models there.`);
-  }
-
-  const { servers: http, port } = await listenLocally(options.port);
-  const url = `http://localhost:${port}`;
-  const hosts = localHosts(port);
-  const allowed = (request: IncomingMessage) => hosts.has(request.headers.host?.toLowerCase() ?? "");
+  const { userData } = options;
+  const setTimer = options.setTimer ?? systemClock.setTimer;
+  const claim = await claimStart(userData, "serve");
 
   const windows = new WindowPresence({
     requestWindow: () => options.onWaitingForWindow?.(),
     setTimer: systemClock.setTimer,
   });
+  const stopped = Promise.withResolvers<ServeStop>();
+  let stopping: ServeStop | null = null;
+  let closing: Promise<void> | null = null;
+  let pages = 0;
+  let cancelIdle: () => void = () => undefined;
+  const armIdle = () => {
+    cancelIdle();
+    const idleStopMs = options.idleStopMs;
+    if (idleStopMs === undefined || closing) return;
+    cancelIdle = setTimer(idleStopMs, () =>
+      stop("idle", `Arcue stops: no page was open for ${Number((idleStopMs / 60_000).toFixed(2))} minutes.`),
+    );
+  };
+  const stop = (reason: ServeStopReason, message: string) => {
+    if (stopping || closing) return;
+    stopping = { reason, message };
+    stopped.resolve(stopping);
+  };
+  const removed = (folder: string) =>
+    stop(
+      "removed",
+      `Arcue stops: its files in ${folder} were removed. Run arcue serve --detach to start the current one.`,
+    );
+
+  let http: Server[] = [];
   let core: ArcueCore | null = null;
+  let url: string;
+  let port: number;
   let bridge: BridgeServer;
+  let unregisterStop: () => void = () => undefined;
   try {
+    const listening = await listenLocally(options.port);
+    http = listening.servers;
+    port = listening.port;
+    url = `http://localhost:${port}`;
     const platform = new NodePlatform({
-      appDataDir: fromNativePath(options.userData),
+      appDataDir: fromNativePath(userData),
       startImportWorker: () => startNodeImportWorker(options.importWorkerEntry, options.onError),
+      lockTimeoutMs: options.lockTimeoutMs,
     });
     core = await ArcueCore.start({ platform, onError: options.onError });
+    unregisterStop = core.registry.handleCommand("serve.stop", (_input, context) => {
+      if (context.caller !== "bridge") {
+        throw new ArcueError("forbidden", "Only the arcue command can stop Arcue in the browser.");
+      }
+      setImmediate(() => stop("requested", "Arcue stops: arcue stop asked it to."));
+    });
     bridge = await startBridgeServer({
       core,
-      userData: options.userData,
+      userData,
       kind: "serve",
-      ensureWindow: (view) => (view === null ? windows.ensure(null) : Promise.resolve()),
+      ensureWindow: (view) => {
+        if (pages === 0) armIdle();
+        return view === null ? windows.ensure(null) : Promise.resolve();
+      },
       onError: options.onError,
       url,
+      build: options.build,
+      claim,
     });
   } catch (error) {
+    await claim.release();
     core?.dispose();
     await Promise.all(http.map((server) => closeServer(server)));
     throw error;
   }
   const started = core;
+  const hosts = localHosts(port);
+  const allowed = (request: IncomingMessage) => hosts.has(request.headers.host?.toLowerCase() ?? "");
 
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  const answered = new WeakMap<WebSocket, boolean>();
   let next = 1;
   sockets.on("connection", (socket: WebSocket, request: IncomingMessage) => {
+    pages++;
+    cancelIdle();
+    answered.set(socket, true);
+    socket.on("pong", () => answered.set(socket, true));
+    socket.once("close", () => {
+      pages--;
+      if (pages === 0) armIdle();
+    });
     const view = socketView(URL.parse(request.url ?? "/", url)) ?? null;
     const channel = messageChannel(webSocketStream(socket), binaryFrameCodec);
     const peer = started.connect(framedEndpoint(channel), {
@@ -154,7 +244,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
       if (!allowed(request)) return refuse(response, 403);
       if (request.method !== "GET" && request.method !== "HEAD") return refuse(response, 405);
-      sendFile(webUi, request, response).catch((error: unknown) => {
+      sendFile(webUi, request, response, () => removed(webUi)).catch((error: unknown) => {
         options.onError(error);
         if (!response.headersSent) refuse(response, 500);
         else response.destroy();
@@ -174,20 +264,102 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
         socket.end(`HTTP/1.1 400 Bad Request\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
         return;
       }
+      if (closing) {
+        socket.end(`HTTP/1.1 503 Service Unavailable\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
+        return;
+      }
       sockets.handleUpgrade(request, socket, head, (connected) => sockets.emit("connection", connected, request));
     });
   }
 
+  let cancelHeartbeat: () => void = () => undefined;
+  const heartbeat = () => {
+    for (const client of sockets.clients) {
+      if (answered.get(client) === false) {
+        client.terminate();
+        continue;
+      }
+      answered.set(client, false);
+      client.ping();
+    }
+    cancelHeartbeat = setTimer(options.heartbeatMs ?? HEARTBEAT_MS, heartbeat);
+  };
+  cancelHeartbeat = setTimer(options.heartbeatMs ?? HEARTBEAT_MS, heartbeat);
+
+  const check = async () => {
+    const workerFolder = dirname(options.importWorkerEntry);
+    if (!(await isFile(resolve(webUi, "index.html")))) return removed(webUi);
+    if (!(await isFile(options.importWorkerEntry))) return removed(workerFolder);
+    if (!(await stat(userData).catch(() => null))) {
+      return stop("data-gone", `Arcue stops: its data folder ${userData} was removed.`);
+    }
+    const held = await bridge.holdsInfo();
+    const other = held === "other-live" ? await readBridgeInfo(userData, "serve") : null;
+    if (other) {
+      return stop("replaced", `Arcue stops: another Arcue in the browser took its place (process ${other.pid}).`);
+    }
+    if (held === "missing") await bridge.rewriteInfo();
+    const desktop = await readBridgeInfo(userData, "desktop");
+    if (desktop && !sharesReviews(desktop)) {
+      const live = await runningCore(userData, "desktop");
+      if (live?.token === desktop.token) {
+        stop("unshared", `Arcue stops: an Arcue that can't share reviews started beside it (process ${live.pid}).`);
+      }
+    }
+  };
+  let cancelChecks: () => void = () => undefined;
+  const checkLater = () => {
+    cancelChecks = setTimer(options.checkMs ?? CHECK_MS, () => {
+      check()
+        .catch((error: unknown) => options.onError(error))
+        .finally(() => {
+          if (!closing && !stopping) checkLater();
+        });
+    });
+  };
+  checkLater();
+  armIdle();
+
   return {
     url,
-    async close() {
-      for (const client of sockets.clients) client.terminate();
-      await Promise.all(http.map((server) => closeServer(server)));
-      await bridge.close();
-      await started.idle();
-      started.dispose();
+    pid: process.pid,
+    stopped: stopped.promise,
+    close(code = SERVE_STOPPED_CLOSE_CODE) {
+      closing ??= (async () => {
+        cancelIdle();
+        cancelHeartbeat();
+        cancelChecks();
+        unregisterStop();
+        await bridge.close().catch((error: unknown) => options.onError(error));
+        await closePages(sockets, code);
+        await Promise.all(http.map((server) => closeServer(server)));
+        windows.dispose();
+        await started.shutdown().catch((error: unknown) => options.onError(error));
+        await recordLastCore(userData, "serve", url);
+      })();
+      return closing;
     },
   };
+}
+
+/** Closes every page's socket with the code, and ends those still open a second later. */
+async function closePages(sockets: WebSocketServer, code: number): Promise<void> {
+  const open = [...sockets.clients];
+  const closed = Promise.all(
+    open.map(
+      (client) =>
+        new Promise<void>((resolvePromise) => {
+          if (client.readyState === client.CLOSED) resolvePromise();
+          else client.once("close", () => resolvePromise());
+        }),
+    ),
+  );
+  for (const client of open) client.close(code);
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([closed, new Promise((resolvePromise) => (timer = setTimeout(resolvePromise, PAGE_CLOSE_MS)))]);
+  clearTimeout(timer);
+  for (const client of sockets.clients) client.terminate();
+  sockets.close();
 }
 
 /** The agent session's view a page's socket address names, null for none, or undefined for a name that is not one. */
@@ -245,6 +417,10 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+async function isFile(path: string): Promise<boolean> {
+  return (await stat(path).catch(() => null))?.isFile() ?? false;
+}
+
 function isCode(error: unknown, code: string): boolean {
   return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
@@ -260,8 +436,16 @@ function rawHeaders(headers: Readonly<Record<string, string>>): string {
     .join("");
 }
 
-/** Sends a file from the web UI's folder, `index.html` for "/". Anything outside the folder is not found. */
-async function sendFile(webUi: string, request: IncomingMessage, response: ServerResponse): Promise<void> {
+/**
+ * Sends a file from the web UI's folder, `index.html` for "/". Anything outside the folder is not found. Calls
+ * `onPageMissing` when `index.html` is gone.
+ */
+async function sendFile(
+  webUi: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+  onPageMissing: () => void,
+): Promise<void> {
   let path: string;
   try {
     path = decodeURIComponent(URL.parse(request.url ?? "/", "http://localhost")?.pathname ?? "");
@@ -272,7 +456,10 @@ async function sendFile(webUi: string, request: IncomingMessage, response: Serve
   const file = resolve(webUi, relative);
   if (path.includes("\0") || !file.startsWith(`${webUi}${sep}`)) return refuse(response, 404);
   const found = await stat(file).catch(() => null);
-  if (!found?.isFile()) return refuse(response, 404);
+  if (!found?.isFile()) {
+    if (relative === "index.html") onPageMissing();
+    return refuse(response, 404);
+  }
   response.writeHead(200, {
     "Content-Type": CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
     "Content-Length": found.size,
