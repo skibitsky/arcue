@@ -985,6 +985,40 @@ describe("LocalHost", () => {
     expect(await server.paths()).toEqual([GOLEM]);
   });
 
+  it("never attaches to another Arcue in the browser that took its address, and attaches once its own runs there", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const reload = vi.fn();
+    const probe = vi.fn(async (): Promise<ServedPage> => "same");
+    const page = new Page(server, { probe, reload }).start();
+    const elsewhere = toasts(
+      page,
+      "Another Arcue in the browser runs at this address now, so this page doesn't connect to it.",
+    );
+    await page.connected();
+    await page.opened(HERO);
+    probe.mockImplementation(async () => "elsewhere");
+
+    await restart(server);
+    for (let wait = 0; wait < 10; wait++) {
+      page.timers.advance(PAST_BACKOFF_MS);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(page.host.client.connectionState).toBe("reconnecting");
+    expect(await server.paths()).toEqual([]);
+    expect(elsewhere()).toHaveLength(1);
+    expect(reload).not.toHaveBeenCalled();
+    const sockets = server.sockets.length;
+    page.timers.advance(PAST_BACKOFF_MS);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(server.sockets).toHaveLength(sockets);
+
+    probe.mockImplementation(async () => "same");
+    await page.connected();
+    await vi.waitFor(() => expect(page.paths()).toEqual([HERO]));
+    expect(elsewhere()).toHaveLength(1);
+  });
+
   it("keeps trying, and attaches, when a probe never answers", async () => {
     const server = new FakeServer();
     await server.start();

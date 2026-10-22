@@ -83,6 +83,12 @@ export const SERVE_STOPPED_CLOSE_CODE = 4000;
 export const LOCAL_PAGE_MARKER = { name: "arcue-page", content: "local" } as const;
 
 /**
+ * The meta tag that `arcue serve` adds to its page, naming its data folder and user, so a page that reconnects never
+ * attaches to another Arcue in the browser that took its address.
+ */
+export const LOCAL_PAGE_OWNER = "arcue-owner";
+
+/**
  * Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket that carries one
  * `binaryFrameCodec` frame per message. The path names the format, so a page left open across an update of its server
  * fails to connect rather than misreads.

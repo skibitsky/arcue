@@ -236,6 +236,32 @@ describe("arcue serve", () => {
     expect(await get(url, "/assets/missing.js")).toMatchObject({ status: 404 });
   });
 
+  it("names its data folder and user in its page, the same on every start, so a page tells it from another", async () => {
+    writeFileSync(
+      join(webUi, "index.html"),
+      "<!doctype html><html><head><title>Arcue</title></head><body></body></html>",
+    );
+    const ownerOf = (body: string) =>
+      /<head><meta name="arcue-owner" content="([0-9a-f]{16})" \/><title>/.exec(body)?.[1];
+    const first = await serve();
+    const page = await get(first.url, "/");
+    const owner = ownerOf(page.body);
+    expect(owner).toBeDefined();
+    expect(page.headers["content-length"]).toBe(String(Buffer.byteLength(page.body)));
+    expect(await get(first.url, "/", { method: "HEAD" })).toMatchObject({ status: 200, body: "" });
+    await first.close();
+
+    const again = await serve();
+    expect(ownerOf((await get(again.url, "/")).body)).toBe(owner);
+    await again.close();
+
+    userData = join(temp, "other-data");
+    const other = await serve();
+    const otherOwner = ownerOf((await get(other.url, "/")).body);
+    expect(otherOwner).toBeDefined();
+    expect(otherOwner).not.toBe(owner);
+  });
+
   it("serves nothing outside the web UI's folder", async () => {
     const { url } = await serve();
 

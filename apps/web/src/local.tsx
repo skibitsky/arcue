@@ -12,7 +12,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { coreSocketUrl } from "./core-socket";
 import { followPage, LocalHost } from "./local-host";
-import { MODULE_SCRIPT, probePage } from "./served-page";
+import { MODULE_SCRIPT, PAGE_OWNER, probePage } from "./served-page";
 
 declare global {
   interface Window {
@@ -22,6 +22,7 @@ declare global {
 }
 
 const pageScript = document.querySelector(MODULE_SCRIPT)?.getAttribute("src") ?? null;
+const pageOwner = document.querySelector(PAGE_OWNER)?.getAttribute("content") ?? null;
 
 function safeSessionStorage(): Storage | null {
   try {
@@ -36,7 +37,7 @@ const host = new LocalHost({
   view: new URLSearchParams(location.search).get(VIEW_PARAMETER),
   storage: safeSessionStorage(),
   hasFocus: () => document.hasFocus(),
-  probe: () => probePage(pageScript, (url, init) => fetch(url, init)),
+  probe: () => probePage(pageScript, (url, init) => fetch(url, init), pageOwner),
   reload: () => location.reload(),
 });
 window.arcueWindow = { client: host.client, store: host.store };

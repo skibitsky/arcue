@@ -4,9 +4,18 @@ import { probePage, servedPage } from "./served-page";
 
 const BUILD = "/assets/index-a1b2c3.js";
 
-function page({ marker = true, script = BUILD }: { marker?: boolean; script?: string | null } = {}): string {
+function page({
+  marker = true,
+  script = BUILD,
+  owner = null,
+}: {
+  marker?: boolean;
+  script?: string | null;
+  owner?: string | null;
+} = {}): string {
   return [
     "<!doctype html><html><head>",
+    owner === null ? "" : `<meta name="arcue-owner" content="${owner}" />`,
     marker ? '<meta name="arcue-page" content="local" />' : "",
     script === null ? "" : `<script type="module" crossorigin src="${script}"></script>`,
     '</head><body><div id="app"></div></body></html>',
@@ -28,6 +37,17 @@ describe("the served page", () => {
   it("is the same page for the script this page loaded, or for a marked page that names none", () => {
     expect(servedPage(page(), BUILD)).toBe("same");
     expect(servedPage(page({ script: null }), BUILD)).toBe("same");
+  });
+
+  it("is elsewhere for a page that names another owner, whatever script it names", () => {
+    expect(servedPage(page({ owner: "b".repeat(16) }), BUILD, "a".repeat(16))).toBe("elsewhere");
+    expect(servedPage(page({ owner: "b".repeat(16), script: "/assets/x.js" }), BUILD, "a".repeat(16))).toBe(
+      "elsewhere",
+    );
+    expect(servedPage(page({ owner: "a".repeat(16) }), BUILD, "a".repeat(16))).toBe("same");
+    expect(servedPage(page(), BUILD, "a".repeat(16))).toBe("same");
+    expect(servedPage(page({ owner: "b".repeat(16) }), BUILD, null)).toBe("same");
+    expect(servedPage(page({ owner: "b".repeat(16), marker: false }), BUILD, "a".repeat(16))).toBe("down");
   });
 
   it("names the script of another build", () => {

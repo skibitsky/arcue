@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { userInfo } from "node:os";
 import { dirname, extname, resolve, sep } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -25,6 +27,7 @@ import {
   ArcueError,
   binaryFrameCodec,
   framedEndpoint,
+  LOCAL_PAGE_OWNER,
   MAX_FRAME_BYTES,
   messageChannel,
   SERVE_CORE_PATH,
@@ -136,6 +139,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   const { userData } = options;
   const setTimer = options.setTimer ?? systemClock.setTimer;
   const claim = await claimStart(userData, "serve");
+  const owner = await pageOwner(userData);
 
   let url = "";
   const windows = new WindowPresence({
@@ -246,7 +250,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
       if (!allowed(request)) return refuse(response, 403);
       if (request.method !== "GET" && request.method !== "HEAD") return refuse(response, 405);
-      sendFile(webUi, request, response, () => removed(webUi)).catch((error: unknown) => {
+      sendFile(webUi, owner, request, response, () => removed(webUi)).catch((error: unknown) => {
         options.onError(error);
         if (!response.headersSent) refuse(response, 500);
         else response.destroy();
@@ -406,6 +410,22 @@ async function listenLocally(port: number): Promise<{ servers: Server[]; port: n
   }
 }
 
+/** Names the data folder and user, the same on every start, so the page tells this Arcue in the browser from another. */
+async function pageOwner(userData: string): Promise<string> {
+  const folder = await realpath(userData).catch(() => resolve(userData));
+  const user = process.getuid?.() ?? userInfo().username;
+  return createHash("sha256").update(`${user}\0${folder}`).digest("hex").slice(0, 16);
+}
+
+/** The page with the meta tag that names its owner, first in its head. */
+function withOwner(html: string, owner: string): string {
+  const meta = `<meta name="${LOCAL_PAGE_OWNER}" content="${owner}" />`;
+  const head = /<head(\s[^>]*)?>/i.exec(html);
+  if (!head) return `${meta}${html}`;
+  const at = head.index + head[0].length;
+  return `${html.slice(0, at)}${meta}${html.slice(at)}`;
+}
+
 function startingServer(): Server {
   const server = createServer((_request, response) => {
     for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
@@ -459,6 +479,7 @@ function rawHeaders(headers: Readonly<Record<string, string>>): string {
  */
 async function sendFile(
   webUi: string,
+  owner: string,
   request: IncomingMessage,
   response: ServerResponse,
   onPageMissing: () => void,
@@ -476,6 +497,16 @@ async function sendFile(
   if (!found?.isFile()) {
     if (relative === "index.html") onPageMissing();
     return refuse(response, 404);
+  }
+  if (relative === "index.html") {
+    const page = Buffer.from(withOwner(await readFile(file, "utf8"), owner));
+    response.writeHead(200, {
+      "Content-Type": CONTENT_TYPES[".html"],
+      "Content-Length": page.length,
+      "Cache-Control": "no-cache",
+    });
+    response.end(request.method === "HEAD" ? undefined : page);
+    return;
   }
   response.writeHead(200, {
     "Content-Type": CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",

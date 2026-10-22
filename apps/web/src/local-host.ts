@@ -24,7 +24,10 @@ export interface LocalHostOptions {
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
   setTimer?: SetTimer;
   hasFocus?: () => boolean;
-  /** Reads "/" again. It is changed only when it carries the arcue-page marker and names another module script. */
+  /**
+   * Reads "/" again. It is changed only when it carries the arcue-page marker and names another module script, and
+   * elsewhere when it names another owner than the page's.
+   */
   probe?: () => Promise<ServedPage>;
   reload?: () => void;
 }
@@ -49,6 +52,7 @@ const SAVE_DELAY_MS = 300;
 const SAVE_INTERVAL_MS = 5000;
 const RELOADED_FOR = "arcue.reloadedFor";
 const PAGE_STOPPED = "Arcue in the browser stopped. This page reconnects once it runs again.";
+const ELSEWHERE = "Another Arcue in the browser runs at this address now, so this page doesn't connect to it.";
 const INVALID_VIEW = "This page's address names a view that isn't valid, so it doesn't connect.";
 
 const defaultTimer: SetTimer = (delayMs, callback) => {
@@ -84,6 +88,8 @@ export class LocalHost {
   #failures = 0;
   #attachedBefore = false;
   #toldStopped = false;
+  /** The last probe found the page of another Arcue in the browser at the page's address. */
+  #elsewhere = false;
   #reopening: Promise<void> = Promise.resolve();
 
   constructor(options: LocalHostOptions) {
@@ -177,6 +183,10 @@ export class LocalHost {
   #connect(): void {
     this.#cancelRetry?.();
     this.#cancelRetry = null;
+    if (this.#elsewhere) {
+      this.#retryLater();
+      return;
+    }
     let socket: WebSocket;
     try {
       socket = this.#options.openSocket();
@@ -214,13 +224,19 @@ export class LocalHost {
   }
 
   /**
-   * After an earlier connection, the server may serve another build of the page now, which the page reloads into once.
-   * Otherwise the client takes the socket and the tabs open again.
+   * After an earlier connection, the server may serve another build of the page now, which the page reloads into once,
+   * or be another Arcue in the browser, which the page never attaches to. Otherwise the client takes the socket and the
+   * tabs open again.
    */
   async #opened(attempt: Attempt, channel: FramedChannel): Promise<void> {
     if (this.#attachedBefore) {
       const page = await this.#probe();
       if (this.#socket !== attempt.socket || !this.#canConnect()) return;
+      if (page === "elsewhere") {
+        this.#foundElsewhere();
+        attempt.socket.close();
+        return;
+      }
       if (typeof page === "object" && this.#reloadOnce(page.changed)) return;
     }
     this.#failures = 0;
@@ -277,20 +293,31 @@ export class LocalHost {
     if (generation === this.#restore.generation) this.saveTabs();
   }
 
-  /** Tries again after a delay that doubles with each failure, and from the third failure first probes the page. */
+  /**
+   * Tries again after a delay that doubles with each failure, and from the third failure, or while another Arcue in the
+   * browser has the address, first probes the page.
+   */
   #retryLater(): void {
     if (!this.#canConnect() || this.#cancelRetry !== null) return;
     this.#failures++;
     const backoffMs = Math.min(MAX_RETRY_MS, FIRST_RETRY_MS * 2 ** (this.#failures - 1));
     const delayMs = backoffMs * (0.8 + Math.random() * 0.4);
-    if (this.#failures < PROBE_AFTER_FAILURES || !this.#options.probe) {
+    if ((this.#failures < PROBE_AFTER_FAILURES && !this.#elsewhere) || !this.#options.probe) {
       this.#schedule(delayMs);
       return;
     }
     void this.#probe().then((page) => {
+      if (page === "elsewhere") this.#foundElsewhere();
+      else this.#elsewhere = false;
       if (typeof page === "object" && this.#socket === null && this.#reloadOnce(page.changed)) return;
       this.#schedule(delayMs);
     });
+  }
+
+  /** Says once that another Arcue in the browser has the address, and connects to none until a probe finds its own. */
+  #foundElsewhere(): void {
+    if (!this.#elsewhere) this.store.notify({ message: ELSEWHERE, kind: "info" });
+    this.#elsewhere = true;
   }
 
   #schedule(delayMs: number): void {

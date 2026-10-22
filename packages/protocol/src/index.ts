@@ -45,6 +45,7 @@ export {
   LAST_CORE_FILE,
   LAUNCH_INFO_FILE,
   LOCAL_PAGE_MARKER,
+  LOCAL_PAGE_OWNER,
   LOCK_PROTOCOL,
   lastCoreSchema,
   launchInfoSchema,
