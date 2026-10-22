@@ -237,8 +237,9 @@ export class LocalHost {
 
   /**
    * Opens the tabs again in order. A model the core still has moves to this page as the core keeps it, such as at the
-   * clip and frame an agent opened it at; any other opens from its path. Then the page shows the other assets the core
-   * holds for its view.
+   * clip and frame an agent opened it at, also from a page of the view that adopted it just before; any other opens
+   * from its path. Then the page adopts the other assets the core holds for its view, which another page of the view
+   * that lost its connection too may take back.
    */
   async #reopenAll(generation: number): Promise<void> {
     let known: Map<string, string>;
@@ -264,7 +265,7 @@ export class LocalHost {
         for (const assetId of known.values()) {
           if (moved.has(assetId) || generation !== this.#restore.generation) continue;
           try {
-            await this.client.execute("view.moveAsset", { assetId, unlessShown: true });
+            await this.client.execute("view.moveAsset", { assetId, adopt: true });
           } catch (error) {
             if (isConflict(error) || generation !== this.#restore.generation) continue;
             if (this.client.connectionState !== "connected") return;

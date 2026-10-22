@@ -67,6 +67,8 @@ export class OpenAsset {
   view: string | null = null;
   /** The clip and frame an open asked for while the core held the asset, for the page that shows it later. */
   waiting: ShowAt | null = null;
+  /** When a page took the asset with `adopt`, until it shows anywhere again: a page that saved its tab may take it back. */
+  adoptedAt: number | null = null;
   closed = false;
   /** Set while `asset.close` waits for the edits in flight. */
   closing: Promise<void> | null = null;

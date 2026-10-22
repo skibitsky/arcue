@@ -291,6 +291,12 @@ export const commands = {
        * that reopens after a reload does. Without it, an asset of another view fails with conflict.
        */
       unlessShown: z.boolean().optional(),
+      /**
+       * Shows an asset the core holds for the calling page's view, as a page that reconnects does with the other assets
+       * of its view, and never one another window shows. For a while, a page of the view that reopens a saved tab of it
+       * with `unlessShown` takes it back, since both pages may have lost their connection and this one came back first.
+       */
+      adopt: z.boolean().optional(),
     }),
     output: z.void(),
   }),

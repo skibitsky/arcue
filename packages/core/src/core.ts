@@ -141,6 +141,8 @@ export interface ArcueCoreOptions {
 }
 
 const VIEW_SHOW_ASSET = "view.showAsset";
+/** How long a page that reopens a saved tab may take its asset back from a page of its view that adopted it. */
+const TAKE_BACK_MS = 30_000;
 const VIEW_RELEASE_ASSET = "view.releaseAsset";
 
 /** Where an asset shows: a window and its view, or with a null window the view whose page the core holds it for. */
@@ -313,7 +315,7 @@ export class ArcueCore {
         asset.viewState = args.state;
       }),
       registry.handleCommand("view.moveAsset", (args, context) =>
-        this.#opening.run(() => this.#move(args.assetId, context, args.unlessShown ?? false)),
+        this.#opening.run(() => this.#move(args.assetId, context, args)),
       ),
       registry.handleCommand("view.reportFocus", (_args, context) => {
         if (context.caller === "window" && context.connection !== null) this.#windows.focus(context.connection);
@@ -462,6 +464,7 @@ export class ArcueCore {
       clock: this.#platform.clock,
     });
     this.#shownIn(asset, window);
+    asset.adoptedAt = null;
   }
 
   /** Shows the asset at the place, or holds it there for the view's page. */
@@ -530,9 +533,14 @@ export class ArcueCore {
   /**
    * Moves an asset's tab to the calling window, within the window's view. The window that shows it releases the tab
    * first and returns its view state, so the receiving window starts from the same camera, clip and frame. An asset the
-   * core holds for the view shows at the clip and frame its open asked for.
+   * core holds for the view shows at the clip and frame its open asked for. With `unlessShown`, a page takes an asset
+   * that another page shows only when that page adopted it in the last `TAKE_BACK_MS`.
    */
-  async #move(assetId: string, context: CallContext, unlessShown: boolean): Promise<void> {
+  async #move(
+    assetId: string,
+    context: CallContext,
+    { unlessShown = false, adopt = false }: { unlessShown?: boolean; adopt?: boolean },
+  ): Promise<void> {
     if (context.caller !== "window" || !this.#windows.has(context.connection)) {
       throw new ArcueError("forbidden", "Only a window can take an asset's tab.");
     }
@@ -541,13 +549,16 @@ export class ArcueCore {
     const target = context.connection;
     const source = this.#windowOf(asset);
     const owner = this.#ownerOf(asset);
+    const quietly = unlessShown || adopt;
     if (owner !== this.#windows.viewOf(target)) {
-      if (unlessShown) return;
+      if (quietly) return;
       throw new ArcueError("conflict", openElsewhere(asset.name, owner));
     }
-    if (unlessShown && source !== null && source !== target) return;
+    const takesBack = !adopt && asset.adoptedAt !== null && this.#platform.clock.now() - asset.adoptedAt < TAKE_BACK_MS;
+    if (quietly && source !== null && source !== target && !takesBack) return;
     const at = source === null ? (asset.waiting ?? {}) : {};
     await this.#relocateTab(asset, source, { view: owner, window: target }, at);
+    if (adopt && source === null) asset.adoptedAt = this.#platform.clock.now();
   }
 
   async #open(

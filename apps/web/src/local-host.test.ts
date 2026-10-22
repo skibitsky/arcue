@@ -786,6 +786,29 @@ describe("LocalHost", () => {
     }
   });
 
+  it("gives each of two pages of one view its own models back after both lose their socket to a running core", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const first = new Page(server).start();
+    await first.connected();
+    await first.opened(HERO, CRATE);
+    const second = new Page(server).start();
+    await second.connected();
+    await second.opened(GOLEM);
+
+    server.dropSockets();
+    await vi.waitFor(() => {
+      for (const page of [first, second]) expect(page.host.client.connectionState).toBe("reconnecting");
+    });
+    await first.connected();
+    await vi.waitFor(() => expect(first.paths()).toEqual([HERO, CRATE, GOLEM]));
+    await second.connected();
+
+    await vi.waitFor(() => expect(second.paths()).toEqual([GOLEM]));
+    await vi.waitFor(() => expect(first.paths()).toEqual([HERO, CRATE]));
+    expect(second.saved()?.tabs.map((tab) => tab.path)).toEqual([GOLEM]);
+  });
+
   it("keeps drafts across a restart, but not the unsaved text of a comment box", async () => {
     const server = new FakeServer();
     await server.start();
