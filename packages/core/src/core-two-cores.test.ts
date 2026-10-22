@@ -1146,6 +1146,46 @@ describe("a reviews lock another holder keeps", () => {
     await unlock();
   });
 
+  it("re-anchors a comment another Arcue saved on an older version once the lock it timed out on is free", async () => {
+    const test = await startTestCore(heroFiles(), { lockTimeoutMs: 15_000 });
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    const [onOlder] = (await saved(test)).comments;
+    await test.platform.writeFile(HERO, finer);
+    for (let check = 0; check < 10; check++) {
+      await flush();
+      await test.core.idle();
+      test.clock.advance(300);
+    }
+    const latest = await versionOf(test, assetId);
+    expect(latest).not.toBe(HERO_VERSION);
+    const review = await saved(test);
+    expect(review.comments[0]?.anchorVersion).toBe(latest);
+    if (!onOlder) throw new Error("The comment was not saved.");
+
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    const writes = writesBy(test, "core-1").length;
+    await test.platform.writeFile(
+      REVIEW_JSON,
+      serializeReview({ ...review, revision: review.revision + 1, comments: [onOlder] }),
+    );
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    test.clock.advance(15_000);
+    await flush();
+    await test.core.idle();
+    await unlock();
+    for (let check = 0; check < 5; check++) {
+      test.clock.advance(1000);
+      await flush();
+      await test.core.idle();
+    }
+
+    expect((await saved(test)).comments[0]).toMatchObject({ id: onOlder.id, anchorVersion: latest });
+    expect(writesBy(test, "core-1")).toHaveLength(writes + 1);
+    expect(test.errors).toEqual([]);
+  });
+
   it("fails a load whose parse times out instead of trying it again", async () => {
     const gate = gatedImporter();
     gate.hold("Hero.fbx");
