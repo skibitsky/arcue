@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -438,6 +439,25 @@ describe("a file lock another holder left", () => {
     const unknown = await timed(() => acquireFileLock(lock, options(shortLease)));
     expect(unknown.ms).toBeGreaterThan(330);
     await unknown.value();
+  });
+
+  it("times out on how long one holder keeps it, not on the wait behind several holders in turn", async () => {
+    writeRecord(lock, record({ pid: process.ppid }));
+    const next = join(temp, "next.lock");
+    const handOver = setTimeout(() => {
+      writeRecord(next, record({ pid: process.ppid }));
+      renameSync(next, lock);
+    }, 600);
+    const letGo = setTimeout(() => rmSync(lock, { force: true }), 1200);
+    try {
+      const { value: release, ms } = await timed(() => acquireFileLock(lock, options({ timeoutMs: 1000 })));
+      expect(ms).toBeGreaterThan(1100);
+      expect(readRecord(lock).pid).toBe(process.pid);
+      await release();
+    } finally {
+      clearTimeout(handOver);
+      clearTimeout(letGo);
+    }
   });
 
   it("is not broken when a clock jump makes it look old while its holder refreshes it", async () => {
