@@ -1260,6 +1260,31 @@ describe("a reviews lock another holder keeps while a file is opened or relinked
     await expect(test.platform.exists(`${STRIKER_REVIEW}/review.json`)).resolves.toBe(true);
   });
 
+  it("keeps the earlier review where it is when its model comes back while an open waits for the lock", async () => {
+    const test = await startTestCore(heroFiles());
+    const first = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(first));
+    await test.core.client.execute("asset.close", { assetId: first });
+    const hero = await test.platform.readText(HERO);
+    await test.platform.rename(HERO, STRIKER);
+    const relinked: unknown[] = [];
+    test.core.client.subscribe("review.relinked", (payload) => relinked.push(payload));
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    const opening = test.window.client.execute("asset.open", { path: STRIKER });
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    await test.platform.writeFile(HERO, hero);
+    await unlock();
+    const { assetId } = await opening;
+    await test.core.idle();
+
+    expect(relinked).toEqual([]);
+    expect((await saved(test)).comments).toHaveLength(1);
+    await expect(test.core.client.query("review.get", { assetId })).resolves.toMatchObject({ comments: [] });
+    expect((await saved(test, `${STRIKER_REVIEW}/review.json`)).comments).toEqual([]);
+    expect(test.errors).toEqual([]);
+  });
+
   it("looks for a lost file of the composition again once the lock is free", async () => {
     const run = `${ART}/Anim/Run.fbx`;
     const test = await startTestCore(
