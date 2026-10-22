@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { closeSync, fstatSync, openSync } from "node:fs";
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { CoreConnection } from "@arcue/platform-node";
@@ -56,7 +56,9 @@ function portOf(url: string | undefined): number | undefined {
 
 /**
  * Runs `arcue serve` in the background and returns once it answers, printing its address and this session's view. When
- * Arcue in the browser already runs and shares reviews, it prints that one's address instead, and never stops it.
+ * Arcue in the browser already runs and shares reviews, it prints that one's address instead, and never stops it. The
+ * child runs in the root of the data folder's drive, so on Windows it keeps no folder someone may remove, such as the
+ * data folder, whose removal stops it.
  */
 export async function detachServe(
   command: Extract<Command, { command: "serve" }>,
@@ -128,7 +130,7 @@ export async function detachServe(
         detached: true,
         stdio: ["ignore", descriptor, descriptor],
         windowsHide: true,
-        cwd: userData,
+        cwd: parse(userData).root,
         env: { ...env, ARCUE_USER_DATA: userData },
       },
     );

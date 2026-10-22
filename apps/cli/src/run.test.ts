@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import type { Server } from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, parse, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { connectToCore, isRunning } from "@arcue/platform-node";
 import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
@@ -364,7 +364,7 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     );
   }
 
-  it("starts arcue serve in the background with an absolute data folder, and prints its address and view", async () => {
+  it("starts arcue serve in the background in its drive's root with an absolute data folder, and prints its address and view", async () => {
     const { code, out, err } = await detach(
       ["--port", "4531"],
       "serve",
@@ -377,7 +377,7 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     expect(code).toBe(0);
     expect(record).toMatchObject({
       argv: [script, "serve", "--port", "4531", "--idle-stop-ms", "1800000"],
-      cwd: userData,
+      cwd: parse(userData).root,
       userData,
       lastCore: { version: 1, kind: "serve" },
     });
