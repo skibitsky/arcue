@@ -67,13 +67,14 @@ describe("the processes a test run started", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "reads the command line from ps where there is no /proc, and kills nothing when it cannot read it",
+    "reads the whole command line from ps where there is no /proc, and kills nothing when it cannot read it",
     async () => {
       const platform = Object.getOwnPropertyDescriptor(process, "platform");
       Object.defineProperty(process, "platform", { value: "darwin" });
       try {
         const ours = sleeper(join(folder, "arcue.js"));
         const other = sleeper(join(tmpdir(), "elsewhere.js"));
+        vi.stubEnv("COLUMNS", "20");
         killStarted(other.pid ?? 0, folder);
         killStarted(ours.pid ?? 0, folder);
         await exited(ours);
