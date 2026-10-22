@@ -232,7 +232,9 @@ describe("holding a model for its view's page", () => {
     const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 12 });
 
     expect(shown).toBe("held");
-    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({ assets: [{ assetId, path: HERO }] });
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO }],
+    });
     const reloaded = browserPage(test, "page-a-2", "a");
     await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true });
     expect(reloaded.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
