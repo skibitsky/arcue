@@ -4,16 +4,22 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { isRunning } from "@arcue/platform-node";
+import { connectToCore, isRunning } from "@arcue/platform-node";
 import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
 import { holdStartLock, sleeper, startFakeCore, writeLastCoreFile } from "@arcue/platform-node/test";
 import { BRIDGE_INFO_FILE, LAST_CORE_FILE, SERVE_INFO_FILE, viewAddress } from "@arcue/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunOptions } from "./run";
 import { run } from "./run";
+import { startServer } from "./serve";
 import { sessionView } from "./session-view";
 import { buildFixture } from "./test-build";
 import { killStarted } from "./test-pids";
+
+vi.mock("./serve", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./serve")>();
+  return { ...actual, startServer: vi.fn(actual.startServer) };
+});
 
 const SERVE_URL = "http://localhost:4530";
 const OTHER_BUILD = "It runs from another arcue build: run arcue stop, then arcue serve --detach to use this one.";
@@ -231,6 +237,50 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
+describe("arcue serve", () => {
+  it("says it waits for a browser when an open outside views arrives before it has started", async () => {
+    const webUi = join(userData, "web");
+    mkdirSync(webUi);
+    writeFileSync(join(webUi, "index.html"), "<!doctype html>");
+    writeFileSync(join(userData, "import-worker.js"), "");
+    const port = await freePort();
+    const { startServer: startActual } = await vi.importActual<typeof import("./serve")>("./serve");
+    const stop = Promise.withResolvers<void>();
+    vi.mocked(startServer).mockImplementationOnce(async (serveOptions) => {
+      const asked = Promise.withResolvers<void>();
+      const started = await startActual({
+        ...serveOptions,
+        onWaitingForWindow: (url) => {
+          try {
+            serveOptions.onWaitingForWindow?.(url);
+          } finally {
+            asked.resolve();
+          }
+        },
+      });
+      const connection = await connectToCore(serveOptions.userData, "serve");
+      connection?.client.execute("asset.open", { path: join(userData, "Hero.fbx") }).catch(() => undefined);
+      await asked.promise;
+      connection?.close();
+      stop.resolve();
+      return started;
+    });
+
+    const result = await arcue(["serve", "--port", String(port)], {
+      webUi,
+      importWorkerEntry: join(userData, "import-worker.js"),
+      build: null,
+      stop: stop.promise,
+    });
+
+    expect(result).toEqual({
+      code: 0,
+      out: `Arcue runs at http://localhost:${port}. Open it in a browser; agents' "arcue open" shows their models there.\n`,
+      err: `Waiting for a browser to open http://localhost:${port}.\n`,
+    });
+  });
+});
+
 describe("arcue serve --detach", { timeout: 20_000 }, () => {
   let fixtures: string;
   let script: string;
@@ -278,6 +328,16 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
       code: 0,
       out: `Stopped Arcue in the browser at http://localhost:4531 (process ${record?.pid}).\n`,
     });
+  });
+
+  it("lets go of the arcue serve it started, so the command can exit while that one runs", async () => {
+    const children = () => process.getActiveResourcesInfo().filter((name) => name === "ProcessWrap").length;
+    const before = children();
+
+    expect(await detach(["--port", "4532"], "serve")).toMatchObject({ code: 0, err: "" });
+
+    expect(isRunning(readRecord()?.pid ?? 0)).toBe(true);
+    expect(children()).toBe(before);
   });
 
   it("prints the address of Arcue in the browser that runs, unless --port names another", async () => {

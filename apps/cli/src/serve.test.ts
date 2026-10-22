@@ -761,6 +761,35 @@ describe("arcue serve on its own", () => {
     connection?.close();
   });
 
+  it("starts no idle time for opens from the command line while a page is connected", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+    const page = await openSocket(running.url, running.url);
+    windowClient(page);
+    await vi.waitFor(() => expect(clock.pendingTimers).toBe(2), { timeout: 5000 });
+    const connection = await connectToCore(userData, "serve");
+
+    await expect(connection?.client.execute("asset.open", { path: model() })).resolves.toMatchObject({
+      assetId: expect.any(String),
+    });
+    await expect(
+      connection?.client.execute("asset.openInView", { path: model("Crate.fbx"), view: "a" }),
+    ).resolves.toMatchObject({ shown: "held" });
+    expect(clock.pendingTimers).toBe(2);
+    clock.advance(31 * MINUTE);
+    await settle();
+
+    expect(seen.stop).toBeNull();
+    connection?.close();
+    page.close();
+  });
+
   it("never stops by itself for want of a page in the foreground", async () => {
     const clock = new ManualClock();
     const running = await serve({ setTimer: (ms, run) => clock.setTimer(ms, run), heartbeatMs: 1e9, checkMs: 1e9 });

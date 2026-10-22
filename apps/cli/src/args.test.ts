@@ -61,7 +61,7 @@ describe("parseArgs", () => {
       port: 4600,
       idleStopMs: 1_800_000,
     });
-    for (const value of ["0", "1.5", "9007199254740993", "-1", "x"]) {
+    for (const value of ["0", "1.5", "-1", "x"]) {
       expect(() => parseArgs(["serve", "--idle-stop-ms", value]), value).toThrow(
         `--idle-stop-ms takes a whole number of milliseconds from 1, got "${value}".`,
       );
@@ -70,9 +70,11 @@ describe("parseArgs", () => {
       command: "serve",
       idleStopMs: 2_147_483_647,
     });
-    expect(() => parseArgs(["serve", "--idle-stop-ms", "2147483648"])).toThrow(
-      '--idle-stop-ms takes at most 2147483647 milliseconds, got "2147483648".',
-    );
+    for (const value of ["2147483648", "9007199254740993", "99999999999999999999"]) {
+      expect(() => parseArgs(["serve", "--idle-stop-ms", value]), value).toThrow(
+        `--idle-stop-ms takes at most 2147483647 milliseconds, got "${value}".`,
+      );
+    }
     expect(() => parseArgs(["serve", "--idle-stop-ms"])).toThrow("--idle-stop-ms needs a value.");
     expect(() => parseArgs(["serve", "--detach", "--idle-stop-ms", "5"])).toThrow("--idle-stop-ms is set by --detach.");
     expect(USAGE).not.toContain("--idle-stop-ms");

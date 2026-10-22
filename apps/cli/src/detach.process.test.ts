@@ -15,6 +15,8 @@ import { registerPid } from "./test-pids";
 
 const processRun = inject("processRun");
 const posix = process.platform !== "win32";
+/** How long after its command is done arcue ends itself whatever handles stay open, as `exitAfterRun` arms. */
+const SAFETY_EXIT_MS = 5000;
 
 let userData: string;
 let children: ChildProcess[];
@@ -124,7 +126,7 @@ describe("arcue serve --detach", () => {
 
     const result = await arcue(["serve", "--detach", "--port", String(port)]);
 
-    expect(Date.now() - before).toBeLessThan(10_000);
+    expect(Date.now() - before).toBeLessThan(SAFETY_EXIT_MS);
     expect(result).toMatchObject({ code: 0, err: "" });
     expect(result.out).toMatch(started(port));
     const pid = await servePid();

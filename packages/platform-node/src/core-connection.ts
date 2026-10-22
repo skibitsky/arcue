@@ -87,20 +87,26 @@ export async function listens(info: BridgeInfo, handshakeMs = 5000): Promise<boo
 /**
  * The live core that keeps a core of `kind` from starting, or null. Cores of both kinds run side by side, so each kind
  * is kept out only by a second core of its own kind, or by a core that does not take the review locks this build
- * takes, in either bridge file. A core that refuses, stays silent or cannot be reached counts as live.
+ * takes, in either bridge file. A core that refuses, stays silent or cannot be reached counts as live. A core of the
+ * other kind that shares reviews never blocks, so it is not reached at all, and one that does not answer costs no wait.
  */
 export async function blockingCore(userData: string, kind: CoreKind, handshakeMs = 5000): Promise<BlockingCore | null> {
   const other: CoreKind = kind === "serve" ? "desktop" : "serve";
   const [own, beside] = await Promise.all([
     runningCore(userData, kind, handshakeMs),
-    runningCore(userData, other, handshakeMs),
+    runningUnshared(userData, other, handshakeMs),
   ]);
   if (own) {
     const same = sharesReviews(own) && (kind === "serve" || own.kind === "desktop");
     return { info: own, reason: same ? "same" : "unshared" };
   }
-  if (beside && !sharesReviews(beside)) return { info: beside, reason: "unshared" };
-  return null;
+  return beside ? { info: beside, reason: "unshared" } : null;
+}
+
+/** The running core that the bridge file of this kind names, when it does not share reviews. */
+async function runningUnshared(userData: string, kind: CoreKind, handshakeMs: number): Promise<BridgeInfo | null> {
+  const info = await readBridgeInfo(userData, kind);
+  return info && !sharesReviews(info) && (await listens(info, handshakeMs)) ? info : null;
 }
 
 async function connectWith(info: BridgeInfo, handshakeMs: number): Promise<CoreConnection | null> {

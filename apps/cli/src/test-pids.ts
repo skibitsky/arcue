@@ -61,7 +61,7 @@ function commandLine(pid: number): string | null {
         { encoding: "utf8", windowsHide: true, timeout: 30_000 },
       );
     }
-    return execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 10_000 });
+    return execFileSync("ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 10_000 });
   } catch {
     return null;
   }
