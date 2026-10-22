@@ -103,7 +103,9 @@ describe("an open for an agent session's view", () => {
     await app.close();
     rmSync(marker);
     writeLastCoreFile(userData, "desktop", SERVE_URL);
-    await expect(route(VIEW)).rejects.toThrow(/did not start within/);
+    await expect(route(VIEW)).rejects.toThrow(
+      /^Arcue did not start within \d+ seconds\. Start the app from where it is installed, or run arcue serve --detach to use Arcue in a browser\.$/,
+    );
     await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
   });
 
@@ -193,6 +195,17 @@ describe("an open outside views", () => {
     const routed = await opening;
     expect(routed.connection.info.token).toBe(app.info.token);
     expect(served.requests).toEqual([]);
+  });
+
+  it("goes to Arcue in the browser when the app that launch.json names starts but does not answer", async () => {
+    const served = await serve();
+    launchable();
+
+    const routed = await route(null);
+
+    expect(existsSync(marker)).toBe(true);
+    expect(routed).toMatchObject({ kind: "serve" });
+    expect(routed.connection.info.token).toBe(served.info.token);
   });
 
   it("goes to Arcue in the browser where no app was ever started", async () => {

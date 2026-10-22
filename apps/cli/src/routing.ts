@@ -24,8 +24,9 @@ export const BROWSER_STOPPED =
  * needed, and to Arcue in the browser only where the app cannot start. While nothing answers, it waits for a core that
  * is starting. When nothing answers and Arcue ran in a browser last, an open for a view never starts the app and
  * throws `BROWSER_STOPPED`; an open outside views starts the app whenever launch.json names one that spawns, and throws
- * `BROWSER_STOPPED` only when it does not. It also throws when the app does not start or has never started on this
- * computer, and when a core listens but does not answer.
+ * `BROWSER_STOPPED` only when it does not, and goes to Arcue in the browser when the app it started does not answer in
+ * time. It also throws when the app does not start or has never started on this computer, and when a core listens but
+ * does not answer.
  */
 export async function connectForOpen(
   userData: string,
@@ -47,7 +48,15 @@ async function routeOutsideViews(userData: string, options: ConnectOrLaunchOptio
   const desktop = await answering(userData, ["desktop"]);
   if (desktop) return desktop;
   const launch = await launchApp(userData);
-  if (launch?.launched) return routed(await waitForApp(userData, options), "desktop");
+  if (launch?.launched) {
+    try {
+      return routed(await waitForApp(userData, options), "desktop");
+    } catch (error) {
+      const served = await answering(userData, ["serve"]).catch(() => null);
+      if (served) return served;
+      throw error;
+    }
+  }
   const running = (await answering(userData, ["serve"])) ?? (await afterStarts(userData, ["desktop", "serve"]));
   if (running) return running;
   if ((await readLastCore(userData))?.kind === "serve") throw new Error(BROWSER_STOPPED);

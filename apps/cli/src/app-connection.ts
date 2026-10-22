@@ -36,6 +36,11 @@ export function launchFailed({ command, reason }: { command: string; reason: str
   return `The Arcue app could not be started from ${command}: ${reason}. Start it from where it is installed, or run arcue serve --detach to use Arcue in a browser.`;
 }
 
+/** What `arcue open` says when the app it started did not answer in time. */
+export function didNotStart(timeoutMs: number): string {
+  return `Arcue did not start within ${Math.round(timeoutMs / 1000)} seconds. Start the app from where it is installed, or run arcue serve --detach to use Arcue in a browser.`;
+}
+
 async function readJson(path: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(path, "utf8"));
@@ -118,5 +123,5 @@ export async function waitForApp(
     if (connection) return connection;
   }
   if (lastError instanceof Error) throw lastError;
-  throw new Error(`Arcue did not start within ${Math.round(timeoutMs / 1000)} seconds.`);
+  throw new Error(didNotStart(timeoutMs));
 }

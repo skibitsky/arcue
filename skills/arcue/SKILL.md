@@ -35,7 +35,7 @@ In Arcue in the browser, a model shows in one view at a time. When `arcue open` 
 
 When `arcue status` shows no Arcue in the browser right after `arcue serve --detach` printed an address, your shell stops what its commands start: run `arcue serve` as a background command that keeps running instead.
 
-Without a built-in browser, `arcue open` shows models in the desktop app, which it starts. When it prints an address instead, give it to the user to open. If it says the app has not been started on this computer yet, could not be started, or that Arcue in the browser has stopped, run `arcue serve --detach` and give the user the address it prints, then run the same `arcue open` again.
+Without a built-in browser, `arcue open` shows models in the desktop app, which it starts. When it prints an address instead, give it to the user to open. If it says the app has not been started on this computer yet, could not be started or did not start, or that Arcue in the browser has stopped, run `arcue serve --detach` and give the user the address it prints, then run the same `arcue open` again.
 
 Name a clip as the file does, from `inspect` or `time.clip`: `--clip 'Armature|Walk'` for an FBX take, `--clip 'Walk'` for the action `Walk` in a .blend. The name comes from the file, so keep it literal: in single quotes, with each `'` in it written as `'\''` in sh, or in PowerShell with each `'`, `‘`, `’`, `‚` and `‛` doubled. Quote file paths the same way. Any other name, such as the display name `Walk` of `Armature|Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
 
