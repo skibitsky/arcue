@@ -82,8 +82,10 @@ describe("ReviewSession", () => {
     expect(session.review.revision).toBe(4);
 
     await expect(session.moveTo(elsewhere, failing(true))).rejects.toThrow("The disk is full.");
+    await platform.writeFile(location.assetPath, "model");
     await expect(session.run((review) => ({ next: { ...review }, result: undefined }))).rejects.toMatchObject({
       code: "conflict",
+      message: expect.stringContaining("could not be finished"),
     });
     await expect(platform.exists(location.folder)).resolves.toBe(false);
   });
