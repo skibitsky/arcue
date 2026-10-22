@@ -9,7 +9,8 @@ import { sessionView } from "../session-view";
  * in its data folder, with the agent session's view its variables name and what `last-core.json` said then, and behaves as `ARCUE_FIXTURE` says: "serve" answers as
  * Arcue in the browser at `serve.json` until `serve.stop`, "port-taken" says its port is in use, "quiet-exit" exits
  * with 3 and says nothing, "crash" records itself in `last-core.json` as a serve that starts does and then exits with
- * 1, and "sleep" never answers. It ends by itself once its data folder is gone.
+ * 1, "lost" exits with 1 as a serve that another start beat does, and "sleep" never answers. It ends by itself once its
+ * data folder is gone.
  */
 const mode = process.env.ARCUE_FIXTURE ?? "serve";
 const userData = process.env.ARCUE_USER_DATA ?? process.cwd();
@@ -53,6 +54,10 @@ switch (mode) {
     process.exit(1);
     break;
   }
+  case "lost":
+    process.stderr.write("Arcue is already running.\n");
+    process.exit(1);
+    break;
   case "sleep":
     break;
   case "serve":
