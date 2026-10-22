@@ -84,7 +84,8 @@ export interface BridgeAddress {
 
 /**
  * Where the core listens, reachable only by this user: a Unix domain socket in a folder only the user can enter, or a
- * named pipe with a new random name on each start, since any user can see pipe names. `bridge.json` names it.
+ * named pipe with a new random name on each start, since any user can see pipe names. Its core's bridge file names it:
+ * `bridge.json` for the desktop app, `serve.json` for Arcue in the browser.
  *
  * Each server gets its own socket, named after its process, so a closing server removes only its own. Sockets of
  * processes that have ended are removed.
