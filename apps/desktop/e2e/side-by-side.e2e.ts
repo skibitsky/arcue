@@ -56,7 +56,7 @@ const PORT = 4541;
 const ADDRESS = `http://localhost:${PORT}`;
 const VIEW = "side-by-side";
 const BROWSER_STOPPED =
-  "Arcue in the browser has stopped. Run arcue serve --detach to start it again; an open page reconnects by itself.\n";
+  "Arcue in the browser has stopped. Run arcue serve --detach, then arcue open again; an open page reconnects by itself.\n";
 const QUIT_COMMENT = "Saved as the app quits";
 /**
  * How long a quitting app gave its windows to close their assets, then its core to stop, before it killed its core,

@@ -16,7 +16,7 @@ export interface Routed {
 
 /** What `arcue open` says when nothing runs and Arcue ran in a browser last. */
 export const BROWSER_STOPPED =
-  "Arcue in the browser has stopped. Run arcue serve --detach to start it again; an open page reconnects by itself.";
+  "Arcue in the browser has stopped. Run arcue serve --detach, then arcue open again; an open page reconnects by itself.";
 
 /**
  * Picks the core an open goes to, launching the desktop app when the rules say so. An open for an agent session's view

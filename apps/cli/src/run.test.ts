@@ -217,6 +217,17 @@ describe("arcue status", () => {
 });
 
 describe("arcue open with Arcue in the browser", () => {
+  it("says to start Arcue in the browser and open the model again once it has stopped", async () => {
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    writeLastCoreFile(userData, "serve", SERVE_URL);
+
+    expect(await arcue(["open", "Hero.fbx"], {}, session)).toEqual({
+      code: 1,
+      out: "",
+      err: "Arcue in the browser has stopped. Run arcue serve --detach, then arcue open again; an open page reconnects by itself.\n",
+    });
+  });
+
   it("says Arcue in the browser stopped while it opened the model", async () => {
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     await serve({

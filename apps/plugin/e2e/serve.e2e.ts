@@ -44,7 +44,7 @@ const WALK = "StoneResonatorRig|Walk";
 const DRAFT = "Lift the back foot sooner.";
 const PAGE_STOPPED = "Arcue in the browser stopped. This page reconnects once it runs again.";
 const BROWSER_STOPPED =
-  "Arcue in the browser has stopped. Run arcue serve --detach to start it again; an open page reconnects by itself.\n";
+  "Arcue in the browser has stopped. Run arcue serve --detach, then arcue open again; an open page reconnects by itself.\n";
 const DETACHED = /^Arcue runs in a browser at (\S+) \(process (\d+)\)\. It stops by itself/;
 
 let temp: string;
