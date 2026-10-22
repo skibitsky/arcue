@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, fstatSync, openSync } from "node:fs";
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -113,13 +113,12 @@ export async function detachServe(
   const logs = join(userData, "logs");
   await mkdir(logs, { recursive: true, mode: 0o700 });
   const log = join(logs, "serve.log");
-  let offset = (await stat(log).catch(() => null))?.size ?? 0;
-  if (offset > LOG_LIMIT_BYTES) {
-    await rename(log, join(logs, "serve.old.log"));
-    offset = 0;
+  if (((await stat(log).catch(() => null))?.size ?? 0) > LOG_LIMIT_BYTES) {
+    await rename(log, join(logs, "serve.old.log")).catch(() => undefined);
   }
   await recordLastCore(userData, "serve");
   const descriptor = openSync(log, "a", 0o600);
+  const offset = fstatSync(descriptor).size;
   let child: ChildProcess;
   try {
     child = spawn(

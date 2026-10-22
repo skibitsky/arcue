@@ -483,6 +483,19 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     expect(readFileSync(join(logs, "serve.log"), "utf8")).toBe("Port 4531 is in use. Choose another with --port.\n");
   });
 
+  it("keeps appending to a log past 1 MiB that cannot be renamed, and prints only what the new arcue serve said", async () => {
+    const logs = join(userData, "logs");
+    mkdirSync(join(logs, "serve.old.log", "kept"), { recursive: true });
+    writeFileSync(join(logs, "serve.log"), "An older line.\n".repeat(80_000));
+
+    expect(await detach(["--port", "4531"], "port-taken")).toEqual({
+      code: 1,
+      out: "",
+      err: "Port 4531 is in use. Choose another with --port.\n",
+    });
+    expect(readFileSync(join(logs, "serve.log"), "utf8")).toMatch(/An older line\.\nPort 4531 is in use/);
+  });
+
   it("stops arcue serve when it does not answer in time", async () => {
     const { code, out } = await detach(["--port", "4531"], "sleep", { detachTimeoutMs: 2000 });
 
