@@ -11,7 +11,7 @@
     "package": "node scripts/package.ts",
     "dev": "node scripts/dev.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.renderer.json",
-    "test:e2e": "pnpm --filter @arcue/cli build && node scripts/build.ts && vitest run --config vitest.e2e.config.ts"
+    "test:e2e": "pnpm --filter @arcue/plugin build && node scripts/build.ts && vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "@arcue/core": "workspace:*",
