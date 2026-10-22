@@ -35,7 +35,10 @@ code=0; arcue status 'StoneResonatorRig|Walk' 'my model.fbx' '100%PATH%' 'a&b' '
 grep -qF 'got "StoneResonatorRig|Walk my model.fbx 100%PATH% a&b ^c !d e"f"' status.txt ||
   fail "Arguments changed on the way to node: $(cat status.txt)"
 
-sh "$scripts/arcue" serve --detach --port 4537 >detach.txt 2>detach-err.txt &
+{
+  code=0; sh "$scripts/arcue" serve --detach --port 4537 2>detach-err.txt || code=$?
+  echo "$code" >detach-code.txt
+} | cat >detach.txt &
 detach=$!
 for _ in $(seq 60); do
   kill -0 "$detach" 2>/dev/null || break
@@ -43,9 +46,10 @@ for _ in $(seq 60); do
 done
 if kill -0 "$detach" 2>/dev/null; then
   kill "$detach" 2>/dev/null || true
-  fail "arcue serve --detach did not return within 60 seconds."
+  fail "arcue serve --detach did not return and close its output within 60 seconds."
 fi
-wait "$detach" || fail "serve --detach failed: $(cat detach.txt detach-err.txt)"
+wait "$detach" || true
+[ "$(cat detach-code.txt)" = 0 ] || fail "serve --detach failed: $(cat detach.txt detach-err.txt)"
 out=$(cat detach.txt)
 case $out in
   'Arcue runs in a browser at http://localhost:4537 '*) ;;
