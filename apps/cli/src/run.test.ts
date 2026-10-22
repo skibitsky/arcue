@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -6,9 +6,10 @@ import { join, parse, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { connectToCore, isRunning } from "@arcue/platform-node";
 import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
-import { holdStartLock, sleeper, startFakeCore, writeLastCoreFile } from "@arcue/platform-node/test";
+import { holdStartLock, sleeper, startFakeCore, writeLastCoreFile, writeLaunchInfo } from "@arcue/platform-node/test";
 import { BRIDGE_INFO_FILE, LAST_CORE_FILE, SERVE_INFO_FILE, viewAddress } from "@arcue/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { connectForOpen } from "./routing";
 import type { RunOptions } from "./run";
 import { run } from "./run";
 import { startServer } from "./serve";
@@ -467,6 +468,49 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
       code: 1,
       out: "",
       err: `arcue serve exited with code 3 before it answered. Its log is ${log}.\n`,
+    });
+  });
+
+  it("puts back what last-core.json said when arcue serve does not start, so a view's open starts the app again", async () => {
+    const marker = join(userData, "launched");
+    writeLaunchInfo(userData, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`);
+    writeLastCoreFile(userData, "desktop", "http://localhost:4531");
+    const before = readFileSync(join(userData, LAST_CORE_FILE), "utf8");
+
+    expect((await detach(["--port", "4531"], "port-taken")).code).toBe(1);
+    expect(readRecord()?.lastCore).toEqual({ version: 1, kind: "serve", serveUrl: "http://localhost:4531" });
+    expect(readFileSync(join(userData, LAST_CORE_FILE), "utf8")).toBe(before);
+    expect((await detach(["--port", "4531"], "sleep", { detachTimeoutMs: 1000 })).code).toBe(1);
+    expect(readFileSync(join(userData, LAST_CORE_FILE), "utf8")).toBe(before);
+    expect((await detach([], "serve", { self: { execPath: join(userData, "no-node"), script } })).code).toBe(1);
+    expect(readFileSync(join(userData, LAST_CORE_FILE), "utf8")).toBe(before);
+
+    await expect(connectForOpen(userData, view, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(
+      /did not start within/,
+    );
+    await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
+  });
+
+  it("removes the last-core.json it wrote when there was none and arcue serve does not start", async () => {
+    expect((await detach(["--port", "4531"], "quiet-exit")).code).toBe(1);
+
+    expect(readRecord()?.lastCore).toEqual({ version: 1, kind: "serve" });
+    expect(existsSync(join(userData, LAST_CORE_FILE))).toBe(false);
+  });
+
+  it("keeps what arcue serve recorded itself before it stopped without answering", async () => {
+    writeLastCoreFile(userData, "desktop", "http://localhost:4531");
+
+    expect(await detach(["--port", "4531"], "crash")).toEqual({
+      code: 1,
+      out: "",
+      err: "arcue serve stopped before it answered.\n",
+    });
+
+    expect(JSON.parse(readFileSync(join(userData, LAST_CORE_FILE), "utf8"))).toEqual({
+      version: 1,
+      kind: "serve",
+      serveUrl: "http://localhost:4531",
     });
   });
 

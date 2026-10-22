@@ -58,7 +58,8 @@ function portOf(url: string | undefined): number | undefined {
  * Runs `arcue serve` in the background and returns once it answers, printing its address and this session's view. When
  * Arcue in the browser already runs and shares reviews, it prints that one's address instead, and never stops it. The
  * child runs in the root of the data folder's drive, so on Windows it keeps no folder someone may remove, such as the
- * data folder, whose removal stops it.
+ * data folder, whose removal stops it. It records Arcue in the browser as the last core before the child starts, so an
+ * open meanwhile never starts the desktop app, and puts the earlier record back when the child fails to start.
  */
 export async function detachServe(
   command: Extract<Command, { command: "serve" }>,
@@ -118,7 +119,7 @@ export async function detachServe(
   if (((await stat(log).catch(() => null))?.size ?? 0) > LOG_LIMIT_BYTES) {
     await rename(log, join(logs, "serve.old.log")).catch(() => undefined);
   }
-  await recordLastCore(userData, "serve");
+  const putBackLastCore = await recordLastCore(userData, "serve");
   const descriptor = openSync(log, "a", 0o600);
   const offset = fstatSync(descriptor).size;
   let child: ChildProcess;
@@ -135,6 +136,7 @@ export async function detachServe(
       },
     );
   } catch (error) {
+    await putBackLastCore();
     output.out(`Could not start Arcue in the browser: ${messageOf(error)}\n`);
     return 1;
   } finally {
@@ -143,6 +145,7 @@ export async function detachServe(
 
   const timeoutMs = options.detachTimeoutMs ?? DETACH_TIMEOUT_MS;
   const outcome = await watchStart(child, userData, timeoutMs);
+  if (outcome.kind !== "started" && outcome.kind !== "other") await putBackLastCore();
   switch (outcome.kind) {
     case "started":
       output.out(

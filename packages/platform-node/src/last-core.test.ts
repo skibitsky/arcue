@@ -97,6 +97,27 @@ describe("the last core", () => {
     expect(onDisk()).toEqual({ version: 1, kind: "desktop", serveUrl: "http://localhost:4600" });
   });
 
+  it("puts back the record a start that failed replaced, unless another Arcue recorded itself since", async () => {
+    const file = join(userData, LAST_CORE_FILE);
+    await writeLastCore(userData, "desktop", ADDRESS);
+    const before = readFileSync(file, "utf8");
+
+    const putBack = await recordLastCore(userData, "serve");
+    expect(onDisk()).toEqual({ version: 1, kind: "serve", serveUrl: ADDRESS });
+    await putBack();
+    expect(readFileSync(file, "utf8")).toBe(before);
+
+    const replaced = await recordLastCore(userData, "serve");
+    await recordLastCore(userData, "serve");
+    await replaced();
+    expect(onDisk()).toEqual({ version: 1, kind: "serve", serveUrl: ADDRESS });
+
+    rmSync(file);
+    await (await recordLastCore(userData, "serve"))();
+    expect(existsSync(file)).toBe(false);
+    expect(readdirSync(userData).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
   it("skips the record when another Arcue holds the start lock past its timeout", async () => {
     holdElsewhere();
     await recordLastCore(userData, "desktop", undefined, 200);

@@ -6,7 +6,7 @@ import type { BlockingCore } from "./core-connection";
 import { blockingCore } from "./core-connection";
 import type { ReleaseLock } from "./file-lock";
 import { acquireFileLock } from "./file-lock";
-import { writeLastCore } from "./last-core";
+import { replaceLastCore } from "./last-core";
 
 const CLAIM_TIMEOUT_MS = 30_000;
 const RECORD_TIMEOUT_MS = 2_000;
@@ -94,19 +94,30 @@ export async function waitForStarts(userData: string, timeoutMs = CLAIM_TIMEOUT_
 
 /**
  * Writes last-core.json under the start lock, waiting at most `timeoutMs` for it and skipping the write after that.
- * Never rejects, and writes nothing once the data folder is gone.
+ * Never rejects, and writes nothing once the data folder is gone. Resolves with a function that puts back, under the
+ * start lock too, what the file held before while no other Arcue has written it since, for a start that fails.
  */
 export async function recordLastCore(
   userData: string,
   kind: CoreKind,
   url?: string,
   timeoutMs = RECORD_TIMEOUT_MS,
-): Promise<void> {
-  if (!(await exists(userData))) return;
+): Promise<() => Promise<void>> {
+  const nothing = async () => undefined;
+  if (!(await exists(userData))) return nothing;
+  const putBack = await underStartLock(userData, timeoutMs, () => replaceLastCore(userData, kind, url));
+  if (!putBack) return nothing;
+  return async () => {
+    await underStartLock(userData, timeoutMs, putBack);
+  };
+}
+
+/** Runs the work while holding the start lock, or resolves null when the lock was not free within `timeoutMs`. */
+async function underStartLock<T>(userData: string, timeoutMs: number, work: () => Promise<T>): Promise<T | null> {
   const release = await takeStartLock(userData, timeoutMs).catch(() => null);
-  if (!release) return;
+  if (!release) return null;
   try {
-    await writeLastCore(userData, kind, url);
+    return await work();
   } finally {
     await release();
   }
