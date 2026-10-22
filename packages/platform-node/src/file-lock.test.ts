@@ -409,21 +409,25 @@ describe("a file lock another holder left", () => {
     }
   });
 
-  it("is never broken by the pid of a record from another pid namespace or boot", async () => {
-    const elsewhere = record({ pid: deadPid(), ns: "pid:[1]/another-boot" });
-    writeRecord(lock, elsewhere);
-    const refresh = setInterval(() => {
-      const now = new Date();
-      utimesSync(lock, now, now);
-    }, 50);
-    try {
-      await expect(acquireFileLock(lock, options({ ...shortLease, timeoutMs: 1000 }))).rejects.toMatchObject({
-        code: "timeout",
-      });
-    } finally {
-      clearInterval(refresh);
+  it("is never broken by the pid of a record from another computer, pid namespace or boot", async () => {
+    for (const elsewhere of [
+      record({ pid: deadPid(), ns: "pid:[1]/another-boot" }),
+      record({ pid: deadPid(), host: `not-${HOST}`.slice(0, 255) }),
+    ]) {
+      writeRecord(lock, elsewhere);
+      const refresh = setInterval(() => {
+        const now = new Date();
+        utimesSync(lock, now, now);
+      }, 50);
+      try {
+        await expect(acquireFileLock(lock, options({ ...shortLease, timeoutMs: 1000 }))).rejects.toMatchObject({
+          code: "timeout",
+        });
+      } finally {
+        clearInterval(refresh);
+      }
+      expect(readRecord(lock)).toEqual(elsewhere);
     }
-    expect(readRecord(lock)).toEqual(elsewhere);
 
     writeRecord(lock, record({ pid: deadPid() }), 3_600_000);
     const { value: release, ms } = await timed(() => acquireFileLock(lock, options()));
