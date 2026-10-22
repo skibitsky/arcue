@@ -4,15 +4,15 @@ import "@arcue/ui/base.css";
 import "@arcue/ui/workspace.css";
 import "./main.css";
 import type { CoreClient } from "@arcue/protocol";
-import { LOCAL_PAGE_MARKER, VIEW_PARAMETER } from "@arcue/protocol";
+import { VIEW_PARAMETER } from "@arcue/protocol";
 import type { WorkspaceStore } from "@arcue/ui";
 import { Workspace } from "@arcue/ui";
 import { createViewport } from "@arcue/viewport";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { coreSocketUrl } from "./core-socket";
-import type { ServedPage } from "./local-host";
 import { followPage, LocalHost } from "./local-host";
+import { MODULE_SCRIPT, probePage } from "./served-page";
 
 declare global {
   interface Window {
@@ -21,24 +21,7 @@ declare global {
   }
 }
 
-const MODULE_SCRIPT = 'script[type="module"][src]';
 const pageScript = document.querySelector(MODULE_SCRIPT)?.getAttribute("src") ?? null;
-
-async function probe(): Promise<ServedPage> {
-  let html: string;
-  try {
-    const response = await fetch("/", { cache: "no-store" });
-    if (!response.ok) return "down";
-    html = await response.text();
-  } catch {
-    return "down";
-  }
-  const served = new DOMParser().parseFromString(html, "text/html");
-  const marker = served.querySelector(`meta[name="${LOCAL_PAGE_MARKER.name}"]`)?.getAttribute("content");
-  if (marker !== LOCAL_PAGE_MARKER.content) return "down";
-  const script = served.querySelector(MODULE_SCRIPT)?.getAttribute("src") ?? null;
-  return script === null || script === pageScript ? "same" : { changed: script };
-}
 
 function safeSessionStorage(): Storage | null {
   try {
@@ -53,7 +36,7 @@ const host = new LocalHost({
   view: new URLSearchParams(location.search).get(VIEW_PARAMETER),
   storage: safeSessionStorage(),
   hasFocus: () => document.hasFocus(),
-  probe,
+  probe: () => probePage(pageScript, (url, init) => fetch(url, init)),
   reload: () => location.reload(),
 });
 window.arcueWindow = { client: host.client, store: host.store };

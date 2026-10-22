@@ -1,5 +1,5 @@
 import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
-import type { ByteStream, CoreClient, IncomingRequest, WindowTabs } from "@arcue/protocol";
+import type { ByteStream, CoreClient, IncomingRequest, ViewState, WindowTabs } from "@arcue/protocol";
 import {
   binaryFrameCodec,
   createMemoryChannel,
@@ -12,8 +12,9 @@ import {
 import type { Importer, SceneDescription } from "@arcue/scene";
 import { SCENE_SPACE } from "@arcue/scene";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LocalHostOptions, ServedPage } from "./local-host";
+import type { LocalHostOptions } from "./local-host";
 import { followPage, LocalHost } from "./local-host";
+import type { ServedPage } from "./served-page";
 
 const HERO = "/work/Hero.fbx";
 const CRATE = "/work/Crate.fbx";
@@ -25,6 +26,12 @@ const NEW_BUILD = "/assets/index-new.js";
 
 /** Longer than any backoff, so advancing by it lets the next attempt run. */
 const PAST_BACKOFF_MS = 6000;
+/** The longest first retry after a connection is lost: 250 ms with its jitter. */
+const FIRST_RETRY_MS = 300;
+const SAVE_DELAY_MS = 300;
+const SAVE_INTERVAL_MS = 5000;
+const OTHER_VIEW = "7b2e5d9c1a0f";
+const TABS_KEY = `arcue.tabs:${VIEW}`;
 
 function emptyScene(): SceneDescription {
   return {
@@ -270,9 +277,14 @@ class Page {
   }
 
   saved(): WindowTabs | null {
-    const text = this.storage.getItem(`arcue.tabs:${VIEW}`);
-    return text === null ? null : (JSON.parse(text) as { tabs: WindowTabs }).tabs;
+    return keptTabs(this.storage);
   }
+}
+
+/** The tabs a page of the view keeps in its storage. */
+function keptTabs(storage: FakeStorage): WindowTabs | null {
+  const text = storage.getItem(TABS_KEY);
+  return text === null ? null : (JSON.parse(text) as { tabs: WindowTabs }).tabs;
 }
 
 function savedTabs(storage: FakeStorage, paths: string[], active: number | null, view = VIEW): void {
@@ -354,7 +366,7 @@ describe("LocalHost", () => {
     await expect(page.host.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
   });
 
-  it("says once that Arcue in the browser stopped, and keeps trying until it runs again", async () => {
+  it("says once that Arcue in the browser stopped, keeps trying until it runs again, and says so when it stops again", async () => {
     const server = new FakeServer();
     await server.start();
     const page = new Page(server).start();
@@ -376,14 +388,26 @@ describe("LocalHost", () => {
     await page.connected();
     await vi.waitFor(() => expect(page.paths()).toEqual([HERO]));
     expect(stopped()).toHaveLength(1);
+
+    await server.stop();
+    await vi.waitFor(() => expect(stopped()).toHaveLength(2));
+    await vi.waitFor(() => expect(page.host.client.connectionState).toBe("reconnecting"));
+    const afterSecondStop = server.sockets.length;
+    page.timers.advance(FIRST_RETRY_MS);
+    expect(server.sockets).toHaveLength(afterSecondStop + 1);
   });
 
   it("reloads once into a new build of the page, keeping its tabs, and again for a newer one", async () => {
     const server = new FakeServer();
     await server.start();
-    const reload = vi.fn();
-    const probe = vi.fn(async (): Promise<ServedPage> => ({ changed: NEW_BUILD }));
-    const page = new Page(server, { probe, reload }).start();
+    const storage = new FakeStorage();
+    const keptAtReload: (WindowTabs | null)[] = [];
+    const reload = vi.fn(() => keptAtReload.push(keptTabs(storage)));
+    const probe = vi.fn(async (): Promise<ServedPage> => {
+      storage.removeItem(TABS_KEY);
+      return { changed: NEW_BUILD };
+    });
+    const page = new Page(server, { probe, reload, storage }).start();
     await page.connected();
     await page.opened(HERO, CRATE);
     expect(probe).not.toHaveBeenCalled();
@@ -394,12 +418,12 @@ describe("LocalHost", () => {
       expect(reload).toHaveBeenCalledTimes(1);
     });
     expect(page.storage.getItem("arcue.reloadedFor")).toBe(NEW_BUILD);
-    expect(page.saved()?.tabs.map((tab) => tab.path)).toEqual([HERO, CRATE]);
+    expect(keptAtReload).toEqual([{ tabs: [HERO, CRATE].map((path) => ({ path, view: null })), active: 1 }]);
     page.timers.advance(PAST_BACKOFF_MS);
     expect(page.host.client.connectionState).toBe("reconnecting");
     page.host.dispose();
 
-    const reloaded = new Page(server, { probe, reload, storage: page.storage }).start();
+    const reloaded = new Page(server, { probe, reload, storage }).start();
     await reloaded.connected();
     await vi.waitFor(() => expect(reloaded.paths()).toEqual([HERO, CRATE]));
     probe.mockImplementation(async () => ({ changed: "/assets/index-newer.js" }));
@@ -524,6 +548,56 @@ describe("LocalHost", () => {
     await vi.waitFor(() => expect(reloaded.activePath()).toBe(CRATE));
   });
 
+  it("opens a tab the core doesn't have from the view it kept, at its clip, frame and camera", async () => {
+    const server = new FakeServer();
+    const core = await server.start();
+    const view: ViewState = {
+      camera: { position: [2, 1.5, 3], target: [0, 1, 0], up: [0, 1, 0], fov: 35 },
+      clip: "Armature|Walk",
+      frame: 20,
+      range: null,
+      display: { mode: "clay", skeleton: true },
+      parts: { hidden: [], shown: [], isolated: null, lod: 0 },
+      outlineOpen: false,
+    };
+    const storage = new FakeStorage();
+    const tabs: WindowTabs = {
+      tabs: [
+        { path: HERO, view },
+        { path: CRATE, view: null },
+      ],
+      active: 0,
+    };
+    storage.setItem(TABS_KEY, JSON.stringify({ version: 1, tabs }));
+    const page = new Page(server, { storage }).start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.paths()).toEqual([HERO, CRATE]));
+    const { assets } = await core.client.query("asset.list", {});
+    const views = await Promise.all(assets.map(({ assetId }) => core.client.query("viewState.get", { assetId })));
+    expect(views).toEqual([view, null]);
+  });
+
+  it("says nothing of a tab another session's view takes while the page opens its tabs again", async () => {
+    const server = new FakeServer();
+    const core = await server.start();
+    const bridge = server.bridge();
+    core.client.subscribe("asset.opened", ({ asset }) => {
+      if (asset.path === HERO) void bridge.execute("asset.openInView", { path: CRATE, view: OTHER_VIEW });
+    });
+    const storage = new FakeStorage();
+    savedTabs(storage, [HERO, CRATE, GOLEM], 0);
+    const page = new Page(server, { storage });
+    const alerts = vi.spyOn(page.store, "notify");
+    page.start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.paths()).toEqual([HERO, GOLEM]));
+    await vi.waitFor(() => expect(page.activePath()).toBe(HERO));
+    expect(await server.paths()).toEqual([HERO, CRATE, GOLEM]);
+    expect(alerts.mock.calls.filter(([toast]) => toast.kind === "alert")).toEqual([]);
+  });
+
   it("starts without saved tabs when its storage throws or holds something else", async () => {
     const server = new FakeServer();
     await server.start();
@@ -600,7 +674,6 @@ describe("LocalHost", () => {
     }
     document.visibilityState = "hidden";
     document.dispatchEvent(new Event("visibilitychange"));
-    expect(page.storage.items.has(`arcue.tabs:${VIEW}`)).toBe(true);
 
     await server.start();
     document.visibilityState = "visible";
@@ -608,6 +681,58 @@ describe("LocalHost", () => {
       document.dispatchEvent(new Event("visibilitychange"));
       expect(page.host.client.connectionState).toBe("connected");
     });
+  });
+
+  it("opens no second socket when the page comes back while an attempt still connects", async () => {
+    const server = new FakeServer();
+    await server.start();
+    server.answer = "hang";
+    const page = new Page(server).start();
+    await vi.waitFor(() => expect(server.sockets).toHaveLength(1));
+    const document = new FakeDocument();
+    const window = new EventTarget();
+    cleanups.push(followPage(page.host, { window, document }));
+
+    for (const name of ["focus", "online", "pageshow"]) window.dispatchEvent(new Event(name));
+    document.dispatchEvent(new Event("resume"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await Promise.resolve();
+
+    expect(server.sockets).toHaveLength(1);
+    server.acceptWaiting();
+    await vi.waitFor(() => expect(page.host.client.connectionState).toBe("connected"));
+    expect(server.sockets).toHaveLength(1);
+  });
+
+  it("keeps its tabs every few seconds, and at once when the page is hidden or goes away", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const page = new Page(server).start();
+    await page.connected();
+    await page.opened(HERO, CRATE);
+    const document = new FakeDocument();
+    const window = new EventTarget();
+    cleanups.push(followPage(page.host, { window, document }));
+    const tabs = { tabs: [HERO, CRATE].map((path) => ({ path, view: null })), active: 1 };
+    page.timers.advance(SAVE_DELAY_MS);
+    let changes = 0;
+    cleanups.push(page.store.state.subscribe(() => changes++));
+
+    page.storage.items.clear();
+    page.timers.advance(SAVE_INTERVAL_MS);
+    expect(page.saved()).toEqual(tabs);
+    page.storage.items.clear();
+    page.timers.advance(SAVE_INTERVAL_MS);
+    expect(page.saved()).toEqual(tabs);
+
+    page.storage.items.clear();
+    window.dispatchEvent(new Event("pagehide"));
+    expect(page.saved()).toEqual(tabs);
+    page.storage.items.clear();
+    document.visibilityState = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(page.saved()).toEqual(tabs);
+    expect(changes).toBe(0);
   });
 
   it("gives up on an attempt still connecting after 10 seconds and tries again", async () => {
@@ -712,6 +837,13 @@ describe("LocalHost", () => {
       document.dispatchEvent(new Event("resume"));
       expect(page.host.client.connectionState).toBe("connected");
     });
+    server.dropSockets();
+    await vi.waitFor(() => expect(page.host.client.connectionState).toBe("reconnecting"));
+    const afterDrop = server.sockets.length;
+    page.timers.advance(FIRST_RETRY_MS);
+    expect(server.sockets).toHaveLength(afterDrop + 1);
+
+    await page.connected();
     const attempts = server.sockets.length;
     page.timers.advance(PAST_BACKOFF_MS);
     document.dispatchEvent(new Event("resume"));
@@ -730,6 +862,12 @@ describe("LocalHost", () => {
     savedTabs(storage, all, 2);
     const page = new Page(server, { storage });
     const asked = opensOf(page);
+    let attaches = 0;
+    cleanups.push(
+      page.host.client.onConnectionChange((state) => {
+        if (state === "connected" && ++attaches === 2) storage.removeItem(TABS_KEY);
+      }),
+    );
     page.start();
 
     await vi.waitFor(() => expect(server.sockets[0]?.readyState).toBe(WebSocket.CLOSED));
@@ -739,7 +877,9 @@ describe("LocalHost", () => {
     await vi.waitFor(() => expect(page.activePath()).toBe(GOLEM));
     expect(asked()).toEqual(all);
     expect(await server.paths()).toEqual(all);
-    expect(page.saved()?.tabs.map((tab) => tab.path)).toEqual(all);
+    await vi.waitFor(() =>
+      expect(page.saved()).toEqual({ tabs: all.map((path) => ({ path, view: null })), active: 2 }),
+    );
   });
 
   it("says once per outage that Arcue in the browser stopped, and nothing for a socket that just drops", async () => {

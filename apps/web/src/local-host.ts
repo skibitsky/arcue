@@ -12,12 +12,7 @@ import {
 import type { WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore, TabRestore } from "@arcue/ui";
 import { webSocketStream } from "./core-socket";
-
-/**
- * What the server serves at "/" now: this page, another build of it with the module script it names, or nothing this
- * page can reload into, such as no answer or a page without the arcue-page marker.
- */
-export type ServedPage = "same" | "down" | { changed: string };
+import type { ServedPage } from "./served-page";
 
 export interface LocalHostOptions {
   /** Opens a new socket to the core on the server the page came from. */
