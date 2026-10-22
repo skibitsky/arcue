@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ArcueCore, ManualClock } from "@arcue/core";
-import { connectToCore, readBridgeInfo } from "@arcue/platform-node";
+import { connectToCore, fromNativePath, NodePlatform, readBridgeInfo } from "@arcue/platform-node";
 import type { FakeCore } from "@arcue/platform-node/test";
 import { startFakeCore, writeLastCoreFile } from "@arcue/platform-node/test";
 import type { CoreClient, IncomingRequest } from "@arcue/protocol";
@@ -602,6 +602,26 @@ describe("arcue serve beside other cores", () => {
     await running.close();
     server = null;
     expect(existsSync(userData)).toBe(false);
+  });
+
+  it("stops when its data folder is removed and a lock makes it again before the next check", async () => {
+    const running = await serve({ checkMs: 200 });
+    const platform = new NodePlatform({
+      appDataDir: fromNativePath(userData),
+      startImportWorker: () => {
+        throw new Error("No import worker.");
+      },
+    });
+
+    rmSync(userData, { recursive: true, force: true });
+    await (await platform.lock(fromNativePath(temp), "reviews"))();
+    expect(existsSync(userData)).toBe(true);
+
+    const stop = await Promise.race([running.stopped, sleep(3000).then(() => null)]);
+    expect(stop).toEqual({ reason: "data-gone", message: `Arcue stops: its data folder ${userData} was removed.` });
+    await running.close();
+    server = null;
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
   });
 });
 

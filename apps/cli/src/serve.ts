@@ -139,6 +139,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   const { userData } = options;
   const setTimer = options.setTimer ?? systemClock.setTimer;
   const claim = await claimStart(userData, "serve");
+  const dataFolder = await folderIdentity(userData);
   const owner = await pageOwner(userData);
 
   let url = "";
@@ -296,7 +297,8 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
     const workerFolder = dirname(options.importWorkerEntry);
     if (!(await isFile(resolve(webUi, "index.html")))) return removed(webUi);
     if (!(await isFile(options.importWorkerEntry))) return removed(workerFolder);
-    if (!(await stat(userData).catch(() => null))) {
+    const folder = await folderIdentity(userData);
+    if (folder === null || (dataFolder !== null && folder !== dataFolder)) {
       return stop("data-gone", `Arcue stops: its data folder ${userData} was removed.`);
     }
     const held = await bridge.holdsInfo();
@@ -411,6 +413,15 @@ async function listenLocally(port: number): Promise<{ servers: Server[]; port: n
 }
 
 /** Names the data folder and user, the same on every start, so the page tells this Arcue in the browser from another. */
+/**
+ * The folder's device and inode, which a folder made again in its place does not share, as when a lock or a save in
+ * flight makes a removed data folder again. Null when it is gone.
+ */
+async function folderIdentity(path: string): Promise<string | null> {
+  const found = await stat(path, { bigint: true }).catch(() => null);
+  return found ? `${found.dev}:${found.ino}` : null;
+}
+
 async function pageOwner(userData: string): Promise<string> {
   const folder = await realpath(userData).catch(() => resolve(userData));
   const user = process.getuid?.() ?? userInfo().username;
