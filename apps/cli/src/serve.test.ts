@@ -35,6 +35,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientOptions } from "ws";
 import { WebSocket } from "ws";
+import { BROWSER_STOPPED, connectForOpen } from "./routing";
 import { run } from "./run";
 import type { ArcueServer, ServeOptions, ServeStop } from "./serve";
 import { localHosts, startServer } from "./serve";
@@ -663,6 +664,22 @@ describe("arcue serve stopping", () => {
     });
     const again = await serve({ port: Number(new URL(running.url).port) });
     expect(again.url).toBe(running.url);
+  });
+
+  it("records that it ran last before it removes serve.json, so an open meanwhile never starts the desktop app", async () => {
+    const running = await serve();
+    const held = await silentPage(running.url);
+    writeLastCoreFile(userData, "desktop");
+
+    const closing = running.close();
+    server = null;
+    await vi.waitFor(() => expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false), { timeout: 2000 });
+    expect(JSON.parse(readFileSync(join(userData, LAST_CORE_FILE), "utf8"))).toMatchObject({ kind: "serve" });
+    await expect(connectForOpen(userData, "a1b2c3d4e5f6", { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(
+      BROWSER_STOPPED,
+    );
+    await closing;
+    held.destroy();
   });
 
   it("closes the command line's connections before the pages, and refuses pages meanwhile", async () => {
