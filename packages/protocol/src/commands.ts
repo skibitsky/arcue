@@ -288,7 +288,8 @@ export const commands = {
       ...assetRef,
       /**
        * Leaves the tab where it is when another window shows the asset, or the asset belongs to another view, as a page
-       * that reopens after a reload does. Without it, an asset of another view fails with conflict.
+       * that reopens after a reload does, except that it takes back an asset another page of its view adopted in the
+       * last 30 seconds (see `adopt`). Without it, an asset of another view fails with conflict.
        */
       unlessShown: z.boolean().optional(),
       /**
