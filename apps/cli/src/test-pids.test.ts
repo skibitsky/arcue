@@ -22,10 +22,17 @@ function sleeper(marker: string): ChildProcess {
   return child;
 }
 
-function exited(child: ChildProcess): Promise<void> {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) resolve();
-    else child.once("exit", () => resolve());
+function exited(child: ChildProcess, withinMs = 3000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => reject(new Error(`process ${child.pid} still runs after ${withinMs} ms`)), withinMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
   });
 }
 
@@ -74,13 +81,13 @@ describe("the processes a test run started", () => {
       try {
         const ours = sleeper(join(folder, "arcue.js"));
         const other = sleeper(join(tmpdir(), "elsewhere.js"));
+        const unread = sleeper(join(folder, "arcue.js"));
         vi.stubEnv("COLUMNS", "20");
         killStarted(other.pid ?? 0, folder);
         killStarted(ours.pid ?? 0, folder);
         await exited(ours);
         expect(isRunning(other.pid ?? 0)).toBe(true);
 
-        const unread = sleeper(join(folder, "arcue.js"));
         vi.stubEnv("PATH", "");
         killStarted(unread.pid ?? 0, folder);
         await sleep(300);

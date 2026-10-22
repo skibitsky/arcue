@@ -183,7 +183,7 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 function parseIdleStop(value: string): number {
   const ms = /^\d+$/.test(value) ? Number(value) : Number.NaN;
-  if (!(ms >= 1 && Number.isSafeInteger(ms))) {
+  if (!(ms >= 1)) {
     throw new UsageError(`--idle-stop-ms takes a whole number of milliseconds from 1, got "${value}".`);
   }
   if (ms > MAX_TIMER_MS) {
