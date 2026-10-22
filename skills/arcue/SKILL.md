@@ -33,7 +33,7 @@ Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 
 In Arcue in the browser, a model shows in one view at a time. When `arcue open` says another session's view has it, add `--move` only if the user wants it here.
 
-When `arcue status` shows no Arcue in the browser right after `arcue serve --detach` printed an address, your shell stops what its commands start: run `arcue serve --port <the port of that address>` as a background command that keeps running instead, and open the view address it prints.
+When `arcue status` shows no Arcue in the browser right after `arcue serve --detach` printed an address, your shell stops what its commands start: run `arcue serve --port <number>` with the port of that address as a background command that keeps running instead, and open the view address it prints.
 
 Without a built-in browser, `arcue open` shows models in the desktop app, which it starts. When it prints an address instead, give it to the user to open. If it says the app has not been started on this computer yet, could not be started or did not start, or that Arcue in the browser has stopped, run `arcue serve --detach` and give the user the address it prints, then run the same `arcue open` again.
 

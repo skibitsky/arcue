@@ -92,7 +92,7 @@ describe("the arcue skill", () => {
   it("keeps the port --detach printed when the shell stops what it starts", async () => {
     const { body } = await skillFile();
 
-    expect(body).toMatch(/run `arcue serve --port <the port of that address>` as a background command/);
+    expect(body).toMatch(/run `arcue serve --port <number>` with the port of that address as a background command/);
   });
 
   it("names itself in its Codex default prompt", async () => {
