@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src", "vite.config.ts", "vitest.config.ts", "../../types/runtime.d.ts"]
+  "include": ["src", "vite.config.ts", "vitest.config.ts", "vitest.processes.config.ts", "../../types/runtime.d.ts"]
 }

@@ -1,6 +1,6 @@
 import { viewNameSchema } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
-import { sessionView } from "./session-view";
+import { outsideSessions, sessionView } from "./session-view";
 
 const claude = "c3a1d6f0-8e2b-4b1c-9d7e-2f5a6b8c0e14";
 const codexSession = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b";
@@ -42,5 +42,20 @@ describe("the session's view", () => {
     const subagent = { CODEX_SESSION_ID: codexSession, CODEX_THREAD_ID: "019a2b3c-0000-7f60-8a9b-0c1d2e3f4a5b" };
 
     expect(sessionView(subagent)).toBe(sessionView(parent));
+  });
+});
+
+describe("outside sessions", () => {
+  it("copies the environment without the variables that name a session", () => {
+    const env = {
+      PATH: "/usr/bin",
+      ARCUE_VIEW: "mine",
+      CLAUDE_CODE_SESSION_ID: claude,
+      CODEX_SESSION_ID: codexSession,
+    };
+
+    expect(outsideSessions({ ...env, CODEX_THREAD_ID: codexThread })).toEqual({ PATH: "/usr/bin" });
+    expect(sessionView(outsideSessions(env))).toBeNull();
+    expect(env.ARCUE_VIEW).toBe("mine");
   });
 });
