@@ -366,6 +366,31 @@ describe("a file lock another holder left", () => {
     await release();
   });
 
+  it("leaves the file of a waiter that broke the same dead holder's lock and took it first", async () => {
+    const stale = record({ pid: deadPid() });
+    writeRecord(lock, stale, 3_600_000);
+    const successor = record({ pid: process.ppid });
+    const claim = `${lock}.${stale.token}.break`;
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let overtaken = false;
+    vi.mocked(fs.open).mockImplementation((path, flags, mode) => {
+      if (path === claim && flags === "wx" && !overtaken) {
+        overtaken = true;
+        writeRecord(lock, successor);
+      }
+      return actual.open(path, flags, mode);
+    });
+    try {
+      await expect(acquireFileLock(lock, options({ timeoutMs: 300 }))).rejects.toMatchObject({ code: "timeout" });
+    } finally {
+      vi.mocked(fs.open).mockImplementation(actual.open);
+    }
+
+    expect(overtaken).toBe(true);
+    expect(readRecord(lock)).toEqual(successor);
+    expect(existsSync(claim)).toBe(false);
+  });
+
   it("is broken only through the lease when it names a live process that does not refresh it", async () => {
     writeRecord(lock, record({ pid: process.ppid }));
 
