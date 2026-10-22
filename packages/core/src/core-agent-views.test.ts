@@ -291,6 +291,23 @@ describe("holding a model for its view's page", () => {
     expect(second.requests).toEqual([]);
   });
 
+  it("starts a held model from the view a page kept for its tab while it keeps none, at the agent's frame", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 7 });
+    const page = browserPage(test, "page-a", "a");
+
+    await page.client.execute("view.moveAsset", { assetId, unlessShown: true, viewState: state });
+
+    await expect(test.core.client.query("viewState.get", { assetId })).resolves.toEqual(state);
+    expect(page.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 7 } }]);
+    page.close();
+    await flush();
+    const reloaded = browserPage(test, "page-b", "a");
+    await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true, viewState: { ...state, frame: 3 } });
+    await expect(test.core.client.query("viewState.get", { assetId })).resolves.toEqual(state);
+  });
+
   it("numbers its holds, so a page tells the model an agent opened last, also one it opened before", async () => {
     const test = await setupServe();
     const cli = bridge(test);

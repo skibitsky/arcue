@@ -277,8 +277,8 @@ export class LocalHost {
 
   /**
    * Opens the tabs again in order. A model the core still has moves to this page as the core keeps it, such as at the
-   * clip and frame an agent opened it at, also from a page of the view that adopted it just before; any other opens
-   * from its path. Then the page adopts the other assets the core holds for its view, which another page of the view
+   * clip and frame an agent opened it at, also from a page of the view that adopted it just before, and from the view
+   * the tab kept when the core keeps none; any other opens from its path. Then the page adopts the other assets the core holds for its view, which another page of the view
    * that lost its connection too may take back. Of the models the core held for an agent's opens while the page was
    * away, the one opened last ends up active, and otherwise the saved active tab.
    */
@@ -304,7 +304,8 @@ export class LocalHost {
           return;
         }
         moved.add(assetId);
-        noteHeld(assetId, await this.client.execute("view.moveAsset", { assetId, unlessShown: true }));
+        const kept = view ? { viewState: view } : {};
+        noteHeld(assetId, await this.client.execute("view.moveAsset", { assetId, unlessShown: true, ...kept }));
       },
       quiet: isConflict,
       adopt: async () => {

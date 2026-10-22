@@ -640,6 +640,36 @@ describe("LocalHost", () => {
     expect(views).toEqual([view, null]);
   });
 
+  it("shows a kept tab that an agent opened while the page was away from the view it kept, at the agent's frame", async () => {
+    const server = new FakeServer();
+    const core = await server.start();
+    const view: ViewState = {
+      camera: { position: [2, 1.5, 3], target: [0, 1, 0], up: [0, 1, 0], fov: 35 },
+      clip: "Armature|Walk",
+      frame: 20,
+      range: null,
+      display: { mode: "clay", skeleton: true },
+      parts: { hidden: [], shown: [], isolated: null, lod: 0 },
+      outlineOpen: false,
+    };
+    const storage = new FakeStorage();
+    storage.setItem(TABS_KEY, JSON.stringify({ version: 1, tabs: { tabs: [{ path: HERO, view }], active: 0 } }));
+    const opened = await server.bridge().execute("asset.openInView", { path: HERO, view: VIEW, frame: 12 });
+    expect(opened.shown).toBe("held");
+    const page = new Page(server, { storage });
+    const requests = requestsTo(page);
+    page.start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.paths()).toEqual([HERO]));
+    await expect(core.client.query("viewState.get", { assetId: opened.assetId })).resolves.toEqual(view);
+    expect(requests).toContainEqual({
+      kind: "command",
+      name: "view.showAsset",
+      input: { assetId: opened.assetId, frame: 12 },
+    });
+  });
+
   it("says nothing of a tab another session's view takes while the page opens its tabs again", async () => {
     const server = new FakeServer();
     const core = await server.start();

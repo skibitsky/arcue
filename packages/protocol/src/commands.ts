@@ -298,6 +298,11 @@ export const commands = {
        * with `unlessShown` takes it back, since both pages may have lost their connection and this one came back first.
        */
       adopt: z.boolean().optional(),
+      /**
+       * The view the calling page kept for the tab, which an asset the core keeps no view for starts from, as one an
+       * agent opened while no page of its view was open. The clip and frame that open asked for still win.
+       */
+      viewState: viewStateSchema.optional(),
     }),
     output: z.object({
       /**
