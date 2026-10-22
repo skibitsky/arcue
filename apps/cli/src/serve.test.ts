@@ -845,6 +845,35 @@ describe("arcue serve on its own", () => {
     connection?.close();
   });
 
+  it("counts the idle time again from each command-line connection and each load of the page while no page is connected", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+
+    clock.advance(29 * MINUTE);
+    const connection = await connectToCore(userData, "serve");
+    await connection?.client.query("asset.list", {});
+    connection?.close();
+    clock.advance(29 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+    expect((await get(running.url, "/assets/index-abc.js")).status).toBe(200);
+    expect((await get(running.url, "/")).status).toBe(200);
+    clock.advance(2 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(28 * MINUTE - 1);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(1);
+    await expect(running.stopped).resolves.toMatchObject({ reason: "idle" });
+  });
+
   it("starts no idle time for opens from the command line while a page is connected", async () => {
     const clock = new ManualClock();
     const running = await serve({

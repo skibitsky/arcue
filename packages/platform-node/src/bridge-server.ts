@@ -32,6 +32,8 @@ interface CommonBridgeOptions {
    * at once for a view, and the core holds the model for the page.
    */
   ensureWindow: (view: string | null) => Promise<void>;
+  /** Called for each connection that presents the token, before it is served. */
+  onConnection?: () => void;
   onError: ListenerErrorHandler;
   handshakeTimeoutMs?: number;
   /** The start lock the host already holds, which the server lets go once its bridge file is written. */
@@ -165,6 +167,7 @@ async function listenForBridges(options: BridgeServerOptions): Promise<BridgeSer
       timeout: { ms: options.handshakeTimeoutMs ?? 5000, setTimer: unrefTimer },
     }).then(
       ({ endpoint, user }) => {
+        options.onConnection?.();
         options.core.connect(windowFirst(endpoint, options.ensureWindow), {
           connection: `bridge-${next++}`,
           caller: "bridge",

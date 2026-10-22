@@ -74,7 +74,10 @@ export interface ServeOptions {
   onError: ListenerErrorHandler;
   /** Called with the address when the command line opens a model without a view and no page outside views is open. */
   onWaitingForWindow?: (url: string) => void;
-  /** Stops the core after this long with no page connected. Without it, the core never stops by itself for that. */
+  /**
+   * Stops the core after this long with no page connected. While none is, each connection from the command line, each
+   * open it sends and each load of the page counts the time again. Without it, the core never stops by itself for that.
+   */
   idleStopMs?: number;
   /** The timers of the idle stop, the pages' heartbeat and the checks. */
   setTimer?: SetTimer;
@@ -110,6 +113,9 @@ export interface ArcueServer {
    */
   close(code?: number): Promise<void>;
 }
+
+/** The addresses of the page itself, whose load counts the idle time again, as its socket connects only once it runs. */
+const PAGE_PATHS: ReadonlySet<string> = new Set(["/", "/index.html"]);
 
 const HEARTBEAT_MS = 30_000;
 const CHECK_MS = 5_000;
@@ -201,6 +207,9 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
         if (pages === 0) armIdle();
         return view === null ? windows.ensure(null) : Promise.resolve();
       },
+      onConnection: () => {
+        if (pages === 0) armIdle();
+      },
       onError: options.onError,
       url,
       build: options.build,
@@ -251,6 +260,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
       if (!allowed(request)) return refuse(response, 403);
       if (request.method !== "GET" && request.method !== "HEAD") return refuse(response, 405);
+      if (pages === 0 && PAGE_PATHS.has(URL.parse(request.url ?? "/", url)?.pathname ?? "")) armIdle();
       sendFile(webUi, owner, request, response, () => removed(webUi)).catch((error: unknown) => {
         options.onError(error);
         if (!response.headersSent) refuse(response, 500);
