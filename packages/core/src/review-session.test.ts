@@ -1,6 +1,6 @@
 import type { ReviewFile } from "@arcue/protocol";
 import { REVIEW_FORMAT } from "@arcue/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ManualClock } from "./manual-clock";
 import { MemoryPlatform } from "./memory-platform";
 import type { ComputeChange } from "./review-session";
@@ -319,7 +319,7 @@ describe("ReviewSession and the reviews lock", () => {
     const unlock = await platform.lock("/work/game", "reviews");
     const waiting = session.run(dismiss).catch((error: unknown) => error);
     const queued = session.run(dismiss);
-    while (platform.lockWaiters(key) === 0) await Promise.resolve();
+    await vi.waitFor(() => expect(platform.lockWaiters(key)).toBe(1));
     clock.advance(15_000);
     await expect(waiting).resolves.toMatchObject({ code: "timeout" });
     await unlock();
