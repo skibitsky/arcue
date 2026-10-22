@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CoreClient, LaunchInfo, ViewState } from "@arcue/protocol";
 import { BRIDGE_INFO_FILE, LAST_CORE_FILE, LAUNCH_INFO_FILE, roundDataSchema } from "@arcue/protocol";
-import type { Page, WebSocketRoute } from "@playwright/test";
+import type { Page, TestInfo, WebSocketRoute } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 interface PageProbe {
@@ -211,6 +211,14 @@ async function gateSockets(page: Page): Promise<{ hold(): void; release(): Promi
   };
 }
 
+/** Copies the logs of the tests' data folders into the test's results, which CI keeps, and keeps the folders. */
+function saveLogs(info: TestInfo): void {
+  failed = true;
+  for (const folder of readdirSync(temp).filter((name) => existsSync(join(temp, name, "logs")))) {
+    cpSync(join(temp, folder, "logs"), info.outputPath(folder, "logs"), { recursive: true });
+  }
+}
+
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
@@ -222,16 +230,17 @@ test.beforeAll(async () => {
   model = copyModel("stone-striker.fbx");
   data = join(temp, "data");
   env = { ...outsideSessions(process.env), ARCUE_USER_DATA: data };
-  await detach();
+  try {
+    await detach();
+  } catch (error) {
+    saveLogs(test.info());
+    throw error;
+  }
 });
 
 test.afterEach(async () => {
   const info = test.info();
-  if (info.status === info.expectedStatus) return;
-  failed = true;
-  for (const folder of readdirSync(temp).filter((name) => existsSync(join(temp, name, "logs")))) {
-    cpSync(join(temp, folder, "logs"), info.outputPath(folder, "logs"), { recursive: true });
-  }
+  if (info.status !== info.expectedStatus) saveLogs(info);
 });
 
 test.afterAll(async () => {

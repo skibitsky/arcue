@@ -35,8 +35,12 @@ code=0; arcue status 'StoneResonatorRig|Walk' 'my model.fbx' '100%PATH%' 'a&b' '
 grep -qF 'got "StoneResonatorRig|Walk my model.fbx 100%PATH% a&b ^c !d e"f"' status.txt ||
   fail "Arguments changed on the way to node: $(cat status.txt)"
 
-watchdog() { sleep "$1" >/dev/null 2>&1; echo "::error::$2" >&2; kill -TERM "$$"; }
-watchdog 60 'arcue serve --detach did not return within 60 seconds.' &
+watchdog() {
+  for _ in $(seq "$1"); do sleep 1; done
+  echo "::error::$2" >&2
+  kill -TERM "$$"
+}
+watchdog 60 'arcue serve --detach did not return within 60 seconds.' >/dev/null &
 dog=$!
 out=$(arcue serve --detach --port 4537) || fail "serve --detach failed: $out"
 kill "$dog" 2>/dev/null || true

@@ -18,11 +18,18 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { CoreConnection } from "@arcue/platform-node";
-import { connectToCore, runningCore } from "@arcue/platform-node";
+import { connectToCore, fromNativePath, NodePlatform, runningCore } from "@arcue/platform-node";
 import type { FakeCore } from "@arcue/platform-node/test";
 import { outsideSessions, startFakeCore } from "@arcue/platform-node/test";
 import type { AssetSummary, CommandInput, CoreClient, ReviewFile, Settings } from "@arcue/protocol";
-import { BRIDGE_INFO_FILE, LOCKS_FOLDER, lockRecordSchema, reviewFileSchema, SERVE_INFO_FILE } from "@arcue/protocol";
+import {
+  BRIDGE_INFO_FILE,
+  LOCKS_FOLDER,
+  lockRecordSchema,
+  lockWaitingSchema,
+  reviewFileSchema,
+  SERVE_INFO_FILE,
+} from "@arcue/protocol";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron } from "playwright";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -50,6 +57,12 @@ const ADDRESS = `http://localhost:${PORT}`;
 const VIEW = "side-by-side";
 const BROWSER_STOPPED =
   "Arcue in the browser has stopped. Run arcue serve --detach to start it again; an open page reconnects by itself.\n";
+const QUIT_COMMENT = "Saved as the app quits";
+/**
+ * How long a quitting app gave its windows to close their assets, then its core to stop, before it killed its core,
+ * when the core's wait was shorter than a lock wait.
+ */
+const OLD_QUIT_WAIT_MS = 5000 + 3000;
 
 let temp: string;
 let userData: string;
@@ -282,6 +295,31 @@ async function killWithWholeLocks(pid: number): Promise<void> {
     process.kill(pid, "SIGCONT");
     await sleep(3);
   }
+}
+
+/** Takes the reviews lock of the test's project as another Arcue on this computer does, until it is let go. */
+async function holdReviews(): Promise<() => Promise<void>> {
+  const platform = new NodePlatform({
+    appDataDir: fromNativePath(userData),
+    startImportWorker: () => {
+      throw new Error("This platform imports nothing.");
+    },
+  });
+  return platform.lock(fromNativePath(project), "reviews");
+}
+
+/** The processes that wait for a lock in the data folder, as the locks' waiting files name them. */
+function waitingPids(): number[] {
+  const folder = join(userData, LOCKS_FOLDER);
+  return readdirSync(folder)
+    .filter((name) => name.endsWith(".waiting"))
+    .flatMap((name) => {
+      try {
+        return [lockWaitingSchema.parse(readJson(join(folder, name))).pid];
+      } catch {
+        return [];
+      }
+    });
 }
 
 beforeEach(() => {
@@ -540,25 +578,36 @@ describe("the desktop app beside Arcue in the browser", () => {
     expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
   });
 
-  it("saves a comment, or says why not, when the app quits while Arcue in the browser holds the reviews lock", async () => {
+  it("saves the comment its core waits to save when the app quits while another Arcue holds the reviews lock", async () => {
     const electron = await launch();
     const page = await connectedWindow(electron);
     await detach();
     const fromWindow = await openInWindow(page, crate);
     const fromServe = await openInServe(crate);
-    const serveSaves = fromServe.create(texts(300, "From the browser")).catch(() => []);
-    await expect.poll(() => savedReview().comments.length).toBeGreaterThan(10);
+    const corePid = bridgeFile(BRIDGE_INFO_FILE).pid;
+    const unlock = await holdReviews();
+    let serveSaves: Promise<string[]> = Promise.resolve([]);
+    try {
+      serveSaves = fromServe.create(texts(50, "From the browser"));
+      void fromWindow.create([QUIT_COMMENT]).catch(() => []);
+      await expect.poll(waitingPids, { timeout: 10_000, interval: 5 }).toContain(corePid);
 
-    void fromWindow.create(["Saved as the app quits"]).catch(() => []);
-    await electron.close();
-    app = null;
-    await serveSaves;
+      const quitting = electron.close();
+      app = null;
+      await sleep(OLD_QUIT_WAIT_MS + 2000);
+      await unlock();
+      await quitting;
+    } finally {
+      await unlock();
+    }
 
+    expect(await serveSaves).toHaveLength(50);
     const saved = savedReview();
-    const kept = saved.comments.some((comment) => comment.text === "Saved as the app quits");
-    expect(kept || /busy for \d+ seconds/.test(`${log("core")}${log("main")}`)).toBe(true);
+    expect(saved.comments.filter((comment) => comment.text === QUIT_COMMENT)).toHaveLength(1);
+    expect(saved.comments).toHaveLength(51);
+    expect(readdirSync(join(project, ".arcue", "reviews", "crate.fbx"))).toEqual(["review.json"]);
     expect(log("main")).toContain("The core exited with code 0");
     expect(log("main")).not.toMatch(/restarting it|crashed|Uncaught|Unhandled/);
-    expect(log("core")).not.toContain("could not save the changes in flight");
+    expect(log("core")).not.toMatch(/could not|busy for/);
   });
 });
