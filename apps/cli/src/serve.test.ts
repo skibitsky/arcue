@@ -478,8 +478,9 @@ describe("arcue serve beside other cores", () => {
     await expect(serve()).resolves.toMatchObject({ pid: process.pid });
   });
 
-  it("stops when a core that takes no review locks starts beside it", async () => {
+  it("stops when a core that takes no review locks starts beside it, also after several checks", async () => {
     const running = await serve({ checkMs: 20 });
+    await sleep(150);
     fakes.push(await startFakeCore(userData, { file: BRIDGE_INFO_FILE }));
 
     await expect(running.stopped).resolves.toEqual({
@@ -518,6 +519,7 @@ describe("arcue serve beside other cores", () => {
     const running = await serve({ checkMs: 20, build: "0123456789abcdef" });
     const info = await readBridgeInfo(userData, "serve");
     expect(info).toMatchObject({ build: "0123456789abcdef", pid: running.pid });
+    await sleep(150);
 
     rmSync(join(userData, SERVE_INFO_FILE));
 
