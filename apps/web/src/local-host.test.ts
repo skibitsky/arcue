@@ -936,6 +936,27 @@ describe("LocalHost", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it("keeps trying, and attaches, when a probe never answers", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const reload = vi.fn();
+    const probe = vi.fn((): Promise<ServedPage> => new Promise(() => undefined));
+    const page = new Page(server, { probe, reload }).start();
+    await page.connected();
+    await page.opened(HERO);
+
+    await server.stop();
+    await vi.waitFor(() => {
+      page.timers.advance(PAST_BACKOFF_MS);
+      expect(probe.mock.calls.length).toBeGreaterThanOrEqual(3);
+    });
+    await server.start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.paths()).toEqual([HERO]));
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it("attaches without reloading when it already reloaded for the build the server serves", async () => {
     const server = new FakeServer();
     await server.start();

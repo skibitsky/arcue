@@ -13,6 +13,7 @@ import type { WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore, TabRestore } from "@arcue/ui";
 import { webSocketStream } from "./core-socket";
 import type { ServedPage } from "./served-page";
+import { PROBE_TIMEOUT_MS } from "./served-page";
 
 export interface LocalHostOptions {
   /** Opens a new socket to the core on the server the page came from. */
@@ -299,11 +300,20 @@ export class LocalHost {
     });
   }
 
+  /** What the server serves at "/" now; a probe that has not answered after `PROBE_TIMEOUT_MS` counts as "down". */
   async #probe(): Promise<ServedPage> {
+    const { probe } = this.#options;
+    if (!probe) return "same";
+    let cancel = () => {};
+    const timedOut = new Promise<ServedPage>((resolve) => {
+      cancel = this.#setTimer(PROBE_TIMEOUT_MS, () => resolve("down"));
+    });
     try {
-      return (await this.#options.probe?.()) ?? "same";
+      return await Promise.race([probe(), timedOut]);
     } catch {
       return "down";
+    } finally {
+      cancel();
     }
   }
 

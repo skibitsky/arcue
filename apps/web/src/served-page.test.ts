@@ -41,7 +41,7 @@ describe("the served page", () => {
     const fetchPage = answering({ ok: true, text: page({ script: "/assets/index-d4e5f6.js" }) });
 
     await expect(probePage(BUILD, fetchPage)).resolves.toEqual({ changed: "/assets/index-d4e5f6.js" });
-    expect(fetchPage).toHaveBeenCalledWith("/", { cache: "no-store" });
+    expect(fetchPage).toHaveBeenCalledWith("/", { cache: "no-store", signal: expect.any(AbortSignal) });
   });
 
   it("is down when the server answers with an error or not at all", async () => {

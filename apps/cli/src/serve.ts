@@ -240,6 +240,8 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   });
 
   for (const server of http) {
+    server.removeAllListeners("request");
+    server.removeAllListeners("upgrade");
     server.on("request", (request: IncomingMessage, response: ServerResponse) => {
       for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
       if (!allowed(request)) return refuse(response, 403);
@@ -377,8 +379,12 @@ export function localHosts(port: number): Set<string> {
 }
 
 /** Listens on 127.0.0.1 and, where the computer has it, on ::1 too, since "localhost" may resolve to either. */
+/**
+ * Listens on the port on both loopback addresses. Until the caller takes their requests over, the servers answer 503,
+ * since a request that arrives while a server has no listener is never answered.
+ */
 async function listenLocally(port: number): Promise<{ servers: Server[]; port: number }> {
-  const first = createServer();
+  const first = startingServer();
   try {
     await listen(first, port, "127.0.0.1");
   } catch (error) {
@@ -388,7 +394,7 @@ async function listenLocally(port: number): Promise<{ servers: Server[]; port: n
     throw error;
   }
   const bound = (first.address() as AddressInfo).port;
-  const second = createServer();
+  const second = startingServer();
   try {
     await listen(second, bound, "::1");
     return { servers: [first, second], port: bound };
@@ -398,6 +404,17 @@ async function listenLocally(port: number): Promise<{ servers: Server[]; port: n
     if (isCode(error, "EADDRINUSE")) throw new Error(`Port ${bound} is in use. Choose another with --port.`);
     throw error;
   }
+}
+
+function startingServer(): Server {
+  const server = createServer((_request, response) => {
+    for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
+    refuse(response, 503);
+  });
+  server.on("upgrade", (_request: IncomingMessage, socket: Duplex) => {
+    socket.end(`HTTP/1.1 503 Service Unavailable\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
+  });
+  return server;
 }
 
 function listen(server: Server, port: number, host: string): Promise<void> {
@@ -425,7 +442,7 @@ function isCode(error: unknown, code: string): boolean {
   return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
 
-function refuse(response: ServerResponse, status: 403 | 404 | 405 | 500): void {
+function refuse(response: ServerResponse, status: 403 | 404 | 405 | 500 | 503): void {
   response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   response.end(`${status}\n`);
 }

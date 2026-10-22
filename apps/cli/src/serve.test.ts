@@ -15,7 +15,7 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ManualClock } from "@arcue/core";
+import { ArcueCore, ManualClock } from "@arcue/core";
 import { connectToCore, readBridgeInfo } from "@arcue/platform-node";
 import type { FakeCore } from "@arcue/platform-node/test";
 import { startFakeCore, writeLastCoreFile } from "@arcue/platform-node/test";
@@ -186,7 +186,43 @@ function windowClient(socket: WebSocket, requests: IncomingRequest[] = []): Core
   );
 }
 
+/** A port nothing listens on now. */
+async function freePort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const address = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  if (typeof address !== "object" || !address) throw new Error("No port was free.");
+  return address.port;
+}
+
 describe("arcue serve", () => {
+  it("answers 503 to pages and sockets while its core starts, so none waits for an answer that never comes", async () => {
+    const port = await freePort();
+    const url = `http://localhost:${port}`;
+    const gate = Promise.withResolvers<void>();
+    const start = ArcueCore.start.bind(ArcueCore);
+    const spy = vi.spyOn(ArcueCore, "start").mockImplementationOnce(async (options) => {
+      await gate.promise;
+      return start(options);
+    });
+    try {
+      const starting = serve({ port });
+      await vi.waitFor(async () => expect((await get(url, "/")).status).toBe(503), { timeout: 3000 });
+      expect((await get(url, "/assets/index-abc.js")).status).toBe(503);
+      const refused = await refusedSocket(url, url);
+      expect(refused).toMatchObject(forbidsFraming);
+
+      gate.resolve();
+      await starting;
+      expect((await get(url, "/")).status).toBe(200);
+      (await openSocket(url, url)).close();
+    } finally {
+      gate.resolve();
+      spy.mockRestore();
+    }
+  });
+
   it("serves the web UI, index.html for the root, with long caching only for hashed assets", async () => {
     const { url } = await serve();
 
