@@ -529,3 +529,22 @@ describe("the locks around every write of review data and settings", () => {
     test.platform.log.length = 0;
   });
 });
+
+describe("waiting for the core", () => {
+  it("gives up going idle, rather than wait for ever, while another program keeps changing the review it reads", async () => {
+    const test = await setup();
+    const versions = [await test.platform.readFile(REVIEW_JSON)];
+    await test.core.client.execute("comment.create", pinComment(test.assetId));
+    await test.core.idle();
+    versions.push(await test.platform.readFile(REVIEW_JSON));
+    let rewrites = 0;
+    test.core.client.subscribe("review.changed", () => {
+      if (++rewrites < 3000) void test.platform.writeFile(REVIEW_JSON, versions[rewrites % 2] ?? "");
+    });
+    await test.platform.writeFile(REVIEW_JSON, versions[0] ?? "");
+
+    await expect(test.core.idle()).rejects.toThrow("The core never went idle: its work went on for 1000 rounds.");
+    expect(rewrites).toBeLessThan(3000);
+    rewrites = 3000;
+  });
+});

@@ -563,6 +563,7 @@ export async function startTestCore(
     onError: (error) => errors.push(error),
     ...options.core,
   });
+  disposeWhenFailed(core);
   const window = new FakeWindow(core, "window-1");
   return { core, platform, clock, window, errors };
 }
@@ -586,7 +587,18 @@ export async function startSecondCore(
     onError: (error) => errors.push(error),
     ...options.core,
   });
+  disposeWhenFailed(core);
   return { core, window: new FakeWindow(core, "window-2"), errors };
+}
+
+/**
+ * Disposes the core when its test fails, so work it keeps doing in microtasks, such as answering another core's saves
+ * for ever, ends and the failure can be reported.
+ */
+function disposeWhenFailed(core: ArcueCore): void {
+  onTestFinished(({ task }) => {
+    if (task.result?.state === "fail") core.dispose();
+  });
 }
 
 /** Lets queued microtasks, such as file watch notifications, run. */

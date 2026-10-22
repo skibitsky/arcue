@@ -168,6 +168,9 @@ const MISSING_MODEL_MS = 2000;
 /** How many times a version is read again when its files change while it loads, before the load fails. */
 const VERSION_PASSES = 3;
 
+/** How many rounds of waiting for its work `idle` takes before it gives up, far past what any finite work needs. */
+const IDLE_ROUNDS = 1000;
+
 /**
  * All review state, behind the command registry. Hosts start it with a platform and connect each window and bridge
  * with `connect`; calls inside the host's own process go through `client`.
@@ -244,9 +247,17 @@ export class ArcueCore {
     return peer;
   }
 
-  /** Resolves once no parse, file check or background save is running. Waiting timers do not count. */
+  /**
+   * Resolves once no parse, file check or background save is running. Waiting timers do not count. Rejects when work
+   * still runs after `IDLE_ROUNDS` rounds of waiting for it, as when two cores keep answering each other's saves.
+   */
   async idle(): Promise<void> {
-    while (this.#pending.size > 0) await Promise.allSettled([...this.#pending]);
+    for (let round = 0; this.#pending.size > 0; round++) {
+      if (round === IDLE_ROUNDS) {
+        throw new Error(`The core never went idle: its work went on for ${IDLE_ROUNDS} rounds.`);
+      }
+      await Promise.allSettled([...this.#pending]);
+    }
   }
 
   /**
