@@ -384,10 +384,10 @@ export function localHosts(port: number): Set<string> {
   return new Set(port === 80 ? names : names.map((name) => `${name}:${port}`));
 }
 
-/** Listens on 127.0.0.1 and, where the computer has it, on ::1 too, since "localhost" may resolve to either. */
 /**
- * Listens on the port on both loopback addresses. Until the caller takes their requests over, the servers answer 503,
- * since a request that arrives while a server has no listener is never answered.
+ * Listens on the port on 127.0.0.1 and, where the computer has it, on ::1 too, since "localhost" may resolve to either.
+ * Until the caller takes their requests over, the servers answer 503, since a request that arrives while a server has
+ * no listener is never answered.
  */
 async function listenLocally(port: number): Promise<{ servers: Server[]; port: number }> {
   const first = startingServer();
@@ -412,7 +412,6 @@ async function listenLocally(port: number): Promise<{ servers: Server[]; port: n
   }
 }
 
-/** Names the data folder and user, the same on every start, so the page tells this Arcue in the browser from another. */
 /**
  * The folder's device and inode, which a folder made again in its place does not share, as when a lock or a save in
  * flight makes a removed data folder again. Null when it is gone.
@@ -422,6 +421,7 @@ async function folderIdentity(path: string): Promise<string | null> {
   return found ? `${found.dev}:${found.ino}` : null;
 }
 
+/** Names the data folder and user, the same on every start, so the page tells this Arcue in the browser from another. */
 async function pageOwner(userData: string): Promise<string> {
   const folder = await realpath(userData).catch(() => resolve(userData));
   const user = process.getuid?.() ?? userInfo().username;
