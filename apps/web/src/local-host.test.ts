@@ -462,12 +462,13 @@ describe("LocalHost", () => {
     expect(page.saved()?.tabs.map((tab) => tab.path)).toEqual([HERO]);
   });
 
-  it("shows a model an agent opened while the page was away at the frame the agent asked for", async () => {
+  it("shows a model an agent opened while the page was away at the frame the agent asked for, in the active tab", async () => {
     const server = new FakeServer();
     await server.start();
     const page = new Page(server).start();
     await page.connected();
-    await page.opened(HERO);
+    await page.opened(HERO, CRATE);
+    page.store.activate("a1");
 
     await restart(server);
     const opened = await server.bridge().execute("asset.openInView", { path: GOLEM, view: VIEW, frame: 12 });
@@ -475,13 +476,15 @@ describe("LocalHost", () => {
     const requests = requestsTo(page);
     await page.connected();
 
-    await vi.waitFor(() => expect(page.paths()).toEqual([HERO, GOLEM]));
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(3));
+    expect(page.paths()).toEqual([HERO, CRATE, GOLEM]);
     expect(requests).toContainEqual({
       kind: "command",
       name: "view.showAsset",
       input: { assetId: opened.assetId, frame: 12 },
     });
-    await vi.waitFor(() => expect(page.activePath()).toBe(HERO));
+    expect(page.activePath()).toBe(GOLEM);
+    expect(page.saved()?.active).toBe(2);
   });
 
   it("brings its tabs back with the same ids when its socket drops while the core keeps running", async () => {
@@ -1166,7 +1169,7 @@ describe("LocalHost", () => {
     await page.connected();
 
     await vi.waitFor(() => expect(page.paths()).toEqual([HERO, CRATE]));
-    await vi.waitFor(() => expect(page.activePath()).toBe(HERO));
+    await vi.waitFor(() => expect(page.activePath()).toBe(CRATE));
     expect(notify.mock.calls.filter(([toast]) => toast.kind === "alert")).toEqual([
       [{ message: "Blob.fbx is not open.", kind: "alert" }],
     ]);

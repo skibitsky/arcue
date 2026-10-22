@@ -12,6 +12,11 @@ export interface ReopenOptions {
    * the core holds for this window, each of which takes the active tab.
    */
   adopt?: () => Promise<void>;
+  /**
+   * The tab to activate in place of the saved active tab once every tab is open and adopted, such as a model an agent
+   * opened while the window was away; null keeps the saved one.
+   */
+  activeInstead?: () => string | null;
 }
 
 /**
@@ -76,11 +81,11 @@ export class TabRestore {
 
   /**
    * Opens the pending tabs one by one, keeping the rest when the generation changes or the client is not connected,
-   * runs `adopt`, then activates the saved active tab. Errors from `open` and `adopt` do not reject it: each becomes an
-   * alert unless `quiet` drops it, and ends the reopen, without activating the saved tab, when the generation changed
-   * or the connection dropped meanwhile.
+   * runs `adopt`, then activates the tab `activeInstead` names, or else the saved active tab. Errors from `open` and
+   * `adopt` do not reject it: each becomes an alert unless `quiet` drops it, and ends the reopen, without activating a
+   * tab, when the generation changed or the connection dropped meanwhile.
    */
-  async reopen(generation: number, { open, quiet, adopt }: ReopenOptions): Promise<void> {
+  async reopen(generation: number, { open, quiet, adopt, activeInstead }: ReopenOptions): Promise<void> {
     for (;;) {
       const tab = this.#unopened[0];
       if (!tab || generation !== this.#generation) break;
@@ -101,9 +106,11 @@ export class TabRestore {
     if (generation !== this.#generation) return;
     const wanted = this.#wantActive;
     this.#wantActive = null;
-    const active = this.#store.state
-      .get()
-      .tabs.find((tab) => tab.kind === "asset" && this.#store.session(tab.id)?.state.get().summary.path === wanted);
+    const instead = activeInstead?.() ?? null;
+    const { tabs } = this.#store.state.get();
+    const active =
+      tabs.find((tab) => tab.kind === "asset" && tab.id === instead) ??
+      tabs.find((tab) => tab.kind === "asset" && this.#store.session(tab.id)?.state.get().summary.path === wanted);
     if (active) this.#store.activate(active.id);
   }
 

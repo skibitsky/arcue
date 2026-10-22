@@ -299,7 +299,13 @@ export const commands = {
        */
       adopt: z.boolean().optional(),
     }),
-    output: z.void(),
+    output: z.object({
+      /**
+       * The core held the asset for the calling page's view, as for an agent's open while no page of the view could show
+       * it, and shows it now, at the clip and frame that open asked for.
+       */
+      held: z.boolean(),
+    }),
   }),
   "view.releaseAsset": command({
     description:

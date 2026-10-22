@@ -533,14 +533,14 @@ export class ArcueCore {
   /**
    * Moves an asset's tab to the calling window, within the window's view. The window that shows it releases the tab
    * first and returns its view state, so the receiving window starts from the same camera, clip and frame. An asset the
-   * core holds for the view shows at the clip and frame its open asked for. With `unlessShown`, a page takes an asset
-   * that another page shows only when that page adopted it in the last `TAKE_BACK_MS`.
+   * core holds for the view shows at the clip and frame its open asked for, which the result says. With `unlessShown`, a
+   * page takes an asset that another page shows only when that page adopted it in the last `TAKE_BACK_MS`.
    */
   async #move(
     assetId: string,
     context: CallContext,
     { unlessShown = false, adopt = false }: { unlessShown?: boolean; adopt?: boolean },
-  ): Promise<void> {
+  ): Promise<{ held: boolean }> {
     if (context.caller !== "window" || !this.#windows.has(context.connection)) {
       throw new ArcueError("forbidden", "Only a window can take an asset's tab.");
     }
@@ -551,14 +551,15 @@ export class ArcueCore {
     const owner = this.#ownerOf(asset);
     const quietly = unlessShown || adopt;
     if (owner !== this.#windows.viewOf(target)) {
-      if (quietly) return;
+      if (quietly) return { held: false };
       throw new ArcueError("conflict", openElsewhere(asset.name, owner));
     }
     const takesBack = !adopt && asset.adoptedAt !== null && this.#platform.clock.now() - asset.adoptedAt < TAKE_BACK_MS;
-    if (quietly && source !== null && source !== target && !takesBack) return;
-    const at = source === null ? (asset.waiting ?? {}) : {};
-    await this.#relocateTab(asset, source, { view: owner, window: target }, at);
+    if (quietly && source !== null && source !== target && !takesBack) return { held: false };
+    const waiting = source === null ? asset.waiting : null;
+    await this.#relocateTab(asset, source, { view: owner, window: target }, waiting ?? {});
     if (adopt && source === null) asset.adoptedAt = this.#platform.clock.now();
+    return { held: waiting !== null };
   }
 
   async #open(

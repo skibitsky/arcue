@@ -731,6 +731,7 @@ export class FakeCoreClient implements CoreClient {
     },
     "view.moveAsset": async ({ assetId }) => {
       await this.#window?.({ kind: "command", name: "view.showAsset", input: { assetId } });
+      return { held: false };
     },
     "view.releaseAsset": () => null,
     "view.setClip": () => {},

@@ -143,6 +143,28 @@ describe("TabRestore", () => {
     expect(activePath()).toBe(STONE);
   });
 
+  it("activates the tab it is told to in place of the saved active tab, and the saved one when that tab is not open", async () => {
+    const { client, restore, store, open, paths, activePath } = restoring();
+    restore.pending(saved([STONE, CRATE], 0));
+    let golem: string | null = null;
+    await restore.reopen(restore.detach(), {
+      open,
+      adopt: async () => {
+        golem = (await client.execute("asset.open", { path: GOLEM })).assetId;
+        const [stone] = store.state.get().tabs;
+        store.activate(stone?.id ?? "");
+      },
+      activeInstead: () => golem,
+    });
+    expect(paths()).toEqual([STONE, CRATE, GOLEM]);
+    expect(activePath()).toBe(GOLEM);
+
+    const [, crate] = store.state.get().tabs;
+    store.activate(crate?.id ?? "");
+    await restore.reopen(restore.detach(), { open, activeInstead: () => "a99" });
+    expect(activePath()).toBe(CRATE);
+  });
+
   it("alerts an adopt that fails while connected and still activates the saved active tab, or keeps it when the connection dropped", async () => {
     const { client, restore, store, open, paths, activePath } = restoring();
     const notify = vi.spyOn(store, "notify");

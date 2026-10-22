@@ -391,16 +391,21 @@ test("comes back at its clip, frame and camera with its drafts after arcue stop,
   await expect(drafts).toContainText(DRAFT);
 });
 
-test("shows a model opened while its page was away at the clip and frame the agent named", async ({ page }) => {
+test("shows a model opened while its page was away at the clip and frame the agent named, in the active tab", async ({
+  page,
+}) => {
+  const before = copyModel("before-outage.fbx");
   const copy = copyModel("outage.fbx");
   const session = await sessionView("outage");
   const sockets = await gateSockets(page);
   await page.goto(session.address);
   await expect(page.getByText("Ask your agent to show you a model")).toBeVisible();
+  expect((await arcueIn(session.env, "open", before, "--frame", "10")).code).toBe(0);
+  await expect(page.getByRole("tab", { name: "before-outage.fbx", selected: true })).toBeVisible();
+  await expect(page.getByRole("img", { name: /^Frame 10 of \d+$/ })).toBeVisible();
 
   sockets.hold();
   await stop();
-  await expect(page.getByText(PAGE_STOPPED)).toBeVisible();
   await detach();
   expect(await arcueIn(session.env, "open", copy, "--clip", WALK, "--frame", "30")).toMatchObject({
     code: 0,
@@ -408,7 +413,8 @@ test("shows a model opened while its page was away at the clip and frame the age
   });
   await sockets.release();
 
-  await expect(page.getByRole("tab", { name: "outage.fbx" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "before-outage.fbx" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "outage.fbx", exact: true, selected: true })).toBeVisible();
   await expect(page.getByRole("img", { name: "Frame 30 of 60" })).toBeVisible();
 });
 

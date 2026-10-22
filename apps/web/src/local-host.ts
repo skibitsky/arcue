@@ -265,7 +265,8 @@ export class LocalHost {
    * Opens the tabs again in order. A model the core still has moves to this page as the core keeps it, such as at the
    * clip and frame an agent opened it at, also from a page of the view that adopted it just before; any other opens
    * from its path. Then the page adopts the other assets the core holds for its view, which another page of the view
-   * that lost its connection too may take back.
+   * that lost its connection too may take back. The last model the core held for an agent's open while the page was
+   * away ends up active, and otherwise the saved active tab.
    */
   async #reopenAll(generation: number): Promise<void> {
     let known: Map<string, string>;
@@ -276,6 +277,7 @@ export class LocalHost {
       return;
     }
     const moved = new Set<string>();
+    let held: string | null = null;
     await this.#restore.reopen(generation, {
       open: async ({ path, view }) => {
         const assetId = known.get(path);
@@ -284,14 +286,14 @@ export class LocalHost {
           return;
         }
         moved.add(assetId);
-        await this.client.execute("view.moveAsset", { assetId, unlessShown: true });
+        if (showedHeld(await this.client.execute("view.moveAsset", { assetId, unlessShown: true }))) held = assetId;
       },
       quiet: isConflict,
       adopt: async () => {
         for (const assetId of known.values()) {
           if (moved.has(assetId) || generation !== this.#restore.generation) continue;
           try {
-            await this.client.execute("view.moveAsset", { assetId, adopt: true });
+            if (showedHeld(await this.client.execute("view.moveAsset", { assetId, adopt: true }))) held = assetId;
           } catch (error) {
             if (isConflict(error) || generation !== this.#restore.generation) continue;
             if (this.client.connectionState !== "connected") return;
@@ -299,6 +301,7 @@ export class LocalHost {
           }
         }
       },
+      activeInstead: () => held,
     });
     if (generation === this.#restore.generation) this.saveTabs();
   }
@@ -426,4 +429,9 @@ export function followPage(host: LocalHost, { window, document }: PageEvents): (
 
 function isConflict(error: unknown): boolean {
   return error instanceof ArcueError && error.code === "conflict";
+}
+
+/** Whether a move showed an asset the core held for the page's view; a core from before it said so answers nothing. */
+function showedHeld(result: unknown): boolean {
+  return typeof result === "object" && result !== null && "held" in result && result.held === true;
 }

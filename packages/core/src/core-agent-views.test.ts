@@ -189,12 +189,16 @@ describe("holding a model for its view's page", () => {
 
     const other = new FakeWindow(test.core, "page-b", "b");
     const outside = new FakeWindow(test.core, "window-2");
-    await other.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    await expect(other.client.execute("view.moveAsset", { assetId, unlessShown: true })).resolves.toEqual({
+      held: false,
+    });
     await outside.client.execute("view.moveAsset", { assetId, unlessShown: true });
     expect([other.requests, outside.requests]).toEqual([[], []]);
 
     const page = new FakeWindow(test.core, "page-a", "a");
-    await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    await expect(page.client.execute("view.moveAsset", { assetId, unlessShown: true })).resolves.toEqual({
+      held: true,
+    });
     expect(page.requests).toEqual([
       { kind: "command", name: "view.showAsset", input: { assetId, clip: "Armature|Run", frame: 7 } },
     ]);
@@ -276,8 +280,8 @@ describe("holding a model for its view's page", () => {
     const first = browserPage(test, "page-a", "a");
     const second = browserPage(test, "page-b", "a");
 
-    await first.client.execute("view.moveAsset", { assetId, adopt: true });
-    await second.client.execute("view.moveAsset", { assetId, adopt: true });
+    await expect(first.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({ held: true });
+    await expect(second.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({ held: false });
 
     expect(first.requestNames).toEqual(["view.showAsset"]);
     expect(second.requests).toEqual([]);
