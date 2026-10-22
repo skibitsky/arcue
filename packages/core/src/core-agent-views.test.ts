@@ -268,6 +268,21 @@ describe("holding a model for its view's page", () => {
     expect(late.requests).toEqual([]);
   });
 
+  it("leaves a model one page of the view adopted with it when another page of the view adopts it too", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    expect(shown).toBe("held");
+    const first = browserPage(test, "page-a", "a");
+    const second = browserPage(test, "page-b", "a");
+
+    await first.client.execute("view.moveAsset", { assetId, adopt: true });
+    await second.client.execute("view.moveAsset", { assetId, adopt: true });
+
+    expect(first.requestNames).toEqual(["view.showAsset"]);
+    expect(second.requests).toEqual([]);
+  });
+
   it("keeps the model in its view when its page reloads", async () => {
     const test = await setup();
     const page = new FakeWindow(test.core, "page-a", "a");
