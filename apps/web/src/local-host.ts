@@ -9,8 +9,8 @@ import {
   viewNameSchema,
   windowTabsSchema,
 } from "@arcue/protocol";
-import type { WorkspaceStore } from "@arcue/ui";
-import { createWorkspaceStore, TabRestore } from "@arcue/ui";
+import type { Readable, WorkspaceStore } from "@arcue/ui";
+import { createWorkspaceStore, Store, TabRestore } from "@arcue/ui";
 import { webSocketStream } from "./core-socket";
 import type { ServedPage } from "./served-page";
 import { PROBE_TIMEOUT_MS } from "./served-page";
@@ -35,6 +35,12 @@ export interface LocalHostOptions {
    */
   probe?: () => Promise<ServedPage>;
   reload?: () => void;
+}
+
+/** What the page shows about its address beside the store's connection state. */
+export interface HostStatus {
+  /** Another Arcue in the browser runs at the page's address, so the page connects to none until its own does. */
+  elsewhere: boolean;
 }
 
 /** A page's tabs as it keeps them in its storage, with the owner of the page that kept them when it named one. */
@@ -79,6 +85,7 @@ export class LocalHost {
   /** The same client for the page's life, across its connections. */
   readonly client: ReconnectingClient;
   readonly store: WorkspaceStore;
+  readonly #status = new Store<HostStatus>({ elsewhere: false });
   readonly #options: LocalHostOptions;
   readonly #setTimer: SetTimer;
   readonly #restore: TabRestore;
@@ -95,8 +102,6 @@ export class LocalHost {
   #failures = 0;
   #attachedBefore = false;
   #toldStopped = false;
-  /** The last probe found the page of another Arcue in the browser at the page's address. */
-  #elsewhere = false;
   #reopening: Promise<void> = Promise.resolve();
 
   constructor(options: LocalHostOptions) {
@@ -114,6 +119,15 @@ export class LocalHost {
     });
     this.store = createWorkspaceStore({ client: this.client, setTimer: this.#setTimer });
     this.#restore = new TabRestore(this.store, this.client);
+  }
+
+  get status(): Readable<HostStatus> {
+    return this.#status;
+  }
+
+  /** The last probe found the page of another Arcue in the browser at the page's address. */
+  get #elsewhere(): boolean {
+    return this.#status.get().elsewhere;
   }
 
   /** Starts the store, takes the tabs the page kept before a reload, and connects. */
@@ -321,7 +335,7 @@ export class LocalHost {
     }
     void this.#probe().then((page) => {
       if (page === "elsewhere") this.#foundElsewhere();
-      else this.#elsewhere = false;
+      else this.#status.patch({ elsewhere: false });
       if (typeof page === "object" && this.#socket === null && this.#reloadOnce(page.changed)) return;
       this.#schedule(delayMs);
     });
@@ -330,7 +344,7 @@ export class LocalHost {
   /** Says once that another Arcue in the browser has the address, and connects to none until a probe finds its own. */
   #foundElsewhere(): void {
     if (!this.#elsewhere) this.store.notify({ message: ELSEWHERE, kind: "info" });
-    this.#elsewhere = true;
+    this.#status.patch({ elsewhere: true });
   }
 
   #schedule(delayMs: number): void {

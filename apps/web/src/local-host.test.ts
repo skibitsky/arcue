@@ -1013,7 +1013,7 @@ describe("LocalHost", () => {
     expect(await server.paths()).toEqual([GOLEM]);
   });
 
-  it("never attaches to another Arcue in the browser that took its address, and attaches once its own runs there", async () => {
+  it("never attaches to another Arcue in the browser that took its address, says so while it waits, and attaches once its own runs there", async () => {
     const server = new FakeServer();
     await server.start();
     const reload = vi.fn();
@@ -1033,6 +1033,7 @@ describe("LocalHost", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     expect(page.host.client.connectionState).toBe("reconnecting");
+    expect(page.host.status.get()).toEqual({ elsewhere: true });
     expect(await server.paths()).toEqual([]);
     expect(elsewhere()).toHaveLength(1);
     expect(reload).not.toHaveBeenCalled();
@@ -1045,6 +1046,7 @@ describe("LocalHost", () => {
     await page.connected();
     await vi.waitFor(() => expect(page.paths()).toEqual([HERO]));
     expect(elsewhere()).toHaveLength(1);
+    expect(page.host.status.get()).toEqual({ elsewhere: false });
   });
 
   it("keeps trying, and attaches, when a probe never answers", async () => {
