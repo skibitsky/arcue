@@ -39,8 +39,8 @@ interface WindowProbe {
   arcueWindow?: {
     client: CoreClient;
     store: {
-      state: { get(): { settings: Settings | null } };
-      session(id: string): { state: { get(): { review: ReviewFile | null } } } | null;
+      state: { get(): { settings: Settings | null; tabs: readonly { kind: string; id: string }[] } };
+      session(id: string): { state: { get(): { review: ReviewFile | null; summary: { path: string } } } } | null;
     };
   };
 }
@@ -201,6 +201,18 @@ function windowAssets(page: Page): Promise<AssetSummary[]> {
   return page.evaluate(async () => {
     const window = (globalThis as WindowProbe).arcueWindow;
     return window ? (await window.client.query("asset.list", {})).assets : [];
+  });
+}
+
+/** The paths of the window's asset tabs, in order. */
+function tabPaths(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const store = (globalThis as WindowProbe).arcueWindow?.store;
+    if (!store) return [];
+    return store.state
+      .get()
+      .tabs.filter((tab) => tab.kind === "asset")
+      .map((tab) => store.session(tab.id)?.state.get().summary.path ?? "");
   });
 }
 
@@ -391,6 +403,7 @@ describe("the desktop app beside Arcue in the browser", () => {
 
     await readyIn(() => windowAssets(page), golem);
     expect((await windowAssets(page)).map((asset) => asset.path)).toEqual([golem]);
+    await expect.poll(() => tabPaths(page)).toEqual([golem]);
     const status = await arcue(["status"]);
     expect(status.code).toBe(0);
     const [browser, desktop] = status.out.split("\n\n");
@@ -497,9 +510,17 @@ describe("the desktop app beside Arcue in the browser", () => {
       const saved = await serveSaves;
       await windowSaves;
       await expect
-        .poll(() => runningCore(userData, "desktop").then((info) => info?.pid), { timeout: 20_000 })
-        .not.toBe(corePid);
+        .poll(
+          async () => {
+            const pid = (await runningCore(userData, "desktop"))?.pid;
+            return pid !== undefined && pid !== corePid;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe(true);
       await connectedWindow(electron);
+      await readyIn(() => windowAssets(page).catch(() => []), crate);
+      await expect.poll(() => tabPaths(page)).toEqual([crate]);
       const ids = new Set(savedReview().comments.map((comment) => comment.id));
       expect(saved.filter((id) => !ids.has(id))).toEqual([]);
     },

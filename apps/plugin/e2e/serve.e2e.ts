@@ -55,7 +55,6 @@ let data: string;
 let env: NodeJS.ProcessEnv;
 /** The processes of Arcue in the browser the tests started, to end any that arcue stop left running. */
 const started = new Set<number>();
-let failed = false;
 
 /** The environment without the variables that name an agent session, as a person at a terminal has it. */
 function outsideSessions(given: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -141,19 +140,20 @@ function readJson(path: string): unknown {
 }
 
 /** Waits until the page's client answers from a core, which only a page connected to a running core does. */
-function connected(page: Page, timeout?: number): Promise<unknown> {
-  return page.waitForFunction(
-    () =>
-      Promise.race([
-        (window as unknown as PageProbe).arcueWindow.client.query("asset.list", {}).then(
-          () => true,
-          () => false,
-        ),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 300)),
-      ]),
-    undefined,
-    { timeout, polling: 100 },
-  );
+function connected(page: Page, timeout = 30_000): Promise<void> {
+  const answers = () =>
+    page
+      .evaluate(() =>
+        Promise.race([
+          (window as unknown as PageProbe).arcueWindow.client.query("asset.list", {}).then(
+            () => true,
+            () => false,
+          ),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 300)),
+        ]),
+      )
+      .catch(() => false);
+  return expect.poll(answers, { timeout, intervals: [100] }).toBe(true);
 }
 
 /** The frame the page last reported to the core for the model at `path`, which the core keeps for its asset. */
@@ -211,9 +211,8 @@ async function gateSockets(page: Page): Promise<{ hold(): void; release(): Promi
   };
 }
 
-/** Copies the logs of the tests' data folders into the test's results, which CI keeps, and keeps the folders. */
+/** Copies the logs of the tests' data folders into the test's results, which CI keeps. */
 function saveLogs(info: TestInfo): void {
-  failed = true;
   for (const folder of readdirSync(temp).filter((name) => existsSync(join(temp, name, "logs")))) {
     cpSync(join(temp, folder, "logs"), info.outputPath(folder, "logs"), { recursive: true });
   }
@@ -246,7 +245,7 @@ test.afterEach(async () => {
 test.afterAll(async () => {
   await arcue("stop");
   for (const pid of started) killStarted(pid);
-  if (!failed) rmSync(temp, { recursive: true, force: true });
+  rmSync(temp, { recursive: true, force: true });
 });
 
 test("shows the model arcue open opens, at its clip and frame, and again after a reload", async ({ page }) => {
@@ -464,23 +463,36 @@ test("reloads once into another build of its page and reopens its tabs at their 
   expect(loads).toBe(1);
 });
 
-test("connects again at once when the browser wakes the frozen page", async ({ page, context }) => {
+test("connects again at once when the browser wakes the frozen page", async ({ page }) => {
   const copy = copyModel("frozen.fbx");
   const session = await sessionView("frozen");
+  const attempts: number[] = [];
+  let refusing = false;
+  await page.routeWebSocket(/\/core\//, async (socket) => {
+    attempts.push(Date.now());
+    if (refusing) await socket.close();
+    else socket.connectToServer();
+  });
   await page.goto(session.address);
   await connected(page);
-  const devtools = await context.newCDPSession(page);
-  await devtools.send("Page.setWebLifecycleState", { state: "frozen" });
 
+  refusing = true;
+  const before = attempts.length;
   await stop();
   await detach();
   expect(await arcueIn(session.env, "open", copy)).toMatchObject({
     code: 0,
     out: expect.stringContaining(`Arcue holds ${copy} as`),
   });
-  await devtools.send("Page.setWebLifecycleState", { state: "active" });
+  await expect.poll(() => attempts.length - before, { timeout: 30_000, intervals: [50] }).toBeGreaterThanOrEqual(5);
+  const failedAt = attempts.at(-1) ?? 0;
+  await page.waitForTimeout(500);
+  refusing = false;
 
-  await connected(page, 2000);
+  await page.evaluate(() => document.dispatchEvent(new Event("resume")));
+
+  await connected(page, 1000);
+  expect(Date.now() - failedAt).toBeLessThan(4000);
   await expect(page.getByRole("tab", { name: "frozen.fbx" })).toBeVisible();
 });
 
