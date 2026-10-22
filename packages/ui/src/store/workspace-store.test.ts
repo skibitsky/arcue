@@ -74,6 +74,22 @@ describe("view commands", () => {
     expect(client.calls.slice(before)).toEqual([]);
   });
 
+  it("answers a view command that finishes at once with its result, not a promise, so it leaves before the render", async () => {
+    const { store, session } = await openStone();
+    session.setFrame(12);
+
+    const released = store.handleRequest({
+      kind: "command",
+      name: "view.releaseAsset",
+      input: { assetId: session.assetId },
+    });
+
+    expect(released).toMatchObject({ clip: "Armature|Charge", frame: 12 });
+    expect(store.handleRequest({ kind: "command", name: "view.showAsset", input: { assetId: session.assetId } })).toBe(
+      undefined,
+    );
+  });
+
   it("refuses to release a tab whose comment box has unsaved text, and shakes the box", async () => {
     const { store, session, viewport } = await openStone();
     viewport.emit("pinPlaced", { anchor: POINT });

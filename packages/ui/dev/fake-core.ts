@@ -82,7 +82,7 @@ const UNDOABLE = new Set<CommandName>([
   "warning.dismissAll",
 ]);
 
-type WindowHandler = (request: IncomingRequest) => Promise<unknown>;
+type WindowHandler = (request: IncomingRequest) => unknown;
 type CommandHandlers = {
   [Name in CommandName]: (args: CommandArgs<Name>) => Promise<CommandOutput<Name>> | CommandOutput<Name>;
 };

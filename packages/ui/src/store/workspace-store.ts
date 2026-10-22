@@ -338,22 +338,28 @@ export class WorkspaceStore {
 
   /**
    * Answers a request the core sends to this window. Pass it as the peer's `handleRequest`: it runs the commands with
-   * runsIn "view" and refuses everything else.
+   * runsIn "view" and refuses everything else. A command that finishes at once returns its result rather than a
+   * promise, so the peer answers before the render its change sets off; a refusal is a rejected promise.
    */
-  handleRequest = async (request: IncomingRequest): Promise<unknown> => {
-    const { name } = request;
-    if (request.kind !== "command" || !isCommandName(name) || commands[name].runsIn !== "view") {
-      throw new ArcueError("unknown-command", `This window does not run "${name}".`);
+  handleRequest = (request: IncomingRequest): unknown => {
+    try {
+      const { name } = request;
+      if (request.kind !== "command" || !isCommandName(name) || commands[name].runsIn !== "view") {
+        throw new ArcueError("unknown-command", `This window does not run "${name}".`);
+      }
+      const parsed = commands[name].input.safeParse(request.input);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.map((issue) => ({
+          path: issue.path.filter((part): part is string | number => typeof part !== "symbol"),
+          message: issue.message,
+        }));
+        throw new ArcueError("invalid-input", `Invalid input for "${name}".`, { issues });
+      }
+      const handler = this.#viewHandlers[name as ViewCommandName] as (args: unknown) => unknown;
+      return handler(parsed.data);
+    } catch (error) {
+      return Promise.reject(error);
     }
-    const parsed = commands[name].input.safeParse(request.input);
-    if (!parsed.success) {
-      const issues = parsed.error.issues.map((issue) => ({
-        path: issue.path.filter((part): part is string | number => typeof part !== "symbol"),
-        message: issue.message,
-      }));
-      throw new ArcueError("invalid-input", `Invalid input for "${name}".`, { issues });
-    }
-    return this.runViewCommand(name as ViewCommandName, parsed.data as CommandArgs<ViewCommandName>);
   };
 
   runViewCommand<Name extends ViewCommandName>(name: Name, args: CommandArgs<Name>): Promise<CommandOutput<Name>> {
