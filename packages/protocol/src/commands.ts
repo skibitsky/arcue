@@ -305,6 +305,11 @@ export const commands = {
        * it, and shows it now, at the clip and frame that open asked for.
        */
       held: z.boolean(),
+      /**
+       * With `held`, the place of that open among the opens the core held assets for, which grows with each, so the
+       * asset with the greatest is the one an agent opened last.
+       */
+      heldOrder: z.number().int().positive().optional(),
     }),
   }),
   "view.releaseAsset": command({

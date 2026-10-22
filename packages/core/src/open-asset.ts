@@ -65,8 +65,11 @@ export class OpenAsset {
    * page the core holds it for. It stays when that page closes, so the page takes the asset back when it reloads.
    */
   view: string | null = null;
-  /** The clip and frame an open asked for while the core held the asset, for the page that shows it later. */
-  waiting: ShowAt | null = null;
+  /**
+   * What an open asked for while the core held the asset, for the page that shows it later: the clip and frame, and
+   * the place of that open among the core's holds.
+   */
+  waiting: { at: ShowAt; order: number } | null = null;
   /** When a page took the asset with `adopt`, until it shows anywhere again: a page that saved its tab may take it back. */
   adoptedAt: number | null = null;
   closed = false;

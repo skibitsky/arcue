@@ -198,6 +198,7 @@ describe("holding a model for its view's page", () => {
     const page = new FakeWindow(test.core, "page-a", "a");
     await expect(page.client.execute("view.moveAsset", { assetId, unlessShown: true })).resolves.toEqual({
       held: true,
+      heldOrder: 1,
     });
     expect(page.requests).toEqual([
       { kind: "command", name: "view.showAsset", input: { assetId, clip: "Armature|Run", frame: 7 } },
@@ -280,11 +281,33 @@ describe("holding a model for its view's page", () => {
     const first = browserPage(test, "page-a", "a");
     const second = browserPage(test, "page-b", "a");
 
-    await expect(first.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({ held: true });
+    await expect(first.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 1,
+    });
     await expect(second.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({ held: false });
 
     expect(first.requestNames).toEqual(["view.showAsset"]);
     expect(second.requests).toEqual([]);
+  });
+
+  it("numbers its holds, so a page tells the model an agent opened last, also one it opened before", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const hero = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    const villain = await cli.execute("asset.openInView", { path: VILLAIN, view: "a" });
+    await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 3 });
+    const page = browserPage(test, "page-a", "a");
+
+    await expect(page.client.execute("view.moveAsset", { assetId: villain.assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 2,
+    });
+    await expect(page.client.execute("view.moveAsset", { assetId: hero.assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 3,
+    });
+    await expect(page.client.execute("view.moveAsset", { assetId: hero.assetId })).resolves.toEqual({ held: false });
   });
 
   it("keeps the model in its view when its page reloads", async () => {

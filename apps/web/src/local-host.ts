@@ -279,8 +279,8 @@ export class LocalHost {
    * Opens the tabs again in order. A model the core still has moves to this page as the core keeps it, such as at the
    * clip and frame an agent opened it at, also from a page of the view that adopted it just before; any other opens
    * from its path. Then the page adopts the other assets the core holds for its view, which another page of the view
-   * that lost its connection too may take back. The last model the core held for an agent's open while the page was
-   * away ends up active, and otherwise the saved active tab.
+   * that lost its connection too may take back. Of the models the core held for an agent's opens while the page was
+   * away, the one opened last ends up active, and otherwise the saved active tab.
    */
   async #reopenAll(generation: number): Promise<void> {
     let known: Map<string, string>;
@@ -291,7 +291,11 @@ export class LocalHost {
       return;
     }
     const moved = new Set<string>();
-    let held: string | null = null;
+    let held: { assetId: string; order: number } | null = null;
+    const noteHeld = (assetId: string, result: unknown) => {
+      const order = heldOrder(result);
+      if (order !== null && (held === null || order >= held.order)) held = { assetId, order };
+    };
     await this.#restore.reopen(generation, {
       open: async ({ path, view }) => {
         const assetId = known.get(path);
@@ -300,14 +304,14 @@ export class LocalHost {
           return;
         }
         moved.add(assetId);
-        if (showedHeld(await this.client.execute("view.moveAsset", { assetId, unlessShown: true }))) held = assetId;
+        noteHeld(assetId, await this.client.execute("view.moveAsset", { assetId, unlessShown: true }));
       },
       quiet: isConflict,
       adopt: async () => {
         for (const assetId of known.values()) {
           if (moved.has(assetId) || generation !== this.#restore.generation) continue;
           try {
-            if (showedHeld(await this.client.execute("view.moveAsset", { assetId, adopt: true }))) held = assetId;
+            noteHeld(assetId, await this.client.execute("view.moveAsset", { assetId, adopt: true }));
           } catch (error) {
             if (isConflict(error) || generation !== this.#restore.generation) continue;
             if (this.client.connectionState !== "connected") return;
@@ -315,7 +319,7 @@ export class LocalHost {
           }
         }
       },
-      activeInstead: () => held,
+      activeInstead: () => held?.assetId ?? null,
     });
     if (generation === this.#restore.generation) this.saveTabs();
   }
@@ -445,7 +449,12 @@ function isConflict(error: unknown): boolean {
   return error instanceof ArcueError && error.code === "conflict";
 }
 
-/** Whether a move showed an asset the core held for the page's view; a core from before it said so answers nothing. */
-function showedHeld(result: unknown): boolean {
-  return typeof result === "object" && result !== null && "held" in result && result.held === true;
+/**
+ * When a move showed an asset the core held for the page's view, the place of the open it held the asset for among
+ * the core's holds, or 0 from a core from before it said so; otherwise null, also from a core from before it said
+ * whether it held the asset, which answers nothing.
+ */
+function heldOrder(result: unknown): number | null {
+  if (typeof result !== "object" || result === null || !("held" in result) || result.held !== true) return null;
+  return "heldOrder" in result && typeof result.heldOrder === "number" ? result.heldOrder : 0;
 }

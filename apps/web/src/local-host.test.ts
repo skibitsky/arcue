@@ -487,6 +487,39 @@ describe("LocalHost", () => {
     expect(page.saved()?.active).toBe(2);
   });
 
+  it("shows the model an agent opened last while the page was away in the active tab, also when it opened it before", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const page = new Page(server).start();
+    await page.connected();
+    await page.opened(HERO);
+
+    await restart(server);
+    const agent = server.bridge();
+    await agent.execute("asset.openInView", { path: CRATE, view: VIEW });
+    await expect(agent.execute("asset.openInView", { path: HERO, view: VIEW, frame: 12 })).resolves.toMatchObject({
+      shown: "held",
+    });
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(2));
+    expect(page.paths()).toEqual([HERO, CRATE]);
+    expect(page.activePath()).toBe(HERO);
+  });
+
+  it("shows the model an agent opened last before the page opened in the active tab, also when it opened it before", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const agent = server.bridge();
+    for (const path of [HERO, CRATE, HERO]) await agent.execute("asset.openInView", { path, view: VIEW });
+    const page = new Page(server).start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(2));
+    expect(page.paths()).toEqual([HERO, CRATE]);
+    expect(page.activePath()).toBe(HERO);
+  });
+
   it("brings its tabs back with the same ids when its socket drops while the core keeps running", async () => {
     const server = new FakeServer();
     await server.start();
