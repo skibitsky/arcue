@@ -1093,6 +1093,129 @@ describe("two cores loading versions", () => {
   });
 });
 
+describe("the comments a review another Arcue saved moves onto the version on screen", () => {
+  /** Lets the core's checks of changed files run, so it shows the latest version and has saved its re-anchor. */
+  async function settleOne(test: TestCore): Promise<void> {
+    for (let check = 0; check < 10; check++) {
+      await flush();
+      await test.core.idle();
+      test.clock.advance(300);
+    }
+  }
+
+  /** Saves the review as another Arcue would, and lets the core adopt it. */
+  async function saveElsewhere(test: TestCore, review: ReviewFile): Promise<void> {
+    const revision = (await saved(test)).revision + 1;
+    await test.platform.writeFile(REVIEW_JSON, serializeReview({ ...review, revision }));
+    await settleOne(test);
+  }
+
+  /** Another comment id of the same form. */
+  const otherId = (id: string) => `${id.slice(0, -1)}${id.endsWith("0") ? "1" : "0"}`;
+
+  it("moves a pin saved on an older version with the same mesh bytes, as after a texture changed", async () => {
+    const skin = `${ART}/skin.png`;
+    const test = await startTestCore({ ...heroFiles({ ...heroSpec, textures: ["skin.png"] }), [skin]: png });
+    const assetId = await openAsset(test);
+    const first = await versionOf(test, assetId);
+    await test.core.client.execute("comment.create", pinComment(assetId, "On the skin.", first));
+    const [onFirst] = (await saved(test)).comments;
+    if (!onFirst) throw new Error("The comment was not saved.");
+    await test.platform.writeFile(skin, Uint8Array.of(9, 9));
+    await settleOne(test);
+    const latest = await versionOf(test, assetId);
+    expect(latest).not.toBe(first);
+    const review = await saved(test);
+    expect(review.comments[0]?.anchorVersion).toBe(latest);
+    const writes = writesBy(test, "core-1").length;
+
+    await saveElsewhere(test, { ...review, comments: [onFirst] });
+
+    expect((await saved(test)).comments).toMatchObject([{ id: onFirst.id, anchorVersion: latest }]);
+    expect(writesBy(test, "core-1")).toHaveLength(writes + 1);
+    expect(test.errors).toEqual([]);
+  });
+
+  it("moves only the pins that should move, and leaves one on a later version with the same mesh bytes", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    const [onOlder] = (await saved(test)).comments;
+    if (!onOlder) throw new Error("The comment was not saved.");
+    await test.platform.writeFile(HERO, finer);
+    await settleOne(test);
+    const shown = await versionOf(test, assetId);
+    const review = await saved(test);
+    const [moved] = review.comments;
+    const record = review.versions.find((version) => version.id === shown);
+    if (!moved || !record) throw new Error("The version on screen was not recorded.");
+    const later = { ...record, id: "0123456789abcdef" };
+    const onLater = {
+      ...moved,
+      id: otherId(moved.id),
+      text: "On the later version.",
+      anchorVersion: later.id,
+      context: { ...moved.context, screenshot: null },
+    };
+
+    await saveElsewhere(test, {
+      ...review,
+      versions: [...review.versions, later],
+      comments: [onOlder, onLater],
+      queue: [onOlder.id, onLater.id],
+    });
+
+    const comments = (await saved(test)).comments;
+    expect(comments[0]).toMatchObject({ id: onOlder.id, anchorVersion: shown });
+    expect(comments[1]).toEqual(onLater);
+    expect(test.errors).toEqual([]);
+  });
+
+  it("leaves a pin on a later version whose only other file this core's version does not record", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    const review = await saved(test);
+    const [comment] = review.comments;
+    const record = review.versions.find((version) => version.id === HERO_VERSION);
+    if (!comment || !record) throw new Error("The version on screen was not recorded.");
+    const prop = { file: "Prop.fbx", id: "1234567", hash: "0123456789abcdef", size: 42 };
+    const later = { ...record, id: "fedcba9876543210", files: [...(record.files ?? []), prop] };
+    const onLater = { ...comment, anchorVersion: later.id };
+    const writes = writesBy(test, "core-1").length;
+
+    await saveElsewhere(test, { ...review, versions: [...review.versions, later], comments: [onLater] });
+
+    expect((await saved(test)).comments).toEqual([onLater]);
+    expect(writesBy(test, "core-1")).toHaveLength(writes);
+    expect(test.errors).toEqual([]);
+  });
+
+  it("starts no re-anchor for a comment without a pin saved on an older version", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", looseComment(assetId));
+    const [onOlder] = (await saved(test)).comments;
+    if (!onOlder) throw new Error("The comment was not saved.");
+    await test.platform.writeFile(HERO, finer);
+    await settleOne(test);
+    const review = await saved(test);
+    const loose = { ...onOlder, id: otherId(onOlder.id), text: "Another one.", anchorVersion: HERO_VERSION };
+    const locks = () => test.platform.log.filter((entry) => entry.actor === "core-1" && entry.op === "lock").length;
+    const before = locks();
+
+    await saveElsewhere(test, {
+      ...review,
+      comments: [...review.comments, loose],
+      queue: [...review.queue, loose.id],
+    });
+
+    expect((await saved(test)).comments.at(-1)).toEqual(loose);
+    expect(locks()).toBe(before);
+    expect(test.errors).toEqual([]);
+  });
+});
+
 describe("a reviews lock another holder keeps", () => {
   it("leaves a version record waiting to try again, longer each time, and records it once the lock is free", async () => {
     const test = await startTestCore(heroFiles(), { lockTimeoutMs: 15_000 });
