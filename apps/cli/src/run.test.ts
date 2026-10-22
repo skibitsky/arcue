@@ -529,11 +529,18 @@ describe("arcue stop", () => {
     });
   });
 
-  it("never stops the desktop app", async () => {
+  it("never stops the desktop app, also an older one", async () => {
     const app = await desktop({ pid: ownedProcess().pid });
 
     expect(await arcue(["stop"], options())).toEqual({ code: 0, out: "Arcue is not running in a browser.\n", err: "" });
     expect(app.requests).toEqual([]);
+    expect(signals).toEqual([]);
+
+    await app.close();
+    const older = await desktop({ kind: undefined, locks: undefined, pid: ownedProcess().pid });
+
+    expect(await arcue(["stop"], options())).toEqual({ code: 0, out: "Arcue is not running in a browser.\n", err: "" });
+    expect(older.requests).toEqual([]);
     expect(signals).toEqual([]);
   });
 
