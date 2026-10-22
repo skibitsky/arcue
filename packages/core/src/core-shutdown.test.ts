@@ -1,10 +1,7 @@
 import type { Importer } from "@arcue/scene";
 import { describe, expect, it, vi } from "vitest";
-import { ArcueCore } from "./core";
-import { ManualClock } from "./manual-clock";
-import type { TestCore } from "./test-support";
+import type { RecordingPlatform, TestCore } from "./test-support";
 import {
-  FakeWindow,
   fakeImporter,
   flush,
   HERO,
@@ -12,8 +9,8 @@ import {
   heroFiles,
   looseComment,
   openAsset,
-  RecordingPlatform,
   readJson,
+  startSecondCore,
   startTestCore,
 } from "./test-support";
 
@@ -68,9 +65,9 @@ describe("ArcueCore.shutdown", () => {
         return fakeImporter.import(request);
       },
     };
-    const platform = new RecordingPlatform({ files: heroFiles(), clock: new ManualClock(), importers: [gated] });
-    const core = await ArcueCore.start({ platform, onError: () => undefined });
-    const window = new FakeWindow(core, "window-1");
+    const test = await startTestCore(heroFiles());
+    const { core, window } = await startSecondCore(test, { importers: [gated] });
+    const { platform } = test;
     await window.client.execute("asset.open", { path: HERO });
     await vi.waitFor(() => expect(platform.parsed).toEqual(["Hero.fbx"]));
 
