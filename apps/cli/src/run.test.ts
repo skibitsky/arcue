@@ -282,6 +282,13 @@ describe("arcue open with Arcue in the browser", () => {
   });
 });
 
+/** Whether this computer can listen on ::1. */
+const hasLoopback6 = await new Promise<boolean>((resolve) => {
+  const server = createServer();
+  server.once("error", () => resolve(false));
+  server.listen(0, "::1", () => server.close(() => resolve(true)));
+});
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -517,6 +524,19 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
       await new Promise((resolve) => taken.close(resolve));
     }
     expect(JSON.parse(readFileSync(join(userData, LAST_CORE_FILE), "utf8"))).toMatchObject({ kind: "serve" });
+  });
+
+  it.skipIf(!hasLoopback6)("runs on 4530 when another program holds the port it ran on last on ::1 only", async () => {
+    const port = await freePort();
+    writeLastCoreFile(userData, "serve", `http://localhost:${port}`);
+    const taken: Server = createServer();
+    await new Promise<void>((resolve) => taken.listen(port, "::1", resolve));
+    try {
+      expect((await detach([], "serve")).code).toBe(0);
+      expect(readRecord()?.argv.slice(2, 4)).toEqual(["--port", "4530"]);
+    } finally {
+      await new Promise((resolve) => taken.close(resolve));
+    }
   });
 });
 

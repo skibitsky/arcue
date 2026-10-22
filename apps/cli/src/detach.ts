@@ -248,13 +248,20 @@ async function answeringWithin(userData: string, ms: number): Promise<BridgeInfo
   }
 }
 
-/** The port when nothing listens on it on 127.0.0.1, or undefined. */
-function freePort(port: number | undefined): Promise<number | undefined> {
-  if (port === undefined) return Promise.resolve(undefined);
+/** The port when nothing listens on it on 127.0.0.1 or ::1, the addresses `arcue serve` takes it on, or undefined. */
+async function freePort(port: number | undefined): Promise<number | undefined> {
+  if (port === undefined || !(await listensOn(port, "127.0.0.1"))) return undefined;
+  return (await listensOn(port, "::1", { lacking: true })) ? port : undefined;
+}
+
+/** Whether a server can listen on the port at the address, or, with `lacking`, the computer has no such address. */
+function listensOn(port: number, host: string, { lacking = false } = {}): Promise<boolean> {
   return new Promise((resolvePromise) => {
     const server = createServer();
-    server.once("error", () => resolvePromise(undefined));
-    server.listen(port, "127.0.0.1", () => server.close(() => resolvePromise(port)));
+    server.once("error", (error: NodeJS.ErrnoException) =>
+      resolvePromise(lacking && (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT")),
+    );
+    server.listen(port, host, () => server.close(() => resolvePromise(true)));
   });
 }
 
