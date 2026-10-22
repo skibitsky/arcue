@@ -470,7 +470,7 @@ describe("arcue serve beside other cores", () => {
 
     const older = await startFakeCore(userData, { file: BRIDGE_INFO_FILE, url: "http://localhost:4530" });
     await expect(serve()).rejects.toThrow(
-      `An older arcue serve runs at http://localhost:4530 (process ${process.pid}) and can't share reviews with this one. Run arcue stop, then try again.`,
+      `An older arcue serve runs at http://localhost:4530 (process ${process.pid}) and can't share reviews with this one. ${process.platform === "win32" ? "Stop it where it runs" : "Run arcue stop"}, then try again.`,
     );
     await older.close();
     expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);

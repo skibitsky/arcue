@@ -242,9 +242,18 @@ describe("the arcue command in an agent session", () => {
     const older = await olderServe();
     const served = capture();
 
-    await expect(run(["open", "Hero.fbx"], served.output, env(session), userData)).resolves.toBe(1);
+    await expect(run(["open", "Hero.fbx"], served.output, env(session), userData, { platform: "linux" })).resolves.toBe(
+      1,
+    );
     expect(served.lines.err).toBe(
       `The Arcue at http://localhost:4530 (process ${process.pid}) is older than this arcue command and cannot show models in a session's view. Restart it: run arcue stop, then arcue serve --detach.\n`,
+    );
+    const onWindows = capture();
+    await expect(
+      run(["open", "Hero.fbx"], onWindows.output, env(session), userData, { platform: "win32" }),
+    ).resolves.toBe(1);
+    expect(onWindows.lines.err).toBe(
+      `The Arcue at http://localhost:4530 (process ${process.pid}) is older than this arcue command and cannot show models in a session's view. Restart it: stop it where it runs, then arcue serve --detach.\n`,
     );
 
     await older.close();

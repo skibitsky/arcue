@@ -17,13 +17,15 @@ export const fromCoreSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("failed"), message: z.string() }),
   /**
    * Another core that cannot run beside this one answers at `bridge.json` or `serve.json`, so this one stopped before
-   * it served a window: another Arcue app ("same"), or a core that takes no review locks ("unshared").
+   * it served a window: another Arcue app ("same"), or a core that takes no review locks ("unshared"). `older` says
+   * whether that core comes from a build before cores ran side by side.
    */
   z.object({
     type: z.literal("already-running"),
     pid: z.int().positive(),
     url: z.string().nullable(),
     reason: z.enum(["same", "unshared"]),
+    older: z.boolean(),
   }),
   /** A bridge opened an asset while no window was connected. */
   z.object({ type: z.literal("need-window") }),

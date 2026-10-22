@@ -74,7 +74,7 @@ export async function run(
       case "status":
         return await status(command, env, output, options);
       case "open":
-        return await open(command, env, cwd, output);
+        return await open(command, env, cwd, output, options.platform ?? process.platform);
       case "inspect":
         return await inspect(command, env, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
       case "serve":
@@ -120,9 +120,10 @@ async function status(
   try {
     const build = cores.some(({ connection }) => connection?.info.build !== undefined) ? await buildOf(options) : null;
     const blocks: string[] = [];
+    const platform = options.platform ?? process.platform;
     for (const { file, connection, error } of cores) {
       if (connection) {
-        blocks.push(await describeCore(connection, file, view, build));
+        blocks.push(await describeCore(connection, file, view, build, platform));
       } else if (error !== null) {
         const info = await readBridgeInfo(userData, file);
         output.err(`${doesNotAnswer(info, file)}: ${messageOf(error)}\n`);
@@ -147,6 +148,7 @@ async function describeCore(
   file: CoreKind,
   view: string | null,
   build: string | null,
+  platform: NodeJS.Platform,
 ): Promise<string> {
   const { info } = connection;
   const { assets } = await connection.client.query("asset.list", {});
@@ -154,7 +156,7 @@ async function describeCore(
   if (inBrowser(info, file)) {
     lines.push(`Arcue is running in a browser at ${info.url} (process ${info.pid}).`);
     if (info.kind === undefined) {
-      lines.push("It is older than this arcue command: run arcue stop, then arcue serve --detach.");
+      lines.push(`It is older than this arcue command: ${stopOlderServe(platform)}, then arcue serve --detach.`);
     } else if (!sharesReviews(info)) {
       lines.push(ANOTHER_VERSION);
     } else if (otherBuild(info, build)) {
@@ -181,6 +183,11 @@ function doesNotAnswer(info: BridgeInfo | null, file: CoreKind): string {
   if (!info) return file === "serve" ? "Arcue in the browser does not answer" : "The Arcue app does not answer";
   if (inBrowser(info, file)) return `Arcue in the browser at ${info.url} (process ${info.pid}) does not answer`;
   return `The Arcue app (process ${info.pid}) does not answer`;
+}
+
+/** How to stop an older `arcue serve`, which `arcue stop` can't do on Windows. */
+function stopOlderServe(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "stop it where it runs" : "run arcue stop";
 }
 
 function messageOf(error: unknown): string {
@@ -221,6 +228,7 @@ async function open(
   env: NodeJS.ProcessEnv,
   cwd: string,
   output: Output,
+  platform: NodeJS.Platform,
 ): Promise<number> {
   const view = sessionView(env, command.view);
   if (command.move && view === null) {
@@ -246,7 +254,7 @@ async function open(
     return shown ? 0 : 1;
   } catch (error) {
     if (!(error instanceof ArcueError)) throw error;
-    if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info, kind));
+    if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info, kind, platform));
     if (kind === "serve" && error.code === "disconnected") {
       throw new Error(
         `Arcue in the browser stopped while opening ${path}. Run arcue serve --detach, then arcue open again.`,
@@ -265,10 +273,10 @@ async function open(
 }
 
 /** What `arcue open` says when the running core predates agent sessions' views. */
-function olderCore({ url, pid }: BridgeInfo, kind: CoreKind): string {
+function olderCore({ url, pid }: BridgeInfo, kind: CoreKind, platform: NodeJS.Platform): string {
   const [running, restart] =
     kind === "serve"
-      ? [`The Arcue at ${url}`, "run arcue stop, then arcue serve --detach"]
+      ? [`The Arcue at ${url}`, `${stopOlderServe(platform)}, then arcue serve --detach`]
       : ["The Arcue app", "quit the app and run arcue open again"];
   return `${running} (process ${pid}) is older than this arcue command and cannot show models in a session's view. Restart it: ${restart}.`;
 }

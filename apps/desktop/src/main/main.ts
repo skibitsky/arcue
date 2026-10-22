@@ -76,7 +76,7 @@ async function run(): Promise<void> {
 
   const blocking = await blockingCore(userData, "desktop");
   if (blocking) {
-    await quitBeside(blocking, log);
+    await quitBeside({ ...blocking, older: blocking.info.kind === undefined }, log);
     return;
   }
 

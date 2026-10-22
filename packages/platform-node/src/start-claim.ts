@@ -12,28 +12,41 @@ const CLAIM_TIMEOUT_MS = 30_000;
 const RECORD_TIMEOUT_MS = 2_000;
 const START_LABEL = "the start of Arcue";
 
-/** A core runs that keeps a core of the kind `starting` from starting beside it. */
+/**
+ * A core runs that keeps a core of the kind `starting` from starting beside it. Its message says how to stop an older
+ * `arcue serve`, which `arcue stop` cannot do on Windows.
+ */
 export class CoreRunningError extends ArcueError {
   readonly running: BridgeInfo;
   readonly reason: BlockingCore["reason"];
   readonly starting: CoreKind;
 
-  constructor(running: BridgeInfo, reason: BlockingCore["reason"], starting: CoreKind) {
-    super("conflict", runningMessage(running, reason, starting));
+  constructor(
+    running: BridgeInfo,
+    reason: BlockingCore["reason"],
+    starting: CoreKind,
+    platform: NodeJS.Platform = process.platform,
+  ) {
+    super("conflict", runningMessage(running, reason, starting, platform));
     this.running = running;
     this.reason = reason;
     this.starting = starting;
   }
 }
 
-function runningMessage(running: BridgeInfo, reason: BlockingCore["reason"], starting: CoreKind): string {
+function runningMessage(
+  running: BridgeInfo,
+  reason: BlockingCore["reason"],
+  starting: CoreKind,
+  platform: NodeJS.Platform,
+): string {
   const { pid, url } = running;
   if (reason === "same") {
     return url ? `Arcue is already running at ${url} (process ${pid}).` : `Arcue is already running (process ${pid}).`;
   }
   if (starting === "serve" && running.kind === undefined) {
     return coreKindOf(running) === "serve"
-      ? `An older arcue serve runs at ${url} (process ${pid}) and can't share reviews with this one. Run arcue stop, then try again.`
+      ? `An older arcue serve runs at ${url} (process ${pid}) and can't share reviews with this one. ${platform === "win32" ? "Stop it where it runs" : "Run arcue stop"}, then try again.`
       : `An Arcue app runs (process ${pid}) that can't share reviews with Arcue in the browser. Quit it or update it, then try again.`;
   }
   return `Another version of Arcue runs (process ${pid}${url ? ` at ${url}` : ""}) and can't share reviews with this one.`;

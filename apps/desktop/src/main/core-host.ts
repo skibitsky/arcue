@@ -122,6 +122,7 @@ export class CoreHost {
         this.#options.onAlreadyRunning({
           info: { pid: message.pid, url: message.url ?? undefined },
           reason: message.reason,
+          older: message.older,
         });
         return;
       case "need-window":

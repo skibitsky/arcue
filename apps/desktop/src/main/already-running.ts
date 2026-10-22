@@ -5,6 +5,8 @@ import type { BridgeInfo } from "@arcue/protocol";
 export interface RunningCore {
   info: Pick<BridgeInfo, "pid" | "url">;
   reason: BlockingCore["reason"];
+  /** Whether the core comes from a build before cores ran side by side, which wrote no kind in its bridge file. */
+  older: boolean;
 }
 
 export interface AlreadyRunningNotice {
@@ -15,8 +17,14 @@ export interface AlreadyRunningNotice {
   open: string | null;
 }
 
-/** What the app says before it quits because a core runs that it cannot run beside. */
-export function alreadyRunningNotice({ info, reason }: RunningCore): AlreadyRunningNotice {
+/**
+ * What the app says before it quits because a core runs that it cannot run beside. `arcue stop` cannot stop an older
+ * `arcue serve` on Windows.
+ */
+export function alreadyRunningNotice(
+  { info, reason, older }: RunningCore,
+  platform: NodeJS.Platform = process.platform,
+): AlreadyRunningNotice {
   const message = "Arcue is already running";
   if (reason === "same") {
     return { message, detail: "Only one Arcue app can run at a time.", buttons: ["Quit"], open: null };
@@ -30,9 +38,12 @@ export function alreadyRunningNotice({ info, reason }: RunningCore): AlreadyRunn
       open: null,
     };
   }
+  const stop = platform === "win32" ? "Stop it where it runs" : "Run arcue stop in a terminal";
   return {
     message,
-    detail: `An older arcue serve runs at ${url} and can't share reviews with this app. Run arcue stop in a terminal, then open Arcue again.`,
+    detail: older
+      ? `An older arcue serve runs at ${url} and can't share reviews with this app. ${stop}, then open Arcue again.`
+      : `Another version of Arcue runs at ${url} and can't share reviews with this app. Stop it or update this app, then open Arcue again.`,
     buttons: ["Open in browser", "Quit"],
     open: url,
   };

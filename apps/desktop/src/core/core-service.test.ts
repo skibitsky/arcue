@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
 import { startFakeCore } from "@arcue/platform-node/test";
-import { BRIDGE_INFO_FILE, bridgeInfoSchema, LAST_CORE_FILE, LOCK_PROTOCOL, lastCoreSchema } from "@arcue/protocol";
+import {
+  BRIDGE_INFO_FILE,
+  bridgeInfoSchema,
+  LAST_CORE_FILE,
+  LOCK_PROTOCOL,
+  lastCoreSchema,
+  SERVE_INFO_FILE,
+} from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FromCore } from "../shared/core-messages";
 import { CoreService } from "./core-service";
@@ -70,7 +77,7 @@ describe("the desktop app's core", () => {
     const core = runCore();
     await core.start();
     expect(core.posted).toEqual([
-      { type: "already-running", pid: older.info.pid, url: "http://localhost:4599", reason: "unshared" },
+      { type: "already-running", pid: older.info.pid, url: "http://localhost:4599", reason: "unshared", older: true },
     ]);
     expect(core.log()).toContain(
       `Another version of Arcue runs (process ${older.info.pid} at http://localhost:4599) and can't share reviews with this one. This core stops.`,
@@ -82,12 +89,26 @@ describe("the desktop app's core", () => {
     expect(readFile(BRIDGE_INFO_FILE)).toBe(before);
   });
 
+  it("stops beside Arcue in the browser of another lock protocol, which it never calls older", async () => {
+    const other = await fakeCore({ file: SERVE_INFO_FILE, kind: "serve", locks: 2, url: "http://localhost:4599" });
+    const core = runCore();
+    await core.start();
+    expect(core.posted).toEqual([
+      { type: "already-running", pid: other.info.pid, url: "http://localhost:4599", reason: "unshared", older: false },
+    ]);
+
+    await core.stop();
+    expect(core.exits).toEqual([0]);
+  });
+
   it("stops beside another Arcue app and leaves the files alone", async () => {
     const app = await fakeCore({ file: BRIDGE_INFO_FILE, kind: "desktop", locks: LOCK_PROTOCOL });
     const before = readFile(BRIDGE_INFO_FILE);
     const core = runCore();
     await core.start();
-    expect(core.posted).toEqual([{ type: "already-running", pid: app.info.pid, url: null, reason: "same" }]);
+    expect(core.posted).toEqual([
+      { type: "already-running", pid: app.info.pid, url: null, reason: "same", older: false },
+    ]);
     expect(core.log()).toContain(`Arcue is already running (process ${app.info.pid}). This core stops.`);
 
     await core.stop();

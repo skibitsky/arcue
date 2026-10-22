@@ -98,6 +98,25 @@ describe("the start claim", () => {
     expect(existsSync(startLockPath(userData))).toBe(true);
   });
 
+  it("says to stop an older arcue serve where it runs on Windows, where arcue stop can't", () => {
+    const older = {
+      version: 1 as const,
+      pid: 42,
+      socket: "/tmp/arcue.sock",
+      token: "t".repeat(43),
+      url: "http://localhost:4530",
+    };
+    const refusal = (platform: NodeJS.Platform) => new CoreRunningError(older, "unshared", "serve", platform).message;
+
+    expect(refusal("win32")).toBe(
+      "An older arcue serve runs at http://localhost:4530 (process 42) and can't share reviews with this one. Stop it where it runs, then try again.",
+    );
+    expect(refusal("linux")).toBe(
+      "An older arcue serve runs at http://localhost:4530 (process 42) and can't share reviews with this one. Run arcue stop, then try again.",
+    );
+    expect(refusal("darwin")).toBe(refusal("linux"));
+  });
+
   it("times out a claim while another Arcue holds the start lock", async () => {
     holdElsewhere();
     await expect(claimStart(userData, "serve", { timeoutMs: 200 })).rejects.toMatchObject({

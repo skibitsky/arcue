@@ -79,7 +79,8 @@ export async function detachServe(
 
   const blocking = await blockingCore(userData, "serve");
   if (blocking?.reason === "unshared") {
-    output.err(`${new CoreRunningError(blocking.info, "unshared", "serve").message}\n`);
+    const platform = options.platform ?? process.platform;
+    output.err(`${new CoreRunningError(blocking.info, "unshared", "serve", platform).message}\n`);
     return 1;
   }
   if (blocking) {

@@ -370,7 +370,7 @@ describe("cores of both kinds", () => {
     });
     await expect(startServe()).rejects.toMatchObject({
       reason: "unshared",
-      message: `An older arcue serve runs at ${ADDRESS} (process ${pid}) and can't share reviews with this one. Run arcue stop, then try again.`,
+      message: `An older arcue serve runs at ${ADDRESS} (process ${pid}) and can't share reviews with this one. ${process.platform === "win32" ? "Stop it where it runs" : "Run arcue stop"}, then try again.`,
     });
     await olderServe.close();
 

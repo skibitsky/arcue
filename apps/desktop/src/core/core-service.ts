@@ -104,6 +104,7 @@ export class CoreService {
             pid: error.running.pid,
             url: error.running.url ?? null,
             reason: error.reason,
+            older: error.running.kind === undefined,
           });
           return;
         }

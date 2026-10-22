@@ -164,11 +164,14 @@ describe("arcue status", () => {
   it("reports an older arcue serve at bridge.json as Arcue in the browser", async () => {
     await desktop({ kind: undefined, locks: undefined, url: SERVE_URL });
 
-    expect(await arcue(["status"], {}, session)).toEqual({
+    expect(await arcue(["status"], { platform: "linux" }, session)).toEqual({
       code: 0,
       out: `Arcue is running in a browser at ${SERVE_URL} (process ${pid}).\nIt is older than this arcue command: run arcue stop, then arcue serve --detach.\nThis session's view: ${viewAddress(SERVE_URL, view)}\nNo assets are open.\n`,
       err: "",
     });
+    expect((await arcue(["status"], { platform: "win32" })).out).toBe(
+      `Arcue is running in a browser at ${SERVE_URL} (process ${pid}).\nIt is older than this arcue command: stop it where it runs, then arcue serve --detach.\nNo assets are open.\n`,
+    );
   });
 
   it("never calls a core with another lock protocol older, nor says to stop it", async () => {
@@ -400,11 +403,15 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     await refusing.close();
 
     await desktop({ kind: undefined, locks: undefined, url: SERVE_URL });
-    expect(await detach([], "serve")).toEqual({
+    const older = `An older arcue serve runs at ${SERVE_URL} (process ${process.pid}) and can't share reviews with this one.`;
+    expect(await detach([], "serve", { platform: "linux" })).toEqual({
       code: 1,
       out: "",
-      err: `An older arcue serve runs at ${SERVE_URL} (process ${process.pid}) and can't share reviews with this one. Run arcue stop, then try again.\n`,
+      err: `${older} Run arcue stop, then try again.\n`,
     });
+    expect((await detach([], "serve", { platform: "win32" })).err).toBe(
+      `${older} Stop it where it runs, then try again.\n`,
+    );
     expect(readRecord()).toBeNull();
   });
 
