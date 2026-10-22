@@ -208,6 +208,22 @@ describe("an open outside views", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
+  it("waits for a core that is starting where no app was ever started, then goes to it", async () => {
+    const holder = holdStartLock(userData);
+    holders.push(holder);
+    let settled = false;
+    const opening = route(null).finally(() => (settled = true));
+
+    await sleep(500);
+    expect(settled).toBe(false);
+    const served = await serve();
+    holder.release();
+
+    const routed = await opening;
+    expect(routed).toMatchObject({ kind: "serve" });
+    expect(routed.connection.info.token).toBe(served.info.token);
+  });
+
   it("says Arcue in the browser stopped when it ran last and no app was ever started", async () => {
     writeLastCoreFile(userData, "serve", SERVE_URL);
 

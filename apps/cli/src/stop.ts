@@ -51,12 +51,13 @@ async function stopRunning(userData: string, output: Output, options: RunOptions
   }
 
   const older = await readBridgeInfo(userData, "desktop");
-  if (older?.url === undefined || older.kind !== undefined) return null;
+  if (!older || !isOlderServe(older)) return null;
   const olderConnection = await connectOrRefuse(userData, "desktop", output);
   if (olderConnection === "refused") return 1;
   if (!olderConnection) return null;
   olderConnection.close();
   const { info } = olderConnection;
+  if (!isOlderServe(info)) return null;
   if ((options.platform ?? process.platform) === "win32") {
     output.out(
       `The arcue serve at ${info.url} (process ${info.pid}) is older than this arcue command and cannot be stopped by it. Stop it where it runs.\n`,
@@ -75,6 +76,11 @@ async function stopRunning(userData: string, output: Output, options: RunOptions
   }
   output.out(`Arcue in the browser (process ${info.pid}) did not stop within ${seconds(timeoutMs)} seconds.\n`);
   return 1;
+}
+
+/** An `arcue serve` from before cores ran side by side, which wrote `bridge.json` with its address and no kind. */
+function isOlderServe(info: BridgeInfo): boolean {
+  return info.url !== undefined && info.kind === undefined;
 }
 
 /** Connects to the core in the bridge file of `kind`, or says that it does not answer. */

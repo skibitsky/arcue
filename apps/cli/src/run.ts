@@ -317,7 +317,7 @@ async function serve(
     idleStopMs: command.idleStopMs,
     build: build ?? undefined,
     onError: (error) => output.err(`${error instanceof Error ? error.message : String(error)}\n`),
-    onWaitingForWindow: () => output.err(`Waiting for a browser to open ${server.url}.\n`),
+    onWaitingForWindow: (url) => output.err(`Waiting for a browser to open ${url}.\n`),
   });
   output.out(`Arcue runs at ${server.url}. Open it in a browser; agents' "arcue open" shows their models there.\n`);
   if (view !== null) output.out(`This session's view: ${viewAddress(server.url, view)}\n`);

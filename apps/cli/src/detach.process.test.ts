@@ -5,7 +5,9 @@ import type { Server } from "node:net";
 import { createServer } from "node:net";
 import { basename, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { connectToCore, isRunning, readBridgeInfo } from "@arcue/platform-node";
+import { writeLastCoreFile } from "@arcue/platform-node/test";
 import { LAST_CORE_FILE } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import { outsideSessions } from "./session-view";
@@ -83,6 +85,11 @@ async function servePid(): Promise<number> {
   if (pid === undefined) throw new Error("No Arcue in the browser answers.");
   registerPid(processRun.folder, pid);
   return pid;
+}
+
+/** The options that load a fixture into the built arcue before it runs. */
+function preload(fixture: keyof typeof processRun.fixtures): string[] {
+  return ["--import", pathToFileURL(processRun.fixtures[fixture]).href];
 }
 
 async function freePort(): Promise<number> {
@@ -263,6 +270,7 @@ describe("stopping Arcue in the browser", () => {
     const port = await freePort();
     await arcue(["serve", "--detach", "--port", String(port)]);
     const pid = await servePid();
+    writeLastCoreFile(userData, "desktop");
 
     expect(await arcue(["stop"])).toMatchObject({
       code: 0,
@@ -294,11 +302,14 @@ describe("stopping Arcue in the browser", () => {
     expect(JSON.parse(readFileSync(join(userData, LAST_CORE_FILE), "utf8"))).toMatchObject({ kind: "serve" });
   });
 
-  it("ends a process whose run returned within 5 seconds, whatever timers it leaves", async () => {
-    const lingering = start(process.execPath, [processRun.fixtures.linger, "help"]);
+  it("ends arcue within 5 seconds once its command is done, whatever timers it leaves", async () => {
+    const lingering = start(process.execPath, [...preload("linger"), processRun.arcue, "help"]);
     const before = Date.now();
 
-    expect(await lingering.exited).toEqual({ code: 0, signal: null });
+    expect(await Promise.race([lingering.exited, sleep(10_000).then(() => "still running")])).toEqual({
+      code: 0,
+      signal: null,
+    });
 
     expect(Date.now() - before).toBeLessThan(6000);
     expect(lingering.output.out).toContain("Usage:");
@@ -306,11 +317,14 @@ describe("stopping Arcue in the browser", () => {
 
   it("ends Arcue in the browser 30 seconds after arcue stop when its close never finishes", async () => {
     const port = await freePort();
-    const models = mkdtempSync(join(processRun.folder, "models-"));
-    const hanging = start(process.execPath, [processRun.fixtures["hanging-serve"]], {
-      env: env({ ARCUE_PORT: String(port), ARCUE_DIST: processRun.dist, ARCUE_MODELS: models }),
-    });
-    await vi.waitFor(() => expect(existsSync(join(userData, "waiting"))).toBe(true), { timeout: 30_000 });
+    const hanging = start(process.execPath, [
+      ...preload("hanging-serve"),
+      processRun.arcue,
+      "serve",
+      "--port",
+      String(port),
+    ]);
+    await vi.waitFor(() => expect(hanging.output.out).toContain("Arcue runs at"), { timeout: 15_000 });
 
     const stopping = arcue(["stop"]);
     await vi.waitFor(() => expect(hanging.output.out).toContain("Arcue stops: arcue stop asked it to.\n"), {
@@ -324,6 +338,5 @@ describe("stopping Arcue in the browser", () => {
     expect(Date.now() - asked).toBeGreaterThan(29_000);
     expect(Date.now() - asked).toBeLessThan(31_000);
     expect(hanging.output.err).toContain("Arcue did not stop within 30 seconds, so it exits now.\n");
-    rmSync(models, { recursive: true, force: true });
   });
 });

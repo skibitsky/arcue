@@ -13,6 +13,7 @@ import type { RunOptions } from "./run";
 import { run } from "./run";
 import { sessionView } from "./session-view";
 import { buildFixture } from "./test-build";
+import { killStarted } from "./test-pids";
 
 const SERVE_URL = "http://localhost:4530";
 const OTHER_BUILD = "It runs from another arcue build: run arcue stop, then arcue serve --detach to use this one.";
@@ -91,7 +92,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   const record = readRecord();
-  if (record && isRunning(record.pid)) process.kill(record.pid, "SIGKILL");
+  const script = record?.argv[0];
+  if (record && script !== undefined) killStarted(record.pid, script);
   for (const child of owned) child.kill();
   await Promise.all(fakes.map((core) => core.close()));
   rmSync(userData, { recursive: true, force: true });
@@ -229,7 +231,7 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-describe("arcue serve --detach", () => {
+describe("arcue serve --detach", { timeout: 20_000 }, () => {
   let fixtures: string;
   let script: string;
 

@@ -18,7 +18,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ManualClock } from "@arcue/core";
 import { connectToCore, readBridgeInfo } from "@arcue/platform-node";
 import type { FakeCore } from "@arcue/platform-node/test";
-import { startFakeCore } from "@arcue/platform-node/test";
+import { startFakeCore, writeLastCoreFile } from "@arcue/platform-node/test";
 import type { CoreClient, IncomingRequest } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
@@ -45,7 +45,7 @@ let userData: string;
 let webUi: string;
 let server: ArcueServer | null;
 let fakes: FakeCore[];
-const errors: unknown[] = [];
+let errors: unknown[];
 
 beforeEach(() => {
   temp = realpathSync(mkdtempSync(join(tmpdir(), "arcue-serve-")));
@@ -58,22 +58,24 @@ beforeEach(() => {
   writeFileSync(join(temp, "secret.txt"), "secret");
   server = null;
   fakes = [];
+  errors = [];
 });
 
 afterEach(async () => {
   await server?.close();
   await Promise.all(fakes.map((fake) => fake.close()));
   rmSync(temp, { recursive: true, force: true });
-  errors.length = 0;
 });
 
+/** A server in the test's folders. Its errors go to this test's list, so a closed server's late ones reach no other. */
 function options(overrides: Partial<ServeOptions> = {}): ServeOptions {
+  const seen = errors;
   return {
     userData,
     importWorkerEntry: join(temp, "import-worker.js"),
     webUi,
     port: 0,
-    onError: (error) => errors.push(error),
+    onError: (error) => seen.push(error),
     ...overrides,
   };
 }
@@ -274,6 +276,21 @@ describe("arcue serve", () => {
 
     expect(viewed.map((request) => request.name)).toEqual(["view.showAsset"]);
     expect(outside).toEqual([]);
+    connection?.close();
+  });
+
+  it("asks for a browser at its address when the command line opens a model and no page is open", async () => {
+    const asked: string[] = [];
+    const { url } = await serve({ onWaitingForWindow: (address) => asked.push(address) });
+    const connection = await connectToCore(userData, "serve");
+    const opening = connection?.client.execute("asset.open", { path: model() });
+
+    await vi.waitFor(() => expect(asked).toEqual([url]), { timeout: 2000 });
+    const shown: IncomingRequest[] = [];
+    windowClient(await openSocket(url, url), shown);
+
+    await expect(opening).resolves.toMatchObject({ assetId: expect.any(String) });
+    expect(shown.map((request) => request.name)).toEqual(["view.showAsset"]);
     connection?.close();
   });
 
@@ -549,6 +566,7 @@ describe("arcue serve stopping", () => {
     const running = await serve();
     const page = await openSocket(running.url, running.url);
     const code = new Promise((resolve) => page.once("close", (closed) => resolve(closed)));
+    writeLastCoreFile(userData, "desktop");
 
     await running.close();
     server = null;

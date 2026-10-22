@@ -66,6 +66,13 @@ describe("parseArgs", () => {
         `--idle-stop-ms takes a whole number of milliseconds from 1, got "${value}".`,
       );
     }
+    expect(parseArgs(["serve", "--idle-stop-ms", "2147483647"])).toEqual({
+      command: "serve",
+      idleStopMs: 2_147_483_647,
+    });
+    expect(() => parseArgs(["serve", "--idle-stop-ms", "2147483648"])).toThrow(
+      '--idle-stop-ms takes at most 2147483647 milliseconds, got "2147483648".',
+    );
     expect(() => parseArgs(["serve", "--idle-stop-ms"])).toThrow("--idle-stop-ms needs a value.");
     expect(() => parseArgs(["serve", "--detach", "--idle-stop-ms", "5"])).toThrow("--idle-stop-ms is set by --detach.");
     expect(USAGE).not.toContain("--idle-stop-ms");

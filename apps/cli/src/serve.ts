@@ -69,8 +69,8 @@ export interface ServeOptions {
   /** 0 picks a free port. */
   port: number;
   onError: ListenerErrorHandler;
-  /** Called when the command line opens a model without a view and no page outside views is open. */
-  onWaitingForWindow?: () => void;
+  /** Called with the address when the command line opens a model without a view and no page outside views is open. */
+  onWaitingForWindow?: (url: string) => void;
   /** Stops the core after this long with no page connected. Without it, the core never stops by itself for that. */
   idleStopMs?: number;
   /** The timers of the idle stop, the pages' heartbeat and the checks. */
@@ -137,8 +137,9 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   const setTimer = options.setTimer ?? systemClock.setTimer;
   const claim = await claimStart(userData, "serve");
 
+  let url = "";
   const windows = new WindowPresence({
-    requestWindow: () => options.onWaitingForWindow?.(),
+    requestWindow: () => options.onWaitingForWindow?.(url),
     setTimer: systemClock.setTimer,
   });
   const stopped = Promise.withResolvers<ServeStop>();
@@ -167,7 +168,6 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
 
   let http: Server[] = [];
   let core: ArcueCore | null = null;
-  let url: string;
   let port: number;
   let bridge: BridgeServer;
   let unregisterStop: () => void = () => undefined;
