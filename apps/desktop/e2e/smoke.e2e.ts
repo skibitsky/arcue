@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { connectToCore } from "@arcue/platform-node";
+import { outsideSessions } from "@arcue/platform-node/test";
 import type { AssetInspection, AssetSummary, CoreClient, ViewState } from "@arcue/protocol";
 import type { BrowserWindow } from "electron";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { rendererSwitches } from "./rendering.ts";
 
 interface WindowProbe {
@@ -49,13 +51,16 @@ let blob: string;
 let turn: string;
 let outside: string;
 let app: ElectronApplication | null = null;
+let failed = false;
+
+/** The environment of the app and the command line: the test's data folder, and no agent session's variables. */
+function env(more: Record<string, string> = {}): Record<string, string> {
+  const given = { ...outsideSessions(process.env), ARCUE_USER_DATA: userData, ...more };
+  return Object.fromEntries(Object.entries(given).filter((entry): entry is [string, string] => entry[1] !== undefined));
+}
 
 function launch(): Promise<ElectronApplication> {
-  return _electron.launch({
-    executablePath: electronPath,
-    args: [...rendererSwitches, appDir],
-    env: { ...process.env, ...sandbox, ARCUE_USER_DATA: userData },
-  });
+  return _electron.launch({ executablePath: electronPath, args: [...rendererSwitches, appDir], env: env(sandbox) });
 }
 
 async function connected(page: Page): Promise<Page> {
@@ -102,12 +107,11 @@ function sceneOf(page: Page, assetId: string) {
   }, assetId);
 }
 
-function bridgeInfo(): { pid: number } {
-  try {
-    return JSON.parse(readFileSync(join(userData, "bridge.json"), "utf8")) as { pid: number };
-  } catch {
-    return { pid: 0 };
-  }
+/** The pid of the app's core that answers the command line, or 0 when none does. */
+async function corePid(): Promise<number> {
+  const connection = await connectToCore(userData, "desktop").catch(() => null);
+  connection?.close();
+  return connection?.info.pid ?? 0;
 }
 
 /** The paths of a window's asset tabs, in order. */
@@ -197,8 +201,15 @@ beforeAll(() => {
   cpSync(join(repo, "samples", "beetle-turn.fbx"), outside);
 });
 
+afterEach(({ task }) => {
+  if (task.result?.state === "fail") failed = true;
+});
+
 afterAll(async () => {
   await app?.close();
+  if (failed && existsSync(join(userData, "logs"))) {
+    cpSync(join(userData, "logs"), join(appDir, "test-results", "smoke"), { recursive: true });
+  }
   rmSync(workDir, { recursive: true, force: true });
 });
 
@@ -206,7 +217,7 @@ describe("arcue inspect", () => {
   it("summarizes a sample without starting the app", async () => {
     const inspected = await run(process.execPath, [cli, "inspect", "--json", "samples/pebble-golem.fbx"], {
       cwd: workDir,
-      env: { ...process.env, ARCUE_USER_DATA: userData },
+      env: env(),
     });
     const inspection = JSON.parse(inspected.stdout) as AssetInspection;
     expect(inspection).toMatchObject({
@@ -215,7 +226,7 @@ describe("arcue inspect", () => {
     });
     expect(inspection.bones).toHaveLength(27);
     expect(inspection.bones).toContainEqual({ name: "Head", path: "Armature/Hips/Spine/Chest/Neck/Head" });
-    expect(bridgeInfo().pid).toBe(0);
+    expect(await corePid()).toBe(0);
   });
 });
 
@@ -291,7 +302,7 @@ describe("the desktop app", () => {
     const opened = await run(
       process.execPath,
       [cli, "open", "samples/pebble-golem.fbx", "--clip", "Armature|Walk", "--frame", "12"],
-      { cwd: workDir, env: { ...process.env, ARCUE_USER_DATA: userData } },
+      { cwd: workDir, env: env() },
     );
     expect(opened.stdout).toContain(`Opened ${golem}`);
     const list = await settled(page, 2);
@@ -307,7 +318,7 @@ describe("the desktop app", () => {
     expect((await shown(page, golemId))?.clip).toBe("Armature|Walk");
     expect(await page.evaluate(() => (globalThis as WindowProbe).arcueWindow?.store.state.get().active)).toBe(golemId);
 
-    const status = await run(process.execPath, [cli, "status"], { env: { ...process.env, ARCUE_USER_DATA: userData } });
+    const status = await run(process.execPath, [cli, "status"], { env: env() });
     expect(status.stdout).toContain("crate.fbx");
     expect(status.stdout).toContain("pebble-golem.fbx");
   });
@@ -316,7 +327,7 @@ describe("the desktop app", () => {
     if (!app) throw new Error("The app is not running.");
     const page = await connectedWindow(app);
     await run(electronPath, [appDir, blob], {
-      env: { ...process.env, ...sandbox, ARCUE_USER_DATA: userData },
+      env: env(sandbox),
     });
     const list = await settled(page, 3);
     expect(list.find((asset) => asset.path === blob)?.status).toBe("ready");
@@ -326,9 +337,10 @@ describe("the desktop app", () => {
   it("reconnects its window and reopens its tabs after the core crashes", async () => {
     if (!app) throw new Error("The app is not running.");
     const page = await connectedWindow(app);
-    const before = bridgeInfo();
-    process.kill(before.pid, "SIGKILL");
-    await expect.poll(() => bridgeInfo().pid, { timeout: 20_000 }).not.toBe(before.pid);
+    const before = await corePid();
+    expect(before).toBeGreaterThan(0);
+    process.kill(before, "SIGKILL");
+    await expect.poll(async () => [0, before].includes(await corePid()), { timeout: 20_000 }).toBe(false);
     await connectedWindow(app);
     const list = await settled(page, 3);
     expect(list.map((asset) => asset.path)).toEqual([crate, golem, blob]);
@@ -410,11 +422,9 @@ describe("the desktop app", () => {
   it.skipIf(process.platform === "win32")("starts the stopped app with its built windows for arcue open", async () => {
     await app?.close();
     app = null;
-    const env = { ...process.env, ...sandbox, ARCUE_USER_DATA: userData };
-    const opened = await run(process.execPath, [cli, "open", crate], { env });
+    const opened = await run(process.execPath, [cli, "open", crate], { env: env(sandbox) });
     expect(opened.stdout).toContain(`Opened ${crate}`);
-    const corePid = bridgeInfo().pid;
-    const mainPid = Number((await run("ps", ["-o", "ppid=", "-p", String(corePid)])).stdout.trim());
+    const mainPid = Number((await run("ps", ["-o", "ppid=", "-p", String(await corePid())])).stdout.trim());
     expect(mainPid).toBeGreaterThan(1);
     process.kill(mainPid, "SIGTERM");
     await expect.poll(() => alive(mainPid), { timeout: 20_000 }).toBe(false);
