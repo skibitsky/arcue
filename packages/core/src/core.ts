@@ -1003,7 +1003,8 @@ export class ArcueCore {
    * review folder run with the opens, so no other tab opens the new path meanwhile. The move refuses a file that has
    * a review of its own, except, when the person chose the file, a review that holds nothing but versions. The asset
    * keeps its id, watches the new files and reloads. Windows retitle the tab on "asset.updated" and learn of the move
-   * from "review.relinked". An automatic follow stops when the old file is back.
+   * from "review.relinked". An automatic follow stops when the old file is back. The asset stays where it is when its
+   * review is gone from disk while its reviews root is still there, since another Arcue moved it to another model.
    */
   #follow(asset: OpenAsset, path: string, automatic: boolean): Promise<void> {
     return this.#inCompositionLine(asset, async () => {

@@ -701,6 +701,29 @@ describe("two cores and a renamed model", () => {
     });
     await expect(a.platform.exists(HERO_REVIEW)).resolves.toBe(false);
   });
+
+  it("never follows a rename with a review another core moved to a copy of the model", async () => {
+    const copy = "/work/game/Assets/Other/Copy.fbx";
+    const copyReview = "/work/game/.arcue/reviews/Assets/Other/Copy.fbx/review.json";
+    const cores = await twoCores();
+    const { a, b } = cores;
+    const commentId = await reviewed(cores);
+    const assetB = await openIn(b);
+    await a.platform.rename(HERO, STRIKER);
+    await a.platform.writeFile(copy, heroFiles()[HERO] ?? "");
+    await openIn(a, copy);
+    await settle(cores);
+    expect((await saved(a, copyReview)).comments.map((comment) => comment.id)).toEqual([commentId]);
+    await expect(b.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId: assetB, path: HERO, error: "Model not found: Hero.fbx" }],
+    });
+    await expect(b.core.client.execute("asset.relink", { assetId: assetB, path: STRIKER })).rejects.toMatchObject({
+      code: "conflict",
+      message: expect.stringContaining("Another Arcue may have moved it to another model."),
+    });
+    await expect(a.platform.exists(STRIKER_REVIEW)).resolves.toBe(false);
+    expect(b.errors).toEqual([]);
+  });
 });
 
 describe("two cores loading versions", () => {

@@ -76,6 +76,8 @@ export class ReviewSession {
   #review: ReviewFile;
   /** Hash of the file's text as this session last read or wrote it; null when there is no file. */
   #diskHash: string | null;
+  /** Whether review.json was on disk at some point while the session had the review, as it read or wrote it. */
+  #seenOnDisk: boolean;
   #closed = false;
   /** Why the session no longer saves: its review folder moved away and could not be moved back. */
   #stranded: string | null = null;
@@ -92,6 +94,7 @@ export class ReviewSession {
     this.#path = reviewFilePath(location);
     this.#review = loaded.review;
     this.#diskHash = loaded.text === null ? null : textHash(loaded.text);
+    this.#seenOnDisk = loaded.text !== null;
     this.#changed = changed;
     this.#adopted = options.adopted;
   }
@@ -143,6 +146,7 @@ export class ReviewSession {
         throw error;
       }
       this.#diskHash = textHash(text);
+      this.#seenOnDisk = true;
       this.#review = next;
       if (change.clearHistory) this.history.clear();
       change.apply?.();
@@ -178,7 +182,9 @@ export class ReviewSession {
    * `location`, where it lives from now on, as this session's own change rather than another program's. The undo
    * history ends, because its steps name files by their old paths.
    * When `move` fails and leaves the review at `location` rather than in its old place, the session stops saving, so
-   * it never writes a second copy of the review into the old folder.
+   * it never writes a second copy of the review into the old folder. When the review the session saw on disk is in
+   * neither place while their reviews root is still there, another core moved it to another model, so the move is
+   * refused and the session stays where it is rather than saving its copy at `location`.
    */
   moveTo(location: ReviewLocation, move: () => Promise<void>): Promise<void> {
     return this.#edits.run(async () => {
@@ -195,6 +201,12 @@ export class ReviewSession {
             this.#stranded = `The review moved to ${location.folder} but could not be finished, so this tab no longer saves it. Close it and open the model again.`;
           }
           throw error;
+        }
+        if (await this.#wentElsewhere(location)) {
+          throw new ArcueError(
+            "conflict",
+            `The review of ${basename(modelPathOf(this.#location))} is gone from disk, so it does not move to ${basename(modelPathOf(location))}. Another Arcue may have moved it to another model.`,
+          );
         }
         this.#location = location;
         this.#path = reviewFilePath(location);
@@ -229,6 +241,20 @@ export class ReviewSession {
   }
 
   /**
+   * Whether the review the session saw on disk is neither in its folder nor at `location`, in a reviews root that is
+   * still there.
+   */
+  async #wentElsewhere(location: ReviewLocation): Promise<boolean> {
+    if (!this.#seenOnDisk) return false;
+    const [here, there, root] = await Promise.all([
+      this.#platform.exists(this.#path),
+      this.#platform.exists(reviewFilePath(location)),
+      this.#platform.exists(location.root),
+    ]);
+    return !here && !there && root;
+  }
+
+  /**
    * Whether saving the review would change nothing: it would write the text the file already holds, or, for a review a
    * newer Arcue saved, which reads without the fields this build does not know, the review as it was read.
    */
@@ -248,6 +274,7 @@ export class ReviewSession {
     const external = parseReview(disk.text, this.#path);
     const before = this.#review;
     this.#diskHash = disk.hash;
+    this.#seenOnDisk = true;
     this.#review = { ...external, asset: { ...external.asset, path: this.#location.assetPath } };
     this.history.clear();
     this.#changed(this.#review);

@@ -89,6 +89,27 @@ describe("ReviewSession", () => {
     });
     await expect(platform.exists(location.folder)).resolves.toBe(false);
   });
+
+  it("refuses a move once the review it saw went elsewhere in its reviews root, and moves once the whole root is gone", async () => {
+    const elsewhere = { ...location, folder: "/app-data/reviews/work/Striker.fbx", assetPath: "/work/Striker.fbx" };
+    const moved = await savedSession();
+    await moved.platform.remove(location.folder);
+    await expect(moved.session.moveTo(elsewhere, async () => undefined)).rejects.toMatchObject({
+      code: "conflict",
+      message: expect.stringContaining("Another Arcue may have moved it to another model."),
+    });
+    await moved.platform.writeFile(location.assetPath, "model");
+    await moved.session.run((review) => ({ next: { ...review }, result: undefined }));
+    await expect(moved.platform.exists(reviewFilePath(location))).resolves.toBe(true);
+    await expect(moved.platform.exists(elsewhere.folder)).resolves.toBe(false);
+
+    const deleted = await savedSession();
+    await deleted.platform.remove(location.root);
+    await deleted.session.moveTo(elsewhere, async () => undefined);
+    await deleted.platform.writeFile(elsewhere.assetPath, "model");
+    await deleted.session.run((review) => ({ next: { ...review }, result: undefined }));
+    await expect(deleted.platform.exists(reviewFilePath(elsewhere))).resolves.toBe(true);
+  });
 });
 
 describe("ReviewSession and the review format", () => {
