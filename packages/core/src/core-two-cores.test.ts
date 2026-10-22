@@ -17,6 +17,7 @@ import {
   looseComment,
   openAsset,
   pinComment,
+  pinContext,
   png,
   readJson,
   startSecondCore,
@@ -807,6 +808,40 @@ describe("two cores loading versions", () => {
     const target = data.comments[0]?.target;
     expect(target).toMatchObject({ kind: "point", meshPath: "Prop.fbx//Hero/Plate" });
     expect(Math.max(...(target?.kind === "point" ? target.vertices : [Infinity]))).toBeLessThan(9);
+  });
+
+  it("re-anchors a comment another core saved on a later version with moved vertices once the model went back", async () => {
+    const moved = fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 3, size: 4 }] });
+    const gate = gatedImporter();
+    const cores = await twoCores(heroFiles(), { importers: [gate.importer] });
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    const assetB = await openIn(b);
+    await a.platform.writeFile(HERO, moved);
+    await settle(cores);
+    const later = await versionOf(a, assetA);
+    expect(later).not.toBe(HERO_VERSION);
+    expect(await versionOf(b, assetB)).toBe(later);
+    gate.hold("Hero.fbx");
+    a.clock.advance(10);
+    await a.platform.writeFile(HERO, fakeAsset(heroSpec));
+    await settleA(cores);
+    expect(await versionOf(a, assetA)).toBe(HERO_VERSION);
+    expect(await versionOf(b, assetB)).toBe(later);
+
+    const { commentId } = await b.core.client.execute("comment.create", {
+      ...pinComment(assetB, "On the body.", later),
+      context: { ...pinContext, centroid: null },
+    });
+    await vi.waitFor(async () => expect((await saved(a)).comments[0]?.anchorVersion).toBe(HERO_VERSION));
+    await b.core.client.execute("asset.close", { assetId: assetB });
+    gate.release("Hero.fbx");
+    await idle(cores);
+
+    expect((await saved(a)).comments[0]).toMatchObject({ id: commentId, anchorVersion: HERO_VERSION });
+    await a.core.client.execute("round.copy", { assetId: assetA });
+    const data = (await readJson(a.platform, `${HERO_REVIEW}/rounds/round-1/round.json`)) as RoundData;
+    expect(data.comments[0]).toMatchObject({ id: commentId, anchorVersion: HERO_VERSION });
   });
 
   it("re-anchors a comment another core saved on an older version once the model, rewritten as it was, settles", async () => {
