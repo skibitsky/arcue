@@ -220,12 +220,19 @@ describe("a file lock in one process", () => {
       await release();
       vi.mocked(fs.open).mockImplementationOnce(() => Promise.reject(failure("EBUSY")));
       await (await acquireFileLock(lock, options()))();
+      Object.defineProperty(process, "platform", { value: "linux" });
+      vi.mocked(fs.open).mockImplementationOnce(() => Promise.reject(failure("EPERM")));
+      const elsewhere = await acquireFileLock(lock, options()).then(
+        async (held) => {
+          await held();
+          return "acquired";
+        },
+        (error: unknown) => error,
+      );
+      expect(elsewhere).toMatchObject({ code: "forbidden" });
     } finally {
       if (platform) Object.defineProperty(process, "platform", platform);
     }
-
-    vi.mocked(fs.open).mockImplementationOnce(() => Promise.reject(failure("EPERM")));
-    await expect(acquireFileLock(lock, options())).rejects.toMatchObject({ code: "forbidden" });
   });
 
   it("takes the lock after one refused create on Windows that follows creates which met holders releasing it", async () => {
