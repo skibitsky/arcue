@@ -3,8 +3,9 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isRunning } from "@arcue/platform-node";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { outsideSessions } from "./session-view";
 import { killRegistered, killStarted, registerPid } from "./test-pids";
 
@@ -34,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const child of children) child.kill("SIGKILL");
   rmSync(folder, { recursive: true, force: true });
 });
@@ -63,4 +65,28 @@ describe("the processes a test run started", () => {
     expect(isRunning(other.pid ?? 0)).toBe(true);
     expect(isRunning(unrecorded.pid ?? 0)).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "reads the command line from ps where there is no /proc, and kills nothing when it cannot read it",
+    async () => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      try {
+        const ours = sleeper(join(folder, "arcue.js"));
+        const other = sleeper(join(tmpdir(), "elsewhere.js"));
+        killStarted(other.pid ?? 0, folder);
+        killStarted(ours.pid ?? 0, folder);
+        await exited(ours);
+        expect(isRunning(other.pid ?? 0)).toBe(true);
+
+        const unread = sleeper(join(folder, "arcue.js"));
+        vi.stubEnv("PATH", "");
+        killStarted(unread.pid ?? 0, folder);
+        await sleep(300);
+        expect({ code: unread.exitCode, signal: unread.signalCode }).toEqual({ code: null, signal: null });
+      } finally {
+        if (platform) Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
 });

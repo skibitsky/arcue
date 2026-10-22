@@ -1,6 +1,7 @@
 import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
 import type { ByteStream, CoreClient, IncomingRequest, ViewState, WindowTabs } from "@arcue/protocol";
 import {
+  ArcueError,
   binaryFrameCodec,
   createMemoryChannel,
   createPeer,
@@ -952,5 +953,93 @@ describe("LocalHost", () => {
     await vi.waitFor(() => expect(page.paths()).toEqual([HERO]));
     expect(probe).toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("waits 250 ms after the first failed attempt and twice as long after each next one up to 5 s, probing from the third", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    cleanups.push(() => random.mockRestore());
+    const server = new FakeServer();
+    const probe = vi.fn(async (): Promise<ServedPage> => "down");
+    const attempts: { at: number; probes: number }[] = [];
+    const page: Page = new Page(server, {
+      probe,
+      openSocket: () => {
+        attempts.push({ at: page.timers.now(), probes: probe.mock.calls.length });
+        return server.socket(VIEW);
+      },
+    });
+    page.start();
+
+    let seen = 0;
+    while (attempts.length < 8 && page.timers.now() < 60_000) {
+      if (attempts.length > seen) {
+        seen = attempts.length;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      page.timers.advance(1);
+    }
+
+    const gaps = attempts.slice(1).map(({ at }, index) => at - (attempts[index]?.at ?? 0));
+    expect(gaps).toEqual([250, 500, 1000, 2000, 4000, 5000, 5000]);
+    expect(attempts.map(({ probes }) => probes)).toEqual([0, 0, 0, 1, 2, 3, 4, 5]);
+  });
+
+  it("tells the core it has the focus each time it connects while it has it", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const focused = new Page(server, { hasFocus: () => true });
+    const unfocused = new Page(server, { hasFocus: () => false, view: OTHER_VIEW });
+    const [toFocused, toUnfocused] = [focused, unfocused].map((page) => {
+      const execute = vi.spyOn(page.host.client, "execute");
+      return () => execute.mock.calls.filter(([name]) => name === "view.reportFocus");
+    });
+    focused.start();
+    unfocused.start();
+    await Promise.all([focused.connected(), unfocused.connected()]);
+    await vi.waitFor(() => expect(toFocused?.()).toEqual([["view.reportFocus", {}]]));
+
+    await restart(server);
+    await Promise.all([focused.connected(), unfocused.connected()]);
+
+    await vi.waitFor(() =>
+      expect(toFocused?.()).toEqual([
+        ["view.reportFocus", {}],
+        ["view.reportFocus", {}],
+      ]),
+    );
+    expect(toUnfocused?.()).toEqual([]);
+  });
+
+  it("alerts an asset held for its view that it cannot show, but not one that is closing, and shows the rest", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const page = new Page(server).start();
+    await page.connected();
+    await page.opened(HERO);
+
+    await restart(server);
+    const bridge = server.bridge();
+    const closing = await bridge.execute("asset.openInView", { path: GOLEM, view: VIEW });
+    const gone = await bridge.execute("asset.openInView", { path: BLOB, view: VIEW });
+    await bridge.execute("asset.openInView", { path: CRATE, view: VIEW });
+    const refusals = new Map([
+      [closing.assetId, new ArcueError("conflict", "Golem.fbx is closing, so its tab cannot move.")],
+      [gone.assetId, new ArcueError("not-found", "Blob.fbx is not open.")],
+    ]);
+    const client = page.host.client;
+    const execute = client.execute.bind(client);
+    vi.spyOn(client, "execute").mockImplementation((name, input) => {
+      const assetId = typeof input === "object" && input !== null && "assetId" in input ? input.assetId : null;
+      const refusal = name === "view.moveAsset" && typeof assetId === "string" ? refusals.get(assetId) : undefined;
+      return refusal ? Promise.reject(refusal) : execute(name, input);
+    });
+    const notify = vi.spyOn(page.store, "notify");
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.paths()).toEqual([HERO, CRATE]));
+    await vi.waitFor(() => expect(page.activePath()).toBe(HERO));
+    expect(notify.mock.calls.filter(([toast]) => toast.kind === "alert")).toEqual([
+      [{ message: "Blob.fbx is not open.", kind: "alert" }],
+    ]);
   });
 });

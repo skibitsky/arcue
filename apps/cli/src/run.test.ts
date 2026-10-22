@@ -280,6 +280,16 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     });
   });
 
+  it("lets go of the arcue serve it started, so the command can exit while that one runs", async () => {
+    const children = () => process.getActiveResourcesInfo().filter((name) => name === "ProcessWrap").length;
+    const before = children();
+
+    expect(await detach(["--port", "4532"], "serve")).toMatchObject({ code: 0, err: "" });
+
+    expect(isRunning(readRecord()?.pid ?? 0)).toBe(true);
+    expect(children()).toBe(before);
+  });
+
   it("prints the address of Arcue in the browser that runs, unless --port names another", async () => {
     const running = await serve({ url: "http://localhost:80" });
     const already = `Arcue already runs in a browser at http://localhost:80 (process ${process.pid}).`;

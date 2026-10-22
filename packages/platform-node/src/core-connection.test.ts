@@ -18,7 +18,7 @@ vi.mock("node:net", async (importOriginal) => {
 });
 
 let userData: string;
-let core: ArcueCore;
+const cores: ArcueCore[] = [];
 const started: { close(): Promise<void> }[] = [];
 
 /** macOS's temporary folder is too long for the socket to fit inside the user data folder, so tests use /tmp. */
@@ -27,17 +27,19 @@ const ADDRESS = "http://localhost:4530";
 
 beforeEach(async () => {
   userData = realpathSync(mkdtempSync(join(userDataRoot, "arcue-connection-")));
-  core = await ArcueCore.start({ platform: new MemoryPlatform({ clock: new ManualClock() }) });
 });
 
 afterEach(async () => {
   vi.mocked(connect).mockReset();
   for (const server of started.splice(0)) await server.close();
-  core.dispose();
+  for (const core of cores.splice(0)) core.dispose();
   rmSync(userData, { recursive: true, force: true });
 });
 
+/** A bridge server of this kind on a core of its own, as each Arcue runs one core. */
 async function serve(kind: CoreKind): Promise<BridgeServer> {
+  const core = await ArcueCore.start({ platform: new MemoryPlatform({ clock: new ManualClock() }) });
+  cores.push(core);
   const quiet = { core, userData, ensureWindow: async () => undefined, onError: () => undefined };
   const server = await startBridgeServer(kind === "serve" ? { ...quiet, kind, url: ADDRESS } : { ...quiet, kind });
   started.push(server);
@@ -230,6 +232,20 @@ describe("the core that keeps another from starting", () => {
     writeInfo(SERVE_INFO_FILE, stale({ url: ADDRESS }));
     await expect(blockingCore(userData, "serve")).resolves.toBeNull();
     await expect(blockingCore(userData, "desktop")).resolves.toBeNull();
+  });
+
+  it("never waits on a core of the other kind that shares reviews, even one that never answers", async () => {
+    const handshakeMs = 2000;
+    const browser = await fake({ file: SERVE_INFO_FILE, kind: "serve", url: ADDRESS, silent: true, ...current });
+    let before = performance.now();
+    await expect(blockingCore(userData, "desktop", handshakeMs)).resolves.toBeNull();
+    expect(performance.now() - before).toBeLessThan(handshakeMs / 2);
+    await browser.close();
+
+    await fake({ file: BRIDGE_INFO_FILE, kind: "desktop", silent: true, ...current });
+    before = performance.now();
+    await expect(blockingCore(userData, "serve", handshakeMs)).resolves.toBeNull();
+    expect(performance.now() - before).toBeLessThan(handshakeMs / 2);
   });
 
   it("is a core that refuses or never answers", async () => {
