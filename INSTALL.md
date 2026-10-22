@@ -24,7 +24,7 @@ Arcue is an app for reviewing 3D models and animations with an AI agent. The use
    If `claude` is not on your PATH, give the user these two commands to run in a terminal.
 2. Plugins load when a session starts. Ask the user to start a new session.
 
-In the Claude desktop app, the plugin shows Arcue in the Browser pane next to the conversation. In a terminal, it opens the Arcue desktop app.
+In the Claude desktop app, the plugin shows Arcue in the Browser pane next to the conversation. In a terminal, it opens the Arcue desktop app, or gives the user the address of Arcue in the browser when that runs or ran last.
 
 ## Codex
 
@@ -37,7 +37,7 @@ In the Claude desktop app, the plugin shows Arcue in the Browser pane next to th
 
 2. Ask the user to start a new thread, so Codex loads the plugin.
 
-In the Codex app, the plugin shows Arcue in the in-app browser. In a terminal, it opens the Arcue desktop app.
+In the Codex app, the plugin shows Arcue in the in-app browser. In a terminal, it opens the Arcue desktop app, or gives the user the address of Arcue in the browser when that runs or ran last.
 
 ## Other agents
 

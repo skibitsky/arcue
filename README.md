@@ -53,7 +53,7 @@ The quickest way is to ask your agent:
 Set up Arcue for me: https://github.com/skibitsky/arcue/blob/main/INSTALL.md
 ```
 
-The Arcue plugin teaches your agent to open models in Arcue, read your comments and check its own changes. In the Claude and Codex apps, Arcue opens in the built-in browser. Everywhere else, it opens in the desktop app.
+The Arcue plugin teaches your agent to open models in Arcue, read your comments and check its own changes. In the Claude and Codex apps, Arcue opens in the built-in browser. Everywhere else, it opens in the desktop app, or your agent gives you the address of Arcue in the browser when that runs or ran last.
 
 ### Claude Code
 

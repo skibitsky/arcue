@@ -18,7 +18,7 @@ The launcher runs Arcue on Node 24 or later from PATH, or on the Node that setup
 Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 
 - `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in this session's view: the page Arcue in the browser serves for this session while it runs, otherwise the desktop app, which it starts if needed. When it says Arcue in the browser has stopped, run `arcue serve --detach` again. `--move` takes a model from another session's view.
-- `arcue serve --detach` starts Arcue in the browser beside the desktop app, at http://localhost:4530 unless `--port <number>` picks another, on the user's files with their reviews in `.arcue/` as the desktop app keeps them. It returns once Arcue runs and prints this session's view, also when Arcue already runs, and Arcue stops by itself after 30 minutes with no page open.
+- `arcue serve --detach` starts Arcue in the browser beside the desktop app, on the user's files with their reviews in `.arcue/` as the desktop app keeps them. It listens at http://localhost:4530, or on the port it ran on last, unless `--port <number>` picks another. It returns once Arcue runs and prints this session's view, also when Arcue already runs, and Arcue stops by itself after 30 minutes with no page open.
 - `arcue stop` stops Arcue in the browser for every session. Run it only when the user asks.
 - `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, bones, clips, materials, missing textures, composed files and import warnings.
 - `arcue status` says whether Arcue runs in a browser and in the desktop app, the address of this session's view, and the models each has open, and exits with 1 when neither runs.
