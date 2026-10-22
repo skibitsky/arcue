@@ -167,6 +167,23 @@ describe("a file lock in one process", () => {
     expect(results.filter((result) => result.status === "rejected")).toEqual([]);
   }, 30_000);
 
+  it("hands it on at once past a waiting file that a waiter in another process left long ago", async () => {
+    mkdirSync(join(temp, "locks"));
+    const waiting = `${lock}.waiting`;
+    writeFileSync(waiting, JSON.stringify({ arcueLockWaiting: 1, token: hex(), pid: deadPid() }));
+    const old = new Date(Date.now() - 10_000);
+    utimesSync(waiting, old, old);
+    const first = await acquireFileLock(lock, options());
+    const waiters = Array.from({ length: 4 }, () => acquireFileLock(lock, options()).then((release) => release()));
+
+    const { ms } = await timed(async () => {
+      await first();
+      await Promise.all(waiters);
+    });
+
+    expect(ms).toBeLessThan(400);
+  });
+
   it("breaks its own leftover at once when a release could not remove it", async () => {
     const release = await acquireFileLock(lock, options());
     vi.mocked(fs.unlink).mockImplementationOnce(() => Promise.reject(failure("EIO")));
