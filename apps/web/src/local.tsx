@@ -36,6 +36,7 @@ const host = new LocalHost({
   openSocket: () => new WebSocket(coreSocketUrl(location)),
   view: new URLSearchParams(location.search).get(VIEW_PARAMETER),
   storage: safeSessionStorage(),
+  owner: pageOwner,
   hasFocus: () => document.hasFocus(),
   probe: () => probePage(pageScript, (url, init) => fetch(url, init), pageOwner),
   reload: () => location.reload(),

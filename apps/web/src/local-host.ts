@@ -22,6 +22,11 @@ export interface LocalHostOptions {
   view: string | null;
   /** Keeps the tabs across a reload; null where the browser refuses storage. */
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
+  /**
+   * The owner the served page names, which tells this Arcue in the browser from another at the same address, or null
+   * when it names none. The page never opens tabs it kept for another owner.
+   */
+  owner?: string | null;
   setTimer?: SetTimer;
   hasFocus?: () => boolean;
   /**
@@ -32,9 +37,10 @@ export interface LocalHostOptions {
   reload?: () => void;
 }
 
-/** A page's tabs as it keeps them in its storage. */
+/** A page's tabs as it keeps them in its storage, with the owner of the page that kept them when it named one. */
 interface SavedTabs {
   version: 1;
+  owner?: string;
   tabs: WindowTabs;
 }
 
@@ -66,7 +72,8 @@ const defaultTimer: SetTimer = (delayMs, callback) => {
  *
  * Whenever its socket closes, as when Arcue in the browser stops and starts again, the page connects again and opens its
  * tabs again in order, then shows the other assets the core holds for its view. It keeps its tabs in the page's
- * storage, so a reload opens them too, and reloads once into a new build of itself when the server serves one.
+ * storage, so a reload opens them too, unless another Arcue in the browser serves the page then, and reloads once into
+ * a new build of itself when the server serves one.
  */
 export class LocalHost {
   /** The same client for the page's life, across its connections. */
@@ -137,7 +144,8 @@ export class LocalHost {
   saveTabs(): void {
     const storage = this.#options.storage;
     if (!storage || !this.#started || this.#disposed || this.#view === undefined) return;
-    const saved: SavedTabs = { version: 1, tabs: this.#restore.tabs() };
+    const owner = this.#options.owner ?? null;
+    const saved: SavedTabs = { version: 1, ...(owner === null ? {} : { owner }), tabs: this.#restore.tabs() };
     try {
       storage.setItem(this.#tabsKey(), JSON.stringify(saved));
     } catch {}
@@ -169,6 +177,8 @@ export class LocalHost {
       if (text === null) return null;
       const saved: unknown = JSON.parse(text);
       if (typeof saved !== "object" || saved === null || !("version" in saved) || saved.version !== 1) return null;
+      const owner = this.#options.owner ?? null;
+      if (owner !== null && "owner" in saved && typeof saved.owner === "string" && saved.owner !== owner) return null;
       const tabs = windowTabsSchema.safeParse("tabs" in saved ? saved.tabs : null);
       return tabs.success ? tabs.data : null;
     } catch {

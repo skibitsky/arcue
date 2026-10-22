@@ -549,6 +549,31 @@ describe("LocalHost", () => {
     await vi.waitFor(() => expect(reloaded.activePath()).toBe(CRATE));
   });
 
+  it("opens the tabs it kept after a reload only when the same Arcue in the browser serves it", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const first = new Page(server, { owner: "mine" }).start();
+    await first.connected();
+    await first.opened(HERO, CRATE);
+    first.timers.advance(SAVE_DELAY_MS);
+    first.host.dispose();
+    const again = new Page(server, { owner: "mine", storage: first.storage }).start();
+    await again.connected();
+    await vi.waitFor(() => expect(again.paths()).toEqual([HERO, CRATE]));
+    again.host.dispose();
+
+    const other = new FakeServer();
+    await other.start();
+    const elsewhere = new Page(other, { owner: "theirs", storage: first.storage }).start();
+    await elsewhere.connected();
+    await vi.waitFor(() =>
+      expect(JSON.parse(first.storage.getItem(TABS_KEY) ?? "{}")).toMatchObject({ owner: "theirs" }),
+    );
+
+    expect(await other.paths()).toEqual([]);
+    expect(elsewhere.paths()).toEqual([]);
+  });
+
   it("opens a tab the core doesn't have from the view it kept, at its clip, frame and camera", async () => {
     const server = new FakeServer();
     const core = await server.start();
