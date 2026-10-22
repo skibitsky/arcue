@@ -3,13 +3,13 @@ import { resolve } from "node:path";
 import type { CoreConnection } from "@arcue/platform-node";
 import { connectToCore, readBridgeInfo } from "@arcue/platform-node";
 import type { BridgeInfo, CommandOutput, CoreKind } from "@arcue/protocol";
-import { ArcueError, coreKindOf, SERVE_STOPPED_CLOSE_CODE, sharesReviews, viewAddress } from "@arcue/protocol";
+import { ArcueError, SERVE_STOPPED_CLOSE_CODE, sharesReviews, viewAddress } from "@arcue/protocol";
 import { userDataDir } from "./app-connection";
 import type { Command } from "./args";
 import { DEFAULT_SERVE_PORT, parseArgs, USAGE, UsageError } from "./args";
 import { buildOf, detachServe, OTHER_BUILD, otherBuild } from "./detach";
 import { bundledImportWorker, formatInspection, inspectFile } from "./inspect";
-import { connectForOpen } from "./routing";
+import { connectForOpen, doesNotAnswer, inBrowser } from "./routing";
 import { bundledWebUi, startServer } from "./serve";
 import { sessionView } from "./session-view";
 import { stopServe } from "./stop";
@@ -137,11 +137,6 @@ async function status(
   }
 }
 
-/** Whether the core a bridge file names is Arcue in the browser: in `serve.json`, or an older `arcue serve`. */
-function inBrowser(info: BridgeInfo, file: CoreKind): info is BridgeInfo & { url: string } {
-  return (file === "serve" || coreKindOf(info) === "serve") && info.url !== undefined;
-}
-
 /** One core's lines in `status`: where it runs, this session's view in a browser, and its assets. */
 async function describeCore(
   connection: CoreConnection,
@@ -176,13 +171,6 @@ async function describeCore(
       ...assets.map((asset) => `  ${asset.assetId}  ${asset.status.padEnd(7)}  ${asset.path}`),
     );
   return lines.join("\n");
-}
-
-/** What `status` says on stderr about a core that listens but does not answer. */
-function doesNotAnswer(info: BridgeInfo | null, file: CoreKind): string {
-  if (!info) return file === "serve" ? "Arcue in the browser does not answer" : "The Arcue app does not answer";
-  if (inBrowser(info, file)) return `Arcue in the browser at ${info.url} (process ${info.pid}) does not answer`;
-  return `The Arcue app (process ${info.pid}) does not answer`;
 }
 
 /** How to stop an older `arcue serve`, which `arcue stop` can't do on Windows. */

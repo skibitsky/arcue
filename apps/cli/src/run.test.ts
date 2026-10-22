@@ -235,6 +235,28 @@ describe("arcue open with Arcue in the browser", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")("names Arcue in the browser when its socket cannot be reached", async () => {
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    writeFileSync(join(userData, "not-a-folder"), "");
+    const socket = join(userData, "not-a-folder", "arcue.sock");
+    const info = {
+      version: 1,
+      socket,
+      token: "t".repeat(43),
+      pid: process.pid,
+      url: SERVE_URL,
+      kind: "serve",
+      locks: 1,
+    };
+    writeFileSync(join(userData, SERVE_INFO_FILE), JSON.stringify(info));
+
+    expect(await arcue(["open", "Hero.fbx"], {}, session)).toEqual({
+      code: 1,
+      out: "",
+      err: `Arcue in the browser at ${SERVE_URL} (process ${process.pid}) does not answer: connect ENOTDIR ${socket}\n`,
+    });
+  });
+
   it("names the view's address when a session's open waits there for its page", async () => {
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     await serve({ answers: { "asset.openInView": () => ({ assetId: "a3", shown: "held" }) } });

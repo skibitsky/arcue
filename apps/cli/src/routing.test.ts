@@ -125,15 +125,22 @@ describe("an open for an agent session's view", () => {
     expect(routed.connection.info.token).toBe(app.info.token);
   });
 
-  it("fails and starts nothing when a core listens but refuses or stays silent", async () => {
+  it("fails, naming the core, and starts nothing when a core listens but refuses or stays silent", async () => {
     launchable();
     const refusing = await fake({ file: SERVE_INFO_FILE, kind: "serve", locks: 1, url: SERVE_URL, refuse: true });
-    await expect(route(VIEW)).rejects.toMatchObject({ code: "forbidden" });
+    await expect(route(VIEW)).rejects.toMatchObject({
+      code: "forbidden",
+      message: `Arcue in the browser at ${SERVE_URL} (process ${process.pid}) does not answer: Arcue refused the connection. The token does not match the running app.`,
+    });
     await refusing.close();
 
     const silent = await fake({ file: BRIDGE_INFO_FILE, kind: "desktop", locks: 1, silent: true });
-    await expect(route(VIEW)).rejects.toMatchObject({ code: "timeout" });
-    await expect(route(null)).rejects.toMatchObject({ code: "timeout" });
+    const unanswered = {
+      code: "timeout",
+      message: `The Arcue app (process ${process.pid}) does not answer: The handshake took longer than 5000 ms.`,
+    };
+    await expect(route(VIEW)).rejects.toMatchObject(unanswered);
+    await expect(route(null)).rejects.toMatchObject(unanswered);
     await silent.close();
 
     expect(await launchedAfterAWhile()).toBe(false);

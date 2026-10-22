@@ -1,7 +1,7 @@
 import type { CoreConnection } from "@arcue/platform-node";
-import { connectToCore, readLastCore, waitForStarts } from "@arcue/platform-node";
-import type { CoreKind } from "@arcue/protocol";
-import { coreKindOf, sharesReviews } from "@arcue/protocol";
+import { connectToCore, readBridgeInfo, readLastCore, waitForStarts } from "@arcue/platform-node";
+import type { BridgeInfo, CoreKind } from "@arcue/protocol";
+import { ArcueError, coreKindOf, sharesReviews } from "@arcue/protocol";
 import type { ConnectOrLaunchOptions } from "./app-connection";
 import { connectOrLaunch, launchApp, launchFailed, NOT_STARTED, waitForApp } from "./app-connection";
 
@@ -52,10 +52,13 @@ async function routeOutsideViews(userData: string, options: ConnectOrLaunchOptio
   throw new Error(launch === null ? NOT_STARTED : launchFailed(launch));
 }
 
-/** The first core of the kinds, in order, that answers. Rejects when one listens but does not answer. */
+/** The first core of the kinds, in order, that answers. Rejects, naming it, when one listens but does not answer. */
 async function answering(userData: string, kinds: readonly CoreKind[]): Promise<Routed | null> {
   for (const kind of kinds) {
-    const connection = await connectToCore(userData, kind);
+    const connection = await connectToCore(userData, kind).catch(async (error: unknown) => {
+      const message = `${doesNotAnswer(await readBridgeInfo(userData, kind), kind)}: ${messageOf(error)}`;
+      throw new ArcueError(error instanceof ArcueError ? error.code : "unavailable", message, { cause: error });
+    });
     if (connection) return routed(connection, kind);
   }
   return null;
@@ -70,4 +73,20 @@ async function afterStarts(userData: string, kinds: readonly CoreKind[]): Promis
 function routed(connection: CoreConnection, file: CoreKind): Routed {
   const { info } = connection;
   return { connection, kind: file === "serve" ? "serve" : coreKindOf(info), older: !sharesReviews(info) };
+}
+
+/** Whether the core a bridge file names is Arcue in the browser: in `serve.json`, or an older `arcue serve`. */
+export function inBrowser(info: BridgeInfo, file: CoreKind): info is BridgeInfo & { url: string } {
+  return (file === "serve" || coreKindOf(info) === "serve") && info.url !== undefined;
+}
+
+/** Names the core a bridge file names, for a core that listens but does not answer. */
+export function doesNotAnswer(info: BridgeInfo | null, file: CoreKind): string {
+  if (!info) return file === "serve" ? "Arcue in the browser does not answer" : "The Arcue app does not answer";
+  if (inBrowser(info, file)) return `Arcue in the browser at ${info.url} (process ${info.pid}) does not answer`;
+  return `The Arcue app (process ${info.pid}) does not answer`;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
