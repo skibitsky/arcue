@@ -3,7 +3,7 @@ import type { Importer } from "@arcue/scene";
 import { describe, expect, it, vi } from "vitest";
 import type { ArcueCore } from "./core";
 import { emptyReview, serializeReview } from "./review-store";
-import type { FakeWindow, SecondCore, TestCore } from "./test-support";
+import type { FakeAssetSpec, FakeWindow, SecondCore, TestCore } from "./test-support";
 import {
   fakeAsset,
   fakeImporter,
@@ -17,6 +17,7 @@ import {
   looseComment,
   openAsset,
   pinComment,
+  pinContext,
   png,
   readJson,
   startSecondCore,
@@ -42,6 +43,14 @@ const animated = (): Record<string, string> => ({
 const finer = fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 5 }] });
 /** The hero with fewer vertices than `finer`, and longer text, so its size differs from both other versions. */
 const coarser = fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4, size: 2 }] });
+/** The importer of a build that cannot read the file "Prop.fbx". */
+const cannotReadProp: Importer = {
+  ...fakeImporter,
+  import: (request) =>
+    request.fileName === "Prop.fbx"
+      ? Promise.reject(new Error("This build cannot read the file."))
+      : fakeImporter.import(request),
+};
 
 interface Side {
   core: ArcueCore;
@@ -98,11 +107,27 @@ async function settleA(cores: TwoCores): Promise<void> {
   await cores.a.core.idle();
 }
 
+/** Lets both cores work for a while without running their stability checks. */
+async function workAWhile(cores: TwoCores): Promise<void> {
+  for (let turn = 0; turn < 20; turn++) await idle(cores);
+}
+
 const saved = async (test: TestCore, path = REVIEW_JSON) => (await readJson(test.platform, path)) as ReviewFile;
 const versionOf = async (side: Side, assetId: string) =>
   (await side.core.client.query("scene.get", { assetId })).version;
 const writesBy = (test: TestCore, actor: string, path = REVIEW_JSON) =>
   test.platform.log.filter((entry) => entry.actor === actor && entry.path === path && entry.op === "writeAtomic");
+
+/** Counts the cores' changes of review.json from now on, and fails every one after the tenth, so a loop ends. */
+function countReviewWrites(test: TestCore): () => number {
+  let writes = 0;
+  test.platform.beforeWrite = (path, _op, actor) => {
+    if (path !== REVIEW_JSON || actor === null) return;
+    writes++;
+    if (writes > 10) throw new Error("The cores keep rewriting review.json.");
+  };
+  return () => writes;
+}
 
 /** Holds back the actor's first change of a path that `matches` until `release`; `reached` resolves once it waits. */
 function holdWrite(
@@ -741,6 +766,84 @@ describe("two cores loading versions", () => {
     expect(data.comments[0]).toMatchObject({ id: commentId, anchorVersion: latest, anchorState: "moved" });
   });
 
+  it("re-anchors a comment another core saved on a later version once a composition's file went back to earlier bytes", async () => {
+    const prop = `${ART}/Prop.fbx`;
+    const plate = (grid: number) => fakeAsset({ meshes: [{ name: "Plate", grid }] });
+    const gate = gatedImporter();
+    const cores = await twoCores(
+      {
+        ...heroFiles(),
+        [prop]: plate(3),
+        [COMPOSITION]: JSON.stringify({ version: 1, attach: [{ file: "Prop.fbx" }] }),
+      },
+      { importers: [gate.importer] },
+    );
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    const assetB = await openIn(b);
+    const first = await versionOf(a, assetA);
+    await a.platform.writeFile(prop, plate(5));
+    await settle(cores);
+    const later = await versionOf(a, assetA);
+    expect(await versionOf(b, assetB)).toBe(later);
+    gate.hold("Prop.fbx");
+    await a.platform.writeFile(prop, plate(3));
+    await settleA(cores);
+    expect(await versionOf(a, assetA)).toBe(first);
+    expect(await versionOf(b, assetB)).toBe(later);
+
+    const { commentId } = await b.core.client.execute("comment.create", {
+      ...pinComment(assetB, "On the plate.", later),
+      target: { kind: "surface", mesh: "Prop.fbx//Hero/Plate", vertices: [18, 19, 23], weights: [0.5, 0.25, 0.25] },
+    });
+    await vi.waitFor(async () => expect((await saved(a)).comments[0]?.anchorVersion).toBe(first));
+    await b.core.client.execute("asset.close", { assetId: assetB });
+    gate.release("Prop.fbx");
+    await idle(cores);
+
+    const comment = (await a.core.client.query("review.get", { assetId: assetA })).comments[0];
+    expect(comment).toMatchObject({ id: commentId, anchorVersion: first, anchorState: "moved" });
+    await a.core.client.execute("round.copy", { assetId: assetA });
+    const data = (await readJson(a.platform, `${HERO_REVIEW}/rounds/round-1/round.json`)) as RoundData;
+    const target = data.comments[0]?.target;
+    expect(target).toMatchObject({ kind: "point", meshPath: "Prop.fbx//Hero/Plate" });
+    expect(Math.max(...(target?.kind === "point" ? target.vertices : [Infinity]))).toBeLessThan(9);
+  });
+
+  it("re-anchors a comment another core saved on a later version with moved vertices once the model went back", async () => {
+    const moved = fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 3, size: 4 }] });
+    const gate = gatedImporter();
+    const cores = await twoCores(heroFiles(), { importers: [gate.importer] });
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    const assetB = await openIn(b);
+    await a.platform.writeFile(HERO, moved);
+    await settle(cores);
+    const later = await versionOf(a, assetA);
+    expect(later).not.toBe(HERO_VERSION);
+    expect(await versionOf(b, assetB)).toBe(later);
+    gate.hold("Hero.fbx");
+    a.clock.advance(10);
+    await a.platform.writeFile(HERO, fakeAsset(heroSpec));
+    await settleA(cores);
+    expect(await versionOf(a, assetA)).toBe(HERO_VERSION);
+    expect(await versionOf(b, assetB)).toBe(later);
+
+    const { commentId } = await b.core.client.execute("comment.create", {
+      ...pinComment(assetB, "On the body.", later),
+      context: { ...pinContext, centroid: null },
+    });
+    await vi.waitFor(async () => expect((await saved(a)).comments[0]?.anchorVersion).toBe(HERO_VERSION));
+    await b.core.client.execute("asset.close", { assetId: assetB });
+    gate.release("Hero.fbx");
+    await idle(cores);
+
+    expect((await saved(a)).comments[0]).toMatchObject({ id: commentId, anchorVersion: HERO_VERSION });
+    await a.core.client.execute("round.copy", { assetId: assetA });
+    const data = (await readJson(a.platform, `${HERO_REVIEW}/rounds/round-1/round.json`)) as RoundData;
+    expect(data.comments[0]).toMatchObject({ id: commentId, anchorVersion: HERO_VERSION });
+  });
+
   it("re-anchors a comment another core saved on an older version once the model, rewritten as it was, settles", async () => {
     const gate = gatedImporter();
     const cores = await twoCores(heroFiles(), { importers: [gate.importer] });
@@ -776,23 +879,108 @@ describe("two cores loading versions", () => {
     const first = await versionOf(a, assetA);
     await a.core.client.execute("comment.create", pinComment(assetA, "On the skin.", first));
     await idle(cores);
-    let writes = 0;
-    a.platform.beforeWrite = (path, _op, actor) => {
-      if (path !== REVIEW_JSON || actor === null) return;
-      writes++;
-      if (writes > 10) throw new Error("The cores keep rewriting review.json.");
-    };
+    const writes = countReviewWrites(a);
     await a.platform.writeFile(skin, Uint8Array.of(9, 9));
     const { version: latest } = await a.core.client.execute("asset.reload", { assetId: assetA });
     expect(latest).not.toBe(first);
     await idle(cores);
-    expect(writes).toBe(1);
+    expect(writes()).toBe(1);
     expect((await saved(a)).comments[0]?.anchorVersion).toBe(latest);
 
     await settle(cores);
     expect(await versionOf(b, assetB)).toBe(latest);
-    expect(writes).toBe(1);
+    expect(writes()).toBe(1);
     expect((await saved(a)).comments[0]?.anchorVersion).toBe(latest);
+    expect(a.errors).toEqual([]);
+    expect(b.errors).toEqual([]);
+  });
+
+  it("leaves a comment on the version another build read the same model into, so neither core moves it back", async () => {
+    const otherBuild: Importer = {
+      ...fakeImporter,
+      import: (request) => {
+        const spec = JSON.parse(new TextDecoder().decode(request.bytes)) as FakeAssetSpec;
+        const read = { ...spec, meshes: [{ name: "Body", grid: 4 }], textures: ["Hero.png"] };
+        return fakeImporter.import({ ...request, bytes: new TextEncoder().encode(fakeAsset(read)) });
+      },
+    };
+    const cores = await twoCores({ ...heroFiles(), [`${ART}/Hero.png`]: png }, { importers: [otherBuild] });
+    const { a, b } = cores;
+    await openIn(a);
+    const assetB = await openIn(b);
+    const other = await versionOf(b, assetB);
+    expect(other).not.toBe(HERO_VERSION);
+
+    const writes = countReviewWrites(a);
+    const { commentId } = await b.core.client.execute("comment.create", pinComment(assetB, "On the body.", other));
+    await workAWhile(cores);
+    await settle(cores);
+    expect(writes()).toBe(1);
+    expect((await saved(a)).comments).toMatchObject([{ id: commentId, anchorVersion: other }]);
+    expect(a.errors).toEqual([]);
+    expect(b.errors).toEqual([]);
+  });
+
+  it("leaves a comment on the version of a core that cannot parse a file of the composition, so neither moves it back", async () => {
+    const cores = await twoCores(
+      {
+        ...heroFiles(),
+        [`${ART}/Prop.fbx`]: fakeAsset({ meshes: [{ name: "Plate", grid: 3 }], textures: ["plate.png"] }),
+        [`${ART}/plate.png`]: png,
+        [COMPOSITION]: JSON.stringify({ version: 1, attach: [{ file: "Prop.fbx" }] }),
+      },
+      { importers: [cannotReadProp] },
+    );
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    const assetB = await openIn(b);
+    const other = await versionOf(b, assetB);
+    expect(other).not.toBe(await versionOf(a, assetA));
+
+    const writes = countReviewWrites(a);
+    const { commentId } = await b.core.client.execute("comment.create", pinComment(assetB, "On the body.", other));
+    await workAWhile(cores);
+    await settle(cores);
+    expect(writes()).toBe(1);
+    expect((await saved(a)).comments).toMatchObject([{ id: commentId, anchorVersion: other }]);
+    expect(a.errors).toEqual([]);
+    expect(b.errors).toEqual([]);
+  });
+
+  it("leaves a comment on a version read with a texture of the composition this core has not read again yet", async () => {
+    const skin = `${ART}/skin.png`;
+    const cores = await twoCores(
+      {
+        ...heroFiles({ ...heroSpec, materials: ["Skin"] }),
+        [`${ART}/Prop.fbx`]: fakeAsset({ meshes: [{ name: "Plate", grid: 3 }] }),
+        [skin]: png,
+        [COMPOSITION]: JSON.stringify({
+          version: 1,
+          attach: [{ file: "Prop.fbx" }],
+          materials: { Skin: { baseColor: "skin.png" } },
+        }),
+      },
+      { importers: [cannotReadProp] },
+    );
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    await a.platform.writeFile(skin, Uint8Array.of(9, 9));
+    const assetB = await openIn(b);
+    const other = await versionOf(b, assetB);
+    const shown = await versionOf(a, assetA);
+    expect(other).not.toBe(shown);
+
+    const writes = countReviewWrites(a);
+    const { commentId } = await b.core.client.execute("comment.create", pinComment(assetB, "On the body.", other));
+    await workAWhile(cores);
+    expect(writes()).toBe(1);
+    expect((await saved(a)).comments).toMatchObject([{ id: commentId, anchorVersion: other }]);
+    expect(await versionOf(a, assetA)).toBe(shown);
+    await settle(cores);
+    await workAWhile(cores);
+    expect(await versionOf(a, assetA)).toBe(other);
+    expect(writes()).toBeLessThan(3);
+    expect((await saved(a)).comments).toMatchObject([{ id: commentId, anchorVersion: other }]);
     expect(a.errors).toEqual([]);
     expect(b.errors).toEqual([]);
   });
@@ -947,6 +1135,55 @@ describe("a reviews lock another holder keeps", () => {
       assets: [{ assetId, path: STRIKER, status: "ready", error: null }],
     });
     await expect(test.platform.exists(`${STRIKER_REVIEW}/review.json`)).resolves.toBe(true);
+  });
+});
+
+describe("a model renamed while a version is parsed", () => {
+  it("follows the model to its new name when it was renamed during the first parse", async () => {
+    const gate = gatedImporter();
+    const cores = await twoCores(heroFiles(), { importers: [gate.importer] });
+    const { a, b } = cores;
+    gate.hold("Hero.fbx");
+    const { assetId } = await b.window.client.execute("asset.open", { path: HERO });
+    await vi.waitFor(() => expect(a.platform.parsed).toEqual(["Hero.fbx"]));
+    await a.platform.rename(HERO, STRIKER);
+    gate.release("Hero.fbx");
+    await settle(cores);
+
+    await expect(b.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: STRIKER, status: "ready", version: HERO_VERSION, error: null }],
+    });
+    await expect(a.platform.exists(`${STRIKER_REVIEW}/review.json`)).resolves.toBe(true);
+    await expect(a.platform.exists(HERO_REVIEW)).resolves.toBe(false);
+    expect(b.errors).toEqual([]);
+  });
+
+  it("follows the model to its new name when it was renamed while a later version was parsed", async () => {
+    const gate = gatedImporter();
+    const cores = await twoCores(heroFiles(), { importers: [gate.importer] });
+    const { a, b } = cores;
+    const assetId = await openIn(b);
+    const { commentId } = await b.core.client.execute("comment.create", pinComment(assetId));
+    gate.hold("Hero.fbx");
+    await a.platform.writeFile(HERO, finer);
+    for (let check = 0; check < 20 && a.platform.parsed.length < 2; check++) {
+      await flush();
+      a.clock.advance(300);
+    }
+    expect(a.platform.parsed).toEqual(["Hero.fbx", "Hero.fbx"]);
+    await a.platform.rename(HERO, STRIKER);
+    gate.release("Hero.fbx");
+    await settle(cores);
+
+    await expect(b.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: STRIKER, status: "ready", error: null }],
+    });
+    const version = await versionOf(b, assetId);
+    expect(version).not.toBe(HERO_VERSION);
+    const review = await saved(a, `${STRIKER_REVIEW}/review.json`);
+    expect(review.comments).toMatchObject([{ id: commentId, anchorVersion: version }]);
+    await expect(a.platform.exists(HERO_REVIEW)).resolves.toBe(false);
+    expect(b.errors).toEqual([]);
   });
 });
 

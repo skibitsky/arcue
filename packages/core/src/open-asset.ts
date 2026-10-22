@@ -38,6 +38,11 @@ export class OpenAsset {
   /** The full hash and size of the model file the version on screen was read from. */
   identity: { hash: string; size: number } | null = null;
   /**
+   * The full hash and size of the model file the last parse read, which is not `identity` while that parse's version
+   * was not recorded, as when the model was renamed meanwhile.
+   */
+  lastParsed: { hash: string; size: number } | null = null;
+  /**
    * The names of the files with the model's extension in its folder when the model last loaded, so a rename shows as a
    * name not among them. Null before the first load, and when there were more than the core checks for a rename.
    */

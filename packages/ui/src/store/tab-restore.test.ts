@@ -143,6 +143,45 @@ describe("TabRestore", () => {
     expect(activePath()).toBe(STONE);
   });
 
+  it("alerts an adopt that fails while connected and still activates the saved active tab, or keeps it when the connection dropped", async () => {
+    const { client, restore, store, open, paths, activePath } = restoring();
+    const notify = vi.spyOn(store, "notify");
+    restore.pending(saved([STONE, CRATE], 0));
+    const failing = async () => {
+      throw new ArcueError("not-found", `${GOLEM} does not exist.`);
+    };
+    await expect(restore.reopen(restore.detach(), { open, adopt: failing })).resolves.toBeUndefined();
+    expect(notify.mock.calls).toEqual([[{ message: `${GOLEM} does not exist.`, kind: "alert" }]]);
+    expect(paths()).toEqual([STONE, CRATE]);
+    expect(activePath()).toBe(STONE);
+    const [, crate] = store.state.get().tabs;
+    store.activate(crate?.id ?? "");
+    expect(restore.tabs().active).toBe(1);
+
+    notify.mockClear();
+    await restore.reopen(restore.detach(), { open, adopt: failing, quiet: () => true });
+    expect(notify).not.toHaveBeenCalled();
+    expect(activePath()).toBe(CRATE);
+
+    await restore.reopen(restore.detach(), {
+      open,
+      adopt: async () => {
+        client.setConnectionState("reconnecting");
+        await failing();
+      },
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect(restore.tabs().active).toBe(1);
+    const [stone] = store.state.get().tabs;
+    store.activate(stone?.id ?? "");
+    expect(restore.tabs().active).toBe(1);
+
+    client.setConnectionState("connected");
+    await restore.reopen(restore.detach(), { open });
+    expect(paths()).toEqual([STONE, CRATE]);
+    expect(activePath()).toBe(CRATE);
+  });
+
   it("drops quiet errors without a toast and alerts the others, dropping both tabs", async () => {
     const { restore, store, open, paths, activePath, savedPaths } = restoring();
     const notify = vi.spyOn(store, "notify");

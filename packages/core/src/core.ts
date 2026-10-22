@@ -908,9 +908,10 @@ export class ArcueCore {
 
   /**
    * The model stayed missing for `MISSING_MODEL_MS`, so an export did not replace it. When exactly one file in its
-   * folder has the bytes of the version on screen or the model's Unity GUID, the asset follows that file; otherwise
-   * the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a refused move are
-   * expected, so they only end the search. A reviews lock another Arcue kept busy makes it look again later.
+   * folder has the bytes of the version on screen or of the last parse, or the model's Unity GUID, the asset follows
+   * that file; otherwise the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a
+   * refused move are expected, so they only end the search. A reviews lock another Arcue kept busy makes it look again
+   * later.
    */
   async #modelGone(asset: OpenAsset): Promise<void> {
     try {
@@ -933,15 +934,16 @@ export class ArcueCore {
 
   /**
    * The one file in the model's folder with the model's extension and a name the folder did not have when the model
-   * last loaded, that has the size and full hash of the file the version on screen was read from, or the model's
-   * Unity GUID in its `.meta` file. A rename makes a new name, while a backup copy that was already there never
-   * matches. Null when there is none or more than one, or before the folder's names are known. It checks at most
-   * `MAX_RENAME_CANDIDATES` files, compares sizes before it hashes, and skips files other tabs show.
+   * last loaded, that has the size and full hash of the file the version on screen was read from or of the one the
+   * last parse read, or the model's Unity GUID in its `.meta` file. A rename makes a new name, while a backup copy that
+   * was already there never matches. Null when there is none or more than one, or before the folder's names are known.
+   * It checks at most `MAX_RENAME_CANDIDATES` files, compares sizes before it hashes, and skips files other tabs show.
    */
   async #findRenamed(asset: OpenAsset): Promise<string | null> {
-    const { identity, siblings } = asset;
+    const { siblings } = asset;
+    const recorded = [asset.identity, asset.lastParsed].filter((entry) => entry !== null);
     const guid = asset.session.review.asset.guid ?? null;
-    if (siblings === null || (identity === null && guid === null)) return null;
+    if (siblings === null || (recorded.length === 0 && guid === null)) return null;
     const folder = dirname(asset.path);
     const extension = extensionOf(asset.name);
     const open = new Set([...this.#assets.values()].map((other) => other.path));
@@ -950,7 +952,7 @@ export class ArcueCore {
       .map((entry) => joinPath(folder, entry.name))
       .filter((path) => !open.has(path))
       .slice(0, MAX_RENAME_CANDIDATES);
-    const found = await filesMatching(this.#platform, candidates, identity === null ? [] : [identity], guid);
+    const found = await filesMatching(this.#platform, candidates, recorded, guid);
     const [only] = found;
     return found.length === 1 && only !== undefined ? only : null;
   }
@@ -1090,6 +1092,7 @@ export class ArcueCore {
       const scene = await buildAssetScene(files, (file) => this.#importFile(asset, file), {
         parsed: (file) => asset.parsed(file.path, file.id),
       });
+      asset.lastParsed = { hash: files.model.hash, size: files.model.size };
       versionId = this.#versionWithDependencies(asset, files);
       this.#watchImportedFiles(asset, files);
       meshes = meshesOf(scene).map((entry) => ({ mesh: entry.path, topology: entry.mesh.topology }));
@@ -1882,10 +1885,11 @@ function replaceComment(review: ReviewFile, updated: Comment): ReviewFile {
 
 /**
  * Whether a comment another Arcue saved moves onto the version on screen. Nothing moves onto a version the review does
- * not record. A comment moves from any version recorded before that one, and from a later one read from other model
- * bytes, as after the model went back to an earlier version. It stays on a later version read from the same model
- * bytes, as when the other Arcue read a texture this one has not read again yet, or names versions another way, so two
- * Arcues never move comments to and fro.
+ * not record. A comment moves from any version recorded before that one, and from a later one read from other bytes of
+ * the model or of a model file of its composition, as after the files went back to earlier bytes. It stays on a later
+ * version read from the same bytes, as when the other Arcue read a texture this one has not read again yet, or another
+ * build read the same bytes into other meshes or could not parse a file of the composition, so two Arcues never move
+ * comments to and fro.
  */
 function movesOnto(comment: Comment, version: string, versions: readonly AssetVersion[]): boolean {
   if (comment.anchorVersion === version) return false;
@@ -1895,7 +1899,24 @@ function movesOnto(comment: Comment, version: string, versions: readonly AssetVe
   const anchoredOn = versions[anchored];
   if (onScreen === undefined) return false;
   if (anchoredOn === undefined || anchored < shown) return true;
-  return anchoredOn.hash !== onScreen.hash || anchoredOn.size !== onScreen.size;
+  return !sameMeshBytes(anchoredOn, onScreen);
+}
+
+/**
+ * Whether two versions were read from the same bytes of the model and of each model file of the composition that both
+ * record the full hash of. Textures change no mesh, and a file only one of them records does not count, since another
+ * build may read the composition another way.
+ */
+function sameMeshBytes(a: AssetVersion, b: AssetVersion): boolean {
+  if (a.hash !== b.hash || a.size !== b.size) return false;
+  const read = new Map((b.files ?? []).map((entry) => [entry.file, entry]));
+  return (a.files ?? []).every((entry) => {
+    const other = read.get(entry.file);
+    if (!hasExtension(entry.file, MODEL_EXTENSIONS) || entry.hash === undefined || other?.hash === undefined) {
+      return true;
+    }
+    return entry.hash === other.hash && entry.size === other.size;
+  });
 }
 
 /**
