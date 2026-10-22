@@ -118,6 +118,25 @@ const versionOf = async (side: Side, assetId: string) =>
 const writesBy = (test: TestCore, actor: string, path = REVIEW_JSON) =>
   test.platform.log.filter((entry) => entry.actor === actor && entry.path === path && entry.op === "writeAtomic");
 
+/** Records what each core writes to review.json from now on, in order, for the returned function to read. */
+function recordReviewWrites(test: TestCore): () => Promise<{ actor: string | null; review: ReviewFile }[]> {
+  const writers: (string | null)[] = [];
+  const reviews: ReviewFile[] = [];
+  test.platform.beforeWrite = async (path, op, actor) => {
+    if (path !== REVIEW_JSON || op !== "writeAtomic") return;
+    if (writers.length > 0) reviews.push(await saved(test));
+    writers.push(actor);
+  };
+  return async () => {
+    test.platform.beforeWrite = null;
+    if (writers.length > reviews.length) reviews.push(await saved(test));
+    return writers.flatMap((actor, index) => {
+      const review = reviews[index];
+      return review ? [{ actor, review }] : [];
+    });
+  };
+}
+
 /** Counts the cores' changes of review.json from now on, and fails every one after the tenth, so a loop ends. */
 function countReviewWrites(test: TestCore): () => number {
   let writes = 0;
@@ -706,6 +725,43 @@ describe("two cores loading versions", () => {
     await settle(cores);
     expect(writesBy(a, "core-2")).toHaveLength(writes);
     expect(await versionOf(b, assetB)).toBe(latest);
+    expect((await saved(a)).comments[0]?.anchorVersion).toBe(latest);
+  });
+
+  it("never re-anchors comments back onto a version whose composition file changed while it was parsed", async () => {
+    const prop = `${ART}/Prop.fbx`;
+    const plate = (grid: number) => fakeAsset({ meshes: [{ name: "Plate", grid }] });
+    const gate = gatedImporter();
+    const cores = await twoCores(
+      {
+        ...heroFiles(),
+        [prop]: plate(3),
+        [COMPOSITION]: JSON.stringify({ version: 1, attach: [{ file: "Prop.fbx" }] }),
+      },
+      { importers: [gate.importer] },
+    );
+    const { a, b } = cores;
+    const assetA = await openIn(a);
+    const assetB = await openIn(b);
+    await a.core.client.execute("comment.create", {
+      ...pinComment(assetA, "On the plate.", await versionOf(a, assetA)),
+      target: { kind: "surface", mesh: "Prop.fbx//Hero/Plate", vertices: [0, 1, 3], weights: [0.5, 0.25, 0.25] },
+    });
+    await idle(cores);
+    gate.hold("Prop.fbx");
+    await a.platform.writeFile(prop, plate(4));
+    await settleA(cores);
+    await a.platform.writeFile(prop, plate(5));
+    await settleA(cores);
+    const latest = await versionOf(a, assetA);
+    expect((await saved(a)).comments[0]?.anchorVersion).toBe(latest);
+    const written = recordReviewWrites(a);
+
+    gate.release("Prop.fbx");
+    await settle(cores);
+    expect(await versionOf(b, assetB)).toBe(latest);
+    const anchors = (await written()).map(({ review }) => review.comments[0]?.anchorVersion);
+    expect(anchors.filter((anchor) => anchor !== latest)).toEqual([]);
     expect((await saved(a)).comments[0]?.anchorVersion).toBe(latest);
   });
 
