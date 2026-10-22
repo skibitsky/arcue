@@ -171,6 +171,24 @@ describe("arcue status", () => {
     });
   });
 
+  it("never calls a core with another lock protocol older, nor says to stop it", async () => {
+    const other = "It runs another version of Arcue, which can't share reviews with this arcue command.";
+    const browser = await serve({ locks: 2 });
+    expect(await arcue(["status"])).toEqual({
+      code: 0,
+      out: `Arcue is running in a browser at ${SERVE_URL} (process ${pid}).\n${other}\nNo assets are open.\n`,
+      err: "",
+    });
+
+    await browser.close();
+    await desktop({ locks: 2 });
+    expect(await arcue(["status"])).toEqual({
+      code: 0,
+      out: `The Arcue app is running (process ${pid}).\n${other}\nNo assets are open.\n`,
+      err: "",
+    });
+  });
+
   it("says on stderr which core does not answer", async () => {
     await serve({ refuse: true });
     const refusal = `Arcue in the browser at ${SERVE_URL} (process ${pid}) does not answer: Arcue refused the connection. The token does not match the running app.\n`;

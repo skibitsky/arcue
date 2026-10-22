@@ -15,6 +15,7 @@ import { sessionView } from "./session-view";
 import { stopServe } from "./stop";
 
 const NODE_MAJOR = 24;
+const ANOTHER_VERSION = "It runs another version of Arcue, which can't share reviews with this arcue command.";
 
 export interface Output {
   out(text: string): void;
@@ -152,18 +153,19 @@ async function describeCore(
   const lines: string[] = [];
   if (inBrowser(info, file)) {
     lines.push(`Arcue is running in a browser at ${info.url} (process ${info.pid}).`);
-    if (!sharesReviews(info)) {
+    if (info.kind === undefined) {
       lines.push("It is older than this arcue command: run arcue stop, then arcue serve --detach.");
+    } else if (!sharesReviews(info)) {
+      lines.push(ANOTHER_VERSION);
     } else if (otherBuild(info, build)) {
       lines.push(OTHER_BUILD);
     }
     if (view !== null) lines.push(`This session's view: ${viewAddress(info.url, view)}`);
+  } else if (info.kind === undefined) {
+    lines.push(`An older Arcue app is running (process ${info.pid}).`);
   } else {
-    lines.push(
-      sharesReviews(info)
-        ? `The Arcue app is running (process ${info.pid}).`
-        : `An older Arcue app is running (process ${info.pid}).`,
-    );
+    lines.push(`The Arcue app is running (process ${info.pid}).`);
+    if (!sharesReviews(info)) lines.push(ANOTHER_VERSION);
   }
   if (assets.length === 0) lines.push("No assets are open.");
   else
