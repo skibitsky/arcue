@@ -22,8 +22,10 @@ export const BROWSER_STOPPED =
  * Picks the core an open goes to, launching the desktop app when the rules say so. An open for an agent session's view
  * goes to Arcue in the browser, else to the desktop app; any other open goes to the desktop app, which starts if
  * needed, and to Arcue in the browser only where the app cannot start. While nothing answers, it waits for a core that
- * is starting. When Arcue ran in a browser last, it never starts the app: it throws `BROWSER_STOPPED`. It also throws
- * when the app does not start or has never started on this computer, and when a core listens but does not answer.
+ * is starting. When nothing answers and Arcue ran in a browser last, an open for a view never starts the app and
+ * throws `BROWSER_STOPPED`; an open outside views starts the app whenever launch.json names one that spawns, and throws
+ * `BROWSER_STOPPED` only when it does not. It also throws when the app does not start or has never started on this
+ * computer, and when a core listens but does not answer.
  */
 export async function connectForOpen(
   userData: string,
