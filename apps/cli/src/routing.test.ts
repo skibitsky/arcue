@@ -237,6 +237,25 @@ describe("an open outside views", () => {
     await expect(route(null)).rejects.toThrow(BROWSER_STOPPED);
   });
 
+  it("starts the desktop app that launch.json names after Arcue in the browser ran last", async () => {
+    writeLastCoreFile(userData, "serve", SERVE_URL);
+    launchable();
+    const opening = route(null, 10_000);
+    await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
+    const app = await desktop();
+
+    const routed = await opening;
+    expect(routed).toMatchObject({ kind: "desktop" });
+    expect(routed.connection.info.token).toBe(app.info.token);
+  });
+
+  it("says Arcue in the browser stopped when it ran last and the app in launch.json cannot start", async () => {
+    writeLastCoreFile(userData, "serve", SERVE_URL);
+    writeFileSync(join(userData, LAUNCH_INFO_FILE), JSON.stringify({ version: 1, command: "/nonexistent", args: [] }));
+
+    await expect(route(null)).rejects.toThrow(BROWSER_STOPPED);
+  });
+
   it("says the app was never started, or why it could not start", async () => {
     await expect(route(null)).rejects.toThrow(NOT_STARTED);
 
