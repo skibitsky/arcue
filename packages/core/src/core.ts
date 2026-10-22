@@ -1885,10 +1885,11 @@ function replaceComment(review: ReviewFile, updated: Comment): ReviewFile {
 
 /**
  * Whether a comment another Arcue saved moves onto the version on screen. Nothing moves onto a version the review does
- * not record. A comment moves from any version recorded before that one, and from a later one with other meshes, as
- * after the model or a file of its composition went back to an earlier version. It stays on a later version with the
- * same meshes, as when the other Arcue read a texture this one has not read again yet, or names versions another way,
- * so two Arcues never move comments to and fro.
+ * not record. A comment moves from any version recorded before that one, and from a later one with other meshes read
+ * from other bytes, as after the model or a model file of its composition went back to earlier bytes. It stays on a
+ * later version with the same meshes, as when the other Arcue read a texture this one has not read again yet, and on
+ * one read from the same bytes, as when another build read them into other meshes or could not parse a file of the
+ * composition, so two Arcues never move comments to and fro.
  */
 function movesOnto(comment: Comment, version: string, versions: readonly AssetVersion[]): boolean {
   if (comment.anchorVersion === version) return false;
@@ -1898,7 +1899,24 @@ function movesOnto(comment: Comment, version: string, versions: readonly AssetVe
   const anchoredOn = versions[anchored];
   if (onScreen === undefined) return false;
   if (anchoredOn === undefined || anchored < shown) return true;
-  return !sameMeshes(anchoredOn, onScreen);
+  return !sameMeshes(anchoredOn, onScreen) && !sameMeshBytes(anchoredOn, onScreen);
+}
+
+/**
+ * Whether two versions were read from the same bytes of the model and of each model file of the composition that both
+ * record the full hash of. Textures change no mesh, and a file only one of them records does not count, since another
+ * build may read the composition another way.
+ */
+function sameMeshBytes(a: AssetVersion, b: AssetVersion): boolean {
+  if (a.hash !== b.hash || a.size !== b.size) return false;
+  const read = new Map((b.files ?? []).map((entry) => [entry.file, entry]));
+  return (a.files ?? []).every((entry) => {
+    const other = read.get(entry.file);
+    if (!hasExtension(entry.file, MODEL_EXTENSIONS) || entry.hash === undefined || other?.hash === undefined) {
+      return true;
+    }
+    return entry.hash === other.hash && entry.size === other.size;
+  });
 }
 
 /** Whether two versions have the same meshes at the same paths with the same topology, which is all anchors use. */
