@@ -15,7 +15,7 @@ import type { Command } from "./args";
 import { DEFAULT_SERVE_PORT } from "./args";
 import { buildId } from "./build-id";
 import type { Output, RunOptions } from "./run";
-import { sessionView } from "./session-view";
+import { outsideSessions, sessionView } from "./session-view";
 
 /** The arcue.js the build writes, which `arcue serve --detach` runs in the background. */
 export const bundledEntry = fileURLToPath(new URL("./arcue.js", import.meta.url));
@@ -57,7 +57,8 @@ function portOf(url: string | undefined): number | undefined {
 /**
  * Runs `arcue serve` in the background and returns once it answers, printing its address and this session's view. When
  * Arcue in the browser already runs and shares reviews, it prints that one's address instead, and never stops it. The
- * child runs in the root of the data folder's drive, so on Windows it keeps no folder someone may remove, such as the
+ * child belongs to no agent session, so it gets none of their variables, and runs in the root of the data folder's
+ * drive, so on Windows it keeps no folder someone may remove, such as the
  * data folder, whose removal stops it. It records Arcue in the browser as the last core before the child starts, so an
  * open meanwhile never starts the desktop app, and puts the earlier record back when the child fails to start.
  */
@@ -132,7 +133,7 @@ export async function detachServe(
         stdio: ["ignore", descriptor, descriptor],
         windowsHide: true,
         cwd: parse(userData).root,
-        env: { ...env, ARCUE_USER_DATA: userData },
+        env: { ...outsideSessions(env), ARCUE_USER_DATA: userData },
       },
     );
   } catch (error) {

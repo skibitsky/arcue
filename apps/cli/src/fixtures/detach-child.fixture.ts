@@ -2,10 +2,11 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startFakeCore } from "@arcue/platform-node/test";
 import { LAST_CORE_FILE, SERVE_INFO_FILE } from "@arcue/protocol";
+import { sessionView } from "../session-view";
 
 /**
  * Stands in for the `arcue serve` that `arcue serve --detach` starts: it records how it was started in `detach-child.json`
- * in its data folder, with what `last-core.json` said then, and behaves as `ARCUE_FIXTURE` says: "serve" answers as
+ * in its data folder, with the agent session's view its variables name and what `last-core.json` said then, and behaves as `ARCUE_FIXTURE` says: "serve" answers as
  * Arcue in the browser at `serve.json` until `serve.stop`, "port-taken" says its port is in use, "quiet-exit" exits
  * with 3 and says nothing, "crash" records itself in `last-core.json` as a serve that starts does and then exits with
  * 1, and "sleep" never answers. It ends by itself once its data folder is gone.
@@ -28,7 +29,7 @@ const record = {
   cwd: process.cwd(),
   pid: process.pid,
   userData: process.env.ARCUE_USER_DATA,
-  view: process.env.ARCUE_VIEW,
+  view: sessionView(process.env),
   lastCore: readJson(join(userData, LAST_CORE_FILE)),
 };
 writeFileSync(join(userData, "detach-child.json"), JSON.stringify(record));

@@ -79,6 +79,7 @@ interface ChildRecord {
   cwd: string;
   pid: number;
   userData: string | undefined;
+  view: string | null;
   lastCore: unknown;
 }
 
@@ -365,12 +366,17 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     );
   }
 
-  it("starts arcue serve in the background in its drive's root with an absolute data folder, and prints its address and view", async () => {
+  it("starts arcue serve in the background in its drive's root with an absolute data folder and no session, and prints its address and view", async () => {
     const { code, out, err } = await detach(
       ["--port", "4531"],
       "serve",
       {},
-      { ...session, ARCUE_USER_DATA: relative(process.cwd(), userData) },
+      {
+        ...session,
+        CLAUDE_CODE_SESSION_ID: "a-session",
+        CODEX_THREAD_ID: "a-thread",
+        ARCUE_USER_DATA: relative(process.cwd(), userData),
+      },
     );
 
     const record = readRecord();
@@ -380,6 +386,7 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
       argv: [script, "serve", "--port", "4531", "--idle-stop-ms", "1800000"],
       cwd: parse(userData).root,
       userData,
+      view: null,
       lastCore: { version: 1, kind: "serve" },
     });
     expect(out).toBe(
