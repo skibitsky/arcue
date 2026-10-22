@@ -936,6 +936,32 @@ describe("LocalHost", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it("leaves an agent's open held for its view when the page reloads into a new build before it shows it", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const answer = Promise.withResolvers<ServedPage>();
+    const probe = vi.fn((): Promise<ServedPage> => answer.promise);
+    const reload = vi.fn(() => {
+      for (const socket of server.sockets) socket.close();
+    });
+    const page = new Page(server, { probe, reload }).start();
+    await page.connected();
+    await page.opened(HERO);
+
+    await restart(server);
+    await vi.waitFor(() => {
+      page.timers.advance(FIRST_RETRY_MS);
+      expect(probe).toHaveBeenCalled();
+    });
+    const opening = server.bridge().execute("asset.openInView", { path: GOLEM, view: VIEW, frame: 12 });
+    await vi.waitFor(async () => expect(await server.paths()).toEqual([GOLEM]));
+    answer.resolve({ changed: NEW_BUILD });
+
+    await expect(opening).resolves.toMatchObject({ shown: "held" });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(await server.paths()).toEqual([GOLEM]);
+  });
+
   it("keeps trying, and attaches, when a probe never answers", async () => {
     const server = new FakeServer();
     await server.start();

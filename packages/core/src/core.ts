@@ -582,8 +582,9 @@ export class ArcueCore {
     asset.candidates = earlier.candidates;
     asset.earlier = earlier.unmatched;
     this.#assets.set(asset.id, asset);
+    let placed: Place;
     try {
-      await this.#place(asset, place, args);
+      placed = await this.#placeOpened(asset, requester, place, args);
     } catch (error) {
       this.#assets.delete(asset.id);
       throw error;
@@ -595,7 +596,25 @@ export class ArcueCore {
     this.#offer(asset);
     this.#watchAsset(asset);
     void this.#load(asset).catch(() => undefined);
-    return { assetId: asset.id, shown: shownAs(place) };
+    return { assetId: asset.id, shown: shownAs(placed) };
+  }
+
+  /**
+   * Places an asset that an open just opened, and returns where it went. When the page of a view that an open from
+   * outside the windows picked closes before it shows the asset, as when the page reloads into a new build, the asset
+   * goes where that open would put it now: another page of the view, a desktop window, or held for the view's page.
+   */
+  async #placeOpened(asset: OpenAsset, requester: Requester, place: Place, at: ShowAt): Promise<Place> {
+    for (let next = place; ; ) {
+      try {
+        await this.#place(asset, next, at);
+        return next;
+      } catch (error) {
+        const gone = next.window !== null && !this.#windows.has(next.window);
+        if (requester.window !== null || next.view === null || !gone) throw error;
+        next = this.#placeFor(requester) ?? requester;
+      }
+    }
   }
 
   /**

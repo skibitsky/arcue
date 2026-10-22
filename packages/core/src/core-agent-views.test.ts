@@ -219,6 +219,25 @@ describe("holding a model for its view's page", () => {
     expect(page.requests[0]?.input).toEqual({ assetId, frame: 9 });
   });
 
+  it("holds the model for the view when its page closes before it shows the model, as when it reloads", async () => {
+    const test = await setupServe();
+    const page = browserPage(test, "page-a", "a");
+    page.respond = (request) => {
+      if (request.name !== "view.showAsset") return undefined;
+      page.close();
+      return new Promise(() => undefined);
+    };
+    const cli = bridge(test);
+
+    const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 12 });
+
+    expect(shown).toBe("held");
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({ assets: [{ assetId, path: HERO }] });
+    const reloaded = browserPage(test, "page-a-2", "a");
+    await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(reloaded.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
+  });
+
   it("keeps the model in its view when its page reloads", async () => {
     const test = await setup();
     const page = new FakeWindow(test.core, "page-a", "a");
