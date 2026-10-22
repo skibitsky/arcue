@@ -46,6 +46,8 @@ interface WindowProbe {
 }
 
 const appDir = fileURLToPath(new URL("..", import.meta.url));
+/** The app's folder as the app records it in launch.json, without the trailing separator `appDir` has. */
+const appPath = resolve(appDir);
 const repo = resolve(appDir, "../..");
 const arcueJs = join(repo, "apps", "plugin", "dist", "plugins", "arcue", "skills", "arcue", "scripts", "arcue.js");
 const electronPath = createRequire(import.meta.url)("electron") as string;
@@ -139,7 +141,7 @@ function runsThisApp(pid: number): boolean {
       process.platform === "linux"
         ? readFileSync(`/proc/${pid}/cmdline`, "utf8")
         : execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
-    return command.includes(appDir);
+    return command.includes(appPath);
   } catch {
     return false;
   }
@@ -582,6 +584,27 @@ describe("the desktop app beside Arcue in the browser", () => {
     expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
     expect([...log("main").matchAll(/Arcue starts \(pid/g)]).toHaveLength(1);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "is started for a person's open once Arcue in the browser ran last and stopped, and its stray main is found",
+    async () => {
+      const electron = await launch();
+      await connectedWindow(electron);
+      await electron.close();
+      app = null;
+      await detach();
+      await arcue(["stop"]);
+
+      const opened = await arcue(["open", crate], sandbox);
+      expect(opened.code).toBe(0);
+      expect(opened.out).toContain(`Opened ${crate}`);
+
+      const started = runningMains();
+      expect(started).toHaveLength(1);
+      process.kill(started[0] ?? 0, "SIGTERM");
+      await expect.poll(() => runningMains(), { timeout: 20_000 }).toEqual([]);
+    },
+  );
 
   it("starts its own core in place of one that stopped without removing bridge.json", async () => {
     const stopped = await startFakeCore(userData, { file: BRIDGE_INFO_FILE, kind: "desktop", locks: 1 });
