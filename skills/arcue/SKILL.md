@@ -1,6 +1,6 @@
 ---
 name: arcue
-description: Arcue is an app, on the desktop or in a browser, where people pin or paint comments on 3D models at a frame and copy them to a coding agent. Use this skill when a message contains "3D review · round" or "Fix these import warnings for", or a path under .arcue/, when the user mentions Arcue or asks to see a model, clip or frame in it, or wants an FBX or Blender .blend file checked for its meshes, clips, missing textures or import warnings. It covers `arcue open`, `arcue serve`, `arcue inspect`, round.json, composition files, and turning Arcue's anchored comments (vertex numbers, bones, frames, screenshots) into exact fixes. Not for working on Arcue's own source code.
+description: Arcue is an app, on the desktop or in a browser, where people pin or paint comments on 3D models at a frame and copy them to a coding agent. Use this skill when a message contains "3D review · round" or "Fix these import warnings for", or a path under .arcue/, when the user mentions Arcue or asks to see a model, clip or frame in it, or wants an FBX or Blender .blend file checked for its meshes, clips, missing textures or import warnings. It covers `arcue open`, `arcue serve --detach`, `arcue stop`, `arcue status`, `arcue inspect`, round.json, composition files, and turning Arcue's anchored comments (vertex numbers, bones, frames, screenshots) into exact fixes. Not for working on Arcue's own source code.
 license: MIT
 ---
 
@@ -17,22 +17,25 @@ The launcher runs Arcue on Node 24 or later from PATH, or on the Node that setup
 
 Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 
-- `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in this session's view, the page `arcue serve` serves for this session while it runs, otherwise in the desktop app, which it starts if needed. `--move` takes a model from another session's view.
-- `arcue serve` runs Arcue in a browser instead of the desktop app, at http://localhost:4530 until it is stopped, on the user's files with their reviews in `.arcue/` as the desktop app keeps them. `--port <number>` picks another port.
+- `arcue open <file> [--clip <name>] [--frame <number>]` shows a model in this session's view: the page Arcue in the browser serves for this session while it runs, otherwise the desktop app, which it starts if needed. When it says Arcue in the browser has stopped, run `arcue serve --detach` again. `--move` takes a model from another session's view.
+- `arcue serve --detach` starts Arcue in the browser beside the desktop app, on the user's files with their reviews in `.arcue/` as the desktop app keeps them. It listens at http://localhost:4530, or on the port it ran on last, unless `--port <number>` picks another. It returns once Arcue runs and prints this session's view, also when Arcue already runs, and Arcue stops by itself after 30 minutes with no page open.
+- `arcue stop` stops Arcue in the browser for every session. Run it only when the user asks.
 - `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, bones, clips, materials, missing textures, composed files and import warnings.
-- `arcue status` says whether Arcue runs, the address of this session's view when a browser shows it, and the models it has open, and exits with 1 when it isn't running.
+- `arcue status` says whether Arcue runs in a browser and in the desktop app, the address of this session's view, and the models each has open, and exits with 1 when neither runs.
 
 ## Where Arcue shows models
 
 `arcue open` shows models in this session's view, a page that only this session and its subagents fill. When the app you run in has a built-in browser, such as the Browser pane in the Claude desktop app or the in-app browser in the Codex app, show that page there:
 
-1. Run `arcue status`. When it prints this session's view, open that address. When Arcue runs without an address, that is the desktop app: use it as it is.
-2. When Arcue isn't running, start `arcue serve` as a background command that keeps running, and run `arcue status` again. In the Claude desktop app, a launch.json `url` must be a bare origin: add `{ "name": "arcue", "url": "http://localhost:4530", "port": 4530 }` to `configurations` in the project's `.claude/launch.json`, creating it with `"version": "0.0.1"` if needed, start that configuration in the Browser pane, then navigate it to the printed address. In the Codex app, open the address with its browser tool.
-3. Keep the page open. When `arcue open` prints an address, the page isn't open: open the address in the built-in browser.
+1. Run `arcue status`. When it prints this session's view, open that address.
+2. Otherwise run `arcue serve --detach`, also when the desktop app runs, and open the view address it prints. It listens on localhost, so allow it outside a sandbox. In the Claude desktop app, a launch.json `url` must be a bare origin: add `{ "name": "arcue", "url": "http://localhost:4530", "port": 4530 }`, with the port of the printed address, to `configurations` in the project's `.claude/launch.json`, creating it with `"version": "0.0.1"` if needed, start that configuration in the Browser pane, then navigate it to the printed address. In the Codex app, open the address with its browser tool. When `arcue serve --detach` says the port is in use, add `--port <number>` with a free port.
+3. Keep the page open: Arcue in the browser stops 30 minutes after the last page closes, and an open page reconnects and reopens its models when Arcue starts again. When `arcue open` prints an address, the page isn't open: open the address in the built-in browser.
 
-A model shows in one view at a time. When `arcue open` says another session's view has it, add `--move` only if the user wants it here.
+In Arcue in the browser, a model shows in one view at a time. When `arcue open` says another session's view has it, add `--move` only if the user wants it here.
 
-Without a built-in browser, `arcue open` starts the desktop app. If it says Arcue has not been started on this computer yet, run `arcue serve` and give the user the address to open.
+When `arcue status` shows no Arcue in the browser right after `arcue serve --detach` printed an address, your shell stops what its commands start: run `arcue serve` as a background command that keeps running instead.
+
+Without a built-in browser, `arcue open` shows models in the desktop app, which it starts. When it prints an address instead, give it to the user to open. If it says the app has not been started on this computer yet, could not be started, or that Arcue in the browser has stopped, run `arcue serve --detach` and give the user the address it prints.
 
 Name a clip as the file does, from `inspect` or `time.clip`: `--clip 'Armature|Walk'` for an FBX take, `--clip 'Walk'` for the action `Walk` in a .blend. The name comes from the file, so keep it literal: in single quotes, with each `'` in it written as `'\''` in sh, or in PowerShell with each `'`, `‘`, `’`, `‚` and `‛` doubled. Quote file paths the same way. Any other name, such as the display name `Walk` of `Armature|Walk`, is ignored without an error. Frames count from the clip's first frame, 0.
 
