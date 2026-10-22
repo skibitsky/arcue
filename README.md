@@ -83,7 +83,7 @@ Desktop app releases will put the `arcue` command on your PATH, so the agent can
 
 ## Build it into your own workflow
 
-- **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve` runs Arcue in any browser on your own files, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. Call it from scripts, CI or your own tools.
+- **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve --detach` runs Arcue in any browser on your own files beside the desktop app, `arcue stop` stops it, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. Call it from scripts, CI or your own tools.
 - **Review files.** Every copied prompt is also saved as [`round.json`](skills/arcue/references/round-json.md) with its screenshots in `.arcue/reviews/`, so any script can read the feedback.
 - **Composition files.** A [`composition.json`](skills/arcue/references/composition.md) loads animation files, attachments and textures together with a model.
 - **Commands.** Every action in Arcue is a typed command with a JSON Schema in [`packages/protocol`](packages/protocol). The window and the `arcue` command call the same commands, and the planned MCP server will too.
