@@ -1,9 +1,7 @@
 import type { ReviewFile, RoundData } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
-import { ArcueCore } from "./core";
 import { screenshotFile } from "./screenshots";
 import {
-  FakeWindow,
   HERO,
   HERO_REVIEW,
   heroFiles,
@@ -12,6 +10,7 @@ import {
   pinComment,
   png,
   readJson,
+  startSecondCore,
   startTestCore,
 } from "./test-support";
 
@@ -110,8 +109,7 @@ describe("screenshots named by a hand-edited review.json", () => {
       await test.platform.remove(link);
       await test.platform.symlink(link, target);
     }
-    const core = await ArcueCore.start({ platform: test.platform });
-    const window = new FakeWindow(core, "window-1");
+    const { core, window } = await startSecondCore(test);
     return { core, window, platform: test.platform, text: JSON.stringify(review), ...ids };
   }
 

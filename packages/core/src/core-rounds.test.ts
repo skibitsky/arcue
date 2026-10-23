@@ -1,7 +1,6 @@
 import type { ReviewFile, RoundData } from "@arcue/protocol";
 import { roundDataSchema } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
-import { ArcueCore } from "./core";
 import type { TestCore } from "./test-support";
 import {
   HERO_REVIEW,
@@ -12,6 +11,7 @@ import {
   pinComment,
   png,
   readJson,
+  startSecondCore,
   startTestCore,
 } from "./test-support";
 
@@ -250,12 +250,12 @@ describe("round.copy", () => {
     const review = await test.core.client.query("review.get", { assetId: test.assetId });
     expect(review.comments[0]?.camera.position).toEqual([0, 1, 3]);
 
-    const restarted = await ArcueCore.start({ platform: test.platform });
-    await expect(restarted.client.query("settings.get", {})).resolves.toEqual({ coordinates: "z-up-blender" });
-    await expect(restarted.client.execute("settings.set", { coordinates: "x-up" as "y-up" })).rejects.toMatchObject({
-      code: "invalid-input",
-    });
-    await expect(restarted.client.execute("settings.set", {})).resolves.toEqual({ coordinates: "z-up-blender" });
+    const restarted = await startSecondCore(test);
+    await expect(restarted.core.client.query("settings.get", {})).resolves.toEqual({ coordinates: "z-up-blender" });
+    await expect(
+      restarted.core.client.execute("settings.set", { coordinates: "x-up" as "y-up" }),
+    ).rejects.toMatchObject({ code: "invalid-input" });
+    await expect(restarted.core.client.execute("settings.set", {})).resolves.toEqual({ coordinates: "z-up-blender" });
   });
 
   it("refuses an empty queue", async () => {
