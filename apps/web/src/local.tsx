@@ -4,15 +4,13 @@ import "@arcue/ui/base.css";
 import "@arcue/ui/workspace.css";
 import "./main.css";
 import type { CoreClient } from "@arcue/protocol";
-import { VIEW_PARAMETER } from "@arcue/protocol";
 import type { WorkspaceStore } from "@arcue/ui";
 import { useSelect, Workspace } from "@arcue/ui";
 import { createViewport } from "@arcue/viewport";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { coreSocketUrl } from "./core-socket";
 import { followPage, LocalHost } from "./local-host";
-import { MODULE_SCRIPT, PAGE_OWNER, probePage } from "./served-page";
+import { localHostOptions } from "./local-page";
 
 declare global {
   interface Window {
@@ -20,9 +18,6 @@ declare global {
     arcueWindow: { client: CoreClient; store: WorkspaceStore };
   }
 }
-
-const pageScript = document.querySelector(MODULE_SCRIPT)?.getAttribute("src") ?? null;
-const pageOwner = document.querySelector(PAGE_OWNER)?.getAttribute("content") ?? null;
 
 function safeSessionStorage(): Storage | null {
   try {
@@ -32,15 +27,9 @@ function safeSessionStorage(): Storage | null {
   }
 }
 
-const host = new LocalHost({
-  openSocket: () => new WebSocket(coreSocketUrl(location)),
-  view: new URLSearchParams(location.search).get(VIEW_PARAMETER),
-  storage: safeSessionStorage(),
-  owner: pageOwner,
-  hasFocus: () => document.hasFocus(),
-  probe: () => probePage(pageScript, (url, init) => fetch(url, init), pageOwner),
-  reload: () => location.reload(),
-});
+const host = new LocalHost(
+  localHostOptions({ document, location, storage: safeSessionStorage(), fetch: (url, init) => fetch(url, init) }),
+);
 window.arcueWindow = { client: host.client, store: host.store };
 host.start();
 followPage(host, { window, document });
