@@ -517,14 +517,19 @@ describe("the locks around every write of review data and settings", () => {
 
   it("reports a core's write that only another core's lock covers", async () => {
     const test = await startTestCore(heroFiles());
+    const outside = "/app-data/reviews/outside/Crate.fbx/review.json";
     const unlock = await test.platform.forCore("core-1").lock("/work/game", "reviews");
+    const unlockOutside = await test.platform.forCore("core-1").lock("/app-data", "reviews");
     await test.platform.forCore("core-2").writeFileAtomic(REVIEW_JSON, "{}");
     await test.platform.forCore("core-2").writeFileAtomic("/app-data/settings.json", "{}");
+    await test.platform.forCore("core-2").writeFileAtomic(outside, "{}");
     await test.platform.writeFile(`${HERO_REVIEW}/notes.txt`, "the test's own write");
+    await unlockOutside();
     await unlock();
     expect(unlockedWrites(test.platform)).toMatchObject([
       { actor: "core-2", op: "writeAtomic", path: REVIEW_JSON, held: [] },
       { actor: "core-2", op: "writeAtomic", path: "/app-data/settings.json", held: [] },
+      { actor: "core-2", op: "writeAtomic", path: outside, held: [] },
     ]);
     test.platform.log.length = 0;
   });
