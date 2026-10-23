@@ -107,10 +107,10 @@ export interface ArcueServer {
   /** Resolves once the core should stop: it stops only once `close` is called. */
   readonly stopped: Promise<ServeStop>;
   /**
-   * Stops the core: it records in `last-core.json` that Arcue in the browser ran last, so an open that finds no core
-   * meanwhile never starts the desktop app, closes the command line's connections and removes `serve.json`, closes the
-   * pages' sockets with `code`, frees the port, and shuts the core down once the changes in flight are saved. A second
-   * call waits for the first.
+   * Stops the core: it records in `last-core.json` that Arcue in the browser ran last, so an open for an agent session's
+   * view that finds no core meanwhile never starts the desktop app, closes the command line's connections and removes
+   * `serve.json`, closes the pages' sockets with `code`, frees the port, and shuts the core down once the changes in
+   * flight are saved. A second call waits for the first.
    */
   close(code?: number): Promise<void>;
 }

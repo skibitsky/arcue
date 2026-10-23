@@ -670,7 +670,7 @@ describe("arcue serve stopping", () => {
     expect(again.url).toBe(running.url);
   });
 
-  it("records that it ran last before it removes serve.json, so an open meanwhile never starts the desktop app", async () => {
+  it("records that it ran last before it removes serve.json, so a view's open meanwhile never starts the desktop app", async () => {
     const running = await serve();
     const held = await silentPage(running.url);
     writeLastCoreFile(userData, "desktop");

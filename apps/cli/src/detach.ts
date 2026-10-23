@@ -58,9 +58,9 @@ function portOf(url: string | undefined): number | undefined {
  * Runs `arcue serve` in the background and returns once it answers, printing its address and this session's view. When
  * Arcue in the browser already runs and shares reviews, it prints that one's address instead, and never stops it. The
  * child belongs to no agent session, so it gets none of their variables, and runs in the root of the data folder's
- * drive, so on Windows it keeps no folder someone may remove, such as the
- * data folder, whose removal stops it. It records Arcue in the browser as the last core before the child starts, so an
- * open meanwhile never starts the desktop app, and puts the earlier record back when the child fails to start.
+ * drive, so on Windows it keeps no folder someone may remove, such as the data folder, whose removal stops it. It
+ * records Arcue in the browser as the last core before the child starts, so an open for an agent session's view
+ * meanwhile never starts the desktop app, and puts the earlier record back when the child fails to start.
  */
 export async function detachServe(
   command: Extract<Command, { command: "serve" }>,
