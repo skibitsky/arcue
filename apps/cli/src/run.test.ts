@@ -7,7 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { connectToCore, isRunning } from "@arcue/platform-node";
 import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
 import { holdStartLock, sleeper, startFakeCore, writeLastCoreFile, writeLaunchInfo } from "@arcue/platform-node/test";
-import { BRIDGE_INFO_FILE, LAST_CORE_FILE, SERVE_INFO_FILE, viewAddress } from "@arcue/protocol";
+import { ArcueError, BRIDGE_INFO_FILE, LAST_CORE_FILE, SERVE_INFO_FILE, viewAddress } from "@arcue/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectForOpen } from "./routing";
 import type { RunOptions } from "./run";
@@ -267,6 +267,29 @@ describe("arcue open with Arcue in the browser", () => {
       code: 1,
       out: "",
       err: `Arcue in the browser at ${SERVE_URL} (process ${process.pid}) does not answer: connect ENOTDIR ${socket}\n`,
+    });
+  });
+
+  it("says to open Arcue in the browser's address when it has no window to show a model in, and the desktop app not", async () => {
+    writeFileSync(join(userData, "Hero.fbx"), "fbx");
+    const noWindow = {
+      "asset.open": () => {
+        throw new ArcueError("unavailable", "No window is open to show the asset.");
+      },
+    };
+    const browser = await serve({ answers: noWindow });
+
+    expect(await arcue(["open", "Hero.fbx"])).toEqual({
+      code: 1,
+      out: "",
+      err: `No window is open to show the asset. Arcue runs in a browser: open ${SERVE_URL} first.\n`,
+    });
+    await browser.close();
+    await desktop({ url: SERVE_URL, answers: noWindow });
+    expect(await arcue(["open", "Hero.fbx"])).toEqual({
+      code: 1,
+      out: "",
+      err: "No window is open to show the asset.\n",
     });
   });
 
