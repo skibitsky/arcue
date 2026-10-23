@@ -76,7 +76,8 @@ export interface ServeOptions {
   onWaitingForWindow?: (url: string) => void;
   /**
    * Stops the core after this long with no page connected. While none is, each connection from the command line, each
-   * open it sends and each load of the page counts the time again. Without it, the core never stops by itself for that.
+   * open it sends and each load of the page into a tab counts the time again. Without it, the core never stops by
+   * itself for that.
    */
   idleStopMs?: number;
   /** The timers of the idle stop, the pages' heartbeat and the checks. */
