@@ -906,7 +906,8 @@ export class ArcueCore {
 
   /**
    * Starts looking for the composition's lost files under new names, each once until the next `asset.reload`. It runs
-   * beside the load, since writing the composition file waits for the asset's edits, and those may wait for loads.
+   * beside the load, since writing the composition file waits for the asset's edits, and those may wait for loads. A
+   * reviews lock another Arcue kept busy makes it look again later.
    */
   #searchLostFiles(asset: OpenAsset, files: AssetFiles): void {
     const lost = lostFiles(files, asset.session.review).filter((file) => !asset.searched.has(file.path));
@@ -916,6 +917,7 @@ export class ArcueCore {
     const relinked = this.#relinkLostFiles(asset, lost, taken).catch((error: unknown) => {
       if (hasCode(error, "timeout")) {
         for (const file of lost) asset.searched.delete(file.path);
+        this.#retryLater(asset, () => this.#load(asset, true));
       } else if (!hasCode(error, "conflict")) {
         this.#onError(error);
       }

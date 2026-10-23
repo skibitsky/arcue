@@ -1594,6 +1594,46 @@ describe("a reviews lock another holder keeps while a file is opened or relinked
     });
     expect(test.errors).toEqual([]);
   });
+
+  it("looks for a lost file again once the lock is free when only its relink timed out", async () => {
+    const run = `${ART}/Anim/Run.fbx`;
+    const test = await startTestCore(
+      {
+        ...heroFiles(),
+        [run]: animation("Run"),
+        [COMPOSITION]: JSON.stringify({ version: 1, animations: ["Anim/Run.fbx"] }),
+      },
+      { lockTimeoutMs: 15_000 },
+    );
+    const assetId = await openAsset(test);
+    await test.platform.remove(run);
+    for (let check = 0; check < 5; check++) {
+      test.clock.advance(1000);
+      await flush();
+      await test.core.idle();
+    }
+    await test.platform.writeFile(`${ART}/Anim/Running.fbx`, animation("Run"));
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    await test.core.client.execute("asset.reload", { assetId });
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    test.clock.advance(15_000);
+    await flush();
+    await test.core.idle();
+    await expect(readJson(test.platform, COMPOSITION)).resolves.toEqual({ version: 1, animations: ["Anim/Run.fbx"] });
+
+    await unlock();
+    for (let check = 0; check < 5; check++) {
+      test.clock.advance(1000);
+      await flush();
+      await test.core.idle();
+    }
+    await expect(readJson(test.platform, COMPOSITION)).resolves.toEqual({
+      version: 1,
+      animations: ["Anim/Running.fbx"],
+    });
+    expect(test.errors).toEqual([]);
+  });
 });
 
 /** A small generator of numbers in [0, 1) from a seed, so a failing run can be repeated. */
