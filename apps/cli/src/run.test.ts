@@ -500,6 +500,27 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     });
   });
 
+  it("reports the Arcue in the browser that won while its own arcue serve still runs, and stops that one", async () => {
+    const winner = ownedProcess();
+    const detaching = detach(["--port", "4531"], "sleep", { build: "a".repeat(16) });
+    const record = await vi.waitFor(
+      () => {
+        const found = readRecord();
+        if (!found) throw new Error("The arcue serve has not started yet.");
+        return found;
+      },
+      { timeout: 5000, interval: 10 },
+    );
+    await serve({ url: "http://localhost:4531", pid: winner.pid, build: "b".repeat(16) });
+
+    expect(await detaching).toEqual({
+      code: 0,
+      out: `Arcue already runs in a browser at http://localhost:4531 (process ${winner.pid}).\n${OTHER_BUILD}\n`,
+      err: "",
+    });
+    await vi.waitFor(() => expect(isRunning(record.pid)).toBe(false), { timeout: 2000, interval: 20 });
+  });
+
   it("puts back what last-core.json said when arcue serve does not start, so a view's open starts the app again", async () => {
     const marker = join(userData, "launched");
     writeLaunchInfo(userData, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`);
