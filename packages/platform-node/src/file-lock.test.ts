@@ -39,6 +39,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers/promises")>();
+  return { ...actual, setTimeout: vi.fn(actual.setTimeout) };
+});
+
 const HOST = hostname().slice(0, 255);
 const posix = process.platform !== "win32";
 
@@ -232,6 +237,26 @@ describe("a file lock in one process", () => {
       expect(elsewhere).toMatchObject({ code: "forbidden" });
     } finally {
       if (platform) Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("tries again at once, without waiting, when the file it met is gone by the time it looks at it", async () => {
+    mkdirSync(join(temp, "locks"));
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let met = false;
+    vi.mocked(fs.open).mockImplementation((path, flags, mode) => {
+      if (path !== lock || flags !== "wx" || met) return actual.open(path, flags, mode);
+      met = true;
+      return Promise.reject(failure("EEXIST"));
+    });
+    vi.mocked(sleep).mockClear();
+    try {
+      const release = await acquireFileLock(lock, options());
+      expect(creates()).toBe(2);
+      expect(sleep).not.toHaveBeenCalled();
+      await release();
+    } finally {
+      vi.mocked(fs.open).mockImplementation(actual.open);
     }
   });
 
