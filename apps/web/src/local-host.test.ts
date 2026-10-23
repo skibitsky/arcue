@@ -531,6 +531,36 @@ describe("LocalHost", () => {
     expect(page.activePath()).toBe(HERO);
   });
 
+  it("shows the model an agent opened last in the active tab when the page meets it after the others", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const agent = server.bridge();
+    for (const path of [HERO, CRATE]) await agent.execute("asset.openInView", { path, view: VIEW });
+    const page = new Page(server).start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(2));
+    expect(page.paths()).toEqual([HERO, CRATE]);
+    expect(page.activePath()).toBe(CRATE);
+  });
+
+  it("shows the model an agent opened last while the page was away in the active tab when it is not a saved tab", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const page = new Page(server).start();
+    await page.connected();
+    await page.opened(HERO);
+
+    await restart(server);
+    const agent = server.bridge();
+    for (const path of [HERO, CRATE]) await agent.execute("asset.openInView", { path, view: VIEW });
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(2));
+    expect(page.paths()).toEqual([HERO, CRATE]);
+    expect(page.activePath()).toBe(CRATE);
+  });
+
   it("shows a model an agent opens while the page reopens its tabs after them, in the active tab", async () => {
     const server = new FakeServer();
     const core = await server.start();
