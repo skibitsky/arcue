@@ -19,6 +19,7 @@ import { ArcueCore, MemoryPlatform } from "@arcue/core";
 import { fbxImporter } from "@arcue/import-fbx";
 import { createMemoryChannel, createPeer, createRemoteClient } from "@arcue/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { acquireFileLock } from "./file-lock";
 import { fromNativePath, toNativePath } from "./native-paths";
 import { NodePlatform } from "./node-platform";
 import type { Fixture } from "./test-children";
@@ -27,6 +28,11 @@ import { buildFixture } from "./test-children";
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
+
+vi.mock("./file-lock", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./file-lock")>();
+  return { ...actual, acquireFileLock: vi.fn(actual.acquireFileLock) };
 });
 
 const CRATE = fileURLToPath(new URL("../../../samples/crate.fbx", import.meta.url));
@@ -333,6 +339,21 @@ describe("NodePlatform locks", () => {
     await (await other.lock(at("game"), "settings"))();
     await (await other.lock(at("other"), "reviews"))();
     await unlock();
+  });
+
+  it("waits 15 seconds for a lock another holder keeps unless told otherwise, as the desktop app's core does", async () => {
+    const timeouts = () => vi.mocked(acquireFileLock).mock.calls.map(([, options]) => options.timeoutMs);
+    vi.mocked(acquireFileLock).mockClear();
+    const quick = new NodePlatform({
+      appDataDir: join(native, "app-data"),
+      startImportWorker: noWorker,
+      lockTimeoutMs: 500,
+    });
+
+    await (await platform.lock(at("game"), "reviews"))();
+    await (await quick.lock(at("game"), "settings"))();
+
+    expect(timeouts()).toEqual([15_000, 500]);
   });
 
   it("locks a folder the same through a link, in another case and in decomposed Unicode", async () => {
