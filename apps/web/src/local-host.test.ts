@@ -21,6 +21,7 @@ const HERO = "/work/Hero.fbx";
 const CRATE = "/work/Crate.fbx";
 const GOLEM = "/work/Golem.fbx";
 const BLOB = "/work/Blob.fbx";
+const HERO_RENAMED = "/work/Hero2.fbx";
 const VIEW = "3f9a0c1d2b4e";
 const PAGE_STOPPED = "Arcue in the browser stopped. This page reconnects once it runs again.";
 const NEW_BUILD = "/assets/index-new.js";
@@ -127,8 +128,9 @@ class FakeSocket extends EventTarget {
 
 /** Arcue in the browser in memory: a core that stops and starts again over the same files, and its pages' sockets. */
 class FakeServer {
+  readonly clock = new ManualClock();
   readonly platform = new MemoryPlatform({
-    clock: new ManualClock(),
+    clock: this.clock,
     files: { [HERO]: "hero", [CRATE]: "crate", [GOLEM]: "golem", [BLOB]: "blob" },
     importers: [emptyImporter],
   });
@@ -316,6 +318,15 @@ function requestsTo(page: Page): IncomingRequest[] {
 function toasts(page: Page, message: string) {
   const notify = vi.spyOn(page.store, "notify");
   return () => notify.mock.calls.filter(([toast]) => toast.message === message).map(([toast]) => toast);
+}
+
+/** Lets the core's clock run until it follows a model it has open to the path. */
+async function followed(server: FakeServer, core: ArcueCore, path: string): Promise<void> {
+  await vi.waitFor(async () => {
+    await core.idle();
+    server.clock.advance(500);
+    expect(await server.paths()).toContain(path);
+  });
 }
 
 async function restart(server: FakeServer, code = SERVE_STOPPED_CLOSE_CODE): Promise<void> {
@@ -597,6 +608,47 @@ describe("LocalHost", () => {
     expect(page.ids()).toEqual(["a1", "a2"]);
     expect(opens()).toEqual([]);
     expect(await server.paths()).toEqual([HERO, CRATE]);
+  });
+
+  it("keeps the place of a tab whose model the core followed to a new name while the page's socket was down", async () => {
+    const server = new FakeServer();
+    const core = await server.start();
+    const page = new Page(server).start();
+    await page.connected();
+    await page.opened(HERO, CRATE);
+    page.store.activate("a1");
+    await vi.waitFor(() => expect(page.store.session("a1")?.state.get().summary.version).not.toBeNull());
+    const alerts = vi.spyOn(page.store, "notify");
+
+    server.dropSockets();
+    await vi.waitFor(() => expect(page.host.client.connectionState).toBe("reconnecting"));
+    await server.platform.rename(HERO, HERO_RENAMED);
+    await followed(server, core, HERO_RENAMED);
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs.map((tab) => tab.path)).toEqual([HERO_RENAMED, CRATE]));
+    expect(page.paths()).toEqual([HERO_RENAMED, CRATE]);
+    expect(page.ids()).toEqual(["a1", "a2"]);
+    expect(page.activePath()).toBe(HERO_RENAMED);
+    expect(alerts).not.toHaveBeenCalled();
+  });
+
+  it("says a saved tab's model is gone after a restart when the core has another model under the tab's old id", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const page = new Page(server).start();
+    await page.connected();
+    await page.opened(HERO, CRATE);
+    await vi.waitFor(() => expect(page.store.session("a1")?.state.get().summary.version).not.toBeNull());
+    const alerts = vi.spyOn(page.store, "notify");
+
+    await restart(server);
+    await server.platform.rename(HERO, HERO_RENAMED);
+    await server.bridge().execute("asset.openInView", { path: GOLEM, view: VIEW });
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs.map((tab) => tab.path)).toEqual([CRATE, GOLEM]));
+    expect(alerts).toHaveBeenCalledWith({ message: `${HERO} does not exist.`, kind: "alert" });
   });
 
   it("keeps a page outside views to its own tabs, apart from a view's page, across a reload", async () => {

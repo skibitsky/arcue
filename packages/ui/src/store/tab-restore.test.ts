@@ -3,6 +3,7 @@ import { ArcueError } from "@arcue/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import { setup } from "../test-helpers";
+import type { ReleasedTab } from "./tab-restore";
 import { TabRestore } from "./tab-restore";
 
 const STONE = STONE_RESONATOR_PATH;
@@ -163,6 +164,34 @@ describe("TabRestore", () => {
     store.activate(crate?.id ?? "");
     await restore.reopen(restore.detach(), { open, activeInstead: () => "a99" });
     expect(activePath()).toBe(CRATE);
+  });
+
+  it("tells each tab it opens again what it showed before, also across a second change, and finds the saved active tab at another path", async () => {
+    const { client, restore, store, open, activePath } = restoring();
+    restore.pending(saved([STONE, CRATE], 0));
+    await restore.reopen(restore.detach(), { open });
+    const before = new Map(
+      store.state.get().tabs.map((tab) => {
+        const summary = store.session(tab.id)?.state.get().summary;
+        return [summary?.path, { assetId: tab.id, version: summary?.version ?? null }];
+      }),
+    );
+    expect([...before.keys()]).toEqual([STONE, CRATE]);
+
+    restore.detach();
+    const told = new Map<string, ReleasedTab | null>();
+    let stoneNow: string | null = null;
+    await restore.reopen(restore.detach(), {
+      open: async (tab, released) => {
+        told.set(tab.path, released);
+        if (tab.path === STONE) stoneNow = (await client.execute("asset.open", { path: GOLEM })).assetId;
+        else await open(tab);
+      },
+      shownAs: (path) => (path === STONE ? stoneNow : null),
+    });
+
+    expect(told).toEqual(before);
+    expect(activePath()).toBe(GOLEM);
   });
 
   it("alerts an adopt that fails while connected and still activates the saved active tab, or keeps it when the connection dropped", async () => {

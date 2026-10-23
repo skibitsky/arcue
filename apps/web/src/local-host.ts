@@ -1,4 +1,4 @@
-import type { CommandArgs, FramedChannel, IncomingRequest, SetTimer, WindowTabs } from "@arcue/protocol";
+import type { AssetSummary, CommandArgs, FramedChannel, IncomingRequest, SetTimer, WindowTabs } from "@arcue/protocol";
 import {
   ArcueError,
   binaryFrameCodec,
@@ -9,7 +9,7 @@ import {
   viewNameSchema,
   windowTabsSchema,
 } from "@arcue/protocol";
-import type { Readable, WorkspaceStore } from "@arcue/ui";
+import type { Readable, ReleasedTab, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore, Store, TabRestore } from "@arcue/ui";
 import { webSocketStream } from "./core-socket";
 import type { ServedPage } from "./served-page";
@@ -299,23 +299,33 @@ export class LocalHost {
   /**
    * Opens the tabs again in order. A model the core still has moves to this page as the core keeps it, such as at the
    * clip and frame an agent opened it at, also from a page of the view that adopted it just before, and from the view
-   * the tab kept when the core keeps none; any other opens from its path. Then the page adopts the other assets the core
-   * holds for its view, which another page of the view that lost its connection too may take back.
+   * the tab kept when the core keeps none; any other opens from its path, or, when its path is gone, moves in its place
+   * the model it showed, which the core kept with the same version under a new name. Then the page adopts the other
+   * assets the core holds for its view, which another page of the view that lost its connection too may take back.
    *
    * The model an agent opened last ends up active, and otherwise the saved active tab: one the core showed in the page
    * while it reopened its tabs, which goes after them unless it is one of them, or else, of the models the core held
    * for an agent's opens while the page was away, the one opened last.
    */
   async #reopenAll(generation: number, shows: Shows): Promise<void> {
-    let known: Map<string, string>;
+    let listed: AssetSummary[];
     try {
-      const { assets } = await this.client.query("asset.list", {});
-      known = new Map(assets.map((asset) => [asset.path, asset.assetId]));
+      listed = (await this.client.query("asset.list", {})).assets;
     } catch {
       return;
     }
+    const known = new Map(listed.map((asset) => [asset.path, asset.assetId]));
     const moved = new Set<string>();
     const restored = new Set<string>();
+    /** The assets that show saved tabs at other paths than the tabs', by the tabs' paths. */
+    const renamed = new Map<string, string>();
+    /** The asset a saved tab showed, which the core now holds at another path with the version the tab showed. */
+    const renamedTo = (path: string, released: ReleasedTab | null) => {
+      if (released === null || released.version === null) return null;
+      const now = listed.find((asset) => asset.assetId === released.assetId);
+      const same = now && now.path !== path && now.version === released.version && !moved.has(now.assetId);
+      return same ? now.assetId : null;
+    };
     let held: { assetId: string; order: number } | null = null;
     const noteHeld = (assetId: string, result: unknown) => {
       const order = heldOrder(result);
@@ -340,19 +350,27 @@ export class LocalHost {
     const agentOpened = () =>
       shows.ids.filter((assetId, at) => shows.ids.lastIndexOf(assetId) === at && this.store.session(assetId) !== null);
     await this.#restore.reopen(generation, {
-      open: async ({ path, view }) => {
+      open: async ({ path, view }, released) => {
         const kept = view ? { viewState: view } : {};
         const assetId = known.get(path);
-        if (assetId === undefined) {
+        if (assetId !== undefined) {
+          restored.add(assetId);
+          await move(assetId, { unlessShown: true, ...kept });
+          return;
+        }
+        try {
           const opened = await own(
             () => this.client.execute("asset.open", { path, ...kept }),
             (result) => result.assetId,
           );
           restored.add(opened.assetId);
-          return;
+        } catch (error) {
+          const followed = isNotFound(error) ? renamedTo(path, released) : null;
+          if (followed === null) throw error;
+          restored.add(followed);
+          renamed.set(path, followed);
+          await move(followed, { unlessShown: true, ...kept });
         }
-        restored.add(assetId);
-        await move(assetId, { unlessShown: true, ...kept });
       },
       quiet: isConflict,
       adopt: async () => {
@@ -371,6 +389,7 @@ export class LocalHost {
         }
       },
       activeInstead: () => agentOpened().at(-1) ?? held?.assetId ?? null,
+      shownAs: (path) => renamed.get(path) ?? null,
     });
     if (generation === this.#restore.generation) this.saveTabs();
   }
@@ -498,6 +517,10 @@ export function followPage(host: LocalHost, { window, document }: PageEvents): (
 
 function isConflict(error: unknown): boolean {
   return error instanceof ArcueError && error.code === "conflict";
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof ArcueError && error.code === "not-found";
 }
 
 /**

@@ -2,9 +2,19 @@ import type { CoreClient, SavedTab, WindowTabs } from "@arcue/protocol";
 import { messageOf } from "./asset-session";
 import type { WorkspaceStore } from "./workspace-store";
 
+/** The asset a saved tab showed before the window's connection changed, in the core it was connected to then. */
+export interface ReleasedTab {
+  assetId: string;
+  /** The version the tab showed, or null before one loaded. */
+  version: string | null;
+}
+
 export interface ReopenOptions {
-  /** Opens one saved tab in the current core. */
-  open(tab: SavedTab): Promise<void>;
+  /**
+   * Opens one saved tab in the current core. `released` is the asset the tab showed before the connection changed,
+   * which a core that kept running may hold at another path now, as when it followed the model to a new name.
+   */
+  open(tab: SavedTab, released: ReleasedTab | null): Promise<void>;
   /** Errors to drop without a toast, such as a model another session's view now has. */
   quiet?: (error: unknown) => boolean;
   /**
@@ -17,6 +27,8 @@ export interface ReopenOptions {
    * opened while the window was away; null keeps the saved one.
    */
   activeInstead?: () => string | null;
+  /** The asset that shows a saved tab now when it is at another path than the tab's, or null when none is. */
+  shownAs?: (path: string) => string | null;
 }
 
 /**
@@ -31,6 +43,8 @@ export class TabRestore {
   #unopened: SavedTab[] = [];
   /** The path of the saved tab to activate once every saved tab is open again. */
   #wantActive: string | null = null;
+  /** What each saved tab showed before the connection changed, by the tab's path. */
+  #released = new Map<string, ReleasedTab>();
   #generation = 0;
 
   constructor(store: WorkspaceStore, client: CoreClient) {
@@ -67,30 +81,40 @@ export class TabRestore {
   }
 
   /**
-   * Call just before attaching a new channel: keeps every tab to reopen, releases the asset tabs, forgets their
-   * summaries, and returns the new generation.
+   * Call just before attaching a new channel: keeps every tab to reopen with the asset it showed, releases the asset
+   * tabs, forgets their summaries, and returns the new generation.
    */
   detach(): number {
     this.pending(this.tabs());
-    for (const tab of this.#store.state.get().tabs) {
-      if (tab.kind === "asset") this.#store.releaseAsset(tab.id);
+    const released = new Map<string, ReleasedTab>();
+    for (const { path } of this.#unopened) {
+      const before = this.#released.get(path);
+      if (before) released.set(path, before);
     }
+    for (const tab of this.#store.state.get().tabs) {
+      if (tab.kind !== "asset") continue;
+      const summary = this.#store.session(tab.id)?.state.get().summary;
+      if (summary && summary.path !== "") released.set(summary.path, { assetId: tab.id, version: summary.version });
+      this.#store.releaseAsset(tab.id);
+    }
+    this.#released = released;
     this.#store.forgetSummaries();
     return ++this.#generation;
   }
 
   /**
    * Opens the pending tabs one by one, keeping the rest when the generation changes or the client is not connected,
-   * runs `adopt`, then activates the tab `activeInstead` names, or else the saved active tab. Errors from `open` and
-   * `adopt` do not reject it: each becomes an alert unless `quiet` drops it, and ends the reopen, without activating a
-   * tab, when the generation changed or the connection dropped meanwhile.
+   * runs `adopt`, then activates the tab `activeInstead` names, or else the saved active tab, also where `shownAs`
+   * says another path shows it. Errors from `open` and `adopt` do not reject it: each becomes an alert unless `quiet`
+   * drops it, and ends the reopen, without activating a tab, when the generation changed or the connection dropped
+   * meanwhile.
    */
-  async reopen(generation: number, { open, quiet, adopt, activeInstead }: ReopenOptions): Promise<void> {
+  async reopen(generation: number, { open, quiet, adopt, activeInstead, shownAs }: ReopenOptions): Promise<void> {
     for (;;) {
       const tab = this.#unopened[0];
       if (!tab || generation !== this.#generation) break;
       try {
-        await open(tab);
+        await open(tab, this.#released.get(tab.path) ?? null);
       } catch (error) {
         if (!this.#reported(generation, error, quiet)) return;
       }
@@ -107,9 +131,11 @@ export class TabRestore {
     const wanted = this.#wantActive;
     this.#wantActive = null;
     const instead = activeInstead?.() ?? null;
+    const wantedAs = wanted === null ? null : (shownAs?.(wanted) ?? null);
     const { tabs } = this.#store.state.get();
     const active =
       tabs.find((tab) => tab.kind === "asset" && tab.id === instead) ??
+      tabs.find((tab) => tab.kind === "asset" && tab.id === wantedAs) ??
       tabs.find((tab) => tab.kind === "asset" && this.#store.session(tab.id)?.state.get().summary.path === wanted);
     if (active) this.#store.activate(active.id);
   }
