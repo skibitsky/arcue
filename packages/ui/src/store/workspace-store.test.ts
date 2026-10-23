@@ -1,10 +1,11 @@
 import { ArcueError, commands } from "@arcue/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { FakeCoreClient } from "../../dev/fake-core";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
-import { flush, openStone, POINT, setup, withPoseClips } from "../test-helpers";
+import { flush, ManualTimers, openStone, POINT, setup, withPoseClips } from "../test-helpers";
 import { NEW_COMMENT_OVERLAY } from "./asset-session";
 import { currentMessage } from "./history";
-import { VIEW_COMMANDS } from "./workspace-store";
+import { createWorkspaceStore, VIEW_COMMANDS } from "./workspace-store";
 
 describe("opening assets", () => {
   it("adds a tab, loads the review and scene, and shows the requested clip and frame", async () => {
@@ -71,6 +72,22 @@ describe("view commands", () => {
     expect(store.state.get().tabs).toEqual([]);
     expect(store.session(session.assetId)).toBeNull();
     expect(client.calls.slice(before)).toEqual([]);
+  });
+
+  it("answers a view command that finishes at once with its result, not a promise, so it leaves before the render", async () => {
+    const { store, session } = await openStone();
+    session.setFrame(12);
+
+    const released = store.handleRequest({
+      kind: "command",
+      name: "view.releaseAsset",
+      input: { assetId: session.assetId },
+    });
+
+    expect(released).toMatchObject({ clip: "Armature|Charge", frame: 12 });
+    expect(store.handleRequest({ kind: "command", name: "view.showAsset", input: { assetId: session.assetId } })).toBe(
+      undefined,
+    );
   });
 
   it("refuses to release a tab whose comment box has unsaved text, and shakes the box", async () => {
@@ -377,6 +394,60 @@ describe("view state and settings", () => {
     await store.setCoordinates("z-up-blender");
     expect(store.state.get().settings).toEqual({ coordinates: "z-up-blender" });
     expect(client.calls.at(-1)).toEqual({ name: "settings.set", input: { coordinates: "z-up-blender" } });
+  });
+
+  it("takes the settings another Arcue changed", async () => {
+    const client = new FakeCoreClient({ catalog: () => null });
+    const subscribe = vi.spyOn(client, "subscribe");
+    const store = createWorkspaceStore({ client, setTimer: new ManualTimers().setTimer });
+    store.start();
+    await flush();
+    expect(store.state.get().settings).toEqual({ coordinates: "y-up" });
+    const changed = subscribe.mock.calls.find(([name]) => name === "settings.changed")?.[1];
+    if (!changed) throw new Error("The store does not listen for settings.changed.");
+    changed({ settings: { coordinates: "z-up-blender", authorName: "Ada" } });
+    expect(store.state.get().settings).toEqual({ coordinates: "z-up-blender", authorName: "Ada" });
+  });
+
+  it("keeps the settings another Arcue changed while a change of its own fails", async () => {
+    const client = new FakeCoreClient({ catalog: () => null });
+    const subscribe = vi.spyOn(client, "subscribe");
+    const execute = vi.spyOn(client, "execute");
+    const store = createWorkspaceStore({ client, setTimer: new ManualTimers().setTimer });
+    store.start();
+    await flush();
+    const changed = subscribe.mock.calls.find(([name]) => name === "settings.changed")?.[1];
+    if (!changed) throw new Error("The store does not listen for settings.changed.");
+    const busy = new ArcueError("timeout", "The settings are busy.");
+
+    execute.mockRejectedValueOnce(busy);
+    await store.setCoordinates("z-up-blender");
+    expect(store.state.get().settings).toEqual({ coordinates: "y-up" });
+    expect(store.state.get().toast).toMatchObject({ message: "The settings are busy.", kind: "alert" });
+
+    execute.mockImplementationOnce(async () => {
+      changed({ settings: { coordinates: "y-up", authorName: "Ada" } });
+      throw busy;
+    });
+    await store.setCoordinates("z-up-blender");
+    expect(store.state.get().settings).toEqual({ coordinates: "y-up", authorName: "Ada" });
+  });
+});
+
+describe("reconnecting", () => {
+  it("forgets the asset summaries, so an id that a new core gives another asset never shows the old name", async () => {
+    const { store, session } = await openStone();
+    const { assetId } = session;
+    store.releaseAsset(assetId);
+    store.showAsset({ assetId });
+    expect(store.session(assetId)?.state.get().summary.name).toBe("StoneResonator.fbx");
+
+    store.releaseAsset(assetId);
+    store.forgetSummaries();
+    store.showAsset({ assetId });
+    expect(store.session(assetId)?.state.get().summary).toMatchObject({ path: "", name: "", status: "loading" });
+    await flush();
+    expect(store.session(assetId)?.state.get().summary.name).toBe("StoneResonator.fbx");
   });
 });
 

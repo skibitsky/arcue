@@ -1,6 +1,8 @@
-import type { MemoryEndpoint } from "@arcue/protocol";
-import { createMemoryChannel, createPeer } from "@arcue/protocol";
+import { ReconnectingClient as ExportedClient } from "@arcue/protocol";
 import { describe, expect, it, vi } from "vitest";
+import type { MemoryEndpoint } from "./memory-channel";
+import { createMemoryChannel } from "./memory-channel";
+import { createPeer } from "./peer";
 import { ReconnectingClient } from "./reconnecting-client";
 
 /** A core stand-in on the far side of a fresh channel; returns the window's side and a way to emit events. */
@@ -11,6 +13,10 @@ function fakeCore(): { windowSide: MemoryEndpoint; emit(name: string, payload: u
 }
 
 describe("ReconnectingClient", () => {
+  it("is part of the protocol package", () => {
+    expect(ExportedClient).toBe(ReconnectingClient);
+  });
+
   it("rejects calls as disconnected until a channel is attached", async () => {
     const client = new ReconnectingClient({ handleRequest: () => null, onLost: () => undefined });
     expect(client.connectionState).toBe("reconnecting");

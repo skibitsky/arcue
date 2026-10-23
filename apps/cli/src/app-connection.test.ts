@@ -1,105 +1,51 @@
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import type { Server, Socket } from "node:net";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { BridgeInfo, IncomingRequest, LaunchInfo } from "@arcue/protocol";
-import {
-  ArcueError,
-  acceptBridge,
-  BRIDGE_INFO_FILE,
-  createPeer,
-  framedChannel,
-  jsonFrameCodec,
-  LAUNCH_INFO_FILE,
-} from "@arcue/protocol";
+import { join, resolve } from "node:path";
+import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
+import { startFakeCore, writeLaunchInfo } from "@arcue/platform-node/test";
+import { ArcueError, BRIDGE_INFO_FILE, SERVE_INFO_FILE } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectOrLaunch, userDataDir } from "./app-connection";
 import { run } from "./run";
 import { sessionView } from "./session-view";
 
-const TOKEN = "t".repeat(43);
 let userData: string;
-let server: Server;
-let sockets: Set<Socket>;
-let requests: IncomingRequest[];
+let fakes: FakeCore[];
 let openInView: (input: unknown) => unknown;
-
-const timer = (delayMs: number, callback: () => void) => {
-  const handle = setTimeout(callback, delayMs);
-  return () => clearTimeout(handle);
-};
 
 /** The environment of a person at a terminal, with the test's data folder. */
 function env(more: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return { ARCUE_USER_DATA: userData, ...more };
 }
 
-async function startFakeCore(token = TOKEN, url?: string): Promise<void> {
-  const socket = join(userData, "arcue.sock");
-  server = createServer((connection) => {
-    sockets.add(connection);
-    const stream = {
-      write: (bytes: Uint8Array) => {
-        connection.write(bytes);
-      },
-      onData(listener: (bytes: Uint8Array) => void) {
-        connection.on("data", listener);
-        return () => connection.off("data", listener);
-      },
-      onClose(listener: () => void) {
-        connection.once("close", listener);
-        return () => connection.off("close", listener);
-      },
-      close: () => connection.destroy(),
-    };
-    acceptBridge(framedChannel(stream, jsonFrameCodec), { token, timeout: { ms: 2000, setTimer: timer } }).then(
-      ({ endpoint }) => {
-        createPeer(endpoint, {
-          handleRequest: (request) => {
-            requests.push(request);
-            if (request.name === "asset.list") {
-              return {
-                assets: [
-                  {
-                    assetId: "a1",
-                    path: "/work/Hero.fbx",
-                    name: "Hero.fbx",
-                    status: "ready",
-                    version: "v1",
-                    error: null,
-                  },
-                ],
-              };
-            }
-            if (request.name === "asset.open") return { assetId: "a2" };
-            if (request.name === "asset.openInView") return openInView(request.input);
-            throw new ArcueError("unknown-command", request.name);
-          },
-        });
-      },
-      () => undefined,
-    );
+/** A core of this build at `bridge.json`, the desktop app's file, or as `options` say, answering like Arcue. */
+async function fakeCore(options: Partial<FakeCoreOptions> = {}): Promise<FakeCore> {
+  const fake = await startFakeCore(userData, {
+    file: BRIDGE_INFO_FILE,
+    kind: "desktop",
+    locks: 1,
+    answers: {
+      "asset.list": () => ({
+        assets: [
+          { assetId: "a1", path: "/work/Hero.fbx", name: "Hero.fbx", status: "ready", version: "v1", error: null },
+        ],
+      }),
+      "asset.open": () => ({ assetId: "a2" }),
+      "asset.openInView": (input) => openInView(input),
+    },
+    ...options,
   });
-  await new Promise<void>((resolve) => server.listen(socket, resolve));
-  writeBridgeInfo(TOKEN, url);
+  fakes.push(fake);
+  return fake;
 }
 
-function writeBridgeInfo(token: string, url?: string): void {
-  const info: BridgeInfo = {
-    version: 1,
-    socket: join(userData, "arcue.sock"),
-    token,
-    pid: 4242,
-    ...(url ? { url } : {}),
-  };
-  writeFileSync(join(userData, BRIDGE_INFO_FILE), JSON.stringify(info));
+/** An `arcue serve` from before cores ran side by side, which wrote `bridge.json` with its address and no kind. */
+function olderServe(): Promise<FakeCore> {
+  return fakeCore({ kind: undefined, locks: undefined, url: "http://localhost:4530" });
 }
 
-/** Records a launch command that runs Node with the script, standing in for the app. */
-function writeLaunchInfo(script: string): void {
-  const info: LaunchInfo = { version: 1, command: process.execPath, args: ["-e", script] };
-  writeFileSync(join(userData, LAUNCH_INFO_FILE), JSON.stringify(info));
+function requestsOf(name: string): unknown[] {
+  return fakes.flatMap((fake) => fake.requests.filter((request) => request.name === name).map(({ input }) => input));
 }
 
 function capture() {
@@ -112,51 +58,69 @@ function capture() {
 
 beforeEach(() => {
   userData = realpathSync(mkdtempSync(join(tmpdir(), "arcue-cli-")));
-  sockets = new Set();
-  requests = [];
+  fakes = [];
   openInView = () => ({ assetId: "a2", shown: "view" });
 });
 
 afterEach(async () => {
-  for (const socket of sockets) socket.destroy();
-  if (server?.listening) await new Promise((resolve) => server.close(resolve));
+  await Promise.all(fakes.map((fake) => fake.close()));
   rmSync(userData, { recursive: true, force: true });
 });
 
 describe("starting the app", () => {
   it("runs the command from launch.json and connects once the socket appears", async () => {
     const marker = join(userData, "launched");
-    writeLaunchInfo(`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`);
+    writeLaunchInfo(userData, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`);
     const connecting = connectOrLaunch(userData, { timeoutMs: 10_000, pollMs: 20 });
     await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await startFakeCore();
+    await fakeCore();
     const connection = await connecting;
     await expect(connection.client.query("asset.list", {})).resolves.toMatchObject({ assets: [{ assetId: "a1" }] });
     connection.close();
   });
 
   it("gives up when the started app never listens", async () => {
-    writeLaunchInfo("");
+    writeLaunchInfo(userData, "");
     await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(/did not start within/);
   });
 
   it("says so when the app was never started on this computer", async () => {
-    await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(/Start it once first/);
+    await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(
+      "Arcue is not running, and the Arcue app has not been started on this computer yet. Start the app once, or run arcue serve --detach to use Arcue in a browser.",
+    );
+  });
+
+  it("fails at once when the app that launch.json names cannot be started", async () => {
+    writeFileSync(join(userData, "launch.json"), JSON.stringify({ version: 1, command: "/nonexistent", args: [] }));
+    const started = Date.now();
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 10_000, pollMs: 20 })).rejects.toThrow(
+      "The Arcue app could not be started from /nonexistent: spawn /nonexistent ENOENT. Start it from where it is installed, or run arcue serve --detach to use Arcue in a browser.",
+    );
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("waits only for the app's bridge.json, never for Arcue in the browser", async () => {
+    const served = await fakeCore({ file: SERVE_INFO_FILE, kind: "serve", url: "http://localhost:4530" });
+    writeLaunchInfo(userData, "");
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(/did not start within/);
+    expect(served.requests).toEqual([]);
   });
 
   it("retries a refused handshake while a starting core replaces bridge.json", async () => {
-    await startFakeCore("u".repeat(43));
+    await fakeCore({ refuse: true });
     const connecting = connectOrLaunch(userData, { timeoutMs: 5000, pollMs: 20 });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    writeBridgeInfo("u".repeat(43));
+    await fakeCore();
     const connection = await connecting;
     await expect(connection.client.query("asset.list", {})).resolves.toMatchObject({ assets: [{ assetId: "a1" }] });
     connection.close();
   });
 
   it("reports the refusal when the handshake never succeeds", async () => {
-    await startFakeCore("u".repeat(43));
+    await fakeCore({ refuse: true });
     await expect(connectOrLaunch(userData, { timeoutMs: 200, pollMs: 20 })).rejects.toMatchObject({
       code: "forbidden",
     });
@@ -165,28 +129,24 @@ describe("starting the app", () => {
 
 describe("the arcue command", () => {
   it("opens a file by its absolute path with a clip and frame", async () => {
-    await startFakeCore();
+    await fakeCore();
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     const { lines, output } = capture();
     const code = await run(["open", "Hero.fbx", "--clip", "Armature|Charge", "--frame", "34"], output, env(), userData);
     expect(code).toBe(0);
-    expect(requests.find((request) => request.name === "asset.open")?.input).toEqual({
-      path: join(userData, "Hero.fbx"),
-      clip: "Armature|Charge",
-      frame: 34,
-    });
+    expect(requestsOf("asset.open")).toEqual([
+      { path: join(userData, "Hero.fbx"), clip: "Armature|Charge", frame: 34 },
+    ]);
     expect(lines.out).toContain("as a2");
   });
 
   it("opens a file by the letter case it has on disk", async ({ skip }) => {
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     if (!existsSync(join(userData, "HERO.FBX"))) skip();
-    await startFakeCore();
+    await fakeCore();
     const { output } = capture();
     await expect(run(["open", "hero.FBX"], output, env(), userData)).resolves.toBe(0);
-    expect(requests.find((request) => request.name === "asset.open")?.input).toEqual({
-      path: join(userData, "Hero.fbx"),
-    });
+    expect(requestsOf("asset.open")).toEqual([{ path: join(userData, "Hero.fbx") }]);
   });
 
   it("refuses a missing file before it starts the app", async () => {
@@ -196,10 +156,10 @@ describe("the arcue command", () => {
   });
 
   it("reports the running app's assets", async () => {
-    await startFakeCore();
+    await fakeCore();
     const { lines, output } = capture();
     await expect(run(["status"], output, env())).resolves.toBe(0);
-    expect(lines.out).toContain("process 4242");
+    expect(lines.out).toContain(`process ${process.pid}`);
     expect(lines.out).toContain("a1  ready    /work/Hero.fbx");
   });
 
@@ -220,26 +180,24 @@ describe("the arcue command in an agent session", () => {
   const session = { CLAUDE_CODE_SESSION_ID: "c3a1d6f0-8e2b-4b1c-9d7e-2f5a6b8c0e14" };
   const view = sessionView(session) ?? "";
   const address = `http://localhost:4530/?view=${view}`;
+  const serve = () => fakeCore({ file: SERVE_INFO_FILE, kind: "serve", url: "http://localhost:4530" });
 
   it("opens a file in the view of the session the environment names", async () => {
-    await startFakeCore(TOKEN, "http://localhost:4530");
+    await serve();
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     const { lines, output } = capture();
 
     await expect(run(["open", "Hero.fbx", "--frame", "12"], output, env(session), userData)).resolves.toBe(0);
 
-    expect(requests.find((request) => request.name === "asset.openInView")?.input).toEqual({
-      path: join(userData, "Hero.fbx"),
-      frame: 12,
-      view,
-      move: false,
-    });
-    expect(requests.some((request) => request.name === "asset.open")).toBe(false);
+    expect(requestsOf("asset.openInView")).toEqual([
+      { path: join(userData, "Hero.fbx"), frame: 12, view, move: false },
+    ]);
+    expect(requestsOf("asset.open")).toEqual([]);
     expect(lines.out).toBe(`Opened ${join(userData, "Hero.fbx")} in this session's view as a2.\n`);
   });
 
   it("names the session's page when Arcue holds the model for it, or shows it outside views", async () => {
-    await startFakeCore(TOKEN, "http://localhost:4530");
+    await serve();
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     openInView = () => ({ assetId: "a2", shown: "held" });
     const held = capture();
@@ -255,7 +213,7 @@ describe("the arcue command in an agent session", () => {
   });
 
   it("takes --view and --move, and says how to move a model another view shows", async () => {
-    await startFakeCore();
+    await fakeCore();
     writeFileSync(join(userData, "Hero.fbx"), "fbx");
     openInView = (input) => {
       if ((input as { move: boolean }).move) return { assetId: "a2", shown: "view" };
@@ -269,11 +227,11 @@ describe("the arcue command in an agent session", () => {
     expect(refused.lines.err).toBe(
       `Hero.fbx is open in another agent session's view, "abc". Add --move to show it in this session's view instead.\n`,
     );
-    expect(requests.at(-1)?.input).toMatchObject({ view: sessionView({}, "review"), move: false });
+    expect(requestsOf("asset.openInView").at(-1)).toMatchObject({ view: sessionView({}, "review"), move: false });
 
     const moved = capture();
     await expect(run(["open", "Hero.fbx", "--move"], moved.output, env(session), userData)).resolves.toBe(0);
-    expect(requests.at(-1)?.input).toMatchObject({ view, move: true });
+    expect(requestsOf("asset.openInView").at(-1)).toMatchObject({ view, move: true });
   });
 
   it("says to restart an Arcue older than views, naming where it runs", async () => {
@@ -281,19 +239,29 @@ describe("the arcue command in an agent session", () => {
     openInView = () => {
       throw new ArcueError("unknown-command", `There is no command named "asset.openInView".`);
     };
-    await startFakeCore(TOKEN, "http://localhost:4530");
+    const older = await olderServe();
     const served = capture();
 
-    await expect(run(["open", "Hero.fbx"], served.output, env(session), userData)).resolves.toBe(1);
+    await expect(run(["open", "Hero.fbx"], served.output, env(session), userData, { platform: "linux" })).resolves.toBe(
+      1,
+    );
     expect(served.lines.err).toBe(
-      "The Arcue at http://localhost:4530 (process 4242) is older than this arcue command and cannot show models in a session's view. Restart it: stop that arcue serve and run arcue serve again.\n",
+      `The Arcue at http://localhost:4530 (process ${process.pid}) is older than this arcue command and cannot show models in a session's view. Restart it: run arcue stop, then arcue serve --detach.\n`,
+    );
+    const onWindows = capture();
+    await expect(
+      run(["open", "Hero.fbx"], onWindows.output, env(session), userData, { platform: "win32" }),
+    ).resolves.toBe(1);
+    expect(onWindows.lines.err).toBe(
+      `The Arcue at http://localhost:4530 (process ${process.pid}) is older than this arcue command and cannot show models in a session's view. Restart it: stop it where it runs, then arcue serve --detach.\n`,
     );
 
-    writeBridgeInfo(TOKEN);
+    await older.close();
+    await fakeCore({ kind: undefined, locks: undefined });
     const desktop = capture();
     await expect(run(["open", "Hero.fbx"], desktop.output, env(session), userData)).resolves.toBe(1);
     expect(desktop.lines.err).toBe(
-      "The Arcue app (process 4242) is older than this arcue command and cannot show models in a session's view. Restart it: quit the app and run arcue open again.\n",
+      `The Arcue app (process ${process.pid}) is older than this arcue command and cannot show models in a session's view. Restart it: quit the app and run arcue open again.\n`,
     );
   });
 
@@ -306,7 +274,7 @@ describe("the arcue command in an agent session", () => {
   });
 
   it("prints the session's view address in its status", async () => {
-    await startFakeCore(TOKEN, "http://localhost:4530");
+    await serve();
     const { lines, output } = capture();
 
     await expect(run(["status"], output, env(session))).resolves.toBe(0);
@@ -323,6 +291,11 @@ describe("userDataDir", () => {
     expect(userDataDir({}, "darwin", "/Users/me")).toBe(join("/Users/me", "Library", "Application Support", "Arcue"));
     expect(userDataDir({ XDG_CONFIG_HOME: "/cfg" }, "linux", "/home/me")).toBe(join("/cfg", "Arcue"));
     expect(userDataDir({}, "linux", "/home/me")).toBe(join("/home/me", ".config", "Arcue"));
-    expect(userDataDir({ ARCUE_USER_DATA: "/tmp/x" }, "darwin", "/Users/me")).toBe("/tmp/x");
+    expect(userDataDir({ ARCUE_USER_DATA: "/tmp/x" }, "darwin", "/Users/me")).toBe(resolve("/tmp/x"));
+  });
+
+  it("resolves a relative ARCUE_USER_DATA against the working folder", () => {
+    expect(userDataDir({ ARCUE_USER_DATA: "data" })).toBe(resolve(process.cwd(), "data"));
+    expect(userDataDir({ ARCUE_USER_DATA: join("..", "data") })).toBe(resolve(process.cwd(), "..", "data"));
   });
 });

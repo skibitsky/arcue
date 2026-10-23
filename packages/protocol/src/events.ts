@@ -4,6 +4,7 @@ import type { EventDefinition } from "./definitions";
 import { event } from "./definitions";
 import { reviewCandidateSchema } from "./relink";
 import { reviewFileSchema } from "./review";
+import { settingsSchema } from "./settings";
 
 export const events = {
   "asset.opened": event({
@@ -35,6 +36,10 @@ export const events = {
   "round.copied": event({
     description: "A round was saved and its prompt copied.",
     payload: z.object({ assetId: assetIdSchema, round: z.int().positive() }),
+  }),
+  "settings.changed": event({
+    description: "The app settings in effect changed, through settings.set in any Arcue or in settings.json on disk.",
+    payload: z.object({ settings: settingsSchema }),
   }),
 } satisfies Record<string, EventDefinition>;
 

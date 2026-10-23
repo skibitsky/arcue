@@ -1,5 +1,5 @@
 import type { CommandInput, ComputedContext, CoreClient, IncomingRequest, MemoryEndpoint, Peer } from "@arcue/protocol";
-import { createMemoryChannel, createPeer, createRemoteClient } from "@arcue/protocol";
+import { ArcueError, createMemoryChannel, createPeer, createRemoteClient, serveImportWorker } from "@arcue/protocol";
 import type {
   CameraAnchor,
   Clip,
@@ -21,12 +21,17 @@ import {
   SCENE_SPACE,
   topologyFingerprint,
 } from "@arcue/scene";
+import { expect, onTestFinished } from "vitest";
 import type { ArcueCoreOptions } from "./core";
 import { ArcueCore } from "./core";
 import { versionIdOf } from "./hash";
 import { ManualClock } from "./manual-clock";
 import type { MemoryPlatformOptions } from "./memory-platform";
 import { MemoryPlatform } from "./memory-platform";
+import { joinPath } from "./paths";
+import type { ImportWorker, Platform, Unlock } from "./platform";
+import { REVIEWS_LOCK, SETTINGS_LOCK } from "./review-store";
+import { BROKEN_SETTINGS_FILE } from "./settings";
 
 /** A square grid of `grid` × `grid` vertices on the XY plane, `size` meters wide, from `offset`. */
 export interface FakeMesh {
@@ -291,31 +296,69 @@ export class FakeWindow {
   }
 }
 
+/** A change to files that `RecordingPlatform` reports to `beforeWrite` and in its `log`. */
+export type WriteOp = "write" | "writeAtomic" | "remove" | "rename" | "removeEmptyFolder";
+
+/** One change to files or locks, by the core that made it, or by the test itself for a null actor. */
+export interface PlatformLogEntry {
+  actor: string | null;
+  op: WriteOp | "lock" | "unlock";
+  /** The path changed, or for a lock its key. A rename logs both of its paths. */
+  path: string;
+  /** The keys of the locks the actor held at that moment. */
+  held: string[];
+}
+
 /**
  * Records how each file was written, so tests can check that review data is only written atomically, and fails the
- * writes or removals that `fail` picks.
+ * writes, removals or locks that `fail` picks. Each core of a test runs on its own `forCore` view, so the log tells
+ * whose write it was and which locks that core held.
  */
 export class RecordingPlatform extends MemoryPlatform {
   readonly writes: { path: string; atomic: boolean }[] = [];
+  readonly log: PlatformLogEntry[] = [];
   /** The file names the import workers parsed, in order. */
   readonly parsed: string[];
-  fail: ((operation: "write" | "remove", path: string) => boolean) | null = null;
+  fail: ((operation: "write" | "remove" | "lock", path: string, actor: string | null) => boolean) | null = null;
   /** Runs before each file is read, so a test can change files at that moment or hold the read back. */
   beforeRead: ((path: string) => Promise<void> | void) | null = null;
+  /** Runs before each change to files, so a test can hold it back; the actor is null for the test's own writes. */
+  beforeWrite: ((path: string, op: WriteOp, actor: string | null) => Promise<void> | void) | null = null;
+  readonly #held = new Map<string | null, Set<string>>();
 
   constructor(options: MemoryPlatformOptions = {}) {
     const parsed: string[] = [];
-    super({
-      ...options,
-      importers: options.importers?.map((importer) => ({
-        ...importer,
-        import: (request) => {
-          parsed.push(request.fileName);
-          return importer.import(request);
-        },
-      })),
-    });
+    super({ ...options, importers: options.importers && recording(options.importers, parsed) });
     this.parsed = parsed;
+  }
+
+  /**
+   * The platform as one core of the test sees it: the same files, clock and locks, with its writes and locks logged as
+   * the actor's. With `importers`, its import workers run those instead of the platform's, so a test can hold back one
+   * core's parses.
+   */
+  forCore(actor: string, options: { importers?: readonly Importer[] } = {}): Platform {
+    const importers = options.importers && recording(options.importers, this.parsed);
+    return {
+      appDataDir: this.appDataDir,
+      clock: this.clock,
+      readFile: (path) => this.readFile(path),
+      readText: (path) => this.readText(path),
+      writeFile: (path, data) => this.#writeFile(actor, path, data),
+      writeFileAtomic: (path, data) => this.#writeFileAtomic(actor, path, data),
+      exists: (path) => this.exists(path),
+      stat: (path) => this.stat(path),
+      mkdir: (path) => this.mkdir(path),
+      list: (path) => this.list(path),
+      remove: (path) => this.#remove(actor, path),
+      removeEmptyFolder: (path) => this.#removeEmptyFolder(actor, path),
+      rename: (from, to) => this.#rename(actor, from, to),
+      watch: (path, listener) => this.watch(path, listener),
+      findWorkspaceRoot: (path) => this.findWorkspaceRoot(path),
+      lock: (folder, name) => this.#lock(actor, folder, name),
+      startImportWorker: () => (importers ? inProcessWorker(importers) : this.startImportWorker()),
+      writeClipboard: (text) => this.writeClipboard(text),
+    };
   }
 
   override async readFile(path: string): Promise<Uint8Array> {
@@ -328,26 +371,161 @@ export class RecordingPlatform extends MemoryPlatform {
     return super.readText(path);
   }
 
-  override async writeFile(path: string, data: Uint8Array | string): Promise<void> {
-    this.#check("write", path);
+  override writeFile(path: string, data: Uint8Array | string): Promise<void> {
+    return this.#writeFile(null, path, data);
+  }
+
+  override writeFileAtomic(path: string, data: Uint8Array | string): Promise<void> {
+    return this.#writeFileAtomic(null, path, data);
+  }
+
+  override remove(path: string): Promise<void> {
+    return this.#remove(null, path);
+  }
+
+  override removeEmptyFolder(path: string): Promise<void> {
+    return this.#removeEmptyFolder(null, path);
+  }
+
+  override rename(from: string, to: string): Promise<void> {
+    return this.#rename(null, from, to);
+  }
+
+  override lock(folder: string, name: string): Promise<Unlock> {
+    return this.#lock(null, folder, name);
+  }
+
+  async #writeFile(actor: string | null, path: string, data: Uint8Array | string): Promise<void> {
+    await this.beforeWrite?.(path, "write", actor);
+    this.#check("write", path, actor);
     this.writes.push({ path, atomic: false });
+    this.#record(actor, "write", path);
     await super.writeFile(path, data);
   }
 
-  override async writeFileAtomic(path: string, data: Uint8Array | string): Promise<void> {
-    this.#check("write", path);
+  async #writeFileAtomic(actor: string | null, path: string, data: Uint8Array | string): Promise<void> {
+    await this.beforeWrite?.(path, "writeAtomic", actor);
+    this.#check("write", path, actor);
     this.writes.push({ path, atomic: true });
+    this.#record(actor, "writeAtomic", path);
     await super.writeFileAtomic(path, data);
   }
 
-  override async remove(path: string): Promise<void> {
-    this.#check("remove", path);
+  async #remove(actor: string | null, path: string): Promise<void> {
+    await this.beforeWrite?.(path, "remove", actor);
+    this.#check("remove", path, actor);
+    this.#record(actor, "remove", path);
     await super.remove(path);
   }
 
-  #check(operation: "write" | "remove", path: string): void {
-    if (this.fail?.(operation, path)) throw new Error(`The disk refused to ${operation} ${path}.`);
+  async #removeEmptyFolder(actor: string | null, path: string): Promise<void> {
+    await this.beforeWrite?.(path, "removeEmptyFolder", actor);
+    this.#record(actor, "removeEmptyFolder", path);
+    await super.removeEmptyFolder(path);
   }
+
+  async #rename(actor: string | null, from: string, to: string): Promise<void> {
+    await this.beforeWrite?.(from, "rename", actor);
+    this.#record(actor, "rename", from);
+    this.#record(actor, "rename", to);
+    await super.rename(from, to);
+  }
+
+  async #lock(actor: string | null, folder: string, name: string): Promise<Unlock> {
+    if (this.fail?.("lock", folder, actor)) {
+      throw new ArcueError("forbidden", `Arcue cannot lock the ${name} of ${folder}: the test refused it.`);
+    }
+    const key = this.lockKey(folder, name);
+    const unlock = await super.lock(folder, name);
+    const held = this.#held.get(actor) ?? new Set<string>();
+    this.#held.set(actor, held);
+    held.add(key);
+    this.#record(actor, "lock", key);
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      held.delete(key);
+      this.#record(actor, "unlock", key);
+      await unlock();
+    };
+  }
+
+  #record(actor: string | null, op: PlatformLogEntry["op"], path: string): void {
+    this.log.push({ actor, op, path, held: [...(this.#held.get(actor) ?? [])] });
+  }
+
+  #check(operation: "write" | "remove", path: string, actor: string | null): void {
+    if (this.fail?.(operation, path, actor)) throw new Error(`The disk refused to ${operation} ${path}.`);
+  }
+}
+
+function recording(importers: readonly Importer[], parsed: string[]): Importer[] {
+  return importers.map((importer) => ({
+    ...importer,
+    import: (request) => {
+      parsed.push(request.fileName);
+      return importer.import(request);
+    },
+  }));
+}
+
+function inProcessWorker(importers: readonly Importer[]): ImportWorker {
+  const [coreSide, workerSide] = createMemoryChannel();
+  serveImportWorker(workerSide, importers);
+  return { endpoint: coreSide, terminate: () => coreSide.close() };
+}
+
+/**
+ * The changes cores made under a reviews root or to the settings file without holding that root's or the settings'
+ * lock. The test's own changes are never listed.
+ */
+export function unlockedWrites(platform: RecordingPlatform): PlatformLogEntry[] {
+  return platform.log.filter((entry) => {
+    if (entry.actor === null || entry.op === "lock" || entry.op === "unlock") return false;
+    const key = lockFor(platform, entry.path);
+    return key !== null && !entry.held.includes(key);
+  });
+}
+
+/** The key of the lock a change of the path needs, or null for a path outside reviews and settings. */
+function lockFor(platform: RecordingPlatform, path: string): string | null {
+  const appData = platform.appDataDir;
+  if (path === joinPath(appData, "settings.json") || path === joinPath(appData, BROKEN_SETTINGS_FILE)) {
+    return platform.lockKey(appData, SETTINGS_LOCK);
+  }
+  if (path.startsWith(`${joinPath(appData, "reviews")}/`)) return platform.lockKey(appData, REVIEWS_LOCK);
+  const arcue = /^(.*?)\/\.arcue(?:\/|$)/.exec(path);
+  return arcue ? platform.lockKey(arcue[1] || "/", REVIEWS_LOCK) : null;
+}
+
+/** Holds back one file's parses until the test lets them go. */
+export interface GatedImporter {
+  importer: Importer;
+  /** Makes parses of the file wait from now on, including one that starts later. */
+  hold(fileName: string): void;
+  /** Lets the file's waiting parses run, and the ones after them. */
+  release(fileName: string): void;
+}
+
+export function gatedImporter(importer: Importer = fakeImporter): GatedImporter {
+  const gates = new Map<string, PromiseWithResolvers<void>>();
+  return {
+    importer: {
+      ...importer,
+      import: async (request) => {
+        await gates.get(request.fileName)?.promise;
+        return importer.import(request);
+      },
+    },
+    hold: (fileName) => {
+      if (!gates.has(fileName)) gates.set(fileName, Promise.withResolvers<void>());
+    },
+    release: (fileName) => {
+      gates.get(fileName)?.resolve();
+      gates.delete(fileName);
+    },
+  };
 }
 
 export interface TestCore {
@@ -359,9 +537,15 @@ export interface TestCore {
   errors: unknown[];
 }
 
+const testClockTime = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+
+/**
+ * Starts a core on the files, as "core-1", and checks once the test finishes that it held the reviews lock for every
+ * change to review data and the settings lock for every change to settings.
+ */
 export async function startTestCore(
   files: Record<string, string | Uint8Array>,
-  options: { clipboard?: boolean; core?: Partial<ArcueCoreOptions> } = {},
+  options: { clipboard?: boolean; core?: Partial<ArcueCoreOptions>; lockTimeoutMs?: number } = {},
 ): Promise<TestCore> {
   const clock = new ManualClock(Date.UTC(2026, 9, 8, 14, 2));
   const platform = new RecordingPlatform({
@@ -369,16 +553,52 @@ export async function startTestCore(
     clock,
     importers: [fakeImporter],
     clipboard: options.clipboard ? "available" : "unavailable",
+    ...(options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs }),
   });
+  onTestFinished(() => expect(unlockedWrites(platform)).toEqual([]));
   const errors: unknown[] = [];
   const core = await ArcueCore.start({
-    platform,
-    formatClockTime: (ms) => new Date(ms).toISOString().slice(11, 16),
+    platform: platform.forCore("core-1"),
+    formatClockTime: testClockTime,
     onError: (error) => errors.push(error),
     ...options.core,
   });
+  disposeWhenFailed(core);
   const window = new FakeWindow(core, "window-1");
   return { core, platform, clock, window, errors };
+}
+
+export interface SecondCore {
+  core: ArcueCore;
+  window: FakeWindow;
+  errors: unknown[];
+}
+
+/** Starts a second core, "core-2", on the test's files, clock and locks, as another process on the computer would. */
+export async function startSecondCore(
+  test: TestCore,
+  options: { core?: Partial<ArcueCoreOptions>; importers?: readonly Importer[] } = {},
+): Promise<SecondCore> {
+  const errors: unknown[] = [];
+  const platform = test.platform.forCore("core-2", options.importers ? { importers: options.importers } : {});
+  const core = await ArcueCore.start({
+    platform,
+    formatClockTime: testClockTime,
+    onError: (error) => errors.push(error),
+    ...options.core,
+  });
+  disposeWhenFailed(core);
+  return { core, window: new FakeWindow(core, "window-2"), errors };
+}
+
+/**
+ * Disposes the core when its test fails, so work it keeps doing in microtasks, such as answering another core's saves
+ * for ever, ends and the failure can be reported.
+ */
+function disposeWhenFailed(core: ArcueCore): void {
+  onTestFinished(({ task }) => {
+    if (task.result?.state === "fail") core.dispose();
+  });
 }
 
 /** Lets queued microtasks, such as file watch notifications, run. */

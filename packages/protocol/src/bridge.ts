@@ -7,23 +7,86 @@ import type { FramedChannel } from "./transport/framed";
 import { framedEndpoint } from "./transport/framed";
 import type { SetTimer } from "./transport/peer";
 
+export const coreKindSchema = z.enum(["desktop", "serve"]);
+
+export type CoreKind = z.output<typeof coreKindSchema>;
+
 /**
- * The file in the desktop app's data folder that tells the command line where the core listens and which token to
- * present. The core rewrites it with a new token every time it starts, readable only by the user.
+ * The desktop app's bridge file. Builds from before cores ran side by side also wrote it for `arcue serve`, with a
+ * `url`.
  */
 export const BRIDGE_INFO_FILE = "bridge.json";
 
+/** The bridge file of Arcue in the browser, which `arcue serve` runs beside the desktop app. */
+export const SERVE_INFO_FILE = "serve.json";
+
+/** The bridge file a core of this kind writes in the data folder. */
+export function bridgeInfoFile(kind: CoreKind): string {
+  return kind === "serve" ? SERVE_INFO_FILE : BRIDGE_INFO_FILE;
+}
+
+/** The lock protocol this build follows. A core that names another never runs beside this one. */
+export const LOCK_PROTOCOL = 1;
+
+/**
+ * A bridge file, which tells the command line where a core listens and which token to present. The core rewrites it
+ * with a new token every time it starts, readable only by the user.
+ */
 export const bridgeInfoSchema = z.object({
+  /** Never raised: older readers take a file with any other version for no core at all. */
   version: z.literal(1),
   /** A Unix domain socket path, or a Windows named pipe such as "\\\\.\\pipe\\arcue-…". */
   socket: z.string().min(1),
   token: z.string().min(32),
   pid: z.int().positive(),
-  /** Where a browser shows the core's window, when `arcue serve` runs the core rather than the desktop app. */
+  /** Where a browser shows the core's pages, for Arcue in the browser. */
   url: z.url().optional(),
+  /** Which core wrote the file. Builds from before cores ran side by side leave it out and take no locks. */
+  kind: coreKindSchema.optional(),
+  /** The lock protocol the core follows. */
+  locks: z.int().positive().optional(),
+  /** Which arcue.js runs the core, for Arcue in the browser: the first 16 hex digits of its SHA-256. */
+  build: z
+    .string()
+    .regex(/^[0-9a-f]{16}$/)
+    .optional(),
 });
 
 export type BridgeInfo = z.output<typeof bridgeInfoSchema>;
+
+/** Whether the core takes the same review locks as this build, so it may run beside it. */
+export function sharesReviews(info: BridgeInfo): boolean {
+  return info.kind !== undefined && info.locks === LOCK_PROTOCOL;
+}
+
+/** The kind of core a bridge file names: its `kind`, or for older builds "serve" when it has a url. */
+export function coreKindOf(info: BridgeInfo): CoreKind {
+  return info.kind ?? (info.url === undefined ? "desktop" : "serve");
+}
+
+/** Which kind of core started, stopped cleanly or was being started last, for "arcue open" while nothing runs. */
+export const LAST_CORE_FILE = "last-core.json";
+
+export const lastCoreSchema = z.object({
+  version: z.literal(1),
+  kind: coreKindSchema,
+  /** Where Arcue in the browser served its pages last, which `arcue serve --detach` takes its port from. */
+  serveUrl: z.url().optional(),
+});
+
+export type LastCore = z.output<typeof lastCoreSchema>;
+
+/** The close code a page's socket gets when Arcue in the browser stops on purpose. */
+export const SERVE_STOPPED_CLOSE_CODE = 4000;
+
+/** The marker the page of Arcue in the browser carries, so a page reloads only into another build of itself. */
+export const LOCAL_PAGE_MARKER = { name: "arcue-page", content: "local" } as const;
+
+/**
+ * The meta tag that `arcue serve` adds to its page, naming its data folder and user, so a page that reconnects never
+ * attaches to another Arcue in the browser that took its address.
+ */
+export const LOCAL_PAGE_OWNER = "arcue-owner";
 
 /**
  * Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket that carries one

@@ -2,12 +2,23 @@ import { ArcueError, createMemoryChannel, serveImportWorker } from "@arcue/proto
 import type { Importer } from "@arcue/scene";
 import { ManualClock } from "./manual-clock";
 import { dirname, findGitRoot, joinPath, normalizePath, pathInside } from "./paths";
-import type { Clock, DirectoryEntry, FileChange, FileStat, ImportWorker, Platform } from "./platform";
+import type { Clock, DirectoryEntry, FileChange, FileStat, ImportWorker, Platform, Unlock } from "./platform";
 
 type Entry =
   | { kind: "file"; data: Uint8Array; modifiedMs: number }
   | { kind: "directory"; modifiedMs: number }
   | { kind: "symlink"; target: string; modifiedMs: number };
+
+interface LockWaiter {
+  grant(): void;
+  timeOut(): void;
+  cancelTimer?: () => void;
+}
+
+interface LockQueue {
+  held: boolean;
+  waiters: LockWaiter[];
+}
 
 export interface MemoryPlatformOptions {
   /** Initial files by absolute path. */
@@ -29,6 +40,11 @@ export interface MemoryPlatformOptions {
    * When given, `importers` is ignored.
    */
   startImportWorker?: () => ImportWorker;
+  /**
+   * How long the first waiter for a lock waits for its holder before it rejects as "timeout". Each waiter's wait starts
+   * when it becomes first in line. Unset, a waiter waits forever and no timer is set.
+   */
+  lockTimeoutMs?: number;
 }
 
 const encoder = new TextEncoder();
@@ -38,6 +54,7 @@ const MAX_LINKS = 40;
 /**
  * A `Platform` held in memory, for tests and for the web host. Watchers hear about changes made through it,
  * one microtask later. Symbolic links resolve as on a real file system, with the lstat semantics `Platform` describes.
+ * Locks are kept in memory too: they create no files and notify no watcher.
  */
 export class MemoryPlatform implements Platform {
   readonly appDataDir: string;
@@ -48,6 +65,8 @@ export class MemoryPlatform implements Platform {
   readonly #clipboardAvailable: boolean;
   readonly #importers: readonly Importer[];
   readonly #startImportWorker: (() => ImportWorker) | undefined;
+  readonly #locks = new Map<string, LockQueue>();
+  readonly #lockTimeoutMs: number | undefined;
 
   constructor(options: MemoryPlatformOptions = {}) {
     this.clock = options.clock ?? new ManualClock();
@@ -55,6 +74,7 @@ export class MemoryPlatform implements Platform {
     this.#clipboardAvailable = options.clipboard === "available";
     this.#importers = options.importers ?? [];
     this.#startImportWorker = options.startImportWorker;
+    this.#lockTimeoutMs = options.lockTimeoutMs;
     for (const [path, data] of Object.entries(options.files ?? {})) this.#write(this.#resolve(path, true), data);
     for (const [path, target] of Object.entries(options.symlinks ?? {})) this.#link(path, target);
   }
@@ -160,6 +180,52 @@ export class MemoryPlatform implements Platform {
     return findGitRoot(path, (candidate) => this.exists(candidate));
   }
 
+  async lock(folder: string, name: string): Promise<Unlock> {
+    const key = this.lockKey(folder, name);
+    const queue = this.#locks.get(key) ?? { held: false, waiters: [] };
+    this.#locks.set(key, queue);
+    if (!queue.held) {
+      queue.held = true;
+      return this.#unlocker(key, queue);
+    }
+    return new Promise<Unlock>((resolve, reject) => {
+      const waiter: LockWaiter = {
+        grant: () => {
+          waiter.cancelTimer?.();
+          resolve(this.#unlocker(key, queue));
+        },
+        timeOut: () => {
+          reject(
+            new ArcueError(
+              "timeout",
+              `Another change kept the ${name} of ${folder} busy, so nothing was changed. Try again.`,
+            ),
+          );
+        },
+      };
+      queue.waiters.push(waiter);
+      if (queue.waiters.length === 1) this.#startWaiting(queue);
+    });
+  }
+
+  /**
+   * What tells one lock from another: the folder with the links in it resolved, in Unicode NFC and lower case, and the
+   * lock's name. A folder that does not exist yet resolves as far as its existing parents do.
+   */
+  lockKey(folder: string, name: string): string {
+    return `${this.#resolve(folder, true).normalize("NFC").toLowerCase()}\n${name}`;
+  }
+
+  /** The keys of the locks someone holds, for tests. */
+  heldLocks(): string[] {
+    return [...this.#locks].flatMap(([key, queue]) => (queue.held ? [key] : []));
+  }
+
+  /** How many wait for the lock with this key, for tests. */
+  lockWaiters(key: string): number {
+    return this.#locks.get(key)?.waiters.length ?? 0;
+  }
+
   startImportWorker(): ImportWorker {
     if (this.#startImportWorker) return this.#startImportWorker();
     const [coreSide, workerSide] = createMemoryChannel();
@@ -170,6 +236,35 @@ export class MemoryPlatform implements Platform {
   async writeClipboard(text: string): Promise<void> {
     if (!this.#clipboardAvailable) throw new ArcueError("unavailable", "This platform has no clipboard.");
     this.clipboardText = text;
+  }
+
+  /** Hands the lock to its first waiter, or frees it when none waits. A second call does nothing. */
+  #unlocker(key: string, queue: LockQueue): Unlock {
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      const next = queue.waiters.shift();
+      if (next) {
+        next.grant();
+        this.#startWaiting(queue);
+        return;
+      }
+      queue.held = false;
+      if (this.#locks.get(key) === queue) this.#locks.delete(key);
+    };
+  }
+
+  /** Starts the timeout of the lock's first waiter, which has just become first in line. */
+  #startWaiting(queue: LockQueue): void {
+    const first = queue.waiters[0];
+    if (!first || this.#lockTimeoutMs === undefined) return;
+    first.cancelTimer = this.clock.setTimer(this.#lockTimeoutMs, () => {
+      if (queue.waiters[0] !== first) return;
+      queue.waiters.shift();
+      first.timeOut();
+      this.#startWaiting(queue);
+    });
   }
 
   /** The path with each link in its folders replaced by the link's target, and a link at the end too when asked. */

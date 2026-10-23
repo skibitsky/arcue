@@ -189,12 +189,17 @@ describe("holding a model for its view's page", () => {
 
     const other = new FakeWindow(test.core, "page-b", "b");
     const outside = new FakeWindow(test.core, "window-2");
-    await other.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    await expect(other.client.execute("view.moveAsset", { assetId, unlessShown: true })).resolves.toEqual({
+      held: false,
+    });
     await outside.client.execute("view.moveAsset", { assetId, unlessShown: true });
     expect([other.requests, outside.requests]).toEqual([[], []]);
 
     const page = new FakeWindow(test.core, "page-a", "a");
-    await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    await expect(page.client.execute("view.moveAsset", { assetId, unlessShown: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 1,
+    });
     expect(page.requests).toEqual([
       { kind: "command", name: "view.showAsset", input: { assetId, clip: "Armature|Run", frame: 7 } },
     ]);
@@ -217,6 +222,109 @@ describe("holding a model for its view's page", () => {
     const page = new FakeWindow(test.core, "page-a", "a");
     await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
     expect(page.requests[0]?.input).toEqual({ assetId, frame: 9 });
+  });
+
+  it("holds the model for the view when its page closes before it shows the model, as when it reloads", async () => {
+    const test = await setupServe();
+    const page = browserPage(test, "page-a", "a");
+    page.respond = (request) => {
+      if (request.name !== "view.showAsset") return undefined;
+      page.close();
+      return new Promise(() => undefined);
+    };
+    const cli = bridge(test);
+
+    const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 12 });
+
+    expect(shown).toBe("held");
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO }],
+    });
+    const reloaded = browserPage(test, "page-a-2", "a");
+    await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(reloaded.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
+  });
+
+  it("lets a page of the view take back for a while a model another page adopted after both dropped", async () => {
+    const test = await setupServe();
+    const before = browserPage(test, "page-a", "a");
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    before.close();
+    await flush();
+    const first = browserPage(test, "page-b", "a");
+    await first.client.execute("view.moveAsset", { assetId, adopt: true });
+    expect(first.requestNames).toEqual(["view.showAsset"]);
+
+    const back = browserPage(test, "page-a-2", "a");
+    await back.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(first.requestNames).toEqual(["view.showAsset", "view.releaseAsset"]);
+    expect(back.requestNames).toEqual(["view.showAsset"]);
+    await first.client.execute("view.moveAsset", { assetId, adopt: true });
+    await first.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(first.requestNames).toEqual(["view.showAsset", "view.releaseAsset"]);
+
+    back.close();
+    await flush();
+    await first.client.execute("view.moveAsset", { assetId, adopt: true });
+    test.clock.advance(30_000);
+    const late = browserPage(test, "page-a-3", "a");
+    await late.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(late.requests).toEqual([]);
+  });
+
+  it("leaves a model one page of the view adopted with it when another page of the view adopts it too", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    expect(shown).toBe("held");
+    const first = browserPage(test, "page-a", "a");
+    const second = browserPage(test, "page-b", "a");
+
+    await expect(first.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 1,
+    });
+    await expect(second.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({ held: false });
+
+    expect(first.requestNames).toEqual(["view.showAsset"]);
+    expect(second.requests).toEqual([]);
+  });
+
+  it("starts a held model from the view a page kept for its tab while it keeps none, at the agent's frame", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 7 });
+    const page = browserPage(test, "page-a", "a");
+
+    await page.client.execute("view.moveAsset", { assetId, unlessShown: true, viewState: state });
+
+    await expect(test.core.client.query("viewState.get", { assetId })).resolves.toEqual(state);
+    expect(page.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 7 } }]);
+    page.close();
+    await flush();
+    const reloaded = browserPage(test, "page-b", "a");
+    await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true, viewState: { ...state, frame: 3 } });
+    await expect(test.core.client.query("viewState.get", { assetId })).resolves.toEqual(state);
+  });
+
+  it("numbers its holds, so a page tells the model an agent opened last, also one it opened before", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const hero = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    const villain = await cli.execute("asset.openInView", { path: VILLAIN, view: "a" });
+    await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 3 });
+    const page = browserPage(test, "page-a", "a");
+
+    await expect(page.client.execute("view.moveAsset", { assetId: villain.assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 2,
+    });
+    await expect(page.client.execute("view.moveAsset", { assetId: hero.assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 3,
+    });
+    await expect(page.client.execute("view.moveAsset", { assetId: hero.assetId })).resolves.toEqual({ held: false });
   });
 
   it("keeps the model in its view when its page reloads", async () => {

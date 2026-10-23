@@ -1,7 +1,7 @@
 import type { ReviewFile, RoundData } from "@arcue/protocol";
 import { REVIEW_FORMAT } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
-import type { TestCore } from "./test-support";
+import type { PlatformLogEntry, TestCore, WriteOp } from "./test-support";
 import {
   FakeWindow,
   fakeAsset,
@@ -16,6 +16,7 @@ import {
   png,
   readJson,
   startTestCore,
+  unlockedWrites,
 } from "./test-support";
 
 const REVIEW_JSON = `${HERO_REVIEW}/review.json`;
@@ -27,7 +28,7 @@ async function setup(): Promise<TestCore & { assetId: string }> {
 }
 
 describe("round.copy failures", () => {
-  it("treats screenshot cleanup as best effort, after the clipboard and the event", async () => {
+  it("treats screenshot cleanup as best effort, inside the round's save", async () => {
     const test = await setup();
     const order: string[] = [];
     test.core.client.subscribe("round.copied", () => order.push("event"));
@@ -39,12 +40,15 @@ describe("round.copy failures", () => {
     };
     const result = await test.core.client.execute("round.copy", { assetId: test.assetId });
     expect(result).toMatchObject({ round: 1, copiedToClipboard: true });
-    expect(order).toEqual(["event", "cleanup"]);
+    expect(order).toEqual(["cleanup", "event"]);
     expect(test.errors).toHaveLength(1);
     await expect(test.core.client.query("review.get", { assetId: test.assetId })).resolves.toMatchObject({
       queue: [],
       rounds: [{ number: 1 }],
     });
+    await expect(readJson(test.platform, REVIEW_JSON)).resolves.toMatchObject({ queue: [], rounds: [{ number: 1 }] });
+    await expect(test.platform.exists(`${HERO_REVIEW}/rounds/round-1/prompt.md`)).resolves.toBe(true);
+    expect(test.platform.heldLocks()).toEqual([]);
   });
 
   it("removes a partly written round folder, so the next round reuses its number", async () => {
@@ -369,5 +373,183 @@ describe("keeping a repository's .arcue folder out of git", () => {
     const assetId = await openAsset(test, "/art/Hero.fbx");
     await test.core.client.execute("comment.create", pinComment(assetId));
     expect(test.platform.writes.filter((write) => write.path.endsWith("/.gitignore"))).toEqual([]);
+  });
+});
+
+describe("the locks around every write of review data and settings", () => {
+  const ART = "/work/game/Assets/Art";
+  const STRIKER = `${ART}/Striker.fbx`;
+  const STRIKER_REVIEW = "/work/game/.arcue/reviews/Assets/Art/Striker.fbx";
+  const COMPOSITION = `${HERO_REVIEW}/composition.json`;
+  const reviews = (test: TestCore) => test.platform.lockKey("/work/game", "reviews");
+
+  /** The core's changes of a kind to paths that match, each with the reviews lock or the settings lock held. */
+  function locked(test: TestCore, op: WriteOp, matches: (path: string) => boolean, key = reviews(test)) {
+    expect(unlockedWrites(test.platform)).toEqual([]);
+    const found = test.platform.log.filter(
+      (entry: PlatformLogEntry) => entry.actor === "core-1" && entry.op === op && matches(entry.path),
+    );
+    expect(found.length).toBeGreaterThan(0);
+    for (const entry of found) expect(entry.held).toContain(key);
+    return found;
+  }
+
+  async function settle(test: TestCore): Promise<void> {
+    for (let check = 0; check < 20; check++) {
+      await flush();
+      await test.core.idle();
+      if (test.clock.pendingTimers === 0) return;
+      test.clock.advance(300);
+    }
+  }
+
+  it("holds the lock for comments, screenshots, rounds, their rollbacks and the cleanup", async () => {
+    const test = await startTestCore(heroFiles(), { clipboard: true });
+    const assetId = await openAsset(test);
+    locked(test, "writeAtomic", (path) => path === "/work/game/.arcue/.gitignore");
+    locked(test, "writeAtomic", (path) => path === REVIEW_JSON);
+
+    const { commentId } = await test.core.client.execute("comment.create", pinComment(assetId));
+    await test.core.client.execute("comment.update", { assetId, commentId, screenshot: png });
+    locked(test, "writeAtomic", (path) => path === `${HERO_REVIEW}/screenshots/${commentId}-2.png`);
+
+    test.platform.fail = (operation, path) => operation === "write" && path === REVIEW_JSON;
+    await expect(test.core.client.execute("comment.create", pinComment(assetId))).rejects.toThrow(/refused/);
+    test.platform.fail = (operation, path) => operation === "write" && path.endsWith("/rounds/round-1/prompt.md");
+    await expect(test.core.client.execute("round.copy", { assetId })).rejects.toThrow(/refused/);
+    test.platform.fail = null;
+    locked(test, "remove", (path) => path.startsWith(`${HERO_REVIEW}/screenshots/`));
+    locked(test, "remove", (path) => path === `${HERO_REVIEW}/rounds/round-1`);
+
+    await test.core.client.execute("round.copy", { assetId });
+    locked(test, "writeAtomic", (path) => path === `${HERO_REVIEW}/rounds/round-1/round.json`);
+    locked(test, "remove", (path) => path === `${HERO_REVIEW}/screenshots/${commentId}.png`);
+    await expect(test.platform.list(`${HERO_REVIEW}/screenshots`)).resolves.toEqual([]);
+  });
+
+  it("holds the lock for composition edits, their undo and redo, and a lost file's relink and its rollback", async () => {
+    const run = `${ART}/Anim/Run.fbx`;
+    const test = await startTestCore({
+      ...heroFiles(),
+      [`${ART}/Wave.fbx`]: fakeAsset({ meshes: [], clips: [{ name: "Wave", frames: 11 }] }),
+      [run]: fakeAsset({ meshes: [], clips: [{ name: "Run", frames: 11 }] }),
+      [COMPOSITION]: JSON.stringify({ version: 1, animations: ["Anim/Run.fbx"] }),
+    });
+    const assetId = await openAsset(test);
+    await test.core.client.execute("composition.addFile", { assetId, file: "Wave.fbx", role: "animation" });
+    await test.core.client.execute("review.undo", { assetId });
+    await test.core.client.execute("review.redo", { assetId });
+    expect(locked(test, "writeAtomic", (path) => path === COMPOSITION)).toHaveLength(3);
+
+    await test.platform.rename(run, `${ART}/Anim/Running.fbx`);
+    let failed = false;
+    test.platform.fail = (operation, path) => {
+      if (failed || operation !== "write" || path !== REVIEW_JSON) return false;
+      failed = test.platform.log.at(-1)?.path === COMPOSITION;
+      return failed;
+    };
+    await test.core.client.execute("asset.reload", { assetId });
+    await test.core.idle();
+    expect(failed).toBe(true);
+    expect(locked(test, "writeAtomic", (path) => path === COMPOSITION)).toHaveLength(5);
+    test.platform.fail = null;
+    await test.core.client.execute("asset.reload", { assetId });
+    await test.core.idle();
+    await expect(readJson(test.platform, COMPOSITION)).resolves.toMatchObject({
+      animations: ["Anim/Running.fbx", "Wave.fbx"],
+    });
+    expect(locked(test, "writeAtomic", (path) => path === COMPOSITION)).toHaveLength(6);
+  });
+
+  it("holds the lock for every move of a review folder", async () => {
+    const test = await startTestCore(heroFiles());
+    const first = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(first));
+    await test.core.client.execute("asset.close", { assetId: first });
+    await test.platform.rename(HERO, STRIKER);
+    const assetId = await openAsset(test, STRIKER);
+    locked(test, "rename", (path) => path === HERO_REVIEW);
+
+    const renamed = `${ART}/Renamed.fbx`;
+    await test.platform.rename(STRIKER, renamed);
+    await settle(test);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({ assets: [{ path: renamed }] });
+    locked(test, "rename", (path) => path === STRIKER_REVIEW);
+
+    await test.core.client.execute("asset.close", { assetId });
+    await test.platform.remove(renamed);
+    await test.platform.writeFile(HERO, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4 }] }));
+    const relinked = await openAsset(test);
+    await test.core.client.execute("review.relink", { assetId: relinked, from: renamed });
+    locked(test, "rename", (path) => path === "/work/game/.arcue/reviews/Assets/Art/Renamed.fbx");
+    locked(test, "remove", (path) => path === HERO_REVIEW);
+  });
+
+  it("holds the lock when it re-anchors a comment another program saved on an older version", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    const older = (await readJson(test.platform, REVIEW_JSON)) as ReviewFile;
+    await test.platform.writeFile(HERO, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 5 }] }));
+    const { version } = await test.core.client.execute("asset.reload", { assetId });
+    const current = (await readJson(test.platform, REVIEW_JSON)) as ReviewFile;
+    const writes = test.platform.log.filter((entry) => entry.actor === "core-1" && entry.path === REVIEW_JSON).length;
+
+    await test.platform.writeFile(
+      REVIEW_JSON,
+      JSON.stringify({ ...current, comments: older.comments, revision: current.revision + 1 }, null, 2),
+    );
+    await flush();
+    await test.core.idle();
+    expect(locked(test, "writeAtomic", (path) => path === REVIEW_JSON)).toHaveLength(writes + 1);
+    expect(((await readJson(test.platform, REVIEW_JSON)) as ReviewFile).comments[0]?.anchorVersion).toBe(version);
+  });
+
+  it("holds the settings lock for settings and a broken settings file", async () => {
+    const test = await startTestCore({ ...heroFiles(), "/app-data/settings.json": "{ half written" });
+    await test.core.client.execute("settings.set", { authorName: "Ana" });
+    const key = test.platform.lockKey("/app-data", "settings");
+    locked(test, "rename", (path) => path === "/app-data/settings.json", key);
+    locked(test, "rename", (path) => path === "/app-data/settings.broken.json", key);
+    locked(test, "writeAtomic", (path) => path === "/app-data/settings.json", key);
+    await expect(test.platform.readText("/app-data/settings.broken.json")).resolves.toBe("{ half written");
+  });
+
+  it("reports a core's write that only another core's lock covers", async () => {
+    const test = await startTestCore(heroFiles());
+    const outside = "/app-data/reviews/outside/Crate.fbx/review.json";
+    const unlock = await test.platform.forCore("core-1").lock("/work/game", "reviews");
+    const unlockOutside = await test.platform.forCore("core-1").lock("/app-data", "reviews");
+    await test.platform.forCore("core-2").writeFileAtomic(REVIEW_JSON, "{}");
+    await test.platform.forCore("core-2").writeFileAtomic("/app-data/settings.json", "{}");
+    await test.platform.forCore("core-2").writeFileAtomic(outside, "{}");
+    await test.platform.writeFile(`${HERO_REVIEW}/notes.txt`, "the test's own write");
+    await unlockOutside();
+    await unlock();
+    expect(unlockedWrites(test.platform)).toMatchObject([
+      { actor: "core-2", op: "writeAtomic", path: REVIEW_JSON, held: [] },
+      { actor: "core-2", op: "writeAtomic", path: "/app-data/settings.json", held: [] },
+      { actor: "core-2", op: "writeAtomic", path: outside, held: [] },
+    ]);
+    test.platform.log.length = 0;
+  });
+});
+
+describe("waiting for the core", () => {
+  it("gives up going idle, rather than wait for ever, while another program keeps changing the review it reads", async () => {
+    const test = await setup();
+    const versions = [await test.platform.readFile(REVIEW_JSON)];
+    await test.core.client.execute("comment.create", pinComment(test.assetId));
+    await test.core.idle();
+    versions.push(await test.platform.readFile(REVIEW_JSON));
+    let rewrites = 0;
+    test.core.client.subscribe("review.changed", () => {
+      if (++rewrites < 3000) void test.platform.writeFile(REVIEW_JSON, versions[rewrites % 2] ?? "");
+    });
+    await test.platform.writeFile(REVIEW_JSON, versions[0] ?? "");
+
+    await expect(test.core.idle()).rejects.toThrow("The core never went idle: its work went on for 1000 rounds.");
+    expect(rewrites).toBeLessThan(3000);
+    rewrites = 3000;
   });
 });

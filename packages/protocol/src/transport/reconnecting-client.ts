@@ -1,21 +1,13 @@
-import type {
-  CommandInput,
-  CommandName,
-  CommandOutput,
-  ConnectionState,
-  CoreClient,
-  EventName,
-  EventPayload,
-  ListenerErrorHandler,
-  MessageEndpoint,
-  Peer,
-  QueryInput,
-  QueryName,
-  QueryOutput,
-  RequestHandler,
-  Unsubscribe,
-} from "@arcue/protocol";
-import { ArcueError, createPeer, reportListenerError } from "@arcue/protocol";
+import type { ConnectionState, CoreClient, Unsubscribe } from "../client";
+import type { CommandInput, CommandName, CommandOutput } from "../commands";
+import { ArcueError } from "../errors";
+import type { EventName, EventPayload } from "../events";
+import type { ListenerErrorHandler } from "../listener-errors";
+import { reportListenerError } from "../listener-errors";
+import type { QueryInput, QueryName, QueryOutput } from "../queries";
+import type { MessageEndpoint } from "./endpoint";
+import type { Peer, RequestHandler } from "./peer";
+import { createPeer } from "./peer";
 
 /** A channel to the core that the window can close, so the core drops a connection the window no longer uses. */
 export interface CoreChannel extends MessageEndpoint {

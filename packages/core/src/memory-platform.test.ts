@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ManualClock } from "./manual-clock";
 import { MemoryPlatform } from "./memory-platform";
-import type { FileChange } from "./platform";
+import type { FileChange, Unlock } from "./platform";
+import { flush } from "./test-support";
 
 describe("MemoryPlatform files", () => {
   it("reads back text and bytes", async () => {
@@ -229,5 +230,203 @@ describe("MemoryPlatform symbolic links", () => {
   it("rejects link loops", async () => {
     const platform = new MemoryPlatform({ symlinks: { "/a": "/b", "/b": "/a" } });
     await expect(platform.readFile("/a")).rejects.toMatchObject({ code: "invalid-input" });
+  });
+});
+
+describe("MemoryPlatform locks", () => {
+  const busy = "Another change kept the reviews of /work/game busy, so nothing was changed. Try again.";
+
+  it("grants a lock to one holder at a time, in the order they asked", async () => {
+    const platform = new MemoryPlatform();
+    const key = platform.lockKey("/work/game", "reviews");
+    const granted: string[] = [];
+    const take = (name: string) =>
+      platform.lock("/work/game", "reviews").then((unlock) => {
+        granted.push(name);
+        return unlock;
+      });
+    const first = await take("first");
+    const second = take("second");
+    const third = take("third");
+    await flush();
+    expect(granted).toEqual(["first"]);
+    expect(platform.lockWaiters(key)).toBe(2);
+
+    await first();
+    await first();
+    await flush();
+    expect(granted).toEqual(["first", "second"]);
+    expect(platform.lockWaiters(key)).toBe(1);
+
+    await (await second)();
+    await (await third)();
+    expect(granted).toEqual(["first", "second", "third"]);
+    expect(platform.heldLocks()).toEqual([]);
+  });
+
+  it("sets a timer only for the first waiter, and rejects it when one holder keeps the lock too long", async () => {
+    const clock = new ManualClock();
+    const platform = new MemoryPlatform({ clock, lockTimeoutMs: 1000 });
+    const unlock = await platform.lock("/work/game", "reviews");
+    expect(clock.pendingTimers).toBe(0);
+
+    const first = platform.lock("/work/game", "reviews").catch((error: unknown) => error);
+    expect(clock.pendingTimers).toBe(1);
+    const second = platform.lock("/work/game", "reviews");
+    expect(clock.pendingTimers).toBe(1);
+
+    clock.advance(1000);
+    await expect(first).resolves.toMatchObject({ code: "timeout", message: busy });
+    expect(clock.pendingTimers).toBe(1);
+
+    await unlock();
+    const unlockSecond = await second;
+    expect(clock.pendingTimers).toBe(0);
+    clock.advance(5000);
+    expect(platform.heldLocks()).toEqual([platform.lockKey("/work/game", "reviews")]);
+    await unlockSecond();
+    expect(platform.heldLocks()).toEqual([]);
+  });
+
+  it("is one lock however the folder is spelled or linked", async () => {
+    const platform = new MemoryPlatform({ files: { "/work/game/.git/HEAD": "" }, symlinks: { "/link": "/work/game" } });
+    const key = platform.lockKey("/work/game", "reviews");
+    expect(key).toBe("/work/game\nreviews");
+    expect(platform.lockKey("/Work/Game", "reviews")).toBe(key);
+    expect(platform.lockKey("/link", "reviews")).toBe(key);
+    expect(platform.lockKey("/work/game/", "reviews")).toBe(key);
+    expect(platform.lockKey("/work/Cafe\u0301", "reviews")).toBe(platform.lockKey("/work/Caf\u00e9", "reviews"));
+
+    const unlock = await platform.lock("/Work/Game", "reviews");
+    expect(platform.heldLocks()).toEqual([key]);
+    const viaLink = platform.lock("/link", "reviews");
+    expect(platform.lockWaiters(key)).toBe(1);
+    await unlock();
+    await (await viaLink)();
+    expect(platform.heldLocks()).toEqual([]);
+  });
+
+  it("keeps locks of different names apart", async () => {
+    const platform = new MemoryPlatform();
+    const reviews = await platform.lock(platform.appDataDir, "reviews");
+    const settings = await platform.lock(platform.appDataDir, "settings");
+    expect(platform.heldLocks().sort()).toEqual(["/app-data\nreviews", "/app-data\nsettings"]);
+    await reviews();
+    await settings();
+    expect(platform.heldLocks()).toEqual([]);
+  });
+
+  it("lets go of the lock it took, even after the folder moved and its path links elsewhere", async () => {
+    const platform = new MemoryPlatform({ files: { "/app-data/settings.json": "{}", "/elsewhere/a.txt": "" } });
+    const key = platform.lockKey("/app-data", "reviews");
+    const unlock = await platform.lock("/app-data", "reviews");
+    await platform.rename("/app-data", "/moved");
+    await platform.symlink("/app-data", "/elsewhere");
+    expect(platform.lockKey("/app-data", "reviews")).not.toBe(key);
+    await unlock();
+    expect(platform.heldLocks()).toEqual([]);
+
+    await platform.remove("/app-data");
+    const again = await platform.lock("/app-data", "reviews");
+    expect(platform.heldLocks()).toEqual([key]);
+    await again();
+  });
+
+  it("locks a folder that does not exist yet as it will be once created", async () => {
+    const platform = new MemoryPlatform({ files: { "/work/.keep": "" }, symlinks: { "/repos": "/work" } });
+    const unlock = await platform.lock("/repos/game", "reviews");
+    await platform.mkdir("/work/game");
+    const key = platform.lockKey("/work/game", "reviews");
+    expect(platform.heldLocks()).toEqual([key]);
+    const real = platform.lock("/work/game", "reviews");
+    expect(platform.lockWaiters(key)).toBe(1);
+    await unlock();
+    await (await real)();
+    expect(platform.heldLocks()).toEqual([]);
+  });
+
+  it("either grants or times out a waiter whose limit falls due as its holder lets go", async () => {
+    for (const releaseFirst of [true, false]) {
+      const clock = new ManualClock();
+      const platform = new MemoryPlatform({ clock, lockTimeoutMs: 1000 });
+      const holder = await platform.lock("/work/game", "reviews");
+      if (releaseFirst) clock.setTimer(1000, () => void holder());
+      const waiter = platform.lock("/work/game", "reviews").then(
+        (unlock): { unlock: Unlock } | { error: unknown } => ({ unlock }),
+        (error: unknown) => ({ error }),
+      );
+      if (!releaseFirst) clock.setTimer(1000, () => void holder());
+      clock.advance(1000);
+      const outcome = await waiter;
+      if (releaseFirst) {
+        expect(outcome).toHaveProperty("unlock");
+        expect(platform.heldLocks()).toEqual([platform.lockKey("/work/game", "reviews")]);
+        if ("unlock" in outcome) await outcome.unlock();
+      } else {
+        expect(outcome).toEqual({ error: expect.objectContaining({ code: "timeout" }) });
+      }
+      await flush();
+      expect(platform.heldLocks()).toEqual([]);
+      expect(platform.lockWaiters(platform.lockKey("/work/game", "reviews"))).toBe(0);
+      expect(clock.pendingTimers).toBe(0);
+    }
+  });
+
+  it("creates no files and notifies no watcher", async () => {
+    const platform = new MemoryPlatform({ files: { "/work/game/Hero.fbx": "v1" } });
+    await flush();
+    const changes: FileChange[] = [];
+    platform.watch("/work/game/Hero.fbx", (change) => changes.push(change));
+    const root = await platform.list("/");
+    const folder = await platform.list("/work/game");
+    const unlock = await platform.lock("/work/game", "reviews");
+    const settings = await platform.lock(platform.appDataDir, "settings");
+    await unlock();
+    await settings();
+    await flush();
+    await expect(platform.list("/")).resolves.toEqual(root);
+    await expect(platform.list("/work/game")).resolves.toEqual(folder);
+    await expect(platform.exists(platform.appDataDir)).resolves.toBe(false);
+    expect(changes).toEqual([]);
+  });
+
+  it("starts each waiter's limit when the lock passes to the holder before it", async () => {
+    const clock = new ManualClock();
+    const platform = new MemoryPlatform({ clock, lockTimeoutMs: 1000 });
+    const outcomes: string[] = [];
+    const holdFor900 = (index: number) =>
+      platform.lock("/work/game", "reviews").then(
+        (unlock) => {
+          outcomes.push(`held ${index}`);
+          clock.setTimer(900, () => void unlock());
+        },
+        () => outcomes.push(`timed out ${index}`),
+      );
+    const holders = Array.from({ length: 11 }, (_, index) => holdFor900(index));
+    for (let turn = 0; turn < 11; turn++) {
+      await flush();
+      clock.advance(900);
+    }
+    await Promise.all(holders);
+    expect(outcomes).toEqual(Array.from({ length: 11 }, (_, index) => `held ${index}`));
+    expect(platform.heldLocks()).toEqual([]);
+  });
+
+  it("times out the next waiter when the waiter granted the lock before it keeps it too long", async () => {
+    const clock = new ManualClock();
+    const platform = new MemoryPlatform({ clock, lockTimeoutMs: 1000 });
+    const holder = await platform.lock("/work/game", "reviews");
+    const first = platform.lock("/work/game", "reviews");
+    const second = platform.lock("/work/game", "reviews").catch((error: unknown) => error);
+    await holder();
+    const unlockFirst = await first;
+    expect(clock.pendingTimers).toBe(1);
+
+    clock.advance(1000);
+    await expect(second).resolves.toMatchObject({ code: "timeout", message: busy });
+    expect(clock.pendingTimers).toBe(0);
+    expect(platform.lockWaiters(platform.lockKey("/work/game", "reviews"))).toBe(0);
+    await unlockFirst();
+    expect(platform.heldLocks()).toEqual([]);
   });
 });

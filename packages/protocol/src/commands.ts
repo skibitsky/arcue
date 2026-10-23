@@ -228,6 +228,13 @@ export const commands = {
     input: settingsSchema.partial(),
     output: settingsSchema,
   }),
+  "serve.stop": command({
+    description:
+      "Stops Arcue in the browser, the core arcue serve runs: it closes the command line's connections and its pages, lets the changes in flight finish saving, and exits. Only the command line may call it; the desktop app does not handle it.",
+    runsIn: "core",
+    input: z.object({}),
+    output: z.void(),
+  }),
   "review.undo": command({
     description:
       "Undo the asset's latest review edit, if there is one: a comment edit or a change to its composition file. A composition file that changed since the edit is not touched, and the call fails with conflict.",
@@ -281,11 +288,34 @@ export const commands = {
       ...assetRef,
       /**
        * Leaves the tab where it is when another window shows the asset, or the asset belongs to another view, as a page
-       * that reopens after a reload does. Without it, an asset of another view fails with conflict.
+       * that reopens after a reload does, except that it takes back an asset another page of its view adopted in the
+       * last 30 seconds (see `adopt`). Without it, an asset of another view fails with conflict.
        */
       unlessShown: z.boolean().optional(),
+      /**
+       * Shows an asset the core holds for the calling page's view, as a page that reconnects does with the other assets
+       * of its view, and never one another window shows. For a while, a page of the view that reopens a saved tab of it
+       * with `unlessShown` takes it back, since both pages may have lost their connection and this one came back first.
+       */
+      adopt: z.boolean().optional(),
+      /**
+       * The view the calling page kept for the tab, which an asset the core keeps no view for starts from, as one an
+       * agent opened while no page of its view was open. The clip and frame that open asked for still win.
+       */
+      viewState: viewStateSchema.optional(),
     }),
-    output: z.void(),
+    output: z.object({
+      /**
+       * The core held the asset for the calling page's view, as for an agent's open while no page of the view could show
+       * it, and shows it now, at the clip and frame that open asked for.
+       */
+      held: z.boolean(),
+      /**
+       * With `held`, the place of that open among the opens the core held assets for, which grows with each, so the
+       * asset with the greatest is the one an agent opened last.
+       */
+      heldOrder: z.number().int().positive().optional(),
+    }),
   }),
   "view.releaseAsset": command({
     description:

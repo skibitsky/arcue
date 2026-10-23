@@ -1,5 +1,9 @@
-import { viewStateSchema } from "@arcue/protocol";
+import type { WindowTabs } from "@arcue/protocol";
+import { windowTabsSchema } from "@arcue/protocol";
 import { z } from "zod";
+
+export type { SavedTab, WindowTabs } from "@arcue/protocol";
+export { savedTabSchema, windowTabsSchema } from "@arcue/protocol";
 
 /** IPC channel names between the main process and the preload. Every payload is checked against its schema. */
 export const channels = {
@@ -26,18 +30,6 @@ export const CORE_PORT_MESSAGE = "arcue:core-port";
 const pathSchema = z.string().min(1).max(4096);
 const assetIdSchema = z.string().min(1).max(200);
 
-export const savedTabSchema = z.object({
-  /** The model's path, which opens the same asset again. */
-  path: pathSchema,
-  view: viewStateSchema.nullable(),
-});
-
-/** A window's asset tabs, in order, and the index of the active one. */
-export const windowTabsSchema = z.object({
-  tabs: z.array(savedTabSchema).max(500),
-  active: z.int().min(0).nullable(),
-});
-
 export const windowInitSchema = z.object({
   platform: z.string(),
   /** Tabs to open when the window starts: a restored session, or the tabs the window had before it reloaded. */
@@ -62,8 +54,6 @@ export const openDialogResultSchema = z.array(pathSchema);
 /** What the open dialog offers when a file is added to a view: models, or images for a texture slot. */
 export const fileKindSchema = z.enum(["model", "image"]);
 
-export type SavedTab = z.output<typeof savedTabSchema>;
-export type WindowTabs = z.output<typeof windowTabsSchema>;
 export type WindowInit = z.output<typeof windowInitSchema>;
 export type MenuCommand = z.output<typeof menuCommandSchema>;
 export type TextEdit = z.output<typeof textEditSchema>;

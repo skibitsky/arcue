@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "./args";
+import { parseArgs, USAGE } from "./args";
 
 describe("parseArgs", () => {
   it("parses open with a clip and a frame, in either order and with = values", () => {
@@ -44,6 +44,46 @@ describe("parseArgs", () => {
     expect(parseArgs(["serve"])).toEqual({ command: "serve" });
     expect(parseArgs(["serve", "--port", "8123"])).toEqual({ command: "serve", port: 8123 });
     expect(parseArgs(["serve", "--port=1"])).toEqual({ command: "serve", port: 1 });
+  });
+
+  it("parses serve --detach, alone, with a port and repeated", () => {
+    expect(parseArgs(["serve", "--detach"])).toEqual({ command: "serve", detach: true });
+    expect(parseArgs(["serve", "--detach", "--port", "8123"])).toEqual({ command: "serve", port: 8123, detach: true });
+    expect(parseArgs(["serve", "--detach", "--detach"])).toEqual({ command: "serve", detach: true });
+    expect(() => parseArgs(["serve", "--detach=x"])).toThrow("--detach takes no value.");
+    expect(() => parseArgs(["serve", "--port", "0", "--detach"])).toThrow("from 1 to 65535");
+  });
+
+  it("parses the hidden --idle-stop-ms only without --detach", () => {
+    expect(parseArgs(["serve", "--idle-stop-ms", "5"])).toEqual({ command: "serve", idleStopMs: 5 });
+    expect(parseArgs(["serve", "--port=4600", "--idle-stop-ms=1800000"])).toEqual({
+      command: "serve",
+      port: 4600,
+      idleStopMs: 1_800_000,
+    });
+    for (const value of ["0", "1.5", "-1", "x"]) {
+      expect(() => parseArgs(["serve", "--idle-stop-ms", value]), value).toThrow(
+        `--idle-stop-ms takes a whole number of milliseconds from 1, got "${value}".`,
+      );
+    }
+    expect(parseArgs(["serve", "--idle-stop-ms", "2147483647"])).toEqual({
+      command: "serve",
+      idleStopMs: 2_147_483_647,
+    });
+    for (const value of ["2147483648", "9007199254740993", "99999999999999999999"]) {
+      expect(() => parseArgs(["serve", "--idle-stop-ms", value]), value).toThrow(
+        `--idle-stop-ms takes at most 2147483647 milliseconds, got "${value}".`,
+      );
+    }
+    expect(() => parseArgs(["serve", "--idle-stop-ms"])).toThrow("--idle-stop-ms needs a value.");
+    expect(() => parseArgs(["serve", "--detach", "--idle-stop-ms", "5"])).toThrow("--idle-stop-ms is set by --detach.");
+    expect(USAGE).not.toContain("--idle-stop-ms");
+  });
+
+  it("parses stop, which takes no arguments", () => {
+    expect(parseArgs(["stop"])).toEqual({ command: "stop" });
+    expect(() => parseArgs(["stop", "now"])).toThrow('"arcue stop" takes no arguments, got "now".');
+    expect(USAGE).toMatch(/^ {2}arcue stop$/m);
   });
 
   it("parses status and help", () => {
