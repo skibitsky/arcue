@@ -1240,7 +1240,7 @@ describe("the comments a review another Arcue saved moves onto the version on sc
 });
 
 describe("a reviews lock another holder keeps", () => {
-  it("leaves a version record waiting to try again, longer each time, and records it once the lock is free", async () => {
+  it("leaves a version record waiting to try again, longer each time up to 30 s, and records it once the lock is free", async () => {
     const test = await startTestCore(heroFiles(), { lockTimeoutMs: 15_000 });
     const key = test.platform.lockKey("/work/game", "reviews");
     const waiting = () => test.platform.lockWaiters(key);
@@ -1266,8 +1266,10 @@ describe("a reviews lock another holder keeps", () => {
     });
     expect(test.clock.pendingTimers).toBe(1);
     await retriesAfter(1000);
-    await timeOut();
-    await retriesAfter(2000);
+    for (const delayMs of [2000, 4000, 8000, 16_000, 30_000, 30_000]) {
+      await timeOut();
+      await retriesAfter(delayMs);
+    }
 
     await unlock();
     await flush();
