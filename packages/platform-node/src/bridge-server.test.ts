@@ -10,6 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { rename } from "node:fs/promises";
 import { connect, Server } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -32,11 +33,16 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { BridgeServer } from "./bridge-server";
 import { bridgeAddress, startBridgeServer } from "./bridge-server";
 import { socketStream } from "./node-socket";
-import { CoreRunningError, claimStart, recordLastCore, takeStartLock } from "./start-claim";
+import { CoreRunningError, claimStart, recordLastCore, startLockPath, takeStartLock } from "./start-claim";
 import type { Fixture, FixtureChild } from "./test-children";
 import { buildFixture } from "./test-children";
 import type { FakeCore } from "./test-cores";
 import { deadPid, startFakeCore } from "./test-cores";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 
 let userData: string;
 let core: ArcueCore;
@@ -452,6 +458,29 @@ describe("cores of both kinds", () => {
   it("lets go of the start lock when it is refused", async () => {
     await expect(startDesktop()).rejects.toBeInstanceOf(CoreRunningError);
     await startLockFree();
+  });
+
+  it("holds the start lock until its bridge file and last-core.json are written, its own or the one it is given", async () => {
+    await stopDefault();
+    const { rename: actualRename } = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const heldAtWrite = new Map<string, boolean>();
+    vi.mocked(rename).mockImplementation(async (from, to) => {
+      if (dirname(String(to)) === userData) heldAtWrite.set(basename(String(to)), existsSync(startLockPath(userData)));
+      return actualRename(from, to);
+    });
+    try {
+      await startDesktop();
+      expect(Object.fromEntries(heldAtWrite)).toEqual({ [BRIDGE_INFO_FILE]: true, [LAST_CORE_FILE]: true });
+      expect(existsSync(startLockPath(userData))).toBe(false);
+
+      heldAtWrite.clear();
+      const claim = await claimStart(userData, "serve");
+      others.push(await startBridgeServer({ core, userData, kind: "serve", url: ADDRESS, claim, ...quiet }));
+      expect(Object.fromEntries(heldAtWrite)).toEqual({ [SERVE_INFO_FILE]: true, [LAST_CORE_FILE]: true });
+      expect(existsSync(startLockPath(userData))).toBe(false);
+    } finally {
+      vi.mocked(rename).mockImplementation(actualRename);
+    }
   });
 
   it("writes its bridge file again when it is gone, and never over another live core's", async () => {
