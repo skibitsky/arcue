@@ -569,6 +569,20 @@ describe("arcue serve --detach", { timeout: 20_000 }, () => {
     expect(readFileSync(join(logs, "serve.log"), "utf8")).toMatch(/An older line\.\nPort 4531 is in use/);
   });
 
+  it("says when it cannot write its log, and leaves last-core.json as it was", async () => {
+    writeLastCoreFile(userData, "desktop", "http://localhost:4531");
+    const before = readFileSync(join(userData, LAST_CORE_FILE), "utf8");
+    const log = join(userData, "logs", "serve.log");
+    mkdirSync(log, { recursive: true });
+
+    const { code, out, err } = await detach(["--port", "4531"], "serve");
+
+    expect({ code, err }).toEqual({ code: 1, err: "" });
+    expect(out.startsWith(`Could not write Arcue's log at ${log}: `)).toBe(true);
+    expect(readRecord()).toBeNull();
+    expect(readFileSync(join(userData, LAST_CORE_FILE), "utf8")).toBe(before);
+  });
+
   it("stops arcue serve when it does not answer in time", async () => {
     const { code, out } = await detach(["--port", "4531"], "sleep", { detachTimeoutMs: 2000 });
 

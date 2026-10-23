@@ -120,9 +120,17 @@ export async function detachServe(
   if (((await stat(log).catch(() => null))?.size ?? 0) > LOG_LIMIT_BYTES) {
     await rename(log, join(logs, "serve.old.log")).catch(() => undefined);
   }
+  let descriptor: number | null = null;
+  let offset: number;
+  try {
+    descriptor = openSync(log, "a", 0o600);
+    offset = fstatSync(descriptor).size;
+  } catch (error) {
+    if (descriptor !== null) closeSync(descriptor);
+    output.out(`Could not write Arcue's log at ${log}: ${messageOf(error)}\n`);
+    return 1;
+  }
   const putBackLastCore = await recordLastCore(userData, "serve");
-  const descriptor = openSync(log, "a", 0o600);
-  const offset = fstatSync(descriptor).size;
   let child: ChildProcess;
   try {
     child = spawn(
