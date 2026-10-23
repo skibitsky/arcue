@@ -1479,6 +1479,34 @@ describe("a reviews lock another holder keeps while a file is opened or relinked
     expect(test.errors).toEqual([]);
   });
 
+  it("opens a renamed model without an error or offer when the earlier review goes to a third model meanwhile", async () => {
+    const third = `${ART}/Third.fbx`;
+    const thirdReview = "/work/game/.arcue/reviews/Assets/Art/Third.fbx";
+    const test = await startTestCore(heroFiles());
+    const first = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(first));
+    await test.core.client.execute("asset.close", { assetId: first });
+    const hero = await test.platform.readText(HERO);
+    await test.platform.rename(HERO, STRIKER);
+    const offered: unknown[] = [];
+    test.core.client.subscribe("review.offered", (payload) => offered.push(payload));
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    const opening = test.window.client.execute("asset.open", { path: STRIKER });
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    await test.platform.writeFile(third, hero);
+    await test.platform.rename(HERO_REVIEW, thirdReview);
+    await unlock();
+    const { assetId } = await opening;
+    await test.core.idle();
+
+    expect(test.errors).toEqual([]);
+    expect(offered).toEqual([]);
+    await expect(test.core.client.query("review.candidates", { assetId })).resolves.toEqual({ candidates: [] });
+    await expect(test.core.client.query("review.get", { assetId })).resolves.toMatchObject({ comments: [] });
+    expect((await saved(test, `${thirdReview}/review.json`)).comments).toHaveLength(1);
+  });
+
   it("keeps the earlier review where it is when its model comes back while a relink waits for the lock", async () => {
     const test = await startTestCore(heroFiles());
     const first = await openAsset(test);
