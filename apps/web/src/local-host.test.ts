@@ -520,6 +520,67 @@ describe("LocalHost", () => {
     expect(page.activePath()).toBe(HERO);
   });
 
+  it("shows a model an agent opens while the page reopens its tabs after them, in the active tab", async () => {
+    const server = new FakeServer();
+    const core = await server.start();
+    const storage = new FakeStorage();
+    savedTabs(storage, [HERO, CRATE, GOLEM], 0);
+    const shown: Promise<string>[] = [];
+    const stop = core.client.subscribe("asset.opened", () => {
+      stop();
+      const opening = server.bridge().execute("asset.openInView", { path: BLOB, view: VIEW, frame: 3 });
+      shown.push(opening.then((opened) => opened.shown));
+    });
+    const page = new Page(server, { storage }).start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(4));
+    await expect(Promise.all(shown)).resolves.toEqual(["view"]);
+    expect(page.paths()).toEqual([HERO, CRATE, GOLEM, BLOB]);
+    expect(page.activePath()).toBe(BLOB);
+  });
+
+  it("keeps a saved tab an agent opens while the page reopens its tabs in its place, in the active tab", async () => {
+    const server = new FakeServer();
+    const core = await server.start();
+    const storage = new FakeStorage();
+    savedTabs(storage, [HERO, CRATE, GOLEM], 0);
+    const stop = core.client.subscribe("asset.opened", () => {
+      stop();
+      void server.bridge().execute("asset.openInView", { path: CRATE, view: VIEW });
+    });
+    const page = new Page(server, { storage }).start();
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(3));
+    expect(page.paths()).toEqual([HERO, CRATE, GOLEM]);
+    expect(page.activePath()).toBe(CRATE);
+  });
+
+  it("shows a model an agent opens as the page's socket comes back after its tabs, in the active tab", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const page = new Page(server).start();
+    await page.connected();
+    await page.opened(HERO, CRATE);
+    page.store.activate("a1");
+    server.dropSockets();
+    await vi.waitFor(() => expect(page.host.client.connectionState).toBe("reconnecting"));
+    const agent = server.bridge();
+    const shown: Promise<string>[] = [];
+    const stop = page.host.client.onConnectionChange((state) => {
+      if (state !== "connected") return;
+      stop();
+      shown.push(agent.execute("asset.openInView", { path: GOLEM, view: VIEW }).then((opened) => opened.shown));
+    });
+    await page.connected();
+
+    await vi.waitFor(() => expect(page.saved()?.tabs).toHaveLength(3));
+    await expect(Promise.all(shown)).resolves.toEqual(["view"]);
+    expect(page.paths()).toEqual([HERO, CRATE, GOLEM]);
+    expect(page.activePath()).toBe(GOLEM);
+  });
+
   it("brings its tabs back with the same ids when its socket drops while the core keeps running", async () => {
     const server = new FakeServer();
     await server.start();

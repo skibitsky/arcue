@@ -1,4 +1,4 @@
-import type { FramedChannel, SetTimer, WindowTabs } from "@arcue/protocol";
+import type { CommandArgs, FramedChannel, IncomingRequest, SetTimer, WindowTabs } from "@arcue/protocol";
 import {
   ArcueError,
   binaryFrameCodec,
@@ -56,6 +56,11 @@ interface Attempt {
   attached: boolean;
 }
 
+/** The assets the core asked the page to show, in order, since the page attached for a reopen of its tabs. */
+interface Shows {
+  ids: string[];
+}
+
 const FIRST_RETRY_MS = 250;
 const MAX_RETRY_MS = 5000;
 const ATTEMPT_TIMEOUT_MS = 10_000;
@@ -103,6 +108,8 @@ export class LocalHost {
   #attachedBefore = false;
   #toldStopped = false;
   #reopening: Promise<void> = Promise.resolve();
+  /** The shows of the reopen that runs or waits to run, until it ends. */
+  #shows: Shows | null = null;
 
   constructor(options: LocalHostOptions) {
     this.#options = options;
@@ -110,7 +117,10 @@ export class LocalHost {
     const view = options.view === null ? null : viewNameSchema.safeParse(options.view);
     this.#view = view === null ? null : view.success ? view.data : undefined;
     this.client = new ReconnectingClient({
-      handleRequest: (request) => this.store.handleRequest(request),
+      handleRequest: (request) => {
+        this.#noteShow(request);
+        return this.store.handleRequest(request);
+      },
       onLost: () => {
         this.#socket = null;
         this.#retryLater();
@@ -265,24 +275,38 @@ export class LocalHost {
     }
     this.#failures = 0;
     const generation = this.#restore.detach();
+    const shows: Shows = { ids: [] };
+    this.#shows = shows;
     this.client.attach({ ...framedEndpoint(channel), close: () => attempt.socket.close() });
     attempt.attached = true;
     this.#attachedBefore = true;
     this.#toldStopped = false;
     if (this.#options.hasFocus?.()) this.store.reportFocus();
     this.#reopening = this.#reopening
-      .then(() => this.#reopenAll(generation))
-      .catch((error: unknown) => console.error(error));
+      .then(() => this.#reopenAll(generation, shows))
+      .catch((error: unknown) => console.error(error))
+      .finally(() => {
+        if (this.#shows === shows) this.#shows = null;
+      });
+  }
+
+  #noteShow({ kind, name, input }: IncomingRequest): void {
+    if (!this.#shows || kind !== "command" || name !== "view.showAsset") return;
+    const assetId = typeof input === "object" && input !== null && "assetId" in input ? input.assetId : null;
+    if (typeof assetId === "string") this.#shows.ids.push(assetId);
   }
 
   /**
    * Opens the tabs again in order. A model the core still has moves to this page as the core keeps it, such as at the
    * clip and frame an agent opened it at, also from a page of the view that adopted it just before, and from the view
-   * the tab kept when the core keeps none; any other opens from its path. Then the page adopts the other assets the core holds for its view, which another page of the view
-   * that lost its connection too may take back. Of the models the core held for an agent's opens while the page was
-   * away, the one opened last ends up active, and otherwise the saved active tab.
+   * the tab kept when the core keeps none; any other opens from its path. Then the page adopts the other assets the core
+   * holds for its view, which another page of the view that lost its connection too may take back.
+   *
+   * The model an agent opened last ends up active, and otherwise the saved active tab: one the core showed in the page
+   * while it reopened its tabs, which goes after them unless it is one of them, or else, of the models the core held
+   * for an agent's opens while the page was away, the one opened last.
    */
-  async #reopenAll(generation: number): Promise<void> {
+  async #reopenAll(generation: number, shows: Shows): Promise<void> {
     let known: Map<string, string>;
     try {
       const { assets } = await this.client.query("asset.list", {});
@@ -291,36 +315,62 @@ export class LocalHost {
       return;
     }
     const moved = new Set<string>();
+    const restored = new Set<string>();
     let held: { assetId: string; order: number } | null = null;
     const noteHeld = (assetId: string, result: unknown) => {
       const order = heldOrder(result);
       if (order !== null && (held === null || order >= held.order)) held = { assetId, order };
     };
+    /** Runs one of the reopen's own calls, which shows at most the asset it names, and drops that show from `shows`. */
+    const own = async <Result>(call: () => Promise<Result>, assetIdOf: (result: Result) => string) => {
+      const from = shows.ids.length;
+      const result = await call();
+      const at = shows.ids.indexOf(assetIdOf(result), from);
+      if (at >= 0) shows.ids.splice(at, 1);
+      return result;
+    };
+    const move = async (assetId: string, input: Omit<CommandArgs<"view.moveAsset">, "assetId">) => {
+      moved.add(assetId);
+      const result = await own(
+        () => this.client.execute("view.moveAsset", { assetId, ...input }),
+        () => assetId,
+      );
+      noteHeld(assetId, result);
+    };
+    const agentOpened = () =>
+      shows.ids.filter((assetId, at) => shows.ids.lastIndexOf(assetId) === at && this.store.session(assetId) !== null);
     await this.#restore.reopen(generation, {
       open: async ({ path, view }) => {
+        const kept = view ? { viewState: view } : {};
         const assetId = known.get(path);
         if (assetId === undefined) {
-          await this.client.execute("asset.open", { path, ...(view ? { viewState: view } : {}) });
+          const opened = await own(
+            () => this.client.execute("asset.open", { path, ...kept }),
+            (result) => result.assetId,
+          );
+          restored.add(opened.assetId);
           return;
         }
-        moved.add(assetId);
-        const kept = view ? { viewState: view } : {};
-        noteHeld(assetId, await this.client.execute("view.moveAsset", { assetId, unlessShown: true, ...kept }));
+        restored.add(assetId);
+        await move(assetId, { unlessShown: true, ...kept });
       },
       quiet: isConflict,
       adopt: async () => {
         for (const assetId of known.values()) {
           if (moved.has(assetId) || generation !== this.#restore.generation) continue;
           try {
-            noteHeld(assetId, await this.client.execute("view.moveAsset", { assetId, adopt: true }));
+            await move(assetId, { adopt: true });
           } catch (error) {
             if (isConflict(error) || generation !== this.#restore.generation) continue;
             if (this.client.connectionState !== "connected") return;
             this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" });
           }
         }
+        for (const assetId of agentOpened()) {
+          if (!restored.has(assetId)) this.store.moveTab(assetId, Number.POSITIVE_INFINITY);
+        }
       },
-      activeInstead: () => held?.assetId ?? null,
+      activeInstead: () => agentOpened().at(-1) ?? held?.assetId ?? null,
     });
     if (generation === this.#restore.generation) this.saveTabs();
   }
