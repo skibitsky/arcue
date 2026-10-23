@@ -118,6 +118,15 @@ export interface ArcueServer {
 /** The addresses of the page itself, whose load counts the idle time again, as its socket connects only once it runs. */
 const PAGE_PATHS: ReadonlySet<string> = new Set(["/", "/index.html"]);
 
+/**
+ * Whether a request loads the page into a tab. A fetch of the page from a script, as an open page's probe of its
+ * address is, does not, so a page left open on another Arcue in the browser keeps no idle serve running.
+ */
+function loadsPage(request: IncomingMessage, address: URL | null): boolean {
+  const destination = request.headers["sec-fetch-dest"];
+  return PAGE_PATHS.has(address?.pathname ?? "") && (destination === undefined || destination === "document");
+}
+
 const HEARTBEAT_MS = 30_000;
 const CHECK_MS = 5_000;
 const PAGE_CLOSE_MS = 1_000;
@@ -261,7 +270,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
       if (!allowed(request)) return refuse(response, 403);
       if (request.method !== "GET" && request.method !== "HEAD") return refuse(response, 405);
-      if (pages === 0 && PAGE_PATHS.has(URL.parse(request.url ?? "/", url)?.pathname ?? "")) armIdle();
+      if (pages === 0 && loadsPage(request, URL.parse(request.url ?? "/", url))) armIdle();
       sendFile(webUi, owner, request, response, () => removed(webUi)).catch((error: unknown) => {
         options.onError(error);
         if (!response.headersSent) refuse(response, 500);

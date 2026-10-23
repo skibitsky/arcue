@@ -95,7 +95,11 @@ interface Answer {
 }
 
 /** Sends the path as it is, without the normalizing `fetch` does, with the Host header given. */
-function get(url: string, path: string, init: { host?: string; method?: string } = {}): Promise<Answer> {
+function get(
+  url: string,
+  path: string,
+  init: { host?: string; method?: string; headers?: Record<string, string> } = {},
+): Promise<Answer> {
   const { port } = new URL(url);
   return new Promise((resolve, reject) => {
     const sent = request(
@@ -104,7 +108,7 @@ function get(url: string, path: string, init: { host?: string; method?: string }
         port,
         path,
         method: init.method ?? "GET",
-        headers: { host: init.host ?? `localhost:${port}` },
+        headers: { ...init.headers, host: init.host ?? `localhost:${port}` },
       },
       (response) => {
         let body = "";
@@ -885,6 +889,28 @@ describe("arcue serve on its own", () => {
     await settle();
     expect(seen.stop).toBeNull();
     clock.advance(28 * MINUTE - 1);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(1);
+    await expect(running.stopped).resolves.toMatchObject({ reason: "idle" });
+  });
+
+  it("counts the idle time again from a load of the page into a tab, and not from a fetch of it by a page", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+
+    clock.advance(20 * MINUTE);
+    expect((await get(running.url, "/", { headers: { "sec-fetch-dest": "document" } })).status).toBe(200);
+    clock.advance(29 * MINUTE);
+    expect((await get(running.url, "/", { headers: { "sec-fetch-dest": "empty" } })).status).toBe(200);
+    expect((await get(running.url, "/index.html", { headers: { "sec-fetch-dest": "empty" } })).status).toBe(200);
+    clock.advance(MINUTE - 1);
     await settle();
     expect(seen.stop).toBeNull();
     clock.advance(1);
