@@ -34,6 +34,33 @@ async function opened(): Promise<TestCore & { assetId: string }> {
 }
 
 describe("ArcueCore.shutdown", () => {
+  it("waits for queued settings saves behind another core's lock before finishing", async () => {
+    const test = await startTestCore({});
+    const folder = test.platform.appDataDir;
+    const key = test.platform.lockKey(folder, "settings");
+    const unlock = await test.platform.lock(folder, "settings");
+    const coordinates = test.window.client.execute("settings.set", { coordinates: "z-up-blender" });
+    const author = test.window.client.execute("settings.set", { authorName: "Ana" });
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+    let stopped = false;
+    const shutdown = test.core.shutdown().then(() => {
+      stopped = true;
+    });
+    try {
+      await flush();
+      expect(stopped).toBe(false);
+      expect(await test.platform.exists(`${folder}/settings.json`)).toBe(false);
+    } finally {
+      await unlock();
+      await Promise.all([coordinates, author, shutdown]);
+    }
+    expect(await readJson(test.platform, `${folder}/settings.json`)).toEqual({
+      coordinates: "z-up-blender",
+      authorName: "Ana",
+    });
+    expect(test.platform.heldLocks()).toEqual([]);
+  });
+
   it("closes an asset only once the save in flight is on disk, then removes the handlers", async () => {
     const test = await opened();
     const held = holdReviewWrites(test.platform);
@@ -178,5 +205,23 @@ describe("ArcueCore.shutdown", () => {
     held.release();
     await shutdown;
     await created;
+  });
+
+  it("refuses settings changes once shutdown has started", async () => {
+    const test = await opened();
+    const held = holdReviewWrites(test.platform);
+    const created = test.window.client.execute("comment.create", looseComment(test.assetId));
+    await held.writing;
+    const shutdown = test.core.shutdown();
+    try {
+      await expect(test.window.client.execute("settings.set", { authorName: "Too late" })).rejects.toMatchObject({
+        code: "unavailable",
+        message: "Arcue is stopping.",
+      });
+    } finally {
+      held.release();
+      await Promise.all([created, shutdown]);
+    }
+    expect(await test.platform.exists(`${test.platform.appDataDir}/settings.json`)).toBe(false);
   });
 });

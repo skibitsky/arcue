@@ -81,9 +81,13 @@ function env(more: Record<string, string> = {}): Record<string, string> {
   return Object.fromEntries(Object.entries(given).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 
-function launch(): Promise<ElectronApplication> {
+function launch(preload?: string): Promise<ElectronApplication> {
   return _electron
-    .launch({ executablePath: electronPath, args: [...rendererSwitches, appDir], env: env(sandbox) })
+    .launch({
+      executablePath: electronPath,
+      args: [...rendererSwitches, ...(preload ? ["--require", preload] : []), appDir],
+      env: env(sandbox),
+    })
     .then((electron) => {
       app = electron;
       return electron;
@@ -557,16 +561,44 @@ describe("the desktop app beside Arcue in the browser", () => {
   it("says why it quits beside an older arcue serve, and starts no core", async () => {
     const older = await startFakeCore(userData, { file: BRIDGE_INFO_FILE, url: ADDRESS });
     fakes.push(older);
+    const notice = join(temp, "notice.json");
+    const preload = join(temp, "notice.cjs");
+    writeFileSync(
+      preload,
+      `const { dialog } = require("electron");
+const { writeFileSync } = require("node:fs");
+dialog.showMessageBox = (options) => {
+  writeFileSync(${JSON.stringify(notice)}, JSON.stringify(options));
+  return new Promise((resolve) => {
+    dialog.dismissTestNotice = () => resolve({ response: options.cancelId, checkboxChecked: false });
+  });
+};
+`,
+    );
 
-    const electron = await launch();
+    const electron = await launch(preload);
 
     await expect
       .poll(() => log("main"), { timeout: 20_000 })
       .toContain(
         `Another Arcue runs (process ${older.info.pid} at ${ADDRESS}) and can't share reviews with this one, so this one quits`,
       );
+    expect(readJson(notice)).toMatchObject({
+      message: "Arcue is already running",
+      detail: expect.stringContaining(`An older arcue serve runs at ${ADDRESS} and can't share reviews with this app.`),
+      buttons: ["Open in browser", "Quit"],
+      cancelId: 1,
+    });
     expect(await electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
     expect(log("core")).toBe("");
+    const closed = electron.waitForEvent("close");
+    await electron.evaluate(({ dialog }) => {
+      const dismiss = Reflect.get(dialog, "dismissTestNotice");
+      if (typeof dismiss !== "function") throw new Error("The compatibility notice was not shown.");
+      setImmediate(() => dismiss());
+    });
+    await closed;
+    app = null;
     expect(readJson(join(userData, BRIDGE_INFO_FILE))).toEqual(older.info);
   });
 

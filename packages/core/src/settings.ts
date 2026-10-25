@@ -53,6 +53,10 @@ export class SettingsStore {
     return this.#serial.run(() => this.load());
   }
 
+  idle(): Promise<void> {
+    return this.#serial.run(async () => undefined);
+  }
+
   /** Reloads whenever settings.json changes on disk. */
   watch(onError: ListenerErrorHandler): void {
     this.#stopWatching?.();

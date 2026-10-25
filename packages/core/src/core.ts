@@ -261,13 +261,14 @@ export class ArcueCore {
   }
 
   /**
-   * Refuses new opens, waits for opens in flight, closes every asset once the changes in flight are saved, then
-   * disposes. Parses in flight are not waited for: they save nothing once their asset is closed.
+   * Refuses new opens and settings changes, waits for opens in flight, closes every asset and waits for pending
+   * settings saves, then disposes. Parses in flight are not waited for: they save nothing once their asset is closed.
    */
   async shutdown(): Promise<void> {
     this.#stopping = true;
     await this.#opening.run(async () => undefined);
     await Promise.all([...this.#assets.keys()].map((id) => this.#close(id).catch(() => undefined)));
+    await this.#settings.idle();
     this.dispose();
   }
 
@@ -318,7 +319,10 @@ export class ArcueCore {
       registry.handleCommand("composition.removeFile", (args) => this.#removeCompositionFile(args)),
       registry.handleCommand("composition.attachFile", (args) => this.#attachCompositionFile(args)),
       registry.handleCommand("material.setTexture", (args) => this.#setMaterialTexture(args)),
-      registry.handleCommand("settings.set", (args) => this.#settings.update(args)),
+      registry.handleCommand("settings.set", (args) => {
+        if (this.#stopping) throw new ArcueError("unavailable", "Arcue is stopping.");
+        return this.#settings.update(args);
+      }),
       registry.handleCommand("view.reportState", (args, context) => {
         const asset = this.#asset(args.assetId);
         if (context.caller === "window" && this.#windows.has(context.connection)) {
