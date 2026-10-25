@@ -10,6 +10,19 @@ async function setup(): Promise<TestCore> {
   return startTestCore({ ...heroFiles(), [VILLAIN]: fakeAsset(heroSpec) });
 }
 
+/** A core as `arcue serve` runs it, before any browser page connects. */
+async function setupServe(): Promise<TestCore> {
+  const test = await setup();
+  test.window.close();
+  await flush();
+  return test;
+}
+
+/** A page `arcue serve` serves: at the plain address without a view, or at a view's address. */
+function browserPage(test: TestCore, connection: string, view?: string): FakeWindow {
+  return new FakeWindow(test.core, connection, view, { browser: true });
+}
+
 function bridge(test: TestCore) {
   const [coreSide, bridgeSide] = createMemoryChannel();
   test.core.connect(coreSide, { connection: "cli-1", caller: "bridge" });
@@ -59,7 +72,7 @@ describe("opening in an agent session's view", () => {
     expect(second.requests).toEqual([]);
   });
 
-  it("falls back to a window outside views while the view's page is not connected", async () => {
+  it("falls back to a desktop window while the view's page is not connected", async () => {
     const test = await setup();
     const pageB = new FakeWindow(test.core, "page-b", "b");
     await pageB.client.execute("view.reportFocus", {});
@@ -89,6 +102,70 @@ describe("opening in an agent session's view", () => {
   });
 });
 
+describe("opening in an agent session's view in arcue serve", () => {
+  it("holds the model for the view's page rather than show it in a page outside views", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    await plain.client.execute("view.reportFocus", {});
+
+    const { assetId, shown } = await bridge(test).execute("asset.openInView", { path: HERO, view: "a" });
+
+    expect(shown).toBe("held");
+    await plain.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(plain.requests).toEqual([]);
+  });
+
+  it("shows the model in the view's page once the page outside views closes and the view's page connects", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 12 });
+    plain.close();
+    await flush();
+
+    const page = browserPage(test, "browser-2", "a");
+    await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
+
+    expect(page.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
+    await cli.execute("view.setFrame", { assetId, frame: 3 });
+    expect(page.requestNames).toEqual(["view.showAsset", "view.setFrame"]);
+    expect(plain.requests).toEqual([]);
+  });
+
+  it("still shows a model opened without a view in a page outside views", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    const page = browserPage(test, "browser-2", "a");
+    await page.client.execute("view.reportFocus", {});
+
+    const { assetId } = await bridge(test).execute("asset.open", { path: HERO });
+
+    expect(plain.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId } }]);
+    expect(page.requests).toEqual([]);
+  });
+
+  it("refuses a model a page outside views shows, and holds it for the view's page with move", async () => {
+    const test = await setupServe();
+    const plain = browserPage(test, "browser-1");
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.open", { path: HERO });
+
+    await expect(cli.execute("asset.openInView", { path: HERO, view: "a" })).rejects.toMatchObject({
+      code: "conflict",
+      message: "Hero.fbx is open in a window outside agent sessions' views.",
+    });
+    await expect(cli.execute("asset.openInView", { path: HERO, view: "a", move: true })).resolves.toEqual({
+      assetId,
+      shown: "held",
+    });
+
+    expect(plain.requestNames).toEqual(["view.showAsset", "view.releaseAsset"]);
+    const page = browserPage(test, "browser-2", "a");
+    await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(page.requestNames).toEqual(["view.showAsset"]);
+  });
+});
+
 describe("holding a model for its view's page", () => {
   it("holds the model while no window can show it, and shows it at its clip and frame when the page connects", async () => {
     const test = await setup();
@@ -112,12 +189,17 @@ describe("holding a model for its view's page", () => {
 
     const other = new FakeWindow(test.core, "page-b", "b");
     const outside = new FakeWindow(test.core, "window-2");
-    await other.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    await expect(other.client.execute("view.moveAsset", { assetId, unlessShown: true })).resolves.toEqual({
+      held: false,
+    });
     await outside.client.execute("view.moveAsset", { assetId, unlessShown: true });
     expect([other.requests, outside.requests]).toEqual([[], []]);
 
     const page = new FakeWindow(test.core, "page-a", "a");
-    await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    await expect(page.client.execute("view.moveAsset", { assetId, unlessShown: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 1,
+    });
     expect(page.requests).toEqual([
       { kind: "command", name: "view.showAsset", input: { assetId, clip: "Armature|Run", frame: 7 } },
     ]);
@@ -140,6 +222,109 @@ describe("holding a model for its view's page", () => {
     const page = new FakeWindow(test.core, "page-a", "a");
     await page.client.execute("view.moveAsset", { assetId, unlessShown: true });
     expect(page.requests[0]?.input).toEqual({ assetId, frame: 9 });
+  });
+
+  it("holds the model for the view when its page closes before it shows the model, as when it reloads", async () => {
+    const test = await setupServe();
+    const page = browserPage(test, "page-a", "a");
+    page.respond = (request) => {
+      if (request.name !== "view.showAsset") return undefined;
+      page.close();
+      return new Promise(() => undefined);
+    };
+    const cli = bridge(test);
+
+    const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 12 });
+
+    expect(shown).toBe("held");
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO }],
+    });
+    const reloaded = browserPage(test, "page-a-2", "a");
+    await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(reloaded.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
+  });
+
+  it("lets a page of the view take back for a while a model another page adopted after both dropped", async () => {
+    const test = await setupServe();
+    const before = browserPage(test, "page-a", "a");
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    before.close();
+    await flush();
+    const first = browserPage(test, "page-b", "a");
+    await first.client.execute("view.moveAsset", { assetId, adopt: true });
+    expect(first.requestNames).toEqual(["view.showAsset"]);
+
+    const back = browserPage(test, "page-a-2", "a");
+    await back.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(first.requestNames).toEqual(["view.showAsset", "view.releaseAsset"]);
+    expect(back.requestNames).toEqual(["view.showAsset"]);
+    await first.client.execute("view.moveAsset", { assetId, adopt: true });
+    await first.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(first.requestNames).toEqual(["view.showAsset", "view.releaseAsset"]);
+
+    back.close();
+    await flush();
+    await first.client.execute("view.moveAsset", { assetId, adopt: true });
+    test.clock.advance(30_000);
+    const late = browserPage(test, "page-a-3", "a");
+    await late.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(late.requests).toEqual([]);
+  });
+
+  it("leaves a model one page of the view adopted with it when another page of the view adopts it too", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    expect(shown).toBe("held");
+    const first = browserPage(test, "page-a", "a");
+    const second = browserPage(test, "page-b", "a");
+
+    await expect(first.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 1,
+    });
+    await expect(second.client.execute("view.moveAsset", { assetId, adopt: true })).resolves.toEqual({ held: false });
+
+    expect(first.requestNames).toEqual(["view.showAsset"]);
+    expect(second.requests).toEqual([]);
+  });
+
+  it("starts a held model from the view a page kept for its tab while it keeps none, at the agent's frame", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const { assetId } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 7 });
+    const page = browserPage(test, "page-a", "a");
+
+    await page.client.execute("view.moveAsset", { assetId, unlessShown: true, viewState: state });
+
+    await expect(test.core.client.query("viewState.get", { assetId })).resolves.toEqual(state);
+    expect(page.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 7 } }]);
+    page.close();
+    await flush();
+    const reloaded = browserPage(test, "page-b", "a");
+    await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true, viewState: { ...state, frame: 3 } });
+    await expect(test.core.client.query("viewState.get", { assetId })).resolves.toEqual(state);
+  });
+
+  it("numbers its holds, so a page tells the model an agent opened last, also one it opened before", async () => {
+    const test = await setupServe();
+    const cli = bridge(test);
+    const hero = await cli.execute("asset.openInView", { path: HERO, view: "a" });
+    const villain = await cli.execute("asset.openInView", { path: VILLAIN, view: "a" });
+    await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 3 });
+    const page = browserPage(test, "page-a", "a");
+
+    await expect(page.client.execute("view.moveAsset", { assetId: villain.assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 2,
+    });
+    await expect(page.client.execute("view.moveAsset", { assetId: hero.assetId, adopt: true })).resolves.toEqual({
+      held: true,
+      heldOrder: 3,
+    });
+    await expect(page.client.execute("view.moveAsset", { assetId: hero.assetId })).resolves.toEqual({ held: false });
   });
 
   it("keeps the model in its view when its page reloads", async () => {

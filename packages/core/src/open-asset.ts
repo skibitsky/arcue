@@ -1,6 +1,7 @@
 import type { AssetStatus, AssetSummary, Comment, ReviewCandidate, ReviewFile, ViewState } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
+import type { FileStats } from "./composition-load";
 import type { ImportFiles } from "./import-files";
 import { basename, dirname } from "./paths";
 import type { EarlierReview } from "./relink";
@@ -8,6 +9,12 @@ import type { ReviewSession } from "./review-session";
 import type { ReviewLocation } from "./review-store";
 import { compositionFilePath } from "./review-store";
 import { Serial } from "./serial";
+
+/** How long background work that met a held reviews lock waits before its first retry. */
+export const FIRST_RETRY_MS = 1000;
+
+/** The longest wait between two retries. */
+export const LAST_RETRY_MS = 30_000;
 
 /** Where to show an asset in its tab, as `asset.open` asks. */
 export interface ShowAt {
@@ -31,6 +38,11 @@ export class OpenAsset {
   /** The full hash and size of the model file the version on screen was read from. */
   identity: { hash: string; size: number } | null = null;
   /**
+   * The full hash and size of the model file the last parse read, which is not `identity` while that parse's version
+   * was not recorded, as when the model was renamed meanwhile.
+   */
+  lastParsed: { hash: string; size: number } | null = null;
+  /**
    * The names of the files with the model's extension in its folder when the model last loaded, so a rename shows as a
    * name not among them. Null before the first load, and when there were more than the core checks for a rename.
    */
@@ -53,8 +65,13 @@ export class OpenAsset {
    * page the core holds it for. It stays when that page closes, so the page takes the asset back when it reloads.
    */
   view: string | null = null;
-  /** The clip and frame an open asked for while the core held the asset, for the page that shows it later. */
-  waiting: ShowAt | null = null;
+  /**
+   * What an open asked for while the core held the asset, for the page that shows it later: the clip and frame, and
+   * the place of that open among the core's holds.
+   */
+  waiting: { at: ShowAt; order: number } | null = null;
+  /** When a page took the asset with `adopt`, until it shows anywhere again: a page that saved its tab may take it back. */
+  adoptedAt: number | null = null;
   closed = false;
   /** Set while `asset.close` waits for the edits in flight. */
   closing: Promise<void> | null = null;
@@ -67,6 +84,17 @@ export class OpenAsset {
   readonly imported = new Map<string, { id: string; scene: SceneDescription; files: ImportFiles }>();
   /** The model and the files of its composition, by path, as the version on screen loaded them. */
   loadedFiles: ReadonlySet<string> = new Set();
+  /** The sizes and modification times of the files the version on screen was read from, by path. */
+  loadedStats: FileStats = new Map();
+  /** Cancels the retry of background work that met a held reviews lock. */
+  cancelRetry: () => void = () => undefined;
+  /** How long until that work is tried again, doubling with each try. */
+  retryDelayMs = FIRST_RETRY_MS;
+  /**
+   * Comments another Arcue saved wait to move onto the version on screen, because its files changed on disk; the next
+   * load moves them, even when it reads the same version.
+   */
+  reanchorPending = false;
   /** The file `composition.fileRoles` read last, whose parse stays until the next question so adding it reads it once. */
   asked: string | null = null;
   /** Serializes edits of the composition file. */

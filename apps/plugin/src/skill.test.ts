@@ -89,6 +89,12 @@ describe("the arcue skill", () => {
     for (const quote of ["'", "\u2018", "\u2019", "\u201a", "\u201b"]) expect(body).toContain(`\`${quote}\``);
   });
 
+  it("keeps the port --detach printed when the shell stops what it starts", async () => {
+    const { body } = await skillFile();
+
+    expect(body).toMatch(/run `arcue serve --port <number>` with the port of that address as a background command/);
+  });
+
   it("names itself in its Codex default prompt", async () => {
     const metadata = await readFile(join(folder, "agents/openai.yaml"), "utf8");
 

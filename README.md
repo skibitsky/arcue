@@ -53,7 +53,7 @@ The quickest way is to ask your agent:
 Set up Arcue for me: https://github.com/skibitsky/arcue/blob/main/INSTALL.md
 ```
 
-The Arcue plugin teaches your agent to open models in Arcue, read your comments and check its own changes. In the Claude and Codex apps, Arcue opens in the built-in browser. Everywhere else, it opens in the desktop app.
+The Arcue plugin teaches your agent to open models in Arcue, read your comments and check its own changes. In the Claude and Codex apps, Arcue opens in the built-in browser. Everywhere else, it opens in the desktop app. When that app has never run or can't start, or Arcue in the browser runs or ran last, your agent gives you the address of Arcue in the browser instead.
 
 ### Claude Code
 
@@ -83,7 +83,7 @@ The [desktop app](INSTALL.md#desktop-app) puts the `arcue` command on your PATH,
 
 ## Build it into your own workflow
 
-- **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve` runs Arcue in any browser on your own files, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. It comes with the desktop app and the plugin. Call it from scripts, CI or your own tools.
+- **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve --detach` runs Arcue in any browser on your own files beside the desktop app, `arcue stop` stops it, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. It comes with the desktop app and the plugin. Call it from scripts, CI or your own tools.
 - **Review files.** Every copied prompt is also saved as [`round.json`](skills/arcue/references/round-json.md) with its screenshots in `.arcue/reviews/`, so any script can read the feedback.
 - **Composition files.** A [`composition.json`](skills/arcue/references/composition.md) loads animation files, attachments and textures together with a model.
 - **Commands.** Every action in Arcue is a typed command with a JSON Schema in [`packages/protocol`](packages/protocol). The window and the `arcue` command call the same commands, and the planned MCP server will too.

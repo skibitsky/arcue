@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ArcueError } from "../errors";
+import type { MessageEndpoint } from "./endpoint";
 import { portEndpoint } from "./endpoint";
 import { isEnvelope } from "./envelope";
 import { createMemoryChannel } from "./memory-channel";
@@ -147,6 +148,35 @@ describe("isEnvelope", () => {
     expect(isEnvelope({ type: "request", id: "1", kind: "command", name: "x" })).toBe(false);
     expect(isEnvelope({ type: "request", id: 1, kind: "mutation", name: "x" })).toBe(false);
     expect(isEnvelope({ type: "response", id: 1, ok: false })).toBe(false);
+  });
+});
+
+describe("a peer answering requests", () => {
+  it("answers a handler's value before the work its change queues, and a promise once it settles", async () => {
+    const order: string[] = [];
+    let deliver: (message: unknown) => void = () => undefined;
+    const endpoint: MessageEndpoint = {
+      post: (message) => {
+        if (message.type === "response") order.push(`answer ${message.id}`);
+      },
+      listen: (listener) => {
+        deliver = listener;
+        return () => undefined;
+      },
+      onClose: () => () => undefined,
+    };
+    createPeer(endpoint, {
+      handleRequest: ({ name }) => {
+        queueMicrotask(() => order.push(`render ${name}`));
+        return name === "slow" ? Promise.resolve(null) : null;
+      },
+    });
+
+    deliver({ type: "request", id: 1, kind: "command", name: "view.showAsset", input: {} });
+    deliver({ type: "request", id: 2, kind: "command", name: "slow", input: {} });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(order).toEqual(["answer 1", "render view.showAsset", "render slow", "answer 2"]);
   });
 });
 

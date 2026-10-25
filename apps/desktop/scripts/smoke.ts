@@ -130,7 +130,8 @@ const striker = join(models, "stone striker & co.fbx");
 const golem = join(models, "pebble golem.fbx");
 await copyFile(join(repo, "samples", "stone-striker.fbx"), striker);
 await copyFile(join(repo, "samples", "pebble-golem.fbx"), golem);
-const env = { ...process.env, ARCUE_USER_DATA: userData };
+const env: NodeJS.ProcessEnv = { ...process.env, ARCUE_USER_DATA: userData };
+for (const name of ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "ARCUE_VIEW"]) delete env[name];
 
 try {
   const help = await arcue(["help"], env);
@@ -195,7 +196,7 @@ try {
   );
 
   const status = await statusOnceReady(env, [striker, golem]);
-  check(status.code === 0 && status.stdout.startsWith("Arcue is running (process "), "arcue status", status);
+  check(status.code === 0 && status.stdout.startsWith("The Arcue app is running (process "), "arcue status", status);
   check(allReady(status, [striker, golem]), "arcue status lists both models as ready", status);
   console.log(`${command} runs on ${node}, starts the app and opens models in it.`);
 } catch (error) {

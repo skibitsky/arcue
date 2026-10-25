@@ -39,7 +39,7 @@ export const commands = {
   }),
   "asset.openInView": command({
     description:
-      "Open an asset for an agent session's view, or focus its tab, as asset.open does. The view's page shows it. While that page is not connected, a window outside views shows it, and with neither the core holds the asset until the page connects. An asset shows in one view at a time: when another view has it, or a window outside views has it while this view's page is connected, the call fails with conflict, unless move takes the asset from there. A move never discards a comment box with unsaved text.",
+      "Open an asset for an agent session's view, or focus its tab, as asset.open does. The view's page shows it. While that page is not connected, a desktop window outside views shows it, never a browser page, which may be another session's; with neither, the core holds the asset until the page connects. An asset shows in one view at a time: when another view has it, or a window outside views has it while this call would show or hold it for this view, the call fails with conflict, unless move takes the asset from there. A move never discards a comment box with unsaved text.",
     runsIn: "core",
     input: z.object({
       path: z.string().min(1),
@@ -50,7 +50,7 @@ export const commands = {
     }),
     output: z.object({
       assetId: assetIdSchema,
-      /** "view" when the view's page shows the asset, "window" when a window outside views does, "held" while it waits for the page. */
+      /** "view" when the view's page shows the asset, "window" when a desktop window outside views does, "held" while it waits for the page. */
       shown: z.enum(["view", "window", "held"]),
     }),
   }),
@@ -228,6 +228,13 @@ export const commands = {
     input: settingsSchema.partial(),
     output: settingsSchema,
   }),
+  "serve.stop": command({
+    description:
+      "Stops Arcue in the browser, the core arcue serve runs: it closes the command line's connections and its pages, lets the changes in flight finish saving, and exits. Only the command line may call it; the desktop app does not handle it.",
+    runsIn: "core",
+    input: z.object({}),
+    output: z.void(),
+  }),
   "review.undo": command({
     description:
       "Undo the asset's latest review edit, if there is one: a comment edit or a change to its composition file. A composition file that changed since the edit is not touched, and the call fails with conflict.",
@@ -281,11 +288,34 @@ export const commands = {
       ...assetRef,
       /**
        * Leaves the tab where it is when another window shows the asset, or the asset belongs to another view, as a page
-       * that reopens after a reload does. Without it, an asset of another view fails with conflict.
+       * that reopens after a reload does, except that it takes back an asset another page of its view adopted in the
+       * last 30 seconds (see `adopt`). Without it, an asset of another view fails with conflict.
        */
       unlessShown: z.boolean().optional(),
+      /**
+       * Shows an asset the core holds for the calling page's view, as a page that reconnects does with the other assets
+       * of its view, and never one another window shows. For a while, a page of the view that reopens a saved tab of it
+       * with `unlessShown` takes it back, since both pages may have lost their connection and this one came back first.
+       */
+      adopt: z.boolean().optional(),
+      /**
+       * The view the calling page kept for the tab, which an asset the core keeps no view for starts from, as one an
+       * agent opened while no page of its view was open. The clip and frame that open asked for still win.
+       */
+      viewState: viewStateSchema.optional(),
     }),
-    output: z.void(),
+    output: z.object({
+      /**
+       * The core held the asset for the calling page's view, as for an agent's open while no page of the view could show
+       * it, and shows it now, at the clip and frame that open asked for.
+       */
+      held: z.boolean(),
+      /**
+       * With `held`, the place of that open among the opens the core held assets for, which grows with each, so the
+       * asset with the greatest is the one an agent opened last.
+       */
+      heldOrder: z.number().int().positive().optional(),
+    }),
   }),
   "view.releaseAsset": command({
     description:

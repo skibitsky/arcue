@@ -1,24 +1,46 @@
+import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, posix, win32 } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { CoreConnection } from "@arcue/platform-node";
 import { connectToCore } from "@arcue/platform-node";
 import type { LaunchInfo } from "@arcue/protocol";
 import { ArcueError, LAUNCH_INFO_FILE, launchInfoSchema } from "@arcue/protocol";
 
-/** The app's data folder: `ARCUE_USER_DATA` when set, otherwise where Electron keeps an app named "Arcue". */
+/**
+ * The app's data folder: `ARCUE_USER_DATA` when set, resolved against the working folder, otherwise where Electron
+ * keeps an app named "Arcue".
+ */
 export function userDataDir(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   home: string = homedir(),
 ): string {
-  if (env.ARCUE_USER_DATA) return env.ARCUE_USER_DATA;
+  if (env.ARCUE_USER_DATA) return resolve(env.ARCUE_USER_DATA);
   if (platform === "darwin") return join(home, "Library", "Application Support", "Arcue");
   if (platform === "win32") return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Arcue");
   return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Arcue");
+}
+
+/** What `arcue open` says when nothing runs and the desktop app has never started on this computer. */
+export const NOT_STARTED =
+  "Arcue is not running, and the Arcue app has not been started on this computer yet. Start the app once, or run arcue serve --detach to use Arcue in a browser.";
+
+/** Whether the app that `launch.json` names started: its process spawned, or why it did not. */
+export type Launch = ({ launched: true } & StartedApp) | { launched: false; command: string; reason: string };
+
+/** What `arcue open` says when the app that `launch.json` names did not start. */
+export function launchFailed({ command, reason }: { command: string; reason: string }): string {
+  return `The Arcue app could not be started from ${command}: ${reason}. Start it from where it is installed, or run arcue serve --detach to use Arcue in a browser.`;
+}
+
+/** What `arcue open` says when the app it started did not answer in time. */
+export function didNotStart(timeoutMs: number): string {
+  return `Arcue did not start within ${Math.round(timeoutMs / 1000)} seconds. Start the app from where it is installed, or run arcue serve --detach to use Arcue in a browser.`;
 }
 
 async function readJson(path: string): Promise<unknown> {
@@ -88,91 +110,98 @@ export interface StartedApp {
   failure(): Error | null;
 }
 
-function launchFailure(command: string, error: unknown): Error {
-  if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-    return new Error(
-      `Arcue is not running, and it is no longer at ${command}. Open Arcue once where it is installed now, or run "arcue serve" to use it in a browser.`,
-    );
-  }
-  const reason = error instanceof Error ? error.message : String(error);
-  return new Error(`Arcue could not start: ${reason}. Run "arcue serve" to use it in a browser.`);
-}
-
-/** Starts the given app, or else the one `launch.json` recorded, detached from this process; null when there is none. */
-export async function launchApp(userData: string, app: LaunchInfo | null): Promise<StartedApp | null> {
+/**
+ * Starts the bundled app or the one `launch.json` recorded, detached from this process, and settles once its process
+ * has spawned or failed to. Null when neither app is available.
+ */
+export async function launchApp(userData: string, app: LaunchInfo | null = bundledApp()): Promise<Launch | null> {
   const launch = app ?? (await readLaunchInfo(userData));
   if (!launch) return null;
+  const failed = (error: unknown): Launch => ({
+    launched: false,
+    command: launch.command,
+    reason: error instanceof Error ? error.message : String(error),
+  });
   let failure: Error | null = null;
+  let child: ChildProcess;
   try {
-    const child = spawn(launch.command, launch.args, {
-      detached: true,
-      stdio: "ignore",
-      env: appEnvironment(process.env),
-    });
+    child = spawn(launch.command, launch.args, { detached: true, stdio: "ignore", env: appEnvironment(process.env) });
+  } catch (error) {
+    return failed(error);
+  }
+  return new Promise((resolvePromise) => {
     child.on("error", (error) => {
-      failure ??= launchFailure(launch.command, error);
+      const result = failed(error);
+      if (!result.launched) failure ??= new Error(launchFailed(result));
+      resolvePromise(result);
     });
     child.once("exit", (code, signal) => {
       if (code === 0) return;
       const status = signal ? `signal ${signal}` : `exit code ${code}`;
-      failure ??= new Error(`Arcue quit as it started (${status}). Run "arcue serve" to use it in a browser.`);
+      failure ??= new Error(
+        `Arcue quit as it started (${status}). Run arcue serve --detach to use Arcue in a browser.`,
+      );
     });
-    child.unref();
-  } catch (error) {
-    failure = launchFailure(launch.command, error);
-  }
-  return { failure: () => failure };
+    child.once("spawn", () => {
+      child.unref();
+      resolvePromise({ launched: true, failure: () => failure });
+    });
+  });
 }
 
 export interface ConnectOrLaunchOptions {
   timeoutMs?: number;
   pollMs?: number;
   handshakeMs?: number;
-  /** The app to start when none runs. Defaults to the app this command line ships in. */
   app?: LaunchInfo | null;
 }
 
 /**
- * Connects to the app, starting it first when nothing listens, and waits up to `timeoutMs` for its socket, or until the
- * app it started fails. A refused handshake is retried too, since a starting core writes its new `bridge.json` only
- * after it listens.
+ * Connects to the app at `bridge.json`, starting it first when nothing listens, and waits up to `timeoutMs` for its
+ * socket. A refused handshake is retried too, since a starting core writes its new `bridge.json` only after it listens.
+ * Throws at once when the app has never started on this computer, or when its process does not spawn.
  */
-export async function connectOrLaunch(
+export async function connectOrLaunch(userData: string, options: ConnectOrLaunchOptions = {}): Promise<CoreConnection> {
+  let refused: unknown = null;
+  const first = await connectToCore(userData, "desktop", options.handshakeMs).catch((error: unknown) => {
+    refused = error;
+    return null;
+  });
+  if (first) return first;
+  let started: StartedApp | null = null;
+  if (refused === null) {
+    const launch = await launchApp(userData, options.app);
+    if (launch === null) throw new Error(NOT_STARTED);
+    if (!launch.launched) throw new Error(launchFailed(launch));
+    started = launch;
+  }
+  return waitForApp(userData, options, refused, started);
+}
+
+/** Waits up to `timeoutMs` for the app that was just started to answer at `bridge.json`, retrying refused handshakes. */
+export async function waitForApp(
   userData: string,
-  { timeoutMs = 30_000, pollMs = 200, handshakeMs = 5000, app = bundledApp() }: ConnectOrLaunchOptions = {},
+  { timeoutMs = 30_000, pollMs = 200, handshakeMs = 5000 }: ConnectOrLaunchOptions = {},
+  refused: unknown = null,
+  started: StartedApp | null = null,
 ): Promise<CoreConnection> {
   const deadline = Date.now() + timeoutMs;
-  let lastError: unknown = null;
-  const attempt = () =>
-    connectToCore(userData, handshakeMs).catch((error: unknown) => {
+  let lastError = refused;
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    const failure = started?.failure();
+    if (failure) throw failure;
+    const connection = await connectToCore(userData, "desktop", handshakeMs).catch((error: unknown) => {
       lastError = error;
       return null;
     });
-  const first = await attempt();
-  if (first) return first;
-  let started: StartedApp | null = null;
-  if (lastError === null) {
-    started = await launchApp(userData, app);
-    if (!started) {
-      throw new Error(
-        'Arcue is not running, and it has not been started on this computer yet. Start it once first, or run "arcue serve" to use it in a browser.',
-      );
-    }
-  }
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-    const failure = started?.failure();
-    if (failure) throw failure;
-    const connection = await attempt();
     if (connection) return connection;
   }
   if (lastError instanceof Error) {
-    const message = `${lastError.message} Quit Arcue and open it again, or run "arcue serve" to use it in a browser.`;
+    const message = `${lastError.message} Quit Arcue and open it again, or run arcue serve --detach to use Arcue in a browser.`;
     throw lastError instanceof ArcueError
       ? new ArcueError(lastError.code, message, { cause: lastError })
       : new Error(message, { cause: lastError });
   }
-  throw new Error(
-    `Arcue did not start within ${Math.round(timeoutMs / 1000)} seconds. Run "arcue serve" to use it in a browser.`,
-  );
+  throw new Error(didNotStart(timeoutMs));
 }

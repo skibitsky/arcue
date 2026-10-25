@@ -1,10 +1,24 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import { request } from "node:http";
+import type { Socket } from "node:net";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectToCore } from "@arcue/platform-node";
+import { setTimeout as sleep } from "node:timers/promises";
+import { ArcueCore, ManualClock } from "@arcue/core";
+import { connectToCore, fromNativePath, NodePlatform, readBridgeInfo } from "@arcue/platform-node";
+import type { FakeCore } from "@arcue/platform-node/test";
+import { startFakeCore, writeLastCoreFile } from "@arcue/platform-node/test";
 import type { CoreClient, IncomingRequest } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
@@ -13,19 +27,26 @@ import {
   createPeer,
   createRemoteClient,
   framedEndpoint,
+  LAST_CORE_FILE,
   messageChannel,
   SERVE_CORE_PATH,
+  SERVE_INFO_FILE,
 } from "@arcue/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClientOptions } from "ws";
 import { WebSocket } from "ws";
-import type { ArcueServer, ServeOptions } from "./serve";
+import { BROWSER_STOPPED, connectForOpen } from "./routing";
+import { run } from "./run";
+import type { ArcueServer, ServeOptions, ServeStop } from "./serve";
 import { localHosts, startServer } from "./serve";
+import { heldLockFiles, holdLockElsewhere } from "./test-locks";
 
 let temp: string;
 let userData: string;
 let webUi: string;
 let server: ArcueServer | null;
-const errors: unknown[] = [];
+let fakes: FakeCore[];
+let errors: unknown[];
 
 beforeEach(() => {
   temp = realpathSync(mkdtempSync(join(tmpdir(), "arcue-serve-")));
@@ -34,23 +55,28 @@ beforeEach(() => {
   mkdirSync(join(webUi, "assets"), { recursive: true });
   writeFileSync(join(webUi, "index.html"), "<!doctype html><title>Arcue</title>");
   writeFileSync(join(webUi, "assets", "index-abc.js"), "export {};");
+  writeFileSync(join(temp, "import-worker.js"), "");
   writeFileSync(join(temp, "secret.txt"), "secret");
   server = null;
+  fakes = [];
+  errors = [];
 });
 
 afterEach(async () => {
   await server?.close();
+  await Promise.all(fakes.map((fake) => fake.close()));
   rmSync(temp, { recursive: true, force: true });
-  errors.length = 0;
 });
 
+/** A server in the test's folders. Its errors go to this test's list, so a closed server's late ones reach no other. */
 function options(overrides: Partial<ServeOptions> = {}): ServeOptions {
+  const seen = errors;
   return {
     userData,
     importWorkerEntry: join(temp, "import-worker.js"),
     webUi,
     port: 0,
-    onError: (error) => errors.push(error),
+    onError: (error) => seen.push(error),
     ...overrides,
   };
 }
@@ -69,7 +95,11 @@ interface Answer {
 }
 
 /** Sends the path as it is, without the normalizing `fetch` does, with the Host header given. */
-function get(url: string, path: string, init: { host?: string; method?: string } = {}): Promise<Answer> {
+function get(
+  url: string,
+  path: string,
+  init: { host?: string; method?: string; headers?: Record<string, string> } = {},
+): Promise<Answer> {
   const { port } = new URL(url);
   return new Promise((resolve, reject) => {
     const sent = request(
@@ -78,7 +108,7 @@ function get(url: string, path: string, init: { host?: string; method?: string }
         port,
         path,
         method: init.method ?? "GET",
-        headers: { host: init.host ?? `localhost:${port}` },
+        headers: { ...init.headers, host: init.host ?? `localhost:${port}` },
       },
       (response) => {
         let body = "";
@@ -102,8 +132,13 @@ function get(url: string, path: string, init: { host?: string; method?: string }
   });
 }
 
-function openSocket(url: string, origin: string, path = SERVE_CORE_PATH): Promise<WebSocket> {
-  const socket = new WebSocket(`${url.replace("http:", "ws:")}${path}`, { origin });
+function openSocket(
+  url: string,
+  origin: string,
+  path = SERVE_CORE_PATH,
+  options: ClientOptions = {},
+): Promise<WebSocket> {
+  const socket = new WebSocket(`${url.replace("http:", "ws:")}${path}`, { origin, ...options });
   return new Promise((resolve, reject) => {
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
@@ -156,7 +191,43 @@ function windowClient(socket: WebSocket, requests: IncomingRequest[] = []): Core
   );
 }
 
+/** A port nothing listens on now. */
+async function freePort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const address = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  if (typeof address !== "object" || !address) throw new Error("No port was free.");
+  return address.port;
+}
+
 describe("arcue serve", () => {
+  it("answers 503 to pages and sockets while its core starts, so none waits for an answer that never comes", async () => {
+    const port = await freePort();
+    const url = `http://localhost:${port}`;
+    const gate = Promise.withResolvers<void>();
+    const start = ArcueCore.start.bind(ArcueCore);
+    const spy = vi.spyOn(ArcueCore, "start").mockImplementationOnce(async (options) => {
+      await gate.promise;
+      return start(options);
+    });
+    try {
+      const starting = serve({ port });
+      await vi.waitFor(async () => expect((await get(url, "/")).status).toBe(503), { timeout: 3000 });
+      expect((await get(url, "/assets/index-abc.js")).status).toBe(503);
+      const refused = await refusedSocket(url, url);
+      expect(refused).toMatchObject(forbidsFraming);
+
+      gate.resolve();
+      await starting;
+      expect((await get(url, "/")).status).toBe(200);
+      (await openSocket(url, url)).close();
+    } finally {
+      gate.resolve();
+      spy.mockRestore();
+    }
+  });
+
   it("serves the web UI, index.html for the root, with long caching only for hashed assets", async () => {
     const { url } = await serve();
 
@@ -168,6 +239,32 @@ describe("arcue serve", () => {
       body: "export {};",
     });
     expect(await get(url, "/assets/missing.js")).toMatchObject({ status: 404 });
+  });
+
+  it("names its data folder and user in its page, the same on every start, so a page tells it from another", async () => {
+    writeFileSync(
+      join(webUi, "index.html"),
+      "<!doctype html><html><head><title>Arcue</title></head><body></body></html>",
+    );
+    const ownerOf = (body: string) =>
+      /<head><meta name="arcue-owner" content="([0-9a-f]{16})" \/><title>/.exec(body)?.[1];
+    const first = await serve();
+    const page = await get(first.url, "/");
+    const owner = ownerOf(page.body);
+    expect(owner).toBeDefined();
+    expect(page.headers["content-length"]).toBe(String(Buffer.byteLength(page.body)));
+    expect(await get(first.url, "/", { method: "HEAD" })).toMatchObject({ status: 200, body: "" });
+    await first.close();
+
+    const again = await serve();
+    expect(ownerOf((await get(again.url, "/")).body)).toBe(owner);
+    await again.close();
+
+    userData = join(temp, "other-data");
+    const other = await serve();
+    const otherOwner = ownerOf((await get(other.url, "/")).body);
+    expect(otherOwner).toBeDefined();
+    expect(otherOwner).not.toBe(owner);
   });
 
   it("serves nothing outside the web UI's folder", async () => {
@@ -238,7 +335,7 @@ describe("arcue serve", () => {
     const outside: IncomingRequest[] = [];
     windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=3f9a0c1d2b4e`), viewed);
     windowClient(await openSocket(url, url), outside);
-    const connection = await connectToCore(userData);
+    const connection = await connectToCore(userData, "serve");
 
     await expect(
       connection?.client.execute("asset.openInView", { path: model, view: "3f9a0c1d2b4e" }),
@@ -249,6 +346,21 @@ describe("arcue serve", () => {
     connection?.close();
   });
 
+  it("asks for a browser at its address when the command line opens a model and no page is open", async () => {
+    const asked: string[] = [];
+    const { url } = await serve({ onWaitingForWindow: (address) => asked.push(address) });
+    const connection = await connectToCore(userData, "serve");
+    const opening = connection?.client.execute("asset.open", { path: model() });
+
+    await vi.waitFor(() => expect(asked).toEqual([url]), { timeout: 2000 });
+    const shown: IncomingRequest[] = [];
+    windowClient(await openSocket(url, url), shown);
+
+    await expect(opening).resolves.toMatchObject({ assetId: expect.any(String) });
+    expect(shown.map((request) => request.name)).toEqual(["view.showAsset"]);
+    connection?.close();
+  });
+
   it("holds a model for its view's page without waiting for a browser", async () => {
     let waited = false;
     const { url } = await serve({ onWaitingForWindow: () => (waited = true) });
@@ -256,7 +368,7 @@ describe("arcue serve", () => {
     writeFileSync(model, "fbx");
     const other: IncomingRequest[] = [];
     windowClient(await openSocket(url, url, `${SERVE_CORE_PATH}?view=b`), other);
-    const connection = await connectToCore(userData);
+    const connection = await connectToCore(userData, "serve");
 
     await expect(connection?.client.execute("asset.openInView", { path: model, view: "a" })).resolves.toMatchObject({
       shown: "held",
@@ -322,9 +434,9 @@ describe("arcue serve", () => {
   it("takes the desktop app's place for the command line, and names its address", async () => {
     const { url } = await serve();
 
-    const info = bridgeInfoSchema.parse(JSON.parse(readFileSync(join(userData, BRIDGE_INFO_FILE), "utf8")));
+    const info = bridgeInfoSchema.parse(JSON.parse(readFileSync(join(userData, SERVE_INFO_FILE), "utf8")));
     expect(info.url).toBe(url);
-    const connection = await connectToCore(userData);
+    const connection = await connectToCore(userData, "serve");
     expect(connection?.info.url).toBe(url);
     await expect(connection?.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
     connection?.close();
@@ -336,11 +448,11 @@ describe("arcue serve", () => {
     await expect(startServer(options())).rejects.toThrow(`Arcue is already running at ${url}`);
   });
 
-  it("removes bridge.json when it stops", async () => {
+  it("removes serve.json when it stops", async () => {
     await (await serve()).close();
     server = null;
 
-    expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
   });
 
   it("asks for another port when its port is taken", async () => {
@@ -350,11 +462,538 @@ describe("arcue serve", () => {
     const port = typeof address === "object" && address ? address.port : 0;
 
     await expect(serve({ port })).rejects.toThrow(`Port ${port} is in use. Choose another with --port.`);
-    expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
     taken.close();
   });
 
   it("needs its web UI", async () => {
     await expect(serve({ webUi: join(temp, "nowhere") })).rejects.toThrow("has no web UI");
+  });
+});
+
+/** Settles what timers that a manual clock ran started. */
+async function settle(): Promise<void> {
+  await sleep(20);
+}
+
+/** A model file in the test folder, outside any repository, so its reviews live in the data folder. */
+function model(name = "Hero.fbx"): string {
+  const path = join(temp, name);
+  writeFileSync(path, "fbx");
+  return path;
+}
+
+/** Whether the server's stop reason has resolved, read without waiting. */
+function watchStop(running: ArcueServer): { readonly stop: ServeStop | null } {
+  const seen: { stop: ServeStop | null } = { stop: null };
+  void running.stopped.then((stop) => {
+    seen.stop = stop;
+  });
+  return seen;
+}
+
+/** A page that upgrades to a socket and then never answers, so a close waits for it. */
+function silentPage(url: string): Promise<Socket> {
+  const { port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(port), "127.0.0.1", () =>
+      socket.write(
+        `GET ${SERVE_CORE_PATH} HTTP/1.1\r\nHost: localhost:${port}\r\nOrigin: ${url}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+      ),
+    );
+    socket.once("data", (chunk) => {
+      if (chunk.toString().startsWith("HTTP/1.1 101")) resolve(socket);
+      else reject(new Error(chunk.toString()));
+    });
+    socket.on("error", () => undefined);
+  });
+}
+
+function filesNamed(folder: string, name: string): string[] {
+  return readdirSync(folder, { recursive: true, encoding: "utf8" })
+    .filter((entry) => entry.endsWith(name))
+    .map((entry) => join(folder, entry));
+}
+
+const MINUTE = 60_000;
+
+describe("arcue serve beside other cores", () => {
+  it("runs beside the desktop app of this build", async () => {
+    fakes.push(await startFakeCore(userData, { file: BRIDGE_INFO_FILE, kind: "desktop", locks: 1 }));
+    const running = await serve({ checkMs: 20 });
+    const seen = watchStop(running);
+
+    await sleep(300);
+    expect(seen.stop).toBeNull();
+    expect(await readBridgeInfo(userData, "serve")).toMatchObject({ kind: "serve", locks: 1, url: running.url });
+  });
+
+  it("refuses to start beside an Arcue app or an arcue serve that takes no review locks", async () => {
+    const app = await startFakeCore(userData, { file: BRIDGE_INFO_FILE });
+    await expect(serve()).rejects.toThrow(
+      `An Arcue app runs (process ${process.pid}) that can't share reviews with Arcue in the browser. Quit it or update it, then try again.`,
+    );
+    await app.close();
+
+    const older = await startFakeCore(userData, { file: BRIDGE_INFO_FILE, url: "http://localhost:4530" });
+    await expect(serve()).rejects.toThrow(
+      `An older arcue serve runs at http://localhost:4530 (process ${process.pid}) and can't share reviews with this one. ${process.platform === "win32" ? "Stop it where it runs" : "Run arcue stop"}, then try again.`,
+    );
+    await older.close();
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
+
+    await expect(serve()).resolves.toMatchObject({ pid: process.pid });
+  });
+
+  it("stops when a core that takes no review locks starts beside it, also after several checks", async () => {
+    const running = await serve({ checkMs: 20 });
+    await sleep(150);
+    fakes.push(await startFakeCore(userData, { file: BRIDGE_INFO_FILE }));
+
+    await expect(running.stopped).resolves.toEqual({
+      reason: "unshared",
+      message: `Arcue stops: an Arcue that can't share reviews started beside it (process ${process.pid}).`,
+    });
+  });
+
+  it("keeps running beside a bridge.json that a core taking no locks left", async () => {
+    const running = await serve({ checkMs: 20 });
+    const left = await startFakeCore(userData, { file: BRIDGE_INFO_FILE });
+    await left.close();
+    writeFileSync(join(userData, BRIDGE_INFO_FILE), JSON.stringify(left.info));
+    const seen = watchStop(running);
+
+    await sleep(300);
+    expect(seen.stop).toBeNull();
+  });
+
+  it("stops when another Arcue in the browser takes serve.json", async () => {
+    const running = await serve({ checkMs: 20 });
+    fakes.push(
+      await startFakeCore(userData, { file: SERVE_INFO_FILE, kind: "serve", locks: 1, url: "http://localhost:4599" }),
+    );
+
+    await expect(running.stopped).resolves.toEqual({
+      reason: "replaced",
+      message: `Arcue stops: another Arcue in the browser took its place (process ${process.pid}).`,
+    });
+    await running.close();
+    server = null;
+    expect(await readBridgeInfo(userData, "serve")).toMatchObject({ url: "http://localhost:4599" });
+  });
+
+  it("writes serve.json again when it is deleted, and names its build there", async () => {
+    const running = await serve({ checkMs: 20, build: "0123456789abcdef" });
+    const info = await readBridgeInfo(userData, "serve");
+    expect(info).toMatchObject({ build: "0123456789abcdef", pid: running.pid });
+    await sleep(150);
+
+    rmSync(join(userData, SERVE_INFO_FILE));
+
+    await vi.waitFor(async () => expect((await readBridgeInfo(userData, "serve"))?.token).toBe(info?.token), {
+      timeout: 2000,
+    });
+  });
+
+  it("stops when its data folder is removed, and leaves it removed", async () => {
+    const running = await serve({ checkMs: 20 });
+
+    rmSync(userData, { recursive: true, force: true });
+
+    await expect(running.stopped).resolves.toEqual({
+      reason: "data-gone",
+      message: `Arcue stops: its data folder ${userData} was removed.`,
+    });
+    await running.close();
+    server = null;
+    expect(existsSync(userData)).toBe(false);
+  });
+
+  it("stops when its data folder is removed and a lock makes it again before the next check", async () => {
+    const running = await serve({ checkMs: 200 });
+    const platform = new NodePlatform({
+      appDataDir: fromNativePath(userData),
+      startImportWorker: () => {
+        throw new Error("No import worker.");
+      },
+    });
+
+    rmSync(userData, { recursive: true, force: true });
+    await (await platform.lock(fromNativePath(temp), "reviews"))();
+    expect(existsSync(userData)).toBe(true);
+
+    const stop = await Promise.race([running.stopped, sleep(3000).then(() => null)]);
+    expect(stop).toEqual({ reason: "data-gone", message: `Arcue stops: its data folder ${userData} was removed.` });
+    await running.close();
+    server = null;
+    expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false);
+  });
+});
+
+describe("arcue serve stopping", () => {
+  it("stops when the command line asks, and only the command line", async () => {
+    const running = await serve();
+    const page = windowClient(await openSocket(running.url, running.url));
+    await expect(page.execute("serve.stop", {})).rejects.toMatchObject({
+      code: "forbidden",
+      message: "Only the arcue command can stop Arcue in the browser.",
+    });
+    const seen = watchStop(running);
+    await settle();
+    expect(seen.stop).toBeNull();
+
+    const connection = await connectToCore(userData, "serve");
+    await expect(connection?.client.execute("serve.stop", {})).resolves.toBeUndefined();
+    connection?.close();
+    await expect(running.stopped).resolves.toEqual({
+      reason: "requested",
+      message: "Arcue stops: arcue stop asked it to.",
+    });
+  });
+
+  it("closes the pages with code 4000, records that it ran last, and frees its port", async () => {
+    const running = await serve();
+    const page = await openSocket(running.url, running.url);
+    const code = new Promise((resolve) => page.once("close", (closed) => resolve(closed)));
+    writeLastCoreFile(userData, "desktop");
+
+    await running.close();
+    server = null;
+
+    expect(await code).toBe(4000);
+    expect(JSON.parse(readFileSync(join(userData, LAST_CORE_FILE), "utf8"))).toEqual({
+      version: 1,
+      kind: "serve",
+      serveUrl: running.url,
+    });
+    const again = await serve({ port: Number(new URL(running.url).port) });
+    expect(again.url).toBe(running.url);
+  });
+
+  it("records that it ran last before it removes serve.json, so a view's open meanwhile never starts the desktop app", async () => {
+    const running = await serve();
+    const held = await silentPage(running.url);
+    writeLastCoreFile(userData, "desktop");
+
+    const closing = running.close();
+    server = null;
+    await vi.waitFor(() => expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false), { timeout: 2000 });
+    expect(JSON.parse(readFileSync(join(userData, LAST_CORE_FILE), "utf8"))).toMatchObject({ kind: "serve" });
+    await expect(connectForOpen(userData, "a1b2c3d4e5f6", { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(
+      BROWSER_STOPPED,
+    );
+    await closing;
+    held.destroy();
+  });
+
+  it("closes the command line's connections before the pages, and refuses pages meanwhile", async () => {
+    const running = await serve();
+    const held = await silentPage(running.url);
+    const connection = await connectToCore(userData, "serve");
+    const socket = connection?.info.socket ?? "";
+    const opening = connection?.client.execute("asset.openInView", { path: model(), view: "a" }).then(
+      () => "result",
+      (error: { code?: string }) => error.code,
+    );
+
+    const closing = running.close();
+    server = null;
+    expect(["result", "disconnected"]).toContain(await opening);
+    await vi.waitFor(() => expect(existsSync(join(userData, SERVE_INFO_FILE))).toBe(false), { timeout: 2000 });
+    await expect(
+      new Promise((resolve, reject) => connect(socket).once("connect", resolve).once("error", reject)),
+    ).rejects.toThrow();
+    await expect(openSocket(running.url, running.url)).rejects.toThrow("503");
+    await closing;
+    held.destroy();
+    connection?.close();
+  });
+
+  it("finishes a save that waits for the reviews lock before it stops", async () => {
+    const running = await serve();
+    const lock = await holdLockElsewhere(userData, userData, "reviews");
+    const connection = await connectToCore(userData, "serve");
+    const opened = await connection?.client.execute("asset.openInView", { path: model(), view: "a" });
+    model("Prop.fbx");
+    const adding = connection?.client
+      .execute("composition.addFile", { assetId: opened?.assetId ?? "", file: "Prop.fbx", role: "set" })
+      .catch(() => undefined);
+    await sleep(200);
+    await connection?.client.execute("serve.stop", {});
+    await running.stopped;
+
+    const closing = running.close();
+    server = null;
+    await sleep(300);
+    lock.release();
+    await closing;
+
+    const [composition] = filesNamed(join(userData, "reviews"), "composition.json");
+    expect(JSON.parse(readFileSync(composition ?? "", "utf8"))).toMatchObject({
+      attach: [{ file: "Prop.fbx" }],
+    });
+    expect(heldLockFiles(userData)).toEqual([]);
+    connection?.close();
+    void adding;
+  });
+
+  it("stops within the lock limit and a second when a save waits on a lock another Arcue keeps", async () => {
+    const running = await serve({ lockTimeoutMs: 500 });
+    const lock = await holdLockElsewhere(userData, userData, "reviews");
+    const connection = await connectToCore(userData, "serve");
+    const opened = await connection?.client.execute("asset.openInView", { path: model(), view: "a" });
+    model("Prop.fbx");
+    const adding = connection?.client
+      .execute("composition.addFile", { assetId: opened?.assetId ?? "", file: "Prop.fbx", role: "set" })
+      .catch((error: { code?: string }) => error.code);
+    await connection?.client.execute("serve.stop", {});
+    await running.stopped;
+    const started = Date.now();
+
+    await running.close();
+    server = null;
+
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(["timeout", "disconnected"]).toContain(await adding);
+    expect(heldLockFiles(userData)).toEqual([lock.file.split(/[\\/]/).at(-1)]);
+    connection?.close();
+  });
+
+  it("prints why it stops when it runs in the foreground", async () => {
+    const port = await new Promise<number>((resolve) => {
+      const probe = createServer();
+      probe.listen(0, "127.0.0.1", () => {
+        const address = probe.address();
+        probe.close(() => resolve(typeof address === "object" && address ? address.port : 0));
+      });
+    });
+    let out = "";
+    let stopping = 0;
+    const running = run(
+      ["serve", "--port", String(port)],
+      { out: (text) => (out += text), err: () => undefined },
+      { ARCUE_USER_DATA: userData, ARCUE_VIEW: "review" },
+      temp,
+      {
+        webUi,
+        importWorkerEntry: join(temp, "import-worker.js"),
+        stop: new Promise(() => undefined),
+        build: "0123456789abcdef",
+        onStopping: () => stopping++,
+      },
+    );
+    await vi.waitFor(() => expect(out).toContain("Arcue runs at"), { timeout: 5000 });
+    expect(await readBridgeInfo(userData, "serve")).toMatchObject({ build: "0123456789abcdef" });
+    const connection = await connectToCore(userData, "serve");
+    await connection?.client.execute("serve.stop", {});
+    connection?.close();
+
+    await expect(running).resolves.toBe(0);
+    expect(out).toMatch(
+      new RegExp(
+        `^Arcue runs at http://localhost:${port}\\. Open it in a browser; agents' "arcue open" shows their models there\\.\\nThis session's view: http://localhost:${port}/\\?view=[0-9a-f]{12}\\nArcue stops: arcue stop asked it to\\.\\n$`,
+      ),
+    );
+    expect(stopping).toBe(1);
+  });
+});
+
+describe("arcue serve on its own", () => {
+  it("stops after the idle time with no page, never while one is connected, and counts again from the last", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+    const idleArmed = (armed: boolean) =>
+      vi.waitFor(() => expect(clock.pendingTimers).toBe(armed ? 3 : 2), { timeout: 5000 });
+
+    await idleArmed(true);
+    clock.advance(29 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+    const page = await openSocket(running.url, running.url);
+    await idleArmed(false);
+    clock.advance(120 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+
+    page.close();
+    const reloaded = await openSocket(running.url, running.url);
+    await settle();
+    clock.advance(120 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+
+    reloaded.close();
+    await idleArmed(true);
+    clock.advance(30 * MINUTE - 1);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(1);
+    await expect(running.stopped).resolves.toEqual({
+      reason: "idle",
+      message: "Arcue stops: no page was open for 30 minutes.",
+    });
+  });
+
+  it("counts the idle time again from each open while no page is connected", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+    const connection = await connectToCore(userData, "serve");
+
+    clock.advance(29 * MINUTE);
+    await expect(connection?.client.execute("asset.openInView", { path: model(), view: "a" })).resolves.toMatchObject({
+      shown: "held",
+    });
+    clock.advance(2 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(28 * MINUTE - 1);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(1);
+    await expect(running.stopped).resolves.toMatchObject({ reason: "idle" });
+    connection?.close();
+  });
+
+  it("counts the idle time again from each command-line connection and each load of the page while no page is connected", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+
+    clock.advance(29 * MINUTE);
+    const connection = await connectToCore(userData, "serve");
+    await connection?.client.query("asset.list", {});
+    connection?.close();
+    clock.advance(29 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+    expect((await get(running.url, "/assets/index-abc.js")).status).toBe(200);
+    expect((await get(running.url, "/")).status).toBe(200);
+    clock.advance(2 * MINUTE);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(28 * MINUTE - 1);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(1);
+    await expect(running.stopped).resolves.toMatchObject({ reason: "idle" });
+  });
+
+  it("counts the idle time again from a load of the page into a tab, and not from a fetch of it by a page", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+
+    clock.advance(20 * MINUTE);
+    expect((await get(running.url, "/", { headers: { "sec-fetch-dest": "document" } })).status).toBe(200);
+    clock.advance(29 * MINUTE);
+    expect((await get(running.url, "/", { headers: { "sec-fetch-dest": "empty" } })).status).toBe(200);
+    expect((await get(running.url, "/index.html", { headers: { "sec-fetch-dest": "empty" } })).status).toBe(200);
+    clock.advance(MINUTE - 1);
+    await settle();
+    expect(seen.stop).toBeNull();
+    clock.advance(1);
+    await expect(running.stopped).resolves.toMatchObject({ reason: "idle" });
+  });
+
+  it("starts no idle time for opens from the command line while a page is connected", async () => {
+    const clock = new ManualClock();
+    const running = await serve({
+      idleStopMs: 30 * MINUTE,
+      setTimer: (ms, run) => clock.setTimer(ms, run),
+      heartbeatMs: 1e9,
+      checkMs: 1e9,
+    });
+    const seen = watchStop(running);
+    const page = await openSocket(running.url, running.url);
+    windowClient(page);
+    await vi.waitFor(() => expect(clock.pendingTimers).toBe(2), { timeout: 5000 });
+    const connection = await connectToCore(userData, "serve");
+
+    await expect(connection?.client.execute("asset.open", { path: model() })).resolves.toMatchObject({
+      assetId: expect.any(String),
+    });
+    await expect(
+      connection?.client.execute("asset.openInView", { path: model("Crate.fbx"), view: "a" }),
+    ).resolves.toMatchObject({ shown: "held" });
+    expect(clock.pendingTimers).toBe(2);
+    clock.advance(31 * MINUTE);
+    await settle();
+
+    expect(seen.stop).toBeNull();
+    connection?.close();
+    page.close();
+  });
+
+  it("never stops by itself for want of a page in the foreground", async () => {
+    const clock = new ManualClock();
+    const running = await serve({ setTimer: (ms, run) => clock.setTimer(ms, run), heartbeatMs: 1e9, checkMs: 1e9 });
+    const seen = watchStop(running);
+
+    clock.advance(24 * 60 * MINUTE);
+    await settle();
+
+    expect(seen.stop).toBeNull();
+  });
+
+  it("drops a page that does not answer its pings, and keeps one that does", async () => {
+    const running = await serve({ heartbeatMs: 50 });
+    const silent = await openSocket(running.url, running.url, SERVE_CORE_PATH, { autoPong: false });
+    const answering = await openSocket(running.url, running.url);
+    const dropped = new Promise((resolve) => silent.once("close", resolve));
+
+    await dropped;
+    await sleep(200);
+
+    expect(answering.readyState).toBe(WebSocket.OPEN);
+    answering.close();
+  });
+
+  it("stops when its page is asked for and index.html is gone", async () => {
+    const running = await serve();
+    rmSync(join(webUi, "index.html"));
+
+    expect((await get(running.url, "/")).status).toBe(404);
+
+    await expect(running.stopped).resolves.toEqual({
+      reason: "removed",
+      message: `Arcue stops: its files in ${webUi} were removed. Run arcue serve --detach to start the current one.`,
+    });
+  });
+
+  it("stops when its web UI or its import worker is removed, with no request", async () => {
+    const first = await serve({ checkMs: 20 });
+    rmSync(join(temp, "import-worker.js"));
+    await expect(first.stopped).resolves.toMatchObject({
+      reason: "removed",
+      message: `Arcue stops: its files in ${temp} were removed. Run arcue serve --detach to start the current one.`,
+    });
+    await first.close();
+    writeFileSync(join(temp, "import-worker.js"), "");
+
+    const second = await serve({ checkMs: 20 });
+    rmSync(join(webUi, "index.html"));
+    await expect(second.stopped).resolves.toMatchObject({ reason: "removed" });
   });
 });

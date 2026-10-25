@@ -36,6 +36,22 @@ export const viewStateSchema = z.object({
   relinkOfferDismissed: z.boolean().optional(),
 });
 
+const pathSchema = z.string().min(1).max(4096);
+
+export const savedTabSchema = z.object({
+  /** The model's path, which opens the same asset again. */
+  path: pathSchema,
+  view: viewStateSchema.nullable(),
+});
+
+/** A window's asset tabs, in order, and the index of the active one. */
+export const windowTabsSchema = z.object({
+  tabs: z.array(savedTabSchema).max(500),
+  active: z.int().min(0).nullable(),
+});
+
 export type DisplayMode = z.output<typeof displayModeSchema>;
 export type PartView = z.output<typeof partViewSchema>;
 export type ViewState = z.output<typeof viewStateSchema>;
+export type SavedTab = z.output<typeof savedTabSchema>;
+export type WindowTabs = z.output<typeof windowTabsSchema>;

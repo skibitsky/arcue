@@ -2,9 +2,15 @@ import type { ReviewFile } from "@arcue/protocol";
 import { ArcueError, COMPOSITION_FILE_NAME, REVIEW_FORMAT, reviewFileSchema, reviewFormat } from "@arcue/protocol";
 import { insideWithoutLinks } from "./links";
 import { basename, joinPath, normalizePath, pathInside } from "./paths";
-import type { Platform } from "./platform";
+import type { Platform, Unlock } from "./platform";
 
 export const REVIEW_SCHEMA_VERSION = 1;
+
+/** The name of the lock every write and move under a reviews root holds. */
+export const REVIEWS_LOCK = "reviews";
+
+/** The name of the lock a write of `settings.json` holds. */
+export const SETTINGS_LOCK = "settings";
 
 /** The folder at a repository's root that holds Arcue's review data. */
 export const ARCUE_FOLDER = ".arcue";
@@ -65,6 +71,16 @@ function rootless(path: string): string {
   const drive = /^([A-Z]):\//.exec(path);
   if (drive) return `${drive[1]}/${path.slice(3)}`;
   return path.slice(1);
+}
+
+/** Holds the lock of the reviews root the location is in. Every write and move under that root holds it. */
+export function lockReviews(platform: Platform, location: ReviewLocation): Promise<Unlock> {
+  return platform.lock(location.workspaceRoot ?? platform.appDataDir, REVIEWS_LOCK);
+}
+
+/** The model a review is for, as an absolute path. */
+export function modelPathOf(location: ReviewLocation): string {
+  return location.workspaceRoot === null ? location.assetPath : joinPath(location.workspaceRoot, location.assetPath);
 }
 
 export function reviewFilePath(location: ReviewLocation): string {

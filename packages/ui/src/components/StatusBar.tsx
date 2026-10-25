@@ -11,15 +11,18 @@ import { WarningsStatus } from "./Warnings";
 
 type WatchState = { tone: "live" | "idle" | "alert"; text: string; tip: string };
 
+const RECONNECTING_TIP = "The core restarted. Your comments are saved.";
+
 function watchState(
   connection: ConnectionState,
   status: string,
   version: string | null,
   exportedAt: string | null,
   error: string | null,
+  reconnectingTip: string,
 ): WatchState {
   if (connection === "reconnecting") {
-    return { tone: "idle", text: "Reconnecting", tip: "The core restarted. Your comments are saved." };
+    return { tone: "idle", text: "Reconnecting", tip: reconnectingTip };
   }
   if (connection === "closed")
     return { tone: "alert", text: "Disconnected", tip: "The connection to the core is gone." };
@@ -101,17 +104,19 @@ export function StatusBar({
   store,
   session,
   connection,
+  reconnectingTip = RECONNECTING_TIP,
 }: {
   store: WorkspaceStore;
   session: AssetSession;
   connection: ConnectionState;
+  reconnectingTip?: string | undefined;
 }) {
   const summary = useSelect(session.state, (state) => state.summary);
   const review = useSelect(session.state, (state) => state.review);
   const scene = useSelect(session.state, (state) => state.scene);
   const parts = useSelect(session.state, (state) => state.parts);
   const exportedAt = review?.versions.find((version) => version.id === summary.version)?.fileModifiedAt ?? null;
-  const watch = watchState(connection, summary.status, summary.version, exportedAt, summary.error);
+  const watch = watchState(connection, summary.status, summary.version, exportedAt, summary.error, reconnectingTip);
   const stats = useMemo(() => (scene ? sceneStats(scene, parts) : null), [scene, parts]);
   const usual = useMemo(() => (scene ? sceneStats(scene) : null), [scene]);
   const changed = (value: number, key: "triangles" | "height") =>

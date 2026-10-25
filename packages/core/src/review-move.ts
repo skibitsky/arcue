@@ -41,7 +41,8 @@ export interface ReviewMove {
  * `replaceUntouched`, an untouched review. A `review.json` it cannot read or a newer Arcue saved refuses the move
  * before anything changes, and a failure after the rename moves the folder back. When the model moved to another
  * folder or took another name, the composition's paths are rewritten so they still find the same files, and the ids
- * `review.json` keeps for those files follow them.
+ * `review.json` keeps for those files follow them. The caller holds the reviews lock of both locations, which is one
+ * lock since a review moves only inside its reviews root.
  */
 export async function moveReview(platform: Platform, move: ReviewMove): Promise<void> {
   const { from, to } = move;

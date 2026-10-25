@@ -1,14 +1,17 @@
 import { execFile } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { fromNativePath, NodePlatform, toNativePath } from "@arcue/platform-node";
 import type { AssetInspection } from "@arcue/protocol";
 import { build } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { formatInspection } from "./inspect";
 import { run } from "./run";
+import { outsideSessions } from "./session-view";
+import { heldLockFiles, holdLockElsewhere } from "./test-locks";
 
 const appDir = fileURLToPath(new URL("..", import.meta.url));
 const samples = resolve(appDir, "../../samples");
@@ -54,7 +57,7 @@ async function runBuilt(args: string[]): Promise<{ code: number; out: string; er
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [join(dist, "arcue.js"), ...args], {
       cwd: samples,
-      env: { ...process.env, ARCUE_USER_DATA: userData },
+      env: outsideSessions({ ...process.env, ARCUE_USER_DATA: userData }),
     });
     return { code: 0, out: stdout, err: stderr };
   } catch (error) {
@@ -152,6 +155,28 @@ describe("arcue inspect", () => {
     });
     expect(code).toBe(1);
     expect(lines.err).toContain("no-worker.js");
+  });
+
+  it("reads a model while another Arcue keeps the review and settings locks, and takes no lock", async () => {
+    const platform = new NodePlatform({
+      appDataDir: fromNativePath(userData),
+      startImportWorker: () => {
+        throw new Error("This platform imports nothing.");
+      },
+    });
+    const root = (await platform.findWorkspaceRoot(fromNativePath(samples))) ?? fromNativePath(samples);
+    const held = [
+      await holdLockElsewhere(userData, toNativePath(root), "reviews"),
+      await holdLockElsewhere(userData, userData, "settings"),
+    ];
+    const started = Date.now();
+    try {
+      expect(await inspect(["crate.fbx"])).toMatchObject({ code: 0, err: "" });
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(heldLockFiles(userData).sort()).toEqual(held.map(({ file }) => basename(file)).sort());
+    } finally {
+      for (const lock of held) lock.release();
+    }
   });
 
   it("runs from the built arcue.js, with the import worker and wasm beside it", async () => {
