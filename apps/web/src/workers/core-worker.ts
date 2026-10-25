@@ -31,6 +31,7 @@ const closeImportWorker = new Map<number, () => void>();
 
 const platform = new MemoryPlatform({
   clock,
+  lockTimeoutMs: 15_000,
   startImportWorker() {
     const id = ++importWorkers;
     const channel = new MessageChannel();

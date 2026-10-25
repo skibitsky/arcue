@@ -25,7 +25,7 @@ import { contentHash, versionIdOf, versionIdOfHash } from "./hash";
 import { readUnityGuid } from "./identity";
 import { insideWithoutLinks } from "./links";
 import { basename, dirname, joinPath, pathInside, relativePath, stemOf } from "./paths";
-import type { Platform } from "./platform";
+import type { FileStat, Platform } from "./platform";
 import { Limit } from "./serial";
 
 /** One file read for a version: its path, its name in prefixes, and its bytes and id when it could be read. */
@@ -52,6 +52,15 @@ export interface TextureRead extends ReadFile {
   written: string;
 }
 
+/** A plain file's size and modification time. */
+export interface FileSnapshot {
+  size: number;
+  modifiedMs: number;
+}
+
+/** The snapshot of each file a version was read from, by path; null for a file that was not there. */
+export type FileStats = ReadonlyMap<string, FileSnapshot | null>;
+
 /** Everything a version of an asset is built from, read once, so the version id matches what gets parsed. */
 export interface AssetFiles {
   model: ReadFile & { bytes: Uint8Array; id: string; hash: string; size: number; modifiedMs: number };
@@ -73,6 +82,8 @@ export interface AssetFiles {
   watch: string[];
   /** The names of the plain files in the model's folder, the model's own included, as listed for its animations. */
   siblings: string[];
+  /** The model, the composition file and each member as they were just before they were read. */
+  stats: FileStats;
 }
 
 export interface ReadAssetOptions {
@@ -101,6 +112,7 @@ export async function readAssetFiles(
 ): Promise<AssetFiles> {
   const stat = await platform.stat(modelPath);
   if (stat?.kind !== "file") throw new ArcueError("not-found", `${modelPath} does not exist.`);
+  const stats = new Map<string, FileSnapshot | null>([[modelPath, snapshotOf(stat)]]);
   const folder = dirname(modelPath);
   const label = (path: string) => relativePath(folder, path) ?? path;
   const model = {
@@ -114,6 +126,7 @@ export async function readAssetFiles(
   let found: { text: string; composition: CompositionFile } | null = null;
   let unreadComposition: AssetFiles["unreadComposition"] = null;
   try {
+    stats.set(compositionPath, snapshotOf(await platform.stat(compositionPath)));
     found = await readComposition(platform, compositionPath, "invalid-input");
   } catch (error) {
     const broken = error instanceof ArcueError && error.code === "invalid-input";
@@ -149,7 +162,7 @@ export async function readAssetFiles(
   const members = new Map<string, ReadFile>();
   for (const path of [...animations, ...attach.map((entry) => entry.path)]) {
     if (path === modelPath || members.has(path)) continue;
-    members.set(path, await readMember(platform, path, label(path), readRoot));
+    members.set(path, await readMember(platform, path, label(path), readRoot, stats));
   }
 
   const textures: TextureRead[] = [];
@@ -217,18 +230,39 @@ export async function readAssetFiles(
     versionFiles,
     watch: [compositionPath, ...members.keys(), ...textures.map((texture) => texture.path)],
     siblings,
+    stats,
   };
+}
+
+/** Whether each file still has the size and modification time it had, and the files that were not there still are not. */
+export async function sameStats(platform: Platform, stats: FileStats): Promise<boolean> {
+  for (const [path, expected] of stats) {
+    const current = snapshotOf(await platform.stat(path));
+    if (current?.size !== expected?.size || current?.modifiedMs !== expected?.modifiedMs) return false;
+  }
+  return true;
+}
+
+function snapshotOf(stat: FileStat | null): FileSnapshot | null {
+  return stat?.kind === "file" ? { size: stat.size, modifiedMs: stat.modifiedMs } : null;
 }
 
 /** The problem of a member file that is not where the composition says, which a rename may explain. */
 export const MEMBER_NOT_FOUND = "File not found";
 
-async function readMember(platform: Platform, path: string, label: string, readRoot: string): Promise<ReadFile> {
+async function readMember(
+  platform: Platform,
+  path: string,
+  label: string,
+  readRoot: string,
+  stats: Map<string, FileSnapshot | null>,
+): Promise<ReadFile> {
   const missing = (problem: string): ReadFile => ({ path, label, bytes: null, id: null, problem });
   if (pathInside(readRoot, path) === null) return missing("File outside the workspace");
   if (!hasExtension(path, MODEL_EXTENSIONS)) return missing("Not a model file");
   if (!(await insideWithoutLinks(platform, readRoot, path))) return missing("File reached through a link");
   const stat = await platform.stat(path);
+  stats.set(path, snapshotOf(stat));
   if (stat?.kind !== "file") return missing(MEMBER_NOT_FOUND);
   return { path, label, ...(await readIdentified(platform, path)), problem: null };
 }

@@ -72,21 +72,36 @@ export function createPeer(endpoint: MessageEndpoint, options: PeerOptions = {})
     }
   };
 
-  const respond = async ({ id, kind, name, input }: RequestEnvelope) => {
-    let output: unknown;
-    try {
-      if (!options.handleRequest)
-        throw new ArcueError("unavailable", `This side does not answer requests ("${name}").`);
-      output = await options.handleRequest({ kind, name, input });
-    } catch (error) {
-      postFailure(id, error);
-      return;
-    }
+  const answer = (id: number, output: unknown) => {
     try {
       const transfer = typeof output === "object" && output !== null ? resultTransfers.get(output) : undefined;
       post({ type: "response", id, ok: true, output }, transfer);
     } catch (error) {
       postFailure(id, error);
+    }
+  };
+
+  /**
+   * Answers at once when the handler returns a value, before the work its change sets off in later microtasks, such as
+   * a window's render, and otherwise once its promise settles.
+   */
+  const respond = ({ id, kind, name, input }: RequestEnvelope) => {
+    let output: unknown;
+    try {
+      if (!options.handleRequest)
+        throw new ArcueError("unavailable", `This side does not answer requests ("${name}").`);
+      output = options.handleRequest({ kind, name, input });
+    } catch (error) {
+      postFailure(id, error);
+      return;
+    }
+    if (isPromiseLike(output)) {
+      output.then(
+        (value) => answer(id, value),
+        (error: unknown) => postFailure(id, error),
+      );
+    } else {
+      answer(id, output);
     }
   };
 
@@ -114,7 +129,7 @@ export function createPeer(endpoint: MessageEndpoint, options: PeerOptions = {})
   unlisten = endpoint.listen((message) => {
     if (closed || !isEnvelope(message)) return;
     if (message.type === "request") {
-      void respond(message);
+      respond(message);
     } else if (message.type === "response") {
       if (message.ok) settle(message.id, (entry) => entry.resolve(message.output));
       else settle(message.id, (entry) => entry.reject(fromWireError(message.error)));
@@ -166,4 +181,8 @@ export function createPeer(endpoint: MessageEndpoint, options: PeerOptions = {})
     },
     close,
   };
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === "object" && value !== null && "then" in value && typeof value.then === "function";
 }

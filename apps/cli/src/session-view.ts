@@ -24,3 +24,10 @@ export function sessionView(env: NodeJS.ProcessEnv, given?: string): string | nu
   if (identity === undefined) return null;
   return createHash("sha256").update(identity).digest("hex").slice(0, 12);
 }
+
+/** A copy of the environment without the variables that name an agent session, for a process that belongs to none. */
+export function outsideSessions(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy: NodeJS.ProcessEnv = { ...env };
+  for (const name of SESSION_VARIABLES) delete copy[name];
+  return copy;
+}

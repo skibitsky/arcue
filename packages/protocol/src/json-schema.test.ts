@@ -20,6 +20,7 @@ describe("protocolJsonSchemas", () => {
 
   it("writes a void result as null", () => {
     expect(schemas["asset.close"]?.output).toMatchObject({ type: "null" });
+    expect(schemas["serve.stop"]?.output).toMatchObject({ type: "null" });
   });
 
   it("leaves inputs with defaults optional", () => {

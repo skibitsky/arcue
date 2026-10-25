@@ -1,8 +1,8 @@
+import type { CoreChannel } from "@arcue/protocol";
+import { ReconnectingClient } from "@arcue/protocol";
 import type { FileHost, WorkspaceStore } from "@arcue/ui";
-import { createWorkspaceStore } from "@arcue/ui";
-import type { DesktopBridge, MenuCommand, SavedTab, TextEdit, WindowTabs } from "../shared/ipc";
-import type { CoreChannel } from "./reconnecting-client";
-import { ReconnectingClient } from "./reconnecting-client";
+import { createWorkspaceStore, TabRestore } from "@arcue/ui";
+import type { DesktopBridge, MenuCommand, TextEdit, WindowTabs } from "../shared/ipc";
 
 export interface WindowHostOptions {
   bridge: DesktopBridge;
@@ -37,11 +37,7 @@ export class WindowHost {
   readonly #options: WindowHostOptions;
   readonly #setTimer: (delayMs: number, callback: () => void) => () => void;
   readonly #stops: (() => void)[] = [];
-  /** Saved tabs not open in the current core yet, in order: the restored session, or the tabs a lost core had. */
-  #unopened: SavedTab[] = [];
-  /** The path of the saved tab to activate once every saved tab is open again. */
-  #wantActive: string | null = null;
-  #generation = 0;
+  readonly #restore: TabRestore;
   #adopt: string | null = null;
   #ready = false;
   #closing = false;
@@ -65,11 +61,12 @@ export class WindowHost {
       open: (dropped) => this.openFiles(dropped),
     };
     this.store = createWorkspaceStore({ client: this.client, setTimer: this.#setTimer, files });
+    this.#restore = new TabRestore(this.store, this.client);
   }
 
   async start(): Promise<void> {
     const init = await this.#bridge.init();
-    if (init.restore) this.#pendingReopen(init.restore);
+    if (init.restore) this.#restore.pending(init.restore);
     this.#adopt = init.adopt;
     const bridge = this.#bridge;
     this.#stops.push(
@@ -119,20 +116,7 @@ export class WindowHost {
    * core restart follow the open ones, so a report never drops them.
    */
   tabs(): WindowTabs {
-    const { tabs, active } = this.store.state.get();
-    const saved: SavedTab[] = [];
-    let activeIndex: number | null = null;
-    for (const tab of tabs) {
-      const session = tab.kind === "asset" ? this.store.session(tab.id) : null;
-      const path = session?.state.get().summary.path ?? "";
-      if (!session || path === "") continue;
-      if (tab.id === active) activeIndex = saved.length;
-      saved.push({ path, view: session.viewState() });
-    }
-    const open = new Set(saved.map((tab) => tab.path));
-    saved.push(...this.#unopened.filter((tab) => !open.has(tab.path)));
-    const wanted = this.#wantActive === null ? -1 : saved.findIndex((tab) => tab.path === this.#wantActive);
-    return { tabs: saved, active: wanted >= 0 ? wanted : activeIndex };
+    return this.#restore.tabs();
   }
 
   dispose(): void {
@@ -147,16 +131,16 @@ export class WindowHost {
    * assets, so the window drops its tabs and opens them again by path, starting each from the view it showed.
    */
   #connect(channel: CoreChannel): void {
-    this.#pendingReopen(this.tabs());
-    for (const tab of this.store.state.get().tabs) {
-      if (tab.kind === "asset") this.store.releaseAsset(tab.id);
-    }
-    const generation = ++this.#generation;
+    const generation = this.#restore.detach();
     this.client.attach(channel);
     if (this.#hasFocus()) this.store.reportFocus();
     this.#reopening = this.#reopening.then(async () => {
-      await this.#reopen(generation);
-      if (generation !== this.#generation) return;
+      await this.#restore.reopen(generation, {
+        open: async (tab) => {
+          await this.client.execute("asset.open", { path: tab.path, ...(tab.view ? { viewState: tab.view } : {}) });
+        },
+      });
+      if (generation !== this.#restore.generation) return;
       const adopt = this.#adopt;
       this.#adopt = null;
       if (adopt) await this.moveHere(adopt);
@@ -168,36 +152,8 @@ export class WindowHost {
     });
   }
 
-  #pendingReopen({ tabs, active }: WindowTabs): void {
-    this.#unopened = [...tabs];
-    this.#wantActive = active === null ? null : (tabs[active]?.path ?? null);
-  }
-
   #hasFocus(): boolean {
     return this.#options.hasFocus?.() ?? false;
-  }
-
-  /** Opens the saved tabs one by one, and stops, keeping the rest, when the connection is lost or replaced. */
-  async #reopen(generation: number): Promise<void> {
-    for (;;) {
-      const tab = this.#unopened[0];
-      if (!tab || generation !== this.#generation) break;
-      try {
-        await this.client.execute("asset.open", { path: tab.path, ...(tab.view ? { viewState: tab.view } : {}) });
-      } catch (error) {
-        if (generation !== this.#generation || this.client.connectionState !== "connected") return;
-        this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" });
-      }
-      if (generation !== this.#generation) return;
-      this.#unopened = this.#unopened.filter((pending) => pending !== tab);
-    }
-    if (generation !== this.#generation) return;
-    const wanted = this.#wantActive;
-    this.#wantActive = null;
-    const active = this.store.state
-      .get()
-      .tabs.find((tab) => tab.kind === "asset" && this.store.session(tab.id)?.state.get().summary.path === wanted);
-    if (active) this.store.activate(active.id);
   }
 
   #menu(command: MenuCommand): void {

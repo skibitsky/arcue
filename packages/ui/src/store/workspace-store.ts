@@ -166,6 +166,7 @@ export class WorkspaceStore {
       client.subscribe("review.changed", ({ assetId, review }) => this.#sessions.get(assetId)?.setReview(review)),
       client.subscribe("review.relinked", ({ assetId, from, automatic }) => this.#onRelinked(assetId, from, automatic)),
       client.subscribe("review.offered", ({ assetId, candidate }) => this.#sessions.get(assetId)?.setOffer(candidate)),
+      client.subscribe("settings.changed", ({ settings }) => this.state.patch({ settings })),
       client.onConnectionChange((connection) => this.#onConnection(connection)),
     ];
     this.#stop = () => {
@@ -213,6 +214,14 @@ export class WorkspaceStore {
   #onSummary(asset: AssetSummary): void {
     this.#summaries.set(asset.assetId, asset);
     this.#sessions.get(asset.assetId)?.setSummary(asset);
+  }
+
+  /**
+   * Forgets the summaries of every asset the core announced. Call it when the window may reach a new core, which
+   * numbers its assets from a1 again, so a new tab never starts with another asset's name.
+   */
+  forgetSummaries(): void {
+    this.#summaries.clear();
   }
 
   activate(id: string): void {
@@ -329,22 +338,28 @@ export class WorkspaceStore {
 
   /**
    * Answers a request the core sends to this window. Pass it as the peer's `handleRequest`: it runs the commands with
-   * runsIn "view" and refuses everything else.
+   * runsIn "view" and refuses everything else. A command that finishes at once returns its result rather than a
+   * promise, so the peer answers before the render its change sets off; a refusal is a rejected promise.
    */
-  handleRequest = async (request: IncomingRequest): Promise<unknown> => {
-    const { name } = request;
-    if (request.kind !== "command" || !isCommandName(name) || commands[name].runsIn !== "view") {
-      throw new ArcueError("unknown-command", `This window does not run "${name}".`);
+  handleRequest = (request: IncomingRequest): unknown => {
+    try {
+      const { name } = request;
+      if (request.kind !== "command" || !isCommandName(name) || commands[name].runsIn !== "view") {
+        throw new ArcueError("unknown-command", `This window does not run "${name}".`);
+      }
+      const parsed = commands[name].input.safeParse(request.input);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.map((issue) => ({
+          path: issue.path.filter((part): part is string | number => typeof part !== "symbol"),
+          message: issue.message,
+        }));
+        throw new ArcueError("invalid-input", `Invalid input for "${name}".`, { issues });
+      }
+      const handler = this.#viewHandlers[name as ViewCommandName] as (args: unknown) => unknown;
+      return handler(parsed.data);
+    } catch (error) {
+      return Promise.reject(error);
     }
-    const parsed = commands[name].input.safeParse(request.input);
-    if (!parsed.success) {
-      const issues = parsed.error.issues.map((issue) => ({
-        path: issue.path.filter((part): part is string | number => typeof part !== "symbol"),
-        message: issue.message,
-      }));
-      throw new ArcueError("invalid-input", `Invalid input for "${name}".`, { issues });
-    }
-    return this.runViewCommand(name as ViewCommandName, parsed.data as CommandArgs<ViewCommandName>);
   };
 
   runViewCommand<Name extends ViewCommandName>(name: Name, args: CommandArgs<Name>): Promise<CommandOutput<Name>> {
@@ -437,11 +452,12 @@ export class WorkspaceStore {
   async setCoordinates(coordinates: CoordinateConvention): Promise<void> {
     const previous = this.state.get().settings;
     if (!previous || previous.coordinates === coordinates) return;
-    this.state.patch({ settings: { ...previous, coordinates } });
+    const optimistic = { ...previous, coordinates };
+    this.state.patch({ settings: optimistic });
     try {
       this.state.patch({ settings: await this.client.execute("settings.set", { coordinates }) });
     } catch (error) {
-      this.state.patch({ settings: previous });
+      if (this.state.get().settings === optimistic) this.state.patch({ settings: previous });
       this.notify({ message: messageOf(error), kind: "alert" });
     }
   }

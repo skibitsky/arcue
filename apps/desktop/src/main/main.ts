@@ -3,14 +3,14 @@ import { mkdirSync } from "node:fs";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runningCore } from "@arcue/platform-node";
+import { blockingCore } from "@arcue/platform-node";
 import type { LaunchInfo } from "@arcue/protocol";
 import { LAUNCH_INFO_FILE } from "@arcue/protocol";
 import { app, dialog, protocol, session, shell } from "electron";
 import type { Log } from "../shared/log";
 import { fileLog } from "../shared/log";
 import type { RunningCore } from "./already-running";
-import { alreadyRunningNotice } from "./already-running";
+import { alreadyRunningLogLine, alreadyRunningNotice } from "./already-running";
 import { assetPathsFromArgv, launchDataSchema } from "./args";
 import { CoreHost } from "./core-host";
 import { installMenu } from "./menu";
@@ -74,9 +74,9 @@ async function run(): Promise<void> {
   process.on("uncaughtException", (error) => log.error("Uncaught exception in the main process", error));
   process.on("unhandledRejection", (error) => log.error("Unhandled rejection in the main process", error));
 
-  const running = await runningCore(userData);
-  if (running) {
-    await quitBeside({ pid: running.pid, url: running.url ?? null }, log);
+  const blocking = await blockingCore(userData, "desktop");
+  if (blocking) {
+    await quitBeside({ ...blocking, older: blocking.info.kind === undefined }, log);
     return;
   }
 
@@ -144,11 +144,12 @@ async function run(): Promise<void> {
   });
 }
 
-/** Says that another Arcue runs on the same reviews, offers to open the address it runs at, and quits. */
+/**
+ * Says which Arcue keeps this one from starting, offers to open the address of an older arcue serve, and quits. Arcue
+ * in the browser of this build runs beside the app and never gets here.
+ */
 async function quitBeside(running: RunningCore, log: Log): Promise<void> {
-  log.info(
-    `Arcue is already running (process ${running.pid}${running.url ? ` at ${running.url}` : ""}), so this one quits`,
-  );
+  log.info(alreadyRunningLogLine(running));
   const notice = alreadyRunningNotice(running);
   try {
     const { response } = await dialog.showMessageBox({

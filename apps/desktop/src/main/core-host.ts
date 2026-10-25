@@ -15,7 +15,7 @@ export interface CoreHostOptions {
   onNeedWindow(): void;
   /** The core stopped unexpectedly. Windows show "reconnecting" and ask for a new port. */
   onLost(): void;
-  /** Another core runs for the data folder, so this one stopped for good. */
+  /** A core that this one cannot run beside answers for the data folder, so this one stopped for good. */
   onAlreadyRunning(running: RunningCore): void;
 }
 
@@ -24,7 +24,7 @@ interface PortRequest {
   deliver(port: MessagePortMain): void;
 }
 
-const STOP_TIMEOUT_MS = 3000;
+const STOP_TIMEOUT_MS = 20_000;
 const MAX_RESTART_DELAY_MS = 10_000;
 const CRASH_WINDOW_MS = 60_000;
 
@@ -67,7 +67,10 @@ export class CoreHost {
     this.#flush();
   }
 
-  /** Asks the core to finish its writes and exit, then kills it if it does not. */
+  /**
+   * Asks the core to finish its writes and exit, then kills it if it has not exited after 20 seconds, longer than a
+   * save waits for a lock another Arcue holds.
+   */
   async stop(): Promise<void> {
     this.#stopping = true;
     if (this.#restartTimer) clearTimeout(this.#restartTimer);
@@ -116,7 +119,11 @@ export class CoreHost {
         return;
       case "already-running":
         void this.stop();
-        this.#options.onAlreadyRunning({ pid: message.pid, url: message.url });
+        this.#options.onAlreadyRunning({
+          info: { pid: message.pid, url: message.url ?? undefined },
+          reason: message.reason,
+          older: message.older,
+        });
         return;
       case "need-window":
         this.#options.onNeedWindow();

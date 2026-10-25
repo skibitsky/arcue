@@ -9,7 +9,8 @@ type SetTimer = (delayMs: number, callback: () => void) => () => void;
  */
 export class WindowPresence {
   readonly #counts = new Map<string | null, number>();
-  #waiters: { view: string | null; resolve: () => void }[] = [];
+  #waiters: { view: string | null; resolve: () => void; reject: (error: ArcueError) => void }[] = [];
+  #disposed = false;
   readonly #requestWindow: () => void;
   readonly #setTimer: SetTimer;
   readonly #timeoutMs: number;
@@ -45,12 +46,17 @@ export class WindowPresence {
    */
   ensure(view: string | null = null): Promise<void> {
     if (this.#canShow(view)) return Promise.resolve();
+    if (this.#disposed) return Promise.reject(stopping());
     return new Promise((resolve, reject) => {
       const waiter = {
         view,
         resolve: () => {
           cancel();
           resolve();
+        },
+        reject: (error: ArcueError) => {
+          cancel();
+          reject(error);
         },
       };
       const cancel = this.#setTimer(this.#timeoutMs, () => {
@@ -62,7 +68,17 @@ export class WindowPresence {
     });
   }
 
+  /** Rejects every waiter as "disconnected" and cancels its timer, as the core stops; later waiters reject at once. */
+  dispose(): void {
+    this.#disposed = true;
+    for (const waiter of this.#waiters.splice(0)) waiter.reject(stopping());
+  }
+
   #canShow(view: string | null): boolean {
     return this.count(null) > 0 || (view !== null && this.count(view) > 0);
   }
+}
+
+function stopping(): ArcueError {
+  return new ArcueError("disconnected", "Arcue is stopping.");
 }

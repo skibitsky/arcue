@@ -6,7 +6,7 @@ export const toCoreSchema = z.discriminatedUnion("type", [
   /** Carries one port of a channel to a window. */
   z.object({ type: z.literal("connect"), connection: z.string().min(1).max(200) }),
   z.object({ type: z.literal("clipboard-done"), id: z.int().positive(), ok: z.boolean() }),
-  /** Closes the bridge socket and exits. */
+  /** Closes the bridge, lets the changes in flight finish saving, and exits. */
   z.object({ type: z.literal("stop") }),
 ]);
 
@@ -15,8 +15,18 @@ export const fromCoreSchema = z.discriminatedUnion("type", [
   /** `socket` is null when the bridge for the command line could not start. */
   z.object({ type: z.literal("started"), socket: z.string().min(1).nullable() }),
   z.object({ type: z.literal("failed"), message: z.string() }),
-  /** Another core answers at `bridge.json`, so this one stopped before it served a window. */
-  z.object({ type: z.literal("already-running"), pid: z.int().positive(), url: z.string().nullable() }),
+  /**
+   * Another core that cannot run beside this one answers at `bridge.json` or `serve.json`, so this one stopped before
+   * it served a window: another Arcue app ("same"), or a core that takes no review locks ("unshared"). `older` says
+   * whether that core comes from a build before cores ran side by side.
+   */
+  z.object({
+    type: z.literal("already-running"),
+    pid: z.int().positive(),
+    url: z.string().nullable(),
+    reason: z.enum(["same", "unshared"]),
+    older: z.boolean(),
+  }),
   /** A bridge opened an asset while no window was connected. */
   z.object({ type: z.literal("need-window") }),
   z.object({ type: z.literal("clipboard"), id: z.int().positive(), text: z.string().max(10_000_000) }),

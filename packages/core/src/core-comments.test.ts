@@ -1,11 +1,9 @@
 import type { CommandInput, CoreClient, ReviewFile } from "@arcue/protocol";
 import { createMemoryChannel, createPeer, createRemoteClient, roundDataSchema } from "@arcue/protocol";
 import { describe, expect, it } from "vitest";
-import { ArcueCore } from "./core";
 import type { TestCore } from "./test-support";
 import {
   camera,
-  FakeWindow,
   fakeAsset,
   HERO,
   HERO_REVIEW,
@@ -18,6 +16,7 @@ import {
   pinContext,
   png,
   readJson,
+  startSecondCore,
   startTestCore,
 } from "./test-support";
 
@@ -472,12 +471,11 @@ describe("re-anchoring on a new version", () => {
     test.core.dispose();
     await test.platform.writeFile(HERO, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 5 }] }));
 
-    const restarted = await ArcueCore.start({ platform: test.platform });
-    const window = new FakeWindow(restarted, "window-1");
-    const { assetId } = await window.client.execute("asset.open", { path: HERO });
-    await restarted.idle();
-    const { version } = await restarted.client.query("scene.get", { assetId });
-    const review = await restarted.client.query("review.get", { assetId });
+    const restarted = await startSecondCore(test);
+    const { assetId } = await restarted.window.client.execute("asset.open", { path: HERO });
+    await restarted.core.idle();
+    const { version } = await restarted.core.client.query("scene.get", { assetId });
+    const review = await restarted.core.client.query("review.get", { assetId });
     expect(review.comments[0]).toMatchObject({
       anchorState: "moved",
       anchorVersion: version,
