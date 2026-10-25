@@ -103,13 +103,30 @@ async function statusOnceReady(env: NodeJS.ProcessEnv, files: readonly string[])
   }
 }
 
-const SLOW_FIRST_START = ["did not answer", "did not start within"];
+const SLOW_TO_ANSWER = ["did not answer", "did not start within"];
 
 async function runningWithin(env: NodeJS.ProcessEnv, ms: number): Promise<void> {
   const deadline = Date.now() + ms;
   while ((await arcue(["status"], env)).code !== 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+}
+
+/**
+ * Runs an `arcue open` until the app answers it, for up to 3 minutes. Under Rosetta, the app and its window's helpers
+ * are translated as they first start, and without a GPU a window busy with its first models can outlast what the
+ * command line waits for.
+ */
+async function openOnceAnswered(args: readonly string[], env: NodeJS.ProcessEnv): Promise<Result> {
+  const deadline = Date.now() + 180_000;
+  let result = await arcue(args, env);
+  while (result.code !== 0 && SLOW_TO_ANSWER.some((text) => result.stderr.includes(text)) && Date.now() < deadline) {
+    console.warn(`The app was slow to answer arcue ${args.join(" ")}, so it tries again.\n${result.stderr}`);
+    await runningWithin(env, Math.max(0, deadline - Date.now()));
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    result = await arcue(args, env);
+  }
+  return result;
 }
 
 /** The end of the app's own logs, which a failed check prints. */
@@ -167,28 +184,14 @@ try {
   const notRunning = await arcue(["status"], env);
   check(notRunning.code === 1 && notRunning.stdout === "Arcue is not running.\n", "arcue status before", notRunning);
 
-  const openStriker = ["open", striker, "--clip", CLIP, "--frame", "12"];
-  let started = await arcue(openStriker, env);
-  const slowStartDeadline = Date.now() + 180_000;
-  while (
-    started.code !== 0 &&
-    SLOW_FIRST_START.some((text) => started.stderr.includes(text)) &&
-    Date.now() < slowStartDeadline
-  ) {
-    // A first start can outlast what the command line waits for: Rosetta translates the app and its window's helpers
-    // on their first start, and without a GPU the window's first render can block it.
-    console.warn(`The app was slow to start, so arcue open tries again once the app runs.\n${started.stderr}`);
-    await runningWithin(env, Math.max(0, slowStartDeadline - Date.now()));
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    started = await arcue(openStriker, env);
-  }
+  const started = await openOnceAnswered(["open", striker, "--clip", CLIP, "--frame", "12"], env);
   check(
     started.code === 0 && started.stdout.startsWith(`Opened ${striker} in Arcue as `),
     "arcue open, starting the app",
     started,
   );
 
-  const opened = await arcue(["open", golem], env);
+  const opened = await openOnceAnswered(["open", golem], env);
   check(
     opened.code === 0 && opened.stdout.startsWith(`Opened ${golem} in Arcue as `),
     "arcue open in the running app",
