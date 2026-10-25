@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-import { $ as splitMemberPath, A as compositionFileSchema, B as countInRanges, C as settingsSchema, Ct as ArcueError, D as IMAGE_FILE_EXTENSIONS, E as COMPOSITION_FILE_NAME, G as parseStoredPath, H as encodeRanges, J as sameTopology, K as fileNameOf, M as keysModelBones, N as memberRoles, O as MODEL_FILE_EXTENSIONS, P as viewStateSchema, Q as memberPath, R as lastFrame, S as viewNameSchema, St as messageChannel, T as screenshotOwner, U as rangesWithin, V as decodeRanges, W as materialSlots, X as composeScene, Z as findNode, _ as reviewFormat, _t as connectBridge, a as isQueryName, at as knownPartView, bt as framedChannel, c as importReadFileInputSchema, ct as TEXTURE_REF_NAMES, d as createPeer, dt as BRIDGE_INFO_FILE, et as describeTextureUses, f as withTransfer, ft as HANDSHAKE_MAX_FRAME_BYTES, g as reviewFileSchema, gt as bridgeInfoSchema, h as reportListenerError, ht as acceptBridge, i as roundDataSchema, it as isDefaultPartView, j as joinsByName, k as animatesModel, l as importRequests, lt as TEXTURE_SLOTS, m as callEach, n as binaryFrameCodec, o as queries, ot as shownByDefault, p as isEnvelope, pt as LAUNCH_INFO_FILE, q as imageMimeType, r as jsonFrameCodec, s as importFindFileInputSchema, st as TEXTURE_REF_KEYS, t as portEndpoint, tt as importWarning, v as commands, vt as launchInfoSchema, w as warningId, wt as COMMENT_ID_PATTERN, x as viewAddress, xt as framedEndpoint, y as isCommandName, yt as MAX_FRAME_BYTES } from "./arcue-CIHJxDUj.js";
+import { A as COMPOSITION_FILE_NAME, At as framedChannel, C as isCommandName, Ct as bridgeInfoSchema, D as settingsSchema, Dt as launchInfoSchema, E as viewNameSchema, Et as lastCoreSchema, F as joinsByName, G as decodeRanges, H as lastFrame, I as keysModelBones, J as materialSlots, K as encodeRanges, L as memberRoles, M as MODEL_FILE_EXTENSIONS, Mt as messageChannel, N as animatesModel, Nt as ArcueError, O as warningId, Ot as sharesReviews, P as compositionFileSchema, Pt as COMMENT_ID_PATTERN, Q as sameTopology, R as viewStateSchema, S as commands, St as bridgeInfoFile, T as viewAddress, Tt as coreKindOf, W as countInRanges, X as fileNameOf, Y as parseStoredPath, Z as imageMimeType, _ as isEnvelope, _t as LAUNCH_INFO_FILE, a as LOCKS_FOLDER, at as importWarning, b as reviewFileSchema, bt as SERVE_STOPPED_CLOSE_CODE, c as lockWaitingSchema, ct as isDefaultPartView, d as importFindFileInputSchema, dt as TEXTURE_REF_KEYS, et as composeScene, f as importReadFileInputSchema, ft as TEXTURE_REF_NAMES, g as withTransfer, gt as LAST_CORE_FILE, h as createPeer, ht as HANDSHAKE_MAX_FRAME_BYTES, i as roundDataSchema, it as describeTextureUses, j as IMAGE_FILE_EXTENSIONS, jt as framedEndpoint, k as screenshotOwner, kt as MAX_FRAME_BYTES, l as isQueryName, lt as knownPartView, n as binaryFrameCodec, nt as memberPath, o as START_LOCK_FILE, p as importRequests, pt as TEXTURE_SLOTS, q as rangesWithin, r as jsonFrameCodec, rt as splitMemberPath, s as lockRecordSchema, t as portEndpoint, tt as findNode, u as queries, ut as shownByDefault, v as callEach, vt as LOCAL_PAGE_OWNER, wt as connectBridge, x as reviewFormat, xt as acceptBridge, y as reportListenerError } from "./arcue-D9i4aRTu.js";
 import { createRequire } from "node:module";
+import * as fs from "node:fs/promises";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
-import { extname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, parse, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { connect, createServer } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir, userInfo } from "node:os";
+import { closeSync, createReadStream, fstatSync, openSync, readFileSync, readlinkSync, unlinkSync, unwatchFile, watch, watchFile } from "node:fs";
+import { setTimeout as setTimeout$1 } from "node:timers/promises";
 import { MessageChannel, Worker } from "node:worker_threads";
-import { createReadStream, unwatchFile, watch, watchFile } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer as createServer$1 } from "node:http";
@@ -52,6 +54,23 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 }) : target, mod));
 var __toCommonJS = (mod) => __hasOwnProp.call(mod, "module.exports") ? mod["module.exports"] : __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
+//#endregion
+//#region src/exit-after-run.ts
+var EXIT_AFTER_MS = 5e3;
+var exitProcess = (code) => process.exit(code);
+var unrefTimer$1 = (ms, run) => setTimeout(run, ms);
+/** Sets the exit code and makes sure the process ends within 5 seconds, whatever handles stay open. */
+function exitAfterRun(code, { exit = exitProcess, setTimer = unrefTimer$1 } = {}) {
+	process.exitCode = code;
+	setTimer(EXIT_AFTER_MS, () => exit(code)).unref();
+}
+/** Ends the process with 1 after `ms` unless it ended first, saying so on stderr. */
+function armHardExit(ms, { exit = exitProcess, setTimer = unrefTimer$1, err = (text) => process.stderr.write(text) } = {}) {
+	setTimer(ms, () => {
+		err(`Arcue did not stop within ${Math.round(ms / 1e3)} seconds, so it exits now.\n`);
+		exit(1);
+	}).unref();
+}
 //#endregion
 //#region ../../packages/scene/src/geometry.ts
 /** A mesh's triangles in source vertex numbers, three per triangle, for queries against `restPositions`. */
@@ -368,39 +387,77 @@ function socketStream(socket) {
 }
 //#endregion
 //#region ../../packages/platform-node/src/core-connection.ts
+/** The errors of a connect that mean nothing listens at the address. */
+var NOTHING_LISTENS$1 = /* @__PURE__ */ new Set([
+	"ENOENT",
+	"ECONNREFUSED",
+	"ENOTSOCK"
+]);
 var timer = (delayMs, callback) => {
 	const handle = setTimeout(callback, delayMs);
 	return () => clearTimeout(handle);
 };
-/** What `bridge.json` in the data folder says, or null when it is missing or not valid. */
-async function readBridgeInfo(userData) {
+/** What the bridge file of a core of this kind says, or null when it is missing or not valid. */
+function readBridgeInfo(userData, kind) {
+	return readBridgeFile(join(userData, bridgeInfoFile(kind)));
+}
+/** What a bridge file holds now, or null when it is missing or not valid. */
+async function readBridgeFile(path) {
 	try {
-		const parsed = bridgeInfoSchema.safeParse(JSON.parse(await readFile(join(userData, BRIDGE_INFO_FILE), "utf8")));
+		const parsed = bridgeInfoSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
 		return parsed.success ? parsed.data : null;
 	} catch {
 		return null;
 	}
 }
-/** Connects to the core that `bridge.json` names and presents its token; null when nothing listens on its socket. */
-async function connectToCore(userData, handshakeMs = 5e3) {
-	const info = await readBridgeInfo(userData);
+/**
+* Connects to the core that the bridge file of this kind names and presents its token. Null when nothing listens;
+* rejects when something listens but refuses, stays silent, or cannot be reached.
+*/
+async function connectToCore(userData, kind, handshakeMs = 5e3) {
+	const info = await readBridgeInfo(userData, kind);
 	return info ? connectWith(info, handshakeMs) : null;
 }
 /**
-* The core that `bridge.json` names, while something listens on its socket. Only one core may run for a data folder,
-* since two would overwrite each other's review files. A core that refuses the token or does not answer in time still
-* listens there, so it counts as running.
+* The core that the bridge file of this kind names, while something listens on its socket. A core that refuses the
+* token, does not answer in time or cannot be reached still listens there, so it counts as running.
 */
-async function runningCore(userData, handshakeMs = 5e3) {
-	const info = await readBridgeInfo(userData);
-	if (!info) return null;
+async function runningCore(userData, kind, handshakeMs = 5e3) {
+	const info = await readBridgeInfo(userData, kind);
+	return info && await listens$1(info, handshakeMs) ? info : null;
+}
+/** Whether something listens where the bridge file says: a core that answers, refuses, stays silent or is out of reach. */
+async function listens$1(info, handshakeMs = 5e3) {
 	try {
 		const connection = await connectWith(info, handshakeMs);
 		connection?.close();
-		return connection ? info : null;
+		return connection !== null;
 	} catch {
-		return info;
+		return true;
 	}
+}
+/**
+* The live core that keeps a core of `kind` from starting, or null. Cores of both kinds run side by side, so each kind
+* is kept out only by a second core of its own kind, or by a core that does not take the review locks this build
+* takes, in either bridge file. A core that refuses, stays silent or cannot be reached counts as live. A core of the
+* other kind that shares reviews never blocks, so it is not reached at all, and one that does not answer costs no wait.
+*/
+async function blockingCore(userData, kind, handshakeMs = 5e3) {
+	const other = kind === "serve" ? "desktop" : "serve";
+	const [own, beside] = await Promise.all([runningCore(userData, kind, handshakeMs), runningUnshared(userData, other, handshakeMs)]);
+	if (own) return {
+		info: own,
+		reason: sharesReviews(own) && (kind === "serve" || own.kind === "desktop") ? "same" : "unshared"
+	};
+	return beside ? {
+		info: beside,
+		reason: "unshared"
+	} : null;
+}
+/** The running core that the bridge file of this kind names, when it does not share reviews. */
+async function runningUnshared(userData, kind, handshakeMs) {
+	const info = await readBridgeInfo(userData, kind);
+	return info && !sharesReviews(info) && await listens$1(info, handshakeMs) ? info : null;
 }
 async function connectWith(info, handshakeMs) {
 	const socket = await openSocket(info.socket);
@@ -423,38 +480,562 @@ async function connectWith(info, handshakeMs) {
 		}
 	};
 }
+/** Resolves null when nothing listens at the path, and rejects when something there cannot be reached. */
 function openSocket(path) {
-	let socket;
-	try {
-		socket = connect(path);
-	} catch {
-		return Promise.resolve(null);
-	}
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
+		const socket = connect(path);
 		socket.once("connect", () => resolve(socket));
-		socket.once("error", () => {
+		socket.once("error", (error) => {
 			socket.destroy();
-			resolve(null);
+			if (error.code !== void 0 && NOTHING_LISTENS$1.has(error.code)) resolve(null);
+			else reject(error);
 		});
 	});
 }
 //#endregion
-//#region ../../packages/platform-node/src/bridge-server.ts
-/** Another core answers at `bridge.json`. */
+//#region ../../packages/platform-node/src/file-lock.ts
+var HEARTBEAT_MS$1 = 5e3;
+var STALE_AFTER_MS = 6e4;
+var CONFIRM_STALE_MS = 1e4;
+var MARK_WAITING_AFTER_MS = 50;
+var WAITING_FRESH_MS = 2e3;
+var YIELD_MS = 200;
+var UNLINK_ATTEMPTS = 5;
+var REFUSALS_BEFORE_FORBIDDEN = 5;
+var BUSY_CODES = /* @__PURE__ */ new Set([
+	"EPERM",
+	"EBUSY",
+	"EACCES"
+]);
+/** This copy of the module, which a later process with the same pid does not share. */
+var INSTANCE = randomHex();
+var HOST = hostname().slice(0, 255);
+var namespace;
+/** The token of every acquire in progress and every lock held in this process, with its lock file. */
+var liveTokens = /* @__PURE__ */ new Map();
+/** The acquires waiting for their turn at each lock file, after the one that has it. */
+var turns = /* @__PURE__ */ new Map();
+/** The other holder this process waits on at each lock file, and since when, by `performance.now()`. */
+var foreign = /* @__PURE__ */ new Map();
+var exitWatched = false;
+/**
+* Holds the lock at `nativePath` against every other holder: acquires in this process, which take turns in order and
+* never time out on each other, and other processes that use the same file. It creates the file with a record of its
+* holder, refreshes its modification time while it holds the lock, and removes it on release.
+*
+* A lock file stays until its holder releases it, except that a waiter breaks it when its holder is gone: a record of
+* this process whose acquire has ended, a record of a process on this computer, in the same pid namespace and boot,
+* that no longer runs, or a file that went without a refresh for `staleAfterMs` and then `confirmStaleMs` more. Rejects
+* with "timeout" when one other holder keeps it longer than `timeoutMs`, and with "forbidden" when it cannot create the
+* file or read the file another holder left.
+*/
+async function acquireFileLock(nativePath, options) {
+	const lease = {
+		heartbeatMs: options.heartbeatMs ?? HEARTBEAT_MS$1,
+		staleAfterMs: options.staleAfterMs ?? STALE_AFTER_MS,
+		confirmStaleMs: options.confirmStaleMs ?? CONFIRM_STALE_MS,
+		now: options.now ?? Date.now
+	};
+	if (lease.confirmStaleMs <= lease.heartbeatMs) throw new RangeError("A lock's confirmStaleMs must be longer than its heartbeatMs.");
+	watchExit();
+	await takeTurn(nativePath);
+	const token = randomHex();
+	liveTokens.set(token, nativePath);
+	const record = {
+		arcueLock: 1,
+		token,
+		instance: INSTANCE,
+		pid: process.pid,
+		host: HOST,
+		ns: lockNamespace(),
+		acquiredAt: lease.now()
+	};
+	const attempt = {
+		path: nativePath,
+		label: options.label,
+		lease,
+		token,
+		record: JSON.stringify(record)
+	};
+	let marked = false;
+	try {
+		const started = performance.now();
+		let vanished = 0;
+		let refusals = 0;
+		for (let tries = 0;; tries++) {
+			const created = await create(nativePath, attempt.record, attempt.label);
+			if (created === "created") {
+				foreign.delete(nativePath);
+				if (marked) await clearWaiting(attempt);
+				return holding(attempt);
+			}
+			const seen = await inspect$1(nativePath, attempt.label);
+			const refusal = seen === "gone" && typeof created === "object" ? created : null;
+			vanished = seen === "gone" ? vanished + 1 : 0;
+			refusals = refusal ? refusals + 1 : 0;
+			if (refusal && refusals >= REFUSALS_BEFORE_FORBIDDEN) throw cannotLock(attempt.label, nativePath, refusal.refused);
+			if (vanished === 1) continue;
+			let holder = null;
+			if (typeof seen === "object") {
+				const judged = judge(seen, lease);
+				holder = judged.record;
+				if (judged.verdict === "stale" && await breakLock(attempt, seen, holder)) continue;
+				if (judged.verdict === "maybe") {
+					await setTimeout$1(lease.confirmStaleMs);
+					const again = await inspect$1(nativePath, attempt.label);
+					if (again === "gone") continue;
+					if (typeof again === "object" && sameSnapshot(again, seen) && await breakLock(attempt, seen, holder)) continue;
+				}
+			}
+			const identity = typeof seen === "object" ? holder?.token ?? `x${digest(seen.text)}` : seen;
+			let watched = foreign.get(nativePath);
+			if (watched?.identity !== identity) {
+				watched = {
+					identity,
+					since: performance.now()
+				};
+				foreign.set(nativePath, watched);
+			}
+			if (performance.now() - watched.since >= options.timeoutMs) throw refusal ? cannotLock(attempt.label, nativePath, refusal.refused) : lockTimeout(options, holder);
+			if (performance.now() - started >= MARK_WAITING_AFTER_MS) {
+				await markWaiting(attempt);
+				marked = true;
+			}
+			await setTimeout$1(Math.min(100, 5 * 2 ** tries) * (.8 + .4 * Math.random()));
+		}
+	} catch (error) {
+		liveTokens.delete(token);
+		if (marked) await clearWaiting(attempt);
+		passTurn(nativePath, 0);
+		throw error;
+	}
+}
+/** Whether a process with this pid runs; one this user may not signal counts as running. */
+function isRunning(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return codeOf$1(error) === "EPERM";
+	}
+}
+/**
+* The pid namespace and boot this process runs in, which lock records name so that only a process that shares them
+* judges whether the holder still runs by its pid: on Linux the namespace link and the boot id, elsewhere the system's
+* name. Null when it cannot be read.
+*/
+function lockNamespace() {
+	namespace ??= readNamespace();
+	return namespace;
+}
+function readNamespace() {
+	if (process.platform !== "linux") return process.platform;
+	try {
+		const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+		const identity = `${readlinkSync("/proc/self/ns/pid")}/${boot}`;
+		return identity.length <= 512 ? identity : null;
+	} catch {
+		return null;
+	}
+}
+function takeTurn(path) {
+	const waiting = turns.get(path);
+	if (!waiting) {
+		turns.set(path, []);
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => waiting.push(resolve));
+}
+function passTurn(path, delayMs) {
+	const next = turns.get(path)?.shift();
+	if (!next) turns.delete(path);
+	else if (delayMs > 0) setTimeout(next, delayMs);
+	else next();
+}
+/** Creates the file with the record, unless it exists or Windows refuses it. */
+async function create(path, record, label) {
+	for (let tries = 0;; tries++) {
+		let handle;
+		try {
+			handle = await fs.open(path, "wx", 384);
+		} catch (error) {
+			const code = codeOf$1(error);
+			if (code === "EEXIST") return "held";
+			if (busyOnWindows(code)) return { refused: error };
+			if (code === "ENOENT" && tries === 0) {
+				await fs.mkdir(dirname(path), {
+					recursive: true,
+					mode: 448
+				}).catch((cause) => {
+					throw cannotLock(label, path, cause);
+				});
+				continue;
+			}
+			throw cannotLock(label, path, error);
+		}
+		try {
+			await handle.writeFile(record);
+			await handle.close();
+		} catch (error) {
+			await handle.close().catch(() => void 0);
+			await fs.unlink(path).catch(() => void 0);
+			throw cannotLock(label, path, error);
+		}
+		return "created";
+	}
+}
+/** Reads a lock file's text and modification time through one descriptor, so both come from the same file. */
+async function inspect$1(path, label) {
+	let handle;
+	try {
+		handle = await fs.open(path, "r");
+	} catch (error) {
+		const code = codeOf$1(error);
+		if (code === "ENOENT" || code === "ENOTDIR") return "gone";
+		if (busyOnWindows(code)) return "busy";
+		throw cannotLock(label, path, error);
+	}
+	try {
+		const stats = await handle.stat();
+		return {
+			text: await handle.readFile("utf8"),
+			mtimeMs: stats.mtimeMs
+		};
+	} catch (error) {
+		throw cannotLock(label, path, error);
+	} finally {
+		await handle.close().catch(() => void 0);
+	}
+}
+/** Whether the holder of a lock file is gone ("stale"), may be gone ("maybe"), or holds it. */
+function judge(seen, lease) {
+	const record = parseRecord(seen.text);
+	if (record?.instance === INSTANCE) return {
+		verdict: liveTokens.has(record.token) ? "alive" : "stale",
+		record
+	};
+	const ns = lockNamespace();
+	if (record && record.host === HOST && ns !== null && record.ns === ns && !isRunning(record.pid)) return {
+		verdict: "stale",
+		record
+	};
+	if (lease.now() - seen.mtimeMs > lease.staleAfterMs) return {
+		verdict: "maybe",
+		record
+	};
+	return {
+		verdict: "alive",
+		record
+	};
+}
+/**
+* Removes a lock file whose holder is gone, while it is still the file that was judged. A claim file named after the
+* record makes sure that only one waiter breaks it. Resolves with whether the lock is worth trying again at once.
+*/
+async function breakLock(attempt, seen, record) {
+	const id = record?.token ?? `x${digest(`${seen.text}${seen.mtimeMs}`)}`;
+	const claim = `${attempt.path}.${id}.break`;
+	if (await create(claim, attempt.record, attempt.label) !== "created") {
+		await clearDeadClaim(claim, attempt);
+		return false;
+	}
+	try {
+		const again = await inspect$1(attempt.path, attempt.label);
+		if (typeof again !== "object" || !sameSnapshot(again, seen)) return true;
+		return await unlinkWithRetry(attempt.path);
+	} finally {
+		await unlinkWithRetry(claim);
+	}
+}
+/** Removes the claim of a waiter that died while it broke a lock. */
+async function clearDeadClaim(claim, attempt) {
+	const seen = await inspect$1(claim, attempt.label);
+	if (typeof seen !== "object") return;
+	const { verdict } = judge(seen, attempt.lease);
+	if (verdict === "alive") return;
+	if (verdict === "maybe") await setTimeout$1(attempt.lease.confirmStaleMs);
+	const again = await inspect$1(claim, attempt.label);
+	if (typeof again === "object" && sameSnapshot(again, seen)) await unlinkWithRetry(claim);
+}
+function holding(attempt) {
+	const heartbeat = setInterval(() => {
+		const at = new Date(attempt.lease.now());
+		fs.utimes(attempt.path, at, at).catch(() => void 0);
+	}, attempt.lease.heartbeatMs);
+	heartbeat.unref();
+	let released = null;
+	const release = async () => {
+		clearInterval(heartbeat);
+		liveTokens.delete(attempt.token);
+		const seen = await inspect$1(attempt.path, attempt.label).catch(() => "gone");
+		if (typeof seen === "object" && parseRecord(seen.text)?.token === attempt.token) await unlinkWithRetry(attempt.path);
+		const yieldToOthers = (turns.get(attempt.path)?.length ?? 0) > 0 && await othersWait(attempt);
+		passTurn(attempt.path, yieldToOthers ? YIELD_MS : 0);
+	};
+	return () => {
+		released ??= release();
+		return released;
+	};
+}
+/** Whether a waiter in another process announced itself, so this process lets it take the lock before its next turn. */
+async function othersWait(attempt) {
+	const seen = await inspect$1(waitingPath(attempt.path), attempt.label).catch(() => "gone");
+	if (typeof seen !== "object" || attempt.lease.now() - seen.mtimeMs >= WAITING_FRESH_MS) return false;
+	const waiting = parseWaiting(seen.text);
+	return waiting !== null && !liveTokens.has(waiting.token);
+}
+async function markWaiting(attempt) {
+	const file = waitingPath(attempt.path);
+	const temporary = `${file}.${attempt.token}.tmp`;
+	const waiting = {
+		arcueLockWaiting: 1,
+		token: attempt.token,
+		pid: process.pid
+	};
+	try {
+		await fs.writeFile(temporary, JSON.stringify(waiting), { mode: 384 });
+		await fs.rename(temporary, file);
+	} catch {
+		await fs.rm(temporary, { force: true }).catch(() => void 0);
+	}
+}
+async function clearWaiting(attempt) {
+	const file = waitingPath(attempt.path);
+	const seen = await inspect$1(file, attempt.label).catch(() => "gone");
+	if (typeof seen === "object" && parseWaiting(seen.text)?.token === attempt.token) await fs.unlink(file).catch(() => void 0);
+}
+function waitingPath(path) {
+	return `${path}.waiting`;
+}
+/** Windows refuses to remove a file while another program, such as a virus scanner, holds it open; it retries. */
+async function unlinkWithRetry(path) {
+	for (let tries = 1;; tries++) try {
+		await fs.unlink(path);
+		return true;
+	} catch (error) {
+		const code = codeOf$1(error);
+		if (code === "ENOENT") return true;
+		if (tries >= UNLINK_ATTEMPTS || code === void 0 || !BUSY_CODES.has(code)) return false;
+		await setTimeout$1(20 * tries);
+	}
+}
+/** Removes this process's lock files when it exits without releasing them. */
+function watchExit() {
+	if (exitWatched) return;
+	exitWatched = true;
+	process.once("exit", () => {
+		for (const [token, path] of liveTokens) removeIfHeld(path, token);
+	});
+}
+function removeIfHeld(path, token) {
+	try {
+		if (parseRecord(readFileSync(path, "utf8"))?.token === token) unlinkSync(path);
+	} catch {
+		return;
+	}
+}
+function parseRecord(text) {
+	try {
+		const parsed = lockRecordSchema.safeParse(JSON.parse(text));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
+}
+function parseWaiting(text) {
+	try {
+		const parsed = lockWaitingSchema.safeParse(JSON.parse(text));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
+}
+function sameSnapshot(a, b) {
+	return a.text === b.text && a.mtimeMs === b.mtimeMs;
+}
+function lockTimeout(options, holder) {
+	const who = holder ? `Another Arcue (process ${holder.pid})` : "Another Arcue";
+	const seconds = Math.round(options.timeoutMs / 100) / 10;
+	return new ArcueError("timeout", `${who} kept ${options.label} busy for ${seconds} seconds, so nothing was changed. Try again.`);
+}
+function cannotLock(label, path, cause) {
+	return new ArcueError("forbidden", `Arcue cannot lock ${label}: ${dirname(path)} cannot be written.`, { cause });
+}
+/** Windows refuses to open a file that is being removed, or that another program holds, for a while. */
+function busyOnWindows(code) {
+	return process.platform === "win32" && code !== void 0 && BUSY_CODES.has(code);
+}
+function codeOf$1(error) {
+	return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : void 0;
+}
+function randomHex() {
+	return randomBytes(16).toString("hex");
+}
+function digest(text) {
+	return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+//#endregion
+//#region ../../packages/platform-node/src/last-core.ts
+/** What `last-core.json` says: which kind of core started, stopped cleanly or was being started last. */
+async function readLastCore(userData) {
+	try {
+		const parsed = lastCoreSchema.safeParse(JSON.parse(await readFile(join(userData, LAST_CORE_FILE), "utf8")));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
+}
+/**
+* Records the kind of core in `last-core.json`, keeping the address Arcue in the browser served at unless `url` gives
+* a new one. Callers hold the start lock. It never rejects: a record it cannot write is left as it was.
+*/
+async function writeLastCore(userData, kind, url) {
+	const file = join(userData, LAST_CORE_FILE);
+	const temporary = `${file}.${process.pid}.tmp`;
+	try {
+		const serveUrl = url ?? (await readLastCore(userData))?.serveUrl;
+		const record = {
+			version: 1,
+			kind,
+			...serveUrl !== void 0 ? { serveUrl } : {}
+		};
+		await writeFile(temporary, `${JSON.stringify(record)}\n`, { mode: 384 });
+		await rename(temporary, file);
+	} catch {
+		await rm(temporary, { force: true }).catch(() => void 0);
+	}
+}
+/**
+* Records the kind as `writeLastCore` does, and returns a function that puts back what `last-core.json` held before,
+* or removes it when it held nothing, while the file is still the one this wrote. Callers hold the start lock for
+* both. Neither rejects.
+*/
+async function replaceLastCore(userData, kind, url) {
+	const file = join(userData, LAST_CORE_FILE);
+	const before = await readFile(file).catch(() => null);
+	await writeLastCore(userData, kind, url);
+	const written = await identity(file);
+	return async () => {
+		if (written === null || await identity(file) !== written) return;
+		const temporary = `${file}.${process.pid}.tmp`;
+		try {
+			if (before === null) await rm(file, { force: true });
+			else {
+				await writeFile(temporary, before, { mode: 384 });
+				await rename(temporary, file);
+			}
+		} catch {
+			await rm(temporary, { force: true }).catch(() => void 0);
+		}
+	};
+}
+/** Tells a file from one written in its place since, which every writer does through a new temporary file. */
+async function identity(path) {
+	const found = await stat(path, { bigint: true }).catch(() => null);
+	return found ? `${found.dev}:${found.ino}:${found.mtimeNs}` : null;
+}
+//#endregion
+//#region ../../packages/platform-node/src/start-claim.ts
+var CLAIM_TIMEOUT_MS = 3e4;
+var RECORD_TIMEOUT_MS = 2e3;
+var START_LABEL = "the start of Arcue";
+/**
+* A core runs that keeps a core of the kind `starting` from starting beside it. Its message says how to stop an older
+* `arcue serve`, which `arcue stop` cannot do on Windows.
+*/
 var CoreRunningError = class extends ArcueError {
 	running;
-	constructor(running) {
-		const where = running.url ? ` at ${running.url}` : "";
-		super("conflict", `Arcue is already running${where} (process ${running.pid}).`);
+	reason;
+	starting;
+	constructor(running, reason, starting, platform = process.platform) {
+		super("conflict", runningMessage(running, reason, starting, platform));
 		this.running = running;
+		this.reason = reason;
+		this.starting = starting;
 	}
 };
+function runningMessage(running, reason, starting, platform) {
+	const { pid, url } = running;
+	if (reason === "same") return url ? `Arcue is already running at ${url} (process ${pid}).` : `Arcue is already running (process ${pid}).`;
+	if (starting === "serve" && running.kind === void 0) return coreKindOf(running) === "serve" ? `An older arcue serve runs at ${url} (process ${pid}) and can't share reviews with this one. ${platform === "win32" ? "Stop it where it runs" : "Run arcue stop"}, then try again.` : `An Arcue app runs (process ${pid}) that can't share reviews with Arcue in the browser. Quit it or update it, then try again.`;
+	return `Another version of Arcue runs (process ${pid}${url ? ` at ${url}` : ""}) and can't share reviews with this one.`;
+}
+/** The lock every Arcue holds while it checks and writes the bridge files of a data folder. */
+function startLockPath(userData) {
+	return join(userData, LOCKS_FOLDER, START_LOCK_FILE);
+}
+/**
+* Takes the start lock of the data folder, which every Arcue that starts or stops a core holds while it checks and
+* writes the bridge files, and refuses with a CoreRunningError when a core that keeps one of `kind` from starting runs.
+* Hold the claim until the core's bridge file is written.
+*/
+async function claimStart(userData, kind, options = {}) {
+	await mkdir(userData, {
+		recursive: true,
+		mode: 448
+	});
+	const release = await takeStartLock(userData, options.timeoutMs ?? CLAIM_TIMEOUT_MS);
+	try {
+		const blocking = await blockingCore(userData, kind);
+		if (blocking) throw new CoreRunningError(blocking.info, blocking.reason, kind);
+	} catch (error) {
+		await release();
+		throw error;
+	}
+	return {
+		kind,
+		release
+	};
+}
+/** Waits until no Arcue is starting a core for the data folder, at most `timeoutMs`. Never rejects. */
+async function waitForStarts(userData, timeoutMs = CLAIM_TIMEOUT_MS) {
+	if (!await exists(startLockPath(userData))) return;
+	await (await takeStartLock(userData, timeoutMs).catch(() => null))?.();
+}
+/**
+* Writes last-core.json under the start lock, waiting at most `timeoutMs` for it and skipping the write after that.
+* Never rejects, and writes nothing once the data folder is gone. Resolves with a function that puts back, under the
+* start lock too, what the file held before while no other Arcue has written it since, for a start that fails.
+*/
+async function recordLastCore(userData, kind, url, timeoutMs = RECORD_TIMEOUT_MS) {
+	const nothing = async () => void 0;
+	if (!await exists(userData)) return nothing;
+	const putBack = await underStartLock(userData, timeoutMs, () => replaceLastCore(userData, kind, url));
+	if (!putBack) return nothing;
+	return async () => {
+		await underStartLock(userData, timeoutMs, putBack);
+	};
+}
+/** Runs the work while holding the start lock, or resolves null when the lock was not free within `timeoutMs`. */
+async function underStartLock(userData, timeoutMs, work) {
+	const release = await takeStartLock(userData, timeoutMs).catch(() => null);
+	if (!release) return null;
+	try {
+		return await work();
+	} finally {
+		await release();
+	}
+}
+/** Takes the start lock for a change to the bridge files of a core that already runs. */
+function takeStartLock(userData, timeoutMs) {
+	return acquireFileLock(startLockPath(userData), {
+		timeoutMs,
+		label: START_LABEL
+	});
+}
+async function exists(path) {
+	return await stat(path).catch(() => null) !== null;
+}
+//#endregion
+//#region ../../packages/platform-node/src/bridge-server.ts
+var REWRITE_TIMEOUT_MS = 2e3;
 /** macOS limits a Unix socket path to 104 bytes, Linux to 108. */
 var MAX_SOCKET_PATH = 100;
 var SOCKET_NAME = /^arcue-(\d+)-[0-9a-f]+\.sock$/;
 /**
 * Where the core listens, reachable only by this user: a Unix domain socket in a folder only the user can enter, or a
-* named pipe with a new random name on each start, since any user can see pipe names. `bridge.json` names it.
+* named pipe with a new random name on each start, since any user can see pipe names. Its core's bridge file names it:
+* `bridge.json` for the desktop app, `serve.json` for Arcue in the browser.
 *
 * Each server gets its own socket, named after its process, so a closing server removes only its own. Sockets of
 * processes that have ended are removed.
@@ -491,14 +1072,6 @@ async function removeEndedSockets(folder) {
 		if (pid > 0 && !isRunning(pid)) await rm(join(folder, entry), { force: true });
 	}
 }
-function isRunning(pid) {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return error.code === "EPERM";
-	}
-}
 async function privateFolder(path) {
 	await mkdir(path, {
 		recursive: true,
@@ -509,23 +1082,28 @@ async function privateFolder(path) {
 	await chmod(path, 448);
 }
 /**
-* Listens for the command line on a local socket. Each connection must present the token from `bridge.json`, which
-* only the user can read, and is then served with the caller "bridge", so internal commands are refused. A hello
-* that names a user makes that user the author of what the connection does.
+* Listens for the command line on a local socket. Each connection must present the token from the core's bridge file,
+* `bridge.json` for the desktop app and `serve.json` for Arcue in the browser, which only the user can read, and is
+* then served with the caller "bridge", so internal commands are refused. A hello that names a user makes that user
+* the author of what the connection does.
 *
-* Only one core may run for a data folder, since two would overwrite each other's review files. While another core
-* answers at `bridge.json`, this throws a `CoreRunningError` and leaves that core's file alone.
+* Cores of both kinds run side by side on one data folder, since both take the review locks. Each kind refuses only a
+* second core of its own kind, or a core that takes no review locks: it checks under the start lock, which it holds
+* until its bridge file is written, and throws a `CoreRunningError` that leaves the other core's file alone.
 */
 async function startBridgeServer(options) {
-	const infoPath = join(options.userData, BRIDGE_INFO_FILE);
-	await mkdir(options.userData, {
-		recursive: true,
-		mode: 448
-	});
-	const running = await runningCore(options.userData);
-	if (running) throw new CoreRunningError(running);
+	const claim = options.claim ?? await claimStart(options.userData, options.kind);
+	try {
+		return await listenForBridges(options);
+	} finally {
+		await claim.release();
+	}
+}
+async function listenForBridges(options) {
+	const { userData, kind } = options;
+	const infoPath = join(userData, bridgeInfoFile(kind));
 	await rm(infoPath, { force: true });
-	const address = await bridgeAddress(options.userData);
+	const address = await bridgeAddress(userData);
 	const token = randomBytes(32).toString("base64url");
 	let next = 1;
 	const open = /* @__PURE__ */ new Set();
@@ -540,6 +1118,7 @@ async function startBridgeServer(options) {
 				setTimer: unrefTimer
 			}
 		}).then(({ endpoint, user }) => {
+			options.onConnection?.();
 			options.core.connect(windowFirst(endpoint, options.ensureWindow), {
 				connection: `bridge-${next++}`,
 				caller: "bridge",
@@ -565,34 +1144,65 @@ async function startBridgeServer(options) {
 		socket: address.socket,
 		token,
 		pid: process.pid,
-		...options.url !== void 0 ? { url: options.url } : {}
+		...options.url !== void 0 ? { url: options.url } : {},
+		kind,
+		locks: 1,
+		...options.kind === "serve" && options.build !== void 0 ? { build: options.build } : {}
 	};
-	const temporary = `${infoPath}.${process.pid}.tmp`;
 	try {
-		await writeFile(temporary, `${JSON.stringify(info)}\n`, { mode: 384 });
-		await rename(temporary, infoPath);
+		await writeBridgeFile(infoPath, info);
 	} catch (error) {
 		await stopListening();
 		await address.remove();
-		await rm(temporary, { force: true }).catch(() => void 0);
 		throw error;
 	}
+	await writeLastCore(userData, kind, options.url);
+	const holdsInfo = async () => {
+		const current = await readBridgeFile(infoPath);
+		if (current?.token === token) return "own";
+		return current && await listens$1(current, options.handshakeTimeoutMs) ? "other-live" : "missing";
+	};
+	let closing = null;
+	let writing = null;
 	return {
 		info,
-		async close() {
-			await stopListening();
-			if ((await readBridgeFile(infoPath))?.token === token) await rm(infoPath, { force: true });
-			await address.remove();
+		holdsInfo,
+		async rewriteInfo() {
+			if (closing || !await stat(userData).catch(() => null)) return;
+			const release = await takeStartLock(userData, REWRITE_TIMEOUT_MS).catch(() => null);
+			if (!release) return;
+			try {
+				if (!closing && await holdsInfo() === "missing" && !closing) {
+					writing = writeBridgeFile(infoPath, info);
+					await writing;
+				}
+			} catch (error) {
+				options.onError(error);
+			} finally {
+				writing = null;
+				await release();
+			}
+		},
+		close() {
+			closing ??= (async () => {
+				await stopListening();
+				await writing?.catch(() => void 0);
+				if ((await readBridgeFile(infoPath))?.token === token) await rm(infoPath, { force: true });
+				await address.remove();
+			})();
+			return closing;
 		}
 	};
 }
-/** What `bridge.json` holds now. Another core may have written it since. */
-async function readBridgeFile(path) {
+/** Writes a bridge file that only the user can read, through a temporary file so that no reader sees half of it. */
+async function writeBridgeFile(path, info) {
+	const temporary = `${path}.${process.pid}.tmp`;
 	try {
-		const parsed = bridgeInfoSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
-		return parsed.success ? parsed.data : null;
-	} catch {
-		return null;
+		await writeFile(temporary, `${JSON.stringify(info)}\n`, { mode: 384 });
+		await rename(temporary, path);
+	} catch (error) {
+		await rm(temporary, { force: true }).catch(() => void 0);
+		throw error;
 	}
 }
 function listen$1(server, path) {
@@ -737,7 +1347,7 @@ function joinPath(base, ...segments) {
 	return normalizePath(root + [...parts, ...segments].join("/").replace(/^\/+/, ""));
 }
 /** The parent folder; a root is its own parent. */
-function dirname(path) {
+function dirname$1(path) {
 	const { root, parts } = split(path);
 	return root + parts.slice(0, -1).join("/");
 }
@@ -775,7 +1385,7 @@ async function findGitRoot(path, exists) {
 	let current = normalizePath(path);
 	for (;;) {
 		if (await exists(joinPath(current, ".git"))) return current;
-		const parent = dirname(current);
+		const parent = dirname$1(current);
 		if (parent === current) return null;
 		current = parent;
 	}
@@ -959,7 +1569,7 @@ function createLinkCheck(platform, root) {
 	const check = (path) => {
 		let result = checked.get(path);
 		if (!result) {
-			result = check(dirname(path)).then(async (parentInside) => parentInside && (await platform.stat(path))?.kind !== "symlink");
+			result = check(dirname$1(path)).then(async (parentInside) => parentInside && (await platform.stat(path))?.kind !== "symlink");
 			checked.set(path, result);
 		}
 		return result;
@@ -984,7 +1594,7 @@ function isReadableImage(name) {
 */
 function createFileSearch(platform, assetPath, readRoot, onCandidate) {
 	const root = normalizePath(readRoot);
-	const assetFolder = dirname(assetPath);
+	const assetFolder = dirname$1(assetPath);
 	const stem = stemOf(assetPath);
 	const insideWithoutLinks = createLinkCheck(platform, root);
 	const listings = /* @__PURE__ */ new Map();
@@ -1010,13 +1620,13 @@ function createFileSearch(platform, assetPath, readRoot, onCandidate) {
 	function* folders(relative) {
 		if (relative !== null) {
 			const target = joinPath(assetFolder, relative);
-			if (pathInside(root, target) !== null) yield Promise.resolve(dirname(target));
+			if (pathInside(root, target) !== null) yield Promise.resolve(dirname$1(target));
 		}
 		yield Promise.resolve(assetFolder);
 		yield entry(assetFolder, `${stem}.fbm`, "directory").then((path) => path ?? joinPath(assetFolder, `${stem}.fbm`));
 		yield entry(assetFolder, "Textures", "directory").then((path) => path ?? joinPath(assetFolder, "Textures"));
 		for (let folder = assetFolder; folder !== root && pathInside(root, folder) !== null;) {
-			folder = dirname(folder);
+			folder = dirname$1(folder);
 			yield Promise.resolve(folder);
 			const textures = joinPath(folder, "Textures");
 			yield entry(folder, "Textures", "directory").then((path) => path ?? textures);
@@ -1240,7 +1850,8 @@ var encoder$2 = new TextEncoder();
 async function readAssetFiles(platform, modelPath, compositionPath, readRoot, options) {
 	const stat = await platform.stat(modelPath);
 	if (stat?.kind !== "file") throw new ArcueError("not-found", `${modelPath} does not exist.`);
-	const folder = dirname(modelPath);
+	const stats = /* @__PURE__ */ new Map([[modelPath, snapshotOf(stat)]]);
+	const folder = dirname$1(modelPath);
 	const label = (path) => relativePath(folder, path) ?? path;
 	const model = {
 		path: modelPath,
@@ -1252,6 +1863,7 @@ async function readAssetFiles(platform, modelPath, compositionPath, readRoot, op
 	let found = null;
 	let unreadComposition = null;
 	try {
+		stats.set(compositionPath, snapshotOf(await platform.stat(compositionPath)));
 		found = await readComposition(platform, compositionPath, "invalid-input");
 	} catch (error) {
 		if (!(error instanceof ArcueError && error.code === "invalid-input") || options.brokenComposition === "reject") throw error;
@@ -1286,7 +1898,7 @@ async function readAssetFiles(platform, modelPath, compositionPath, readRoot, op
 	const members = /* @__PURE__ */ new Map();
 	for (const path of [...animations, ...attach.map((entry) => entry.path)]) {
 		if (path === modelPath || members.has(path)) continue;
-		members.set(path, await readMember(platform, path, label(path), readRoot));
+		members.set(path, await readMember(platform, path, label(path), readRoot, stats));
 	}
 	const textures = [];
 	const search = createFileSearch(platform, modelPath, readRoot);
@@ -1351,12 +1963,27 @@ async function readAssetFiles(platform, modelPath, compositionPath, readRoot, op
 			...members.keys(),
 			...textures.map((texture) => texture.path)
 		],
-		siblings
+		siblings,
+		stats
 	};
+}
+/** Whether each file still has the size and modification time it had, and the files that were not there still are not. */
+async function sameStats(platform, stats) {
+	for (const [path, expected] of stats) {
+		const current = snapshotOf(await platform.stat(path));
+		if (current?.size !== expected?.size || current?.modifiedMs !== expected?.modifiedMs) return false;
+	}
+	return true;
+}
+function snapshotOf(stat) {
+	return stat?.kind === "file" ? {
+		size: stat.size,
+		modifiedMs: stat.modifiedMs
+	} : null;
 }
 /** The problem of a member file that is not where the composition says, which a rename may explain. */
 var MEMBER_NOT_FOUND = "File not found";
-async function readMember(platform, path, label, readRoot) {
+async function readMember(platform, path, label, readRoot, stats) {
 	const missing = (problem) => ({
 		path,
 		label,
@@ -1367,7 +1994,9 @@ async function readMember(platform, path, label, readRoot) {
 	if (pathInside(readRoot, path) === null) return missing("File outside the workspace");
 	if (!hasExtension(path, MODEL_EXTENSIONS)) return missing("Not a model file");
 	if (!await insideWithoutLinks(platform, readRoot, path)) return missing("File reached through a link");
-	if ((await platform.stat(path))?.kind !== "file") return missing(MEMBER_NOT_FOUND);
+	const stat = await platform.stat(path);
+	stats.set(path, snapshotOf(stat));
+	if (stat?.kind !== "file") return missing(MEMBER_NOT_FOUND);
 	return {
 		path,
 		label,
@@ -1719,7 +2348,7 @@ var ReviewHistory = class {
 };
 //#endregion
 //#region ../../packages/core/src/import-files.ts
-async function readReferencedFile(platform, assetPath, relativePath, readRoot = dirname(assetPath)) {
+async function readReferencedFile(platform, assetPath, relativePath, readRoot = dirname$1(assetPath)) {
 	const resolved = referencedPath(assetPath, relativePath, readRoot);
 	if (resolved === null || !await insideWithoutLinks(platform, readRoot, resolved)) return null;
 	return (await platform.stat(resolved))?.kind === "file" ? platform.readFile(resolved) : null;
@@ -1727,7 +2356,7 @@ async function readReferencedFile(platform, assetPath, relativePath, readRoot = 
 function referencedPath(assetPath, relativePath, readRoot) {
 	const slashed = relativePath.replaceAll("\\", "/");
 	if (slashed === "" || slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
-	const resolved = joinPath(dirname(assetPath), slashed);
+	const resolved = joinPath(dirname$1(assetPath), slashed);
 	return pathInside(readRoot, resolved) && isReadableImage(basename(resolved)) ? resolved : null;
 }
 var ImportFiles = class ImportFiles {
@@ -1794,7 +2423,7 @@ var ImportFiles = class ImportFiles {
 * other files only through `readReferencedFile` and a `createFileSearch` that lives as long as the import.
 */
 async function importAsset(platform, assetPath, bytes, options = {}) {
-	const readRoot = options.readRoot ?? await platform.findWorkspaceRoot(assetPath) ?? dirname(assetPath);
+	const readRoot = options.readRoot ?? await platform.findWorkspaceRoot(assetPath) ?? dirname$1(assetPath);
 	const files = options.files ?? new ImportFiles(platform, assetPath, readRoot);
 	const worker = platform.startImportWorker();
 	const peer = createPeer(worker.endpoint, {
@@ -2094,6 +2723,10 @@ function inspectMembers(files) {
 	for (const texture of files.textures) add(texture.label, "texture", texture.bytes !== null);
 	return [...members.values()];
 }
+/** The name of the lock every write and move under a reviews root holds. */
+var REVIEWS_LOCK = "reviews";
+/** The name of the lock a write of `settings.json` holds. */
+var SETTINGS_LOCK = "settings";
 /** The folder at a repository's root that holds Arcue's review data. */
 var ARCUE_FOLDER = ".arcue";
 /**
@@ -2131,6 +2764,14 @@ function rootless(path) {
 	const drive = /^([A-Z]):\//.exec(path);
 	if (drive) return `${drive[1]}/${path.slice(3)}`;
 	return path.slice(1);
+}
+/** Holds the lock of the reviews root the location is in. Every write and move under that root holds it. */
+function lockReviews(platform, location) {
+	return platform.lock(location.workspaceRoot ?? platform.appDataDir, REVIEWS_LOCK);
+}
+/** The model a review is for, as an absolute path. */
+function modelPathOf(location) {
+	return location.workspaceRoot === null ? location.assetPath : joinPath(location.workspaceRoot, location.assetPath);
 }
 function reviewFilePath(location) {
 	return joinPath(location.folder, "review.json");
@@ -2261,7 +2902,8 @@ function serializeReview(review) {
 * `replaceUntouched`, an untouched review. A `review.json` it cannot read or a newer Arcue saved refuses the move
 * before anything changes, and a failure after the rename moves the folder back. When the model moved to another
 * folder or took another name, the composition's paths are rewritten so they still find the same files, and the ids
-* `review.json` keeps for those files follow them.
+* `review.json` keeps for those files follow them. The caller holds the reviews lock of both locations, which is one
+* lock since a review moves only inside its reviews root.
 */
 async function moveReview(platform, move) {
 	const { from, to } = move;
@@ -2336,8 +2978,8 @@ async function untouchedReview(platform, location) {
 * no file, and the old and new labels of the files whose paths changed. A broken composition file is left as it is.
 */
 async function movedComposition(platform, move, review) {
-	const fromFolder = dirname(move.fromModel);
-	const toFolder = dirname(move.toModel);
+	const fromFolder = dirname$1(move.fromModel);
+	const toFolder = dirname$1(move.toModel);
 	let found;
 	try {
 		found = await readComposition(platform, compositionFilePath(move.from), "conflict");
@@ -2399,8 +3041,8 @@ async function rebaseComposition(platform, composition, fromFolder, toFolder) {
 * joins as an animation file written from the new model's folder, labelled as that path, as any member file is.
 */
 async function joinedByName(platform, move, review, composition) {
-	const fromFolder = dirname(move.fromModel);
-	const toFolder = dirname(move.toModel);
+	const fromFolder = dirname$1(move.fromModel);
+	const toFolder = dirname$1(move.toModel);
 	const listed = new Set(writtenPaths(composition).map((written) => relativePath(fromFolder, joinPath(fromFolder, written))));
 	const animations = [];
 	const labels = /* @__PURE__ */ new Map();
@@ -2505,7 +3147,7 @@ function renameWarningId(id, rename) {
 /** Removes the folders above `folder` that the move left empty, up to the reviews root, one empty folder at a time. */
 async function removeEmptyFolders(platform, location) {
 	try {
-		for (let current = dirname(location.folder); pathInside(location.root, current); current = dirname(current)) {
+		for (let current = dirname$1(location.folder); pathInside(location.root, current); current = dirname$1(current)) {
 			if (!await insideWithoutLinks(platform, location.workspaceRoot ?? platform.appDataDir, current)) return;
 			await platform.removeEmptyFolder(current);
 		}
@@ -2550,7 +3192,7 @@ async function findLostFiles(platform, modelPath, readRoot, lost, taken) {
 		const dot = name.lastIndexOf(".");
 		if (dot <= 0) continue;
 		const extension = name.slice(dot).toLowerCase();
-		const matches = await filesMatching(platform, (await findFilesByExtension(platform, readRoot, [dirname(file.path), dirname(modelPath)], [extension])).filter((candidate) => !taken.has(candidate)), [file.identity], file.identity.guid);
+		const matches = await filesMatching(platform, (await findFilesByExtension(platform, readRoot, [dirname$1(file.path), dirname$1(modelPath)], [extension])).filter((candidate) => !taken.has(candidate)), [file.identity], file.identity.guid);
 		const [only] = matches;
 		if (only !== void 0 && matches.length === 1) found.set(file.path, only);
 	}
@@ -2578,6 +3220,10 @@ function withMovedFiles(composition, modelFolder, moved) {
 }
 //#endregion
 //#region ../../packages/core/src/open-asset.ts
+/** How long background work that met a held reviews lock waits before its first retry. */
+var FIRST_RETRY_MS = 1e3;
+/** The longest wait between two retries. */
+var LAST_RETRY_MS = 3e4;
 /** Everything the core holds for one open asset. */
 var OpenAsset = class {
 	id;
@@ -2593,6 +3239,11 @@ var OpenAsset = class {
 	earlier = [];
 	/** The full hash and size of the model file the version on screen was read from. */
 	identity = null;
+	/**
+	* The full hash and size of the model file the last parse read, which is not `identity` while that parse's version
+	* was not recorded, as when the model was renamed meanwhile.
+	*/
+	lastParsed = null;
 	/**
 	* The names of the files with the model's extension in its folder when the model last loaded, so a rename shows as a
 	* name not among them. Null before the first load, and when there were more than the core checks for a rename.
@@ -2616,8 +3267,13 @@ var OpenAsset = class {
 	* page the core holds it for. It stays when that page closes, so the page takes the asset back when it reloads.
 	*/
 	view = null;
-	/** The clip and frame an open asked for while the core held the asset, for the page that shows it later. */
+	/**
+	* What an open asked for while the core held the asset, for the page that shows it later: the clip and frame, and
+	* the place of that open among the core's holds.
+	*/
 	waiting = null;
+	/** When a page took the asset with `adopt`, until it shows anywhere again: a page that saved its tab may take it back. */
+	adoptedAt = null;
 	closed = false;
 	/** Set while `asset.close` waits for the edits in flight. */
 	closing = null;
@@ -2630,6 +3286,17 @@ var OpenAsset = class {
 	imported = /* @__PURE__ */ new Map();
 	/** The model and the files of its composition, by path, as the version on screen loaded them. */
 	loadedFiles = /* @__PURE__ */ new Set();
+	/** The sizes and modification times of the files the version on screen was read from, by path. */
+	loadedStats = /* @__PURE__ */ new Map();
+	/** Cancels the retry of background work that met a held reviews lock. */
+	cancelRetry = () => void 0;
+	/** How long until that work is tried again, doubling with each try. */
+	retryDelayMs = FIRST_RETRY_MS;
+	/**
+	* Comments another Arcue saved wait to move onto the version on screen, because its files changed on disk; the next
+	* load moves them, even when it reads the same version.
+	*/
+	reanchorPending = false;
 	/** The file `composition.fileRoles` read last, whose parse stays until the next question so adding it reads it once. */
 	asked = null;
 	/** Serializes edits of the composition file. */
@@ -2692,7 +3359,7 @@ var OpenAsset = class {
 };
 /** The folder an asset's files may be read from: its git repository, or outside one the model's own folder. */
 function readRootFor(workspaceRoot, modelPath) {
-	return workspaceRoot ?? dirname(modelPath);
+	return workspaceRoot ?? dirname$1(modelPath);
 }
 function findComment(review, commentId) {
 	const comment = review.comments.find((entry) => entry.id === commentId);
@@ -2778,7 +3445,7 @@ function fixFor(warning, scene, assetPath) {
 		if (untextured.length === 1 && material) return {
 			kind: "use-as-base-color",
 			material: material.name,
-			file: joinPath(dirname(assetPath), warning.foundPath)
+			file: joinPath(dirname$1(assetPath), warning.foundPath)
 		};
 	}
 	return null;
@@ -3489,7 +4156,9 @@ var encoder$1 = new TextEncoder();
 * from it. Just before saving it checks the file again and starts over if it moved. Each save adds one to the
 * review's `revision` and records this build's format. A change that would write the text the file already holds,
 * and no other file, is not saved. A review a newer Arcue saved can be read but not changed: a change that would save
-* it is refused, so the fields this build does not know stay in the file.
+* it is refused, so the fields this build does not know stay in the file. Each change and move holds the reviews lock
+* from its first read to its last write. A change that would create review.json while the model is gone is refused,
+* since another core moved the review.
 */
 var ReviewSession = class {
 	history = new ReviewHistory();
@@ -3497,61 +4166,87 @@ var ReviewSession = class {
 	#location;
 	#path;
 	#changed;
+	#adopted;
 	#edits = new Serial();
 	#review;
 	/** Hash of the file's text as this session last read or wrote it; null when there is no file. */
 	#diskHash;
+	/** Whether review.json was on disk at some point while the session had the review, as it read or wrote it. */
+	#seenOnDisk;
 	#closed = false;
 	/** Why the session no longer saves: its review folder moved away and could not be moved back. */
 	#stranded = null;
-	constructor(platform, location, loaded, changed) {
+	constructor(platform, location, loaded, changed, options = {}) {
 		this.#platform = platform;
 		this.#location = location;
 		this.#path = reviewFilePath(location);
 		this.#review = loaded.review;
 		this.#diskHash = loaded.text === null ? null : textHash(loaded.text);
+		this.#seenOnDisk = loaded.text !== null;
 		this.#changed = changed;
+		this.#adopted = options.adopted;
 	}
 	get review() {
 		return this.#review;
 	}
 	run(compute) {
 		return this.#edits.run(async () => {
-			for (let attempt = 1;; attempt++) {
-				this.#checkUsable();
-				await this.#sync();
-				const current = this.#review;
-				const change = await compute(current);
-				if (change.next === null || !change.prepare && !change.clearHistory && this.#unchanged(change.next, current)) {
-					change.apply?.();
-					if (change.edit) this.history.record(change.edit);
-					return change.result;
-				}
-				const next = savedReview(change.next, current.revision + 1);
-				const text = serializeReview(next);
-				if ((await this.#readDisk()).hash !== this.#diskHash) {
-					if (attempt < ATTEMPTS) continue;
-					throw new ArcueError("conflict", "review.json keeps changing on disk; try again.");
-				}
-				checkSavable(current, this.#location);
-				await prepareArcueFolder(this.#platform, this.#location);
-				try {
-					await change.prepare?.();
-					await checkReviewPath(this.#platform, this.#location, this.#path);
-					await this.#platform.writeFileAtomic(this.#path, text);
-				} catch (error) {
-					await checkReviewPath(this.#platform, this.#location, this.#location.folder).then(() => change.rollback?.()).catch(() => void 0);
-					throw error;
-				}
-				this.#diskHash = textHash(text);
-				this.#review = next;
-				if (change.clearHistory) this.history.clear();
-				change.apply?.();
-				if (change.edit) this.history.record(change.edit);
-				this.#changed(next);
-				return change.result;
+			this.#checkUsable();
+			const unlock = await lockReviews(this.#platform, this.#location);
+			try {
+				return await this.#runLocked(compute);
+			} finally {
+				await unlock();
 			}
 		});
+	}
+	async #runLocked(compute) {
+		for (let attempt = 1;; attempt++) {
+			this.#checkUsable();
+			await this.#sync();
+			if (this.#diskHash === null) await this.#checkModelThere();
+			const current = this.#review;
+			const change = await compute(current);
+			if (change.next === null || !change.prepare && !change.clearHistory && this.#unchanged(change.next, current)) {
+				change.apply?.();
+				if (change.edit) this.history.record(change.edit);
+				return change.result;
+			}
+			const next = savedReview(change.next, current.revision + 1);
+			const text = serializeReview(next);
+			if ((await this.#readDisk()).hash !== this.#diskHash) {
+				if (attempt < ATTEMPTS) continue;
+				throw new ArcueError("conflict", "review.json keeps changing on disk; try again.");
+			}
+			checkSavable(current, this.#location);
+			await prepareArcueFolder(this.#platform, this.#location);
+			try {
+				await change.prepare?.();
+				await checkReviewPath(this.#platform, this.#location, this.#path);
+				await this.#platform.writeFileAtomic(this.#path, text);
+			} catch (error) {
+				await checkReviewPath(this.#platform, this.#location, this.#location.folder).then(() => change.rollback?.()).catch(() => void 0);
+				throw error;
+			}
+			this.#diskHash = textHash(text);
+			this.#seenOnDisk = true;
+			this.#review = next;
+			if (change.clearHistory) this.history.clear();
+			change.apply?.();
+			if (change.edit) this.history.record(change.edit);
+			this.#changed(next);
+			await change.afterSave?.().catch(() => void 0);
+			return change.result;
+		}
+	}
+	/**
+	* Refuses a change while neither review.json nor the model is on disk: every move of a review needs its model gone,
+	* so another core moved this one, and saving here would start a second copy of it.
+	*/
+	async #checkModelThere() {
+		const model = modelPathOf(this.#location);
+		if (await this.#platform.stat(model) !== null) return;
+		throw new ArcueError("conflict", `${basename(model)} and its review are gone from disk, so the change was not saved. If the model was renamed, Arcue follows it in a moment; otherwise open the model at its new path.`);
 	}
 	/** Takes in a change another program made to `review.json`, as a watcher reports it. */
 	refresh() {
@@ -3561,23 +4256,33 @@ var ReviewSession = class {
 	}
 	/**
 	* Runs `move`, which moves or replaces the review folder on disk, between two changes, then takes in the review at
-	* `location`, where it lives from now on. The undo history ends, because its steps name files by their old paths.
+	* `location`, where it lives from now on, as this session's own change rather than another program's. The undo
+	* history ends, because its steps name files by their old paths.
 	* When `move` fails and leaves the review at `location` rather than in its old place, the session stops saving, so
-	* it never writes a second copy of the review into the old folder.
+	* it never writes a second copy of the review into the old folder. When the review the session saw on disk is in
+	* neither place while their reviews root is still there, another core moved it to another model, so the move is
+	* refused and the session stays where it is rather than saving its copy at `location`.
 	*/
 	moveTo(location, move) {
 		return this.#edits.run(async () => {
 			this.#checkUsable();
+			if (location.root !== this.#location.root) throw new ArcueError("internal", "A review moves only inside its reviews root.");
+			const unlock = await lockReviews(this.#platform, this.#location);
 			try {
-				await move();
-			} catch (error) {
-				if (await this.#movedAway(reviewFilePath(location))) this.#stranded = `The review moved to ${location.folder} but could not be finished, so this tab no longer saves it. Close it and open the model again.`;
-				throw error;
+				try {
+					await move();
+				} catch (error) {
+					if (await this.#movedAway(reviewFilePath(location))) this.#stranded = `The review moved to ${location.folder} but could not be finished, so this tab no longer saves it. Close it and open the model again.`;
+					throw error;
+				}
+				if (await this.#wentElsewhere(location)) throw new ArcueError("conflict", `The review of ${basename(modelPathOf(this.#location))} is gone from disk, so it does not move to ${basename(modelPathOf(location))}. Another Arcue may have moved it to another model.`);
+				this.#location = location;
+				this.#path = reviewFilePath(location);
+				this.history.clear();
+				await this.#sync({ adopt: false });
+			} finally {
+				await unlock();
 			}
-			this.#location = location;
-			this.#path = reviewFilePath(location);
-			this.history.clear();
-			await this.#sync();
 		});
 	}
 	/** Waits for the changes in flight, then refuses new ones. */
@@ -3600,6 +4305,19 @@ var ReviewSession = class {
 		}
 	}
 	/**
+	* Whether the review the session saw on disk is neither in its folder nor at `location`, in a reviews root that is
+	* still there.
+	*/
+	async #wentElsewhere(location) {
+		if (!this.#seenOnDisk) return false;
+		const [here, there, root] = await Promise.all([
+			this.#platform.exists(this.#path),
+			this.#platform.exists(reviewFilePath(location)),
+			this.#platform.exists(location.root)
+		]);
+		return !here && !there && root;
+	}
+	/**
 	* Whether saving the review would change nothing: it would write the text the file already holds, or, for a review a
 	* newer Arcue saved, which reads without the fields this build does not know, the review as it was read.
 	*/
@@ -3611,7 +4329,7 @@ var ReviewSession = class {
 		if (isNewerFormat(current)) return text === serializeReview(current);
 		return this.#diskHash !== null && textHash(text) === this.#diskHash;
 	}
-	async #sync() {
+	async #sync({ adopt = true } = {}) {
 		const disk = await this.#readDisk();
 		if (disk.hash === this.#diskHash) return;
 		if (disk.text === null) {
@@ -3619,7 +4337,9 @@ var ReviewSession = class {
 			return;
 		}
 		const external = parseReview(disk.text, this.#path);
+		const before = this.#review;
 		this.#diskHash = disk.hash;
+		this.#seenOnDisk = true;
 		this.#review = {
 			...external,
 			asset: {
@@ -3629,6 +4349,7 @@ var ReviewSession = class {
 		};
 		this.history.clear();
 		this.#changed(this.#review);
+		if (adopt) this.#adopted?.(this.#review, before);
 	}
 	async #readDisk() {
 		await checkReviewPath(this.#platform, this.#location, this.#path);
@@ -3831,12 +4552,21 @@ var storedSettingsSchema = settingsSchema.extend({
 	authorName: settingsSchema.shape.authorName.catch(void 0)
 });
 var defaultSettings = { coordinates: "y-up" };
-/** App settings in `settings.json` in the app data folder. A missing or unreadable file gives the defaults. */
+/** Where a `settings.json` that is not a JSON object goes, so the next write starts afresh without losing it. */
+var BROKEN_SETTINGS_FILE = "settings.broken.json";
+/**
+* App settings in `settings.json` in the app data folder, which every Arcue that uses the folder shares. A missing file
+* gives the defaults, and a value this build cannot use gives that setting's default.
+*/
 var SettingsStore = class {
 	#platform;
+	#changed;
+	#serial = new Serial();
 	#settings = defaultSettings;
-	constructor(platform) {
+	#stopWatching = null;
+	constructor(platform, changed) {
 		this.#platform = platform;
+		this.#changed = changed;
 	}
 	get path() {
 		return joinPath(this.#platform.appDataDir, "settings.json");
@@ -3844,28 +4574,95 @@ var SettingsStore = class {
 	get current() {
 		return this.#settings;
 	}
+	/**
+	* Reads the file: a missing one gives the defaults, a broken one keeps the settings in effect. Calls `changed` when
+	* they differ. Never rejects.
+	*/
 	async load() {
-		try {
-			if ((await this.#platform.stat(this.path))?.kind === "file") {
-				const parsed = storedSettingsSchema.safeParse(JSON.parse(await this.#platform.readText(this.path)));
-				if (parsed.success) this.#settings = parsed.data;
-			}
-		} catch {
-			this.#settings = defaultSettings;
-		}
+		this.#set(await this.#read());
 		return this.#settings;
 	}
-	/** Saves the settings with the change applied. The registry has already validated the change. */
-	async update(change) {
-		const next = {
-			...this.#settings,
-			...change
-		};
-		await this.#platform.writeFileAtomic(this.path, `${JSON.stringify(next, null, 2)}\n`);
-		this.#settings = next;
-		return next;
+	/** `load`, in turn with updates. */
+	reload() {
+		return this.#serial.run(() => this.load());
+	}
+	idle() {
+		return this.#serial.run(async () => void 0);
+	}
+	/** Reloads whenever settings.json changes on disk. */
+	watch(onError) {
+		this.#stopWatching?.();
+		this.#stopWatching = this.#platform.watch(this.path, () => {
+			this.reload().catch(onError);
+		});
+	}
+	/**
+	* Holds the settings lock, reads the file again, and writes it with `change` applied, every key it does not know
+	* kept and the keys it knows made valid. A file that is not a JSON object is first renamed to settings.broken.json.
+	* Calls `changed` when the settings differ. A read that fails for another reason rejects and writes nothing.
+	*/
+	update(change) {
+		return this.#serial.run(async () => {
+			const unlock = await this.#platform.lock(this.#platform.appDataDir, SETTINGS_LOCK);
+			try {
+				const merged = {
+					...await this.#readRaw(),
+					...change
+				};
+				const known = storedSettingsSchema.parse(merged);
+				for (const key of Object.keys(storedSettingsSchema.shape)) merged[key] = known[key];
+				const written = Object.fromEntries(Object.entries(merged).filter(([, value]) => value !== void 0));
+				await this.#platform.writeFileAtomic(this.path, `${JSON.stringify(written, null, 2)}\n`);
+				this.#set(known);
+				return this.#settings;
+			} finally {
+				await unlock();
+			}
+		});
+	}
+	/** Stops watching the file. */
+	dispose() {
+		this.#stopWatching?.();
+		this.#stopWatching = null;
+	}
+	#set(settings) {
+		if (sortedJson(settings) === sortedJson(this.#settings)) return;
+		this.#settings = settings;
+		this.#changed?.(settings);
+	}
+	async #read() {
+		try {
+			const stat = await this.#platform.stat(this.path);
+			if (stat === null) return defaultSettings;
+			if (stat.kind !== "file") return this.#settings;
+			const parsed = storedSettingsSchema.safeParse(JSON.parse(await this.#platform.readText(this.path)));
+			return parsed.success ? parsed.data : this.#settings;
+		} catch {
+			return this.#settings;
+		}
+	}
+	/** The object the file holds as written, `{}` without a file. One that is not a JSON object moves aside first. */
+	async #readRaw() {
+		if (await this.#platform.stat(this.path) === null) return {};
+		const raw = parseObject(await this.#platform.readText(this.path));
+		if (raw !== null) return raw;
+		const broken = joinPath(this.#platform.appDataDir, BROKEN_SETTINGS_FILE);
+		await this.#platform.remove(broken);
+		await this.#platform.rename(this.path, broken);
+		return {};
 	}
 };
+function parseObject(text) {
+	try {
+		const value = JSON.parse(text);
+		return typeof value === "object" && value !== null && !Array.isArray(value) ? { ...value } : null;
+	} catch {
+		return null;
+	}
+}
+function sortedJson(settings) {
+	return JSON.stringify(Object.fromEntries(Object.entries(settings).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)));
+}
 //#endregion
 //#region ../../packages/core/src/windows.ts
 /** The windows connected to the core, the view each belongs to, and which gained focus last. */
@@ -3930,6 +4727,8 @@ var WindowRegistry = class {
 //#endregion
 //#region ../../packages/core/src/core.ts
 var VIEW_SHOW_ASSET = "view.showAsset";
+/** How long a page that reopens a saved tab may take its asset back from a page of its view that adopted it. */
+var TAKE_BACK_MS = 3e4;
 var VIEW_RELEASE_ASSET = "view.releaseAsset";
 /** The most files in a missing model's folder that the core checks for the model under a new name. */
 var MAX_RENAME_CANDIDATES = 256;
@@ -3938,6 +4737,10 @@ var MAX_RENAME_CANDIDATES = 256;
 * so a slow export that removes the file before writing it again is never taken for a rename.
 */
 var MISSING_MODEL_MS = 2e3;
+/** How many times a version is read again when its files change while it loads, before the load fails. */
+var VERSION_PASSES = 3;
+/** How many rounds of waiting for its work `idle` takes before it gives up, far past what any finite work needs. */
+var IDLE_ROUNDS = 1e3;
 /**
 * All review state, behind the command registry. Hosts start it with a platform and connect each window and bridge
 * with `connect`; calls inside the host's own process go through `client`.
@@ -3960,16 +4763,20 @@ var ArcueCore = class ArcueCore {
 	#onError;
 	#commentIds = new CommentIds();
 	#nextAssetNumber = 1;
-	/** Creates the core and reads its settings. */
+	/** How many times the core held an asset for a view's page, which gives each hold its place. */
+	#holds = 0;
+	#stopping = false;
+	/** Creates the core, reads its settings and watches them. */
 	static async start(options) {
 		const core = new ArcueCore(options);
 		await core.#settings.load();
+		core.#settings.watch(core.#onError);
 		return core;
 	}
 	constructor(options) {
 		this.#platform = options.platform;
 		this.registry = options.registry ?? new CommandRegistry();
-		this.#settings = new SettingsStore(options.platform);
+		this.#settings = new SettingsStore(options.platform, (settings) => this.registry.emit("settings.changed", { settings }));
 		this.#stabilityIntervalMs = options.stabilityIntervalMs ?? 300;
 		this.#importTimeoutMs = options.importTimeoutMs ?? 12e4;
 		this.#showAssetTimeoutMs = options.showAssetTimeoutMs ?? 1e4;
@@ -4007,14 +4814,32 @@ var ArcueCore = class ArcueCore {
 		}
 		return peer;
 	}
-	/** Resolves once no parse, file check or background save is running. Waiting timers do not count. */
+	/**
+	* Resolves once no parse, file check or background save is running. Waiting timers do not count. Rejects when work
+	* still runs after `IDLE_ROUNDS` rounds of waiting for it, as when two cores keep answering each other's saves.
+	*/
 	async idle() {
-		while (this.#pending.size > 0) await Promise.allSettled([...this.#pending]);
+		for (let round = 0; this.#pending.size > 0; round++) {
+			if (round === IDLE_ROUNDS) throw new Error(`The core never went idle: its work went on for ${IDLE_ROUNDS} rounds.`);
+			await Promise.allSettled([...this.#pending]);
+		}
+	}
+	/**
+	* Refuses new opens and settings changes, waits for opens in flight, closes every asset and waits for pending
+	* settings saves, then disposes. Parses in flight are not waited for: they save nothing once their asset is closed.
+	*/
+	async shutdown() {
+		this.#stopping = true;
+		await this.#opening.run(async () => void 0);
+		await Promise.all([...this.#assets.keys()].map((id) => this.#close(id).catch(() => void 0)));
+		await this.#settings.idle();
+		this.dispose();
 	}
 	/** Stops watching files and removes the handlers. Open assets are dropped without events. */
 	dispose() {
 		for (const asset of this.#assets.values()) this.#stop(asset);
 		this.#assets.clear();
+		this.#settings.dispose();
 		for (const unregister of this.#unregister.splice(0)) unregister();
 	}
 	#registerHandlers() {
@@ -4029,14 +4854,17 @@ var ArcueCore = class ArcueCore {
 			const asset = this.#asset(args.assetId);
 			asset.searched.clear();
 			return { version: await this.#load(asset) };
-		}), registry.handleCommand("comment.create", (args, context) => this.#createComment(args, context.user)), registry.handleCommand("comment.update", (args) => this.#updateComment(args)), registry.handleCommand("comment.delete", (args) => this.#deleteComment(args)), registry.handleCommand("comment.resolve", (args) => this.#resolveComment(args)), registry.handleCommand("comment.reopen", (args, context) => this.#reopenComment(args, context.user)), registry.handleCommand("comment.createFromWarning", (args, context) => this.#createFromWarning(args, context.user)), registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])), registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)), registry.handleCommand("round.copy", (args, context) => this.#inCompositionLine(this.#asset(args.assetId), () => this.#copyRound(args.assetId, context.user))), registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")), registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")), registry.handleCommand("review.relink", (args) => this.#relinkReview(args.assetId, args.from)), registry.handleCommand("composition.addFile", (args) => this.#addCompositionFile(args)), registry.handleCommand("composition.removeFile", (args) => this.#removeCompositionFile(args)), registry.handleCommand("composition.attachFile", (args) => this.#attachCompositionFile(args)), registry.handleCommand("material.setTexture", (args) => this.#setMaterialTexture(args)), registry.handleCommand("settings.set", (args) => this.#settings.update(args)), registry.handleCommand("view.reportState", (args, context) => {
+		}), registry.handleCommand("comment.create", (args, context) => this.#createComment(args, context.user)), registry.handleCommand("comment.update", (args) => this.#updateComment(args)), registry.handleCommand("comment.delete", (args) => this.#deleteComment(args)), registry.handleCommand("comment.resolve", (args) => this.#resolveComment(args)), registry.handleCommand("comment.reopen", (args, context) => this.#reopenComment(args, context.user)), registry.handleCommand("comment.createFromWarning", (args, context) => this.#createFromWarning(args, context.user)), registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])), registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)), registry.handleCommand("round.copy", (args, context) => this.#inCompositionLine(this.#asset(args.assetId), () => this.#copyRound(args.assetId, context.user))), registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")), registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")), registry.handleCommand("review.relink", (args) => this.#relinkReview(args.assetId, args.from)), registry.handleCommand("composition.addFile", (args) => this.#addCompositionFile(args)), registry.handleCommand("composition.removeFile", (args) => this.#removeCompositionFile(args)), registry.handleCommand("composition.attachFile", (args) => this.#attachCompositionFile(args)), registry.handleCommand("material.setTexture", (args) => this.#setMaterialTexture(args)), registry.handleCommand("settings.set", (args) => {
+			if (this.#stopping) throw new ArcueError("unavailable", "Arcue is stopping.");
+			return this.#settings.update(args);
+		}), registry.handleCommand("view.reportState", (args, context) => {
 			const asset = this.#asset(args.assetId);
 			if (context.caller === "window" && this.#windows.has(context.connection)) {
 				this.#checkSameView(asset, context.connection);
 				this.#shownIn(asset, context.connection);
 			}
 			asset.viewState = args.state;
-		}), registry.handleCommand("view.moveAsset", (args, context) => this.#opening.run(() => this.#move(args.assetId, context, args.unlessShown ?? false))), registry.handleCommand("view.reportFocus", (_args, context) => {
+		}), registry.handleCommand("view.moveAsset", (args, context) => this.#opening.run(() => this.#move(args.assetId, context, args))), registry.handleCommand("view.reportFocus", (_args, context) => {
 			if (context.caller === "window" && context.connection !== null) this.#windows.focus(context.connection);
 		}), registry.handleCommand(VIEW_SHOW_ASSET, async (args, context) => {
 			const asset = this.#asset(args.assetId);
@@ -4167,6 +4995,7 @@ var ArcueCore = class ArcueCore {
 			clock: this.#platform.clock
 		});
 		this.#shownIn(asset, window);
+		asset.adoptedAt = null;
 	}
 	/** Shows the asset at the place, or holds it there for the view's page. */
 	async #place(asset, place, at) {
@@ -4176,7 +5005,10 @@ var ArcueCore = class ArcueCore {
 		}
 		asset.window = null;
 		asset.view = place.view;
-		asset.waiting = showAt(at);
+		asset.waiting = {
+			at: showAt(at),
+			order: ++this.#holds
+		};
 	}
 	/**
 	* Removes the asset's tab from its window, keeping the view state the window returns. A window refuses while the tab's
@@ -4230,27 +5062,39 @@ var ArcueCore = class ArcueCore {
 	/**
 	* Moves an asset's tab to the calling window, within the window's view. The window that shows it releases the tab
 	* first and returns its view state, so the receiving window starts from the same camera, clip and frame. An asset the
-	* core holds for the view shows at the clip and frame its open asked for.
+	* core holds for the view shows at the clip and frame its open asked for, which the result says with the place of
+	* that open among the core's holds; it starts from the view state the page kept for its tab when the core keeps none.
+	* With `unlessShown`, a page takes an asset that another page shows only when that page adopted it in the last
+	* `TAKE_BACK_MS`.
 	*/
-	async #move(assetId, context, unlessShown) {
+	async #move(assetId, context, { unlessShown = false, adopt = false, viewState }) {
 		if (context.caller !== "window" || !this.#windows.has(context.connection)) throw new ArcueError("forbidden", "Only a window can take an asset's tab.");
 		const asset = this.#asset(assetId);
 		if (asset.closing) throw new ArcueError("conflict", `${asset.name} is closing, so its tab cannot move.`);
 		const target = context.connection;
 		const source = this.#windowOf(asset);
 		const owner = this.#ownerOf(asset);
+		const quietly = unlessShown || adopt;
 		if (owner !== this.#windows.viewOf(target)) {
-			if (unlessShown) return;
+			if (quietly) return { held: false };
 			throw new ArcueError("conflict", openElsewhere(asset.name, owner));
 		}
-		if (unlessShown && source !== null && source !== target) return;
-		const at = source === null ? asset.waiting ?? {} : {};
+		const takesBack = !adopt && asset.adoptedAt !== null && this.#platform.clock.now() - asset.adoptedAt < TAKE_BACK_MS;
+		if (quietly && source !== null && source !== target && !takesBack) return { held: false };
+		const waiting = source === null ? asset.waiting : null;
+		if (viewState !== void 0 && asset.viewState === null) asset.viewState = viewState;
 		await this.#relocateTab(asset, source, {
 			view: owner,
 			window: target
-		}, at);
+		}, waiting?.at ?? {});
+		if (adopt && source === null) asset.adoptedAt = this.#platform.clock.now();
+		return waiting === null ? { held: false } : {
+			held: true,
+			heldOrder: waiting.order
+		};
 	}
 	async #open(args, requester, move) {
+		if (this.#stopping) throw new ArcueError("unavailable", "Arcue is stopping.");
 		const path = normalizePath(args.path);
 		const existing = [...this.#assets.values()].find((asset) => asset.path === path && !asset.closing);
 		if (existing) return {
@@ -4271,13 +5115,14 @@ var ArcueCore = class ArcueCore {
 		const asset = new OpenAsset(id, path, location, new ReviewSession(this.#platform, location, loaded, (review) => this.registry.emit("review.changed", {
 			assetId: id,
 			review
-		})));
+		}), { adopted: (review, before) => this.#reanchorAdopted(asset, review, before) }));
 		if (args.viewState) asset.viewState = args.viewState;
 		asset.candidates = earlier.candidates;
 		asset.earlier = earlier.unmatched;
 		this.#assets.set(asset.id, asset);
+		let placed;
 		try {
-			await this.#place(asset, place, args);
+			placed = await this.#placeOpened(asset, requester, place, args);
 		} catch (error) {
 			this.#assets.delete(asset.id);
 			throw error;
@@ -4293,15 +5138,31 @@ var ArcueCore = class ArcueCore {
 		this.#load(asset).catch(() => void 0);
 		return {
 			assetId: asset.id,
-			shown: shownAs(place)
+			shown: shownAs(placed)
 		};
+	}
+	/**
+	* Places an asset that an open just opened, and returns where it went. When the page of a view that an open from
+	* outside the windows picked closes before it shows the asset, as when the page reloads into a new build, the asset
+	* goes where that open would put it now: another page of the view, a desktop window, or held for the view's page.
+	*/
+	async #placeOpened(asset, requester, place, at) {
+		for (let next = place;;) try {
+			await this.#place(asset, next, at);
+			return next;
+		} catch (error) {
+			const gone = next.window !== null && !this.#windows.has(next.window);
+			if (requester.window !== null || next.view === null || !gone) throw error;
+			next = this.#placeFor(requester) ?? requester;
+		}
 	}
 	/**
 	* For a file without a review: finds the reviews whose model is gone and, when exactly one has a version with the
 	* file's bytes or the file's Unity GUID, moves it to the file's review folder. Several such reviews become candidates
 	* to offer, and so does a single one when the search stopped at a bound or the move was refused; with none, the
 	* reviews are kept to compare meshes with once the file loads. A failure leaves the file without a review rather
-	* than failing the open.
+	* than failing the open. The move checks again under the reviews lock, so when another Arcue gave the file a review
+	* or took the earlier one meanwhile, the file opens with what is on disk.
 	*/
 	async #earlierReview(location, path, size) {
 		const none = {
@@ -4318,20 +5179,17 @@ var ArcueCore = class ArcueCore {
 			const [only] = matches;
 			if (only && matches.length === 1 && complete) {
 				const { location: from, model } = only.earlier;
-				try {
-					await moveReview(this.#platform, {
-						from,
-						fromModel: model,
-						to: location,
-						toModel: path
-					});
-					return {
-						...none,
-						moved: model
-					};
-				} catch (error) {
-					if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
-				}
+				const taken = await this.#takeEarlierReview({
+					from,
+					fromModel: model,
+					to: location,
+					toModel: path
+				});
+				if (taken === "moved") return {
+					...none,
+					moved: model
+				};
+				if (taken === "none") return none;
 			}
 			return {
 				...none,
@@ -4341,6 +5199,31 @@ var ArcueCore = class ArcueCore {
 		} catch (error) {
 			this.#onError(error);
 			return none;
+		}
+	}
+	/**
+	* Moves the earlier review under the reviews lock: "none" when the file got a review or the earlier one went
+	* meanwhile, and "refused" when its model is back, the move was refused or the lock stayed busy.
+	*/
+	async #takeEarlierReview(move) {
+		let unlock;
+		try {
+			unlock = await lockReviews(this.#platform, move.to);
+		} catch (error) {
+			if (!hasCode(error, "timeout")) this.#onError(error);
+			return "refused";
+		}
+		try {
+			if (await this.#platform.stat(reviewFilePath(move.to)) !== null) return "none";
+			if (!await reviewedModelGone(this.#platform, move.from, move.fromModel)) return "refused";
+			await moveReview(this.#platform, move);
+			return "moved";
+		} catch (error) {
+			if (hasCode(error, "not-found")) return "none";
+			if (!hasCode(error, "conflict") && !hasCode(error, "timeout")) this.#onError(error);
+			return "refused";
+		} finally {
+			await unlock();
 		}
 	}
 	/** Compares the first version's meshes with the earlier reviews no file identity matched, rule 3, and offers the best. */
@@ -4373,13 +5256,16 @@ var ArcueCore = class ArcueCore {
 				if (!await volumeThere(this.#platform, earlier, from)) throw new ArcueError("unavailable", `The drive of ${basename(from)} is not connected, so its review stays where it is.`);
 				if (!await reviewedModelGone(this.#platform, earlier, from)) throw new ArcueError("conflict", `${basename(from)} still exists, so its review stays with it.`);
 				if ([...this.#assets.values()].some((open) => open.location.folder === earlier.folder)) throw new ArcueError("conflict", `The review of ${basename(from)} is open in a tab.`);
-				await asset.session.moveTo(asset.location, () => moveReview(this.#platform, {
-					from: earlier,
-					fromModel: from,
-					to: asset.location,
-					toModel: asset.path,
-					replaceUntouched: true
-				}));
+				await asset.session.moveTo(asset.location, async () => {
+					if (!await reviewedModelGone(this.#platform, earlier, from)) throw new ArcueError("conflict", `${basename(from)} still exists, so its review stays with it.`);
+					await moveReview(this.#platform, {
+						from: earlier,
+						fromModel: from,
+						to: asset.location,
+						toModel: asset.path,
+						replaceUntouched: true
+					});
+				});
 			});
 			asset.candidates = [];
 			asset.earlier = [];
@@ -4450,6 +5336,21 @@ var ArcueCore = class ArcueCore {
 		for (const stop of asset.compositionWatchers.values()) stop();
 		asset.compositionWatchers.clear();
 		asset.cancelStabilityCheck();
+		asset.cancelRetry();
+	}
+	/**
+	* Runs background work again later, after it met a reviews lock another Arcue kept busy: after one second at first,
+	* then twice as long each time up to thirty seconds, until the asset closes. A later retry replaces an earlier one.
+	*/
+	#retryLater(asset, task) {
+		if (asset.closed) return;
+		asset.cancelRetry();
+		const delay = asset.retryDelayMs;
+		asset.retryDelayMs = Math.min(delay * 2, LAST_RETRY_MS);
+		asset.cancelRetry = this.#platform.clock.setTimer(delay, () => {
+			asset.cancelRetry = () => void 0;
+			task().catch(() => void 0);
+		});
 	}
 	#fileChanged(asset) {
 		if (asset.closed) return;
@@ -4487,7 +5388,8 @@ var ArcueCore = class ArcueCore {
 	}
 	/**
 	* Starts looking for the composition's lost files under new names, each once until the next `asset.reload`. It runs
-	* beside the load, since writing the composition file waits for the asset's edits, and those may wait for loads.
+	* beside the load, since writing the composition file waits for the asset's edits, and those may wait for loads. A
+	* reviews lock another Arcue kept busy makes it look again later.
 	*/
 	#searchLostFiles(asset, files) {
 		const lost = lostFiles(files, asset.session.review).filter((file) => !asset.searched.has(file.path));
@@ -4499,7 +5401,10 @@ var ArcueCore = class ArcueCore {
 			...files.textures.map((texture) => texture.path)
 		]);
 		const relinked = this.#relinkLostFiles(asset, lost, taken).catch((error) => {
-			if (!(error instanceof ArcueError && error.code === "conflict")) this.#onError(error);
+			if (hasCode(error, "timeout")) {
+				for (const file of lost) asset.searched.delete(file.path);
+				this.#retryLater(asset, () => this.#load(asset, true));
+			} else if (!hasCode(error, "conflict")) this.#onError(error);
 		});
 		this.#track(relinked);
 	}
@@ -4520,7 +5425,7 @@ var ArcueCore = class ArcueCore {
 				next: null,
 				result: false
 			};
-			const { composition, labels } = withMovedFiles(found.composition, dirname(asset.path), moved);
+			const { composition, labels } = withMovedFiles(found.composition, dirname$1(asset.path), moved);
 			const text = serializeComposition(composition);
 			if (text === serializeComposition(found.composition)) return {
 				next: null,
@@ -4537,9 +5442,10 @@ var ArcueCore = class ArcueCore {
 	}
 	/**
 	* The model stayed missing for `MISSING_MODEL_MS`, so an export did not replace it. When exactly one file in its
-	* folder has the bytes of the version on screen or the model's Unity GUID, the asset follows that file; otherwise
-	* the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a refused move are
-	* expected, so they only end the search.
+	* folder has the bytes of the version on screen or of the last parse, or the model's Unity GUID, the asset follows
+	* that file; otherwise the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a
+	* refused move are expected, so they only end the search. A reviews lock another Arcue kept busy makes it look again
+	* later.
 	*/
 	async #modelGone(asset) {
 		try {
@@ -4549,7 +5455,11 @@ var ArcueCore = class ArcueCore {
 				return;
 			}
 		} catch (error) {
-			if (!(error instanceof ArcueError && (error.code === "conflict" || error.code === "not-found"))) this.#onError(error);
+			if (hasCode(error, "timeout")) {
+				this.#retryLater(asset, () => this.#track(this.#modelGone(asset)));
+				return;
+			}
+			if (!hasCode(error, "conflict") && !hasCode(error, "not-found")) this.#onError(error);
 		}
 		if (asset.closed || asset.missing || await this.#platform.exists(asset.path)) return;
 		asset.missing = true;
@@ -4557,20 +5467,21 @@ var ArcueCore = class ArcueCore {
 	}
 	/**
 	* The one file in the model's folder with the model's extension and a name the folder did not have when the model
-	* last loaded, that has the size and full hash of the file the version on screen was read from, or the model's
-	* Unity GUID in its `.meta` file. A rename makes a new name, while a backup copy that was already there never
-	* matches. Null when there is none or more than one, or before the folder's names are known. It checks at most
-	* `MAX_RENAME_CANDIDATES` files, compares sizes before it hashes, and skips files other tabs show.
+	* last loaded, that has the size and full hash of the file the version on screen was read from or of the one the
+	* last parse read, or the model's Unity GUID in its `.meta` file. A rename makes a new name, while a backup copy that
+	* was already there never matches. Null when there is none or more than one, or before the folder's names are known.
+	* It checks at most `MAX_RENAME_CANDIDATES` files, compares sizes before it hashes, and skips files other tabs show.
 	*/
 	async #findRenamed(asset) {
-		const { identity, siblings } = asset;
+		const { siblings } = asset;
+		const recorded = [asset.identity, asset.lastParsed].filter((entry) => entry !== null);
 		const guid = asset.session.review.asset.guid ?? null;
-		if (siblings === null || identity === null && guid === null) return null;
-		const folder = dirname(asset.path);
+		if (siblings === null || recorded.length === 0 && guid === null) return null;
+		const folder = dirname$1(asset.path);
 		const extension = extensionOf(asset.name);
 		const open = new Set([...this.#assets.values()].map((other) => other.path));
 		const candidates = (await this.#platform.list(folder)).filter((entry) => entry.kind === "file" && hasExtension(entry.name, [extension]) && !siblings.has(entry.name)).map((entry) => joinPath(folder, entry.name)).filter((path) => !open.has(path)).slice(0, MAX_RENAME_CANDIDATES);
-		const found = await filesMatching(this.#platform, candidates, identity === null ? [] : [identity], guid);
+		const found = await filesMatching(this.#platform, candidates, recorded, guid);
 		const [only] = found;
 		return found.length === 1 && only !== void 0 ? only : null;
 	}
@@ -4587,7 +5498,8 @@ var ArcueCore = class ArcueCore {
 	* review folder run with the opens, so no other tab opens the new path meanwhile. The move refuses a file that has
 	* a review of its own, except, when the person chose the file, a review that holds nothing but versions. The asset
 	* keeps its id, watches the new files and reloads. Windows retitle the tab on "asset.updated" and learn of the move
-	* from "review.relinked". An automatic follow stops when the old file is back.
+	* from "review.relinked". An automatic follow stops when the old file is back. The asset stays where it is when its
+	* review is gone from disk while its reviews root is still there, since another Arcue moved it to another model.
 	*/
 	#follow(asset, path, automatic) {
 		return this.#inCompositionLine(asset, async () => {
@@ -4637,7 +5549,24 @@ var ArcueCore = class ArcueCore {
 	#load(asset, force = false) {
 		return this.#track(asset.loads.run(() => this.#loadVersion(asset, force)));
 	}
+	/**
+	* Reads and parses the asset's files and records the version, reading them again when they changed on disk before
+	* the version was recorded, so a version is never recorded for files that are gone. A version record that meets a
+	* reviews lock another Arcue kept busy leaves the asset as it is and tries again later.
+	*/
 	async #loadVersion(asset, force) {
+		for (let pass = 1;; pass++) {
+			const versionId = await this.#loadPass(asset, force);
+			if (versionId !== null) return versionId;
+			if (pass === VERSION_PASSES) {
+				const error = new ArcueError("conflict", `${asset.name} keeps changing on disk; Arcue loads it once it settles.`);
+				this.#failed(asset, error);
+				throw error;
+			}
+		}
+	}
+	/** One read of the asset's files: the version on screen, or null when the files changed before it was recorded. */
+	async #loadPass(asset, force) {
 		if (asset.closed) throw new ArcueError("not-found", `${asset.name} is closed.`);
 		let files;
 		try {
@@ -4655,6 +5584,8 @@ var ArcueCore = class ArcueCore {
 		let versionId = this.#versionWithDependencies(asset, files);
 		if (versionId === asset.version && !force) {
 			this.#watchImportedFiles(asset, files);
+			asset.loadedStats = files.stats;
+			if (asset.reanchorPending) await this.#reanchorOnScreen(asset);
 			if (asset.status !== "ready") {
 				asset.status = "ready";
 				asset.error = null;
@@ -4665,15 +5596,25 @@ var ArcueCore = class ArcueCore {
 		asset.status = "loading";
 		this.registry.emit("asset.updated", { asset: asset.summary });
 		let meshes = [];
+		let recording = false;
 		try {
 			const scene = await buildAssetScene(files, (file) => this.#importFile(asset, file), { parsed: (file) => asset.parsed(file.path, file.id) });
+			asset.lastParsed = {
+				hash: files.model.hash,
+				size: files.model.size
+			};
 			versionId = this.#versionWithDependencies(asset, files);
 			this.#watchImportedFiles(asset, files);
 			meshes = meshesOf(scene).map((entry) => ({
 				mesh: entry.path,
 				topology: entry.mesh.topology
 			}));
-			await asset.session.run((review) => {
+			recording = true;
+			if (await asset.session.run(async (review) => {
+				if (!await sameStats(this.#platform, files.stats)) return {
+					next: null,
+					result: "superseded"
+				};
 				const record = {
 					id: versionId,
 					fileModifiedAt: new Date(files.model.modifiedMs).toISOString(),
@@ -4697,7 +5638,7 @@ var ArcueCore = class ArcueCore {
 						versions,
 						comments: review.comments.map((comment) => reanchorer.reanchor(comment))
 					},
-					result: void 0,
+					result: "recorded",
 					apply: () => {
 						asset.session.history.mapComments((comment) => reanchorer.reanchor(comment));
 						asset.scene = scene;
@@ -4712,16 +5653,66 @@ var ArcueCore = class ArcueCore {
 						const kept = /* @__PURE__ */ new Set([asset.path, ...files.members.keys()]);
 						for (const path of asset.imported.keys()) if (!kept.has(path)) asset.imported.delete(path);
 						asset.loadedFiles = kept;
+						asset.loadedStats = files.stats;
+						asset.reanchorPending = false;
+						asset.retryDelayMs = 1e3;
 					}
 				};
-			});
+			}) === "superseded") return null;
 		} catch (error) {
-			this.#failed(asset, error);
+			if (recording && hasCode(error, "timeout")) this.#retryLater(asset, () => this.#load(asset, force));
+			else this.#failed(asset, error);
 			throw error;
 		}
 		this.registry.emit("asset.updated", { asset: asset.summary });
 		this.#matchStructure(asset, meshes);
 		return versionId;
+	}
+	/**
+	* Re-anchors the comments of a review another Arcue saved when it holds a pinned comment that is new or newly
+	* anchored and should move onto the version on screen, as when that Arcue still showed an older version.
+	*/
+	#reanchorAdopted(asset, review, before) {
+		const version = asset.version;
+		if (asset.closed || version === null || asset.scene === null) return;
+		const earlier = new Map(before.comments.map((comment) => [comment.id, comment.anchorVersion]));
+		if (review.comments.some((comment) => comment.target !== null && movesOnto(comment, version, review.versions) && earlier.get(comment.id) !== comment.anchorVersion)) this.#track(asset.loads.run(() => this.#reanchorOnScreen(asset)));
+	}
+	/**
+	* Moves the comments that should move onto the version on screen, while its files are still the ones it was read
+	* from. Otherwise it waits for the files to be read again: the load their change queued re-anchors them, even when
+	* the files turn out to hold the version on screen.
+	*/
+	async #reanchorOnScreen(asset) {
+		try {
+			if (await asset.session.run(async (review) => {
+				const { version, scene } = asset;
+				if (asset.closed || version === null || scene === null) return {
+					next: null,
+					result: "unchanged"
+				};
+				if (!await sameStats(this.#platform, asset.loadedStats)) return {
+					next: null,
+					result: "stale"
+				};
+				const reanchorer = new Reanchorer(review.versions, version, scene);
+				const reanchor = (comment) => movesOnto(comment, version, review.versions) ? reanchorer.reanchor(comment) : comment;
+				return {
+					next: {
+						...review,
+						comments: review.comments.map(reanchor)
+					},
+					result: "reanchored",
+					apply: () => {
+						asset.session.history.mapComments(reanchor);
+						asset.reanchorPending = false;
+					}
+				};
+			}) === "stale") asset.reanchorPending = true;
+		} catch (error) {
+			if (hasCode(error, "timeout")) this.#retryLater(asset, () => this.#load(asset, true));
+			else if (!asset.closed && !hasCode(error, "conflict")) this.#onError(error);
+		}
 	}
 	/** Parses one file of the asset, or takes the scene parsed from the same bytes before. */
 	async #importFile(asset, file) {
@@ -4806,7 +5797,7 @@ var ArcueCore = class ArcueCore {
 	*/
 	async #editComposition(asset, change) {
 		const path = asset.compositionPath;
-		const folder = dirname(asset.path);
+		const folder = dirname$1(asset.path);
 		if (await asset.session.run(async () => {
 			await this.#checkCompositionPath(asset);
 			const found = await readComposition(this.#platform, path, "conflict");
@@ -4856,7 +5847,7 @@ var ArcueCore = class ArcueCore {
 	/** A path a composition command names: absolute, or relative to the model's folder. */
 	#resolveCompositionPath(asset, file) {
 		const slashed = file.replaceAll("\\", "/");
-		return /^(?:[A-Za-z]:)?\//.test(slashed) ? normalizePath(slashed) : joinPath(dirname(asset.path), slashed);
+		return /^(?:[A-Za-z]:)?\//.test(slashed) ? normalizePath(slashed) : joinPath(dirname$1(asset.path), slashed);
 	}
 	/**
 	* A file to add to the composition: inside the asset's workspace, reached without symbolic links, and an existing
@@ -4865,7 +5856,7 @@ var ArcueCore = class ArcueCore {
 	async #newCompositionFile(asset, file, extensions) {
 		const path = this.#resolveCompositionPath(asset, file);
 		const name = basename(path);
-		const written = relativePath(dirname(asset.path), path);
+		const written = relativePath(dirname$1(asset.path), path);
 		if (written === null || pathInside(asset.readRoot, path) === null) throw new ArcueError("invalid-input", `${name} is outside the asset's workspace.`);
 		if (!hasExtension(path, extensions)) throw new ArcueError("invalid-input", `${name} is not one of ${extensions.join(", ")}.`);
 		if (!await insideWithoutLinks(this.#platform, asset.readRoot, path)) throw new ArcueError("invalid-input", `${name} is reached through a symbolic link.`);
@@ -4935,10 +5926,10 @@ var ArcueCore = class ArcueCore {
 	#removeCompositionFile(args) {
 		const asset = this.#asset(args.assetId);
 		const path = this.#resolveCompositionPath(asset, args.file);
-		const label = relativePath(dirname(asset.path), path);
+		const label = relativePath(dirname$1(asset.path), path);
 		return this.#inCompositionLine(asset, () => this.#editComposition(asset, (composition, same) => {
 			if (!listsMember(composition, same(path))) {
-				if (dirname(path) === dirname(asset.path) && isConventionAnimation(asset.path, basename(path))) throw new ArcueError("invalid-input", `${basename(path)} joins by its name. Rename or move it to take it out of the view.`);
+				if (dirname$1(path) === dirname$1(asset.path) && isConventionAnimation(asset.path, basename(path))) throw new ArcueError("invalid-input", `${basename(path)} joins by its name. Rename or move it to take it out of the view.`);
 				throw new ArcueError("not-found", `${args.file} is not in the composition.`);
 			}
 			return withoutMember(composition, same(path), (id) => label !== null && splitMemberPath(id).file === label);
@@ -5293,6 +6284,7 @@ var ArcueCore = class ArcueCore {
 	async #copyRound(assetId, author) {
 		const asset = this.#asset(assetId);
 		const reviewFolder = asset.location.folder;
+		await this.#settings.reload();
 		const { round, prompt } = await asset.session.run(async (review) => {
 			const { scene, version } = asset.loaded();
 			if (review.queue.length === 0) throw new ArcueError("conflict", "The queue has no comments to copy.");
@@ -5355,13 +6347,14 @@ var ArcueCore = class ArcueCore {
 				comments: [...review.queue]
 			};
 			if (author) summary.author = author;
+			const next = {
+				...review,
+				comments,
+				queue: [],
+				rounds: [...review.rounds, summary]
+			};
 			return {
-				next: {
-					...review,
-					comments,
-					queue: [],
-					rounds: [...review.rounds, summary]
-				},
+				next,
 				result: {
 					round,
 					prompt
@@ -5372,7 +6365,8 @@ var ArcueCore = class ArcueCore {
 					await writeReviewFile(this.#platform, asset.location, joinPath(folder, "round.json"), `${JSON.stringify(data, null, 2)}\n`);
 					await writeReviewFile(this.#platform, asset.location, joinPath(folder, "prompt.md"), prompt);
 				},
-				rollback: () => removeReviewFile(this.#platform, asset.location, folder)
+				rollback: () => removeReviewFile(this.#platform, asset.location, folder),
+				afterSave: () => this.#removeUnusedScreenshots(asset, next).catch((error) => this.#onError(error))
 			};
 		});
 		let copiedToClipboard = false;
@@ -5386,11 +6380,6 @@ var ArcueCore = class ArcueCore {
 			assetId: asset.id,
 			round
 		});
-		try {
-			await this.#removeUnusedScreenshots(asset);
-		} catch (error) {
-			this.#onError(error);
-		}
 		return {
 			round,
 			prompt,
@@ -5398,30 +6387,25 @@ var ArcueCore = class ArcueCore {
 		};
 	}
 	/**
-	* Removes unsent screenshots that no comment uses and undo cannot bring back. It runs inside the asset's review
-	* changes, so no comment can be saving a screenshot meanwhile, and it removes only files named like screenshots.
+	* Removes unsent screenshots that no comment of the saved review uses and undo cannot bring back, and only files named
+	* like screenshots. Runs inside the round's save, under the reviews lock, so no core can be saving a screenshot
+	* meanwhile and nothing another core can undo still refers to one.
 	*/
-	#removeUnusedScreenshots(asset) {
-		return asset.session.run(async (review) => {
-			const folder = joinPath(asset.location.folder, "screenshots");
-			await checkReviewPath(this.#platform, asset.location, folder);
-			if ((await this.#platform.stat(folder))?.kind !== "directory" || !await insideWithoutLinks(this.#platform, asset.location.folder, folder)) return {
-				next: null,
-				result: void 0
-			};
-			const kept = asset.session.history.screenshots();
-			for (const comment of review.comments) if (comment.context.screenshot) kept.add(comment.context.screenshot);
-			for (const entry of await this.#platform.list(folder)) {
-				if (entry.kind !== "file" || !UNSENT_SCREENSHOT_NAME.test(entry.name)) continue;
-				if (!kept.has(`screenshots/${entry.name}`)) await removeReviewFile(this.#platform, asset.location, joinPath(folder, entry.name));
-			}
-			return {
-				next: null,
-				result: void 0
-			};
-		});
+	async #removeUnusedScreenshots(asset, review) {
+		const folder = joinPath(asset.location.folder, "screenshots");
+		await checkReviewPath(this.#platform, asset.location, folder);
+		if ((await this.#platform.stat(folder))?.kind !== "directory" || !await insideWithoutLinks(this.#platform, asset.location.folder, folder)) return;
+		const kept = asset.session.history.screenshots();
+		for (const comment of review.comments) if (comment.context.screenshot) kept.add(comment.context.screenshot);
+		for (const entry of await this.#platform.list(folder)) {
+			if (entry.kind !== "file" || !UNSENT_SCREENSHOT_NAME.test(entry.name)) continue;
+			if (!kept.has(`screenshots/${entry.name}`)) await removeReviewFile(this.#platform, asset.location, joinPath(folder, entry.name));
+		}
 	}
 };
+function hasCode(error, code) {
+	return error instanceof ArcueError && error.code === code;
+}
 function shownAs(place) {
 	if (place.window === null) return "held";
 	return place.view === null ? "window" : "view";
@@ -5448,6 +6432,38 @@ function replaceComment(review, updated) {
 		...review,
 		comments: review.comments.map((comment) => comment.id === updated.id ? updated : comment)
 	};
+}
+/**
+* Whether a comment another Arcue saved moves onto the version on screen. Nothing moves onto a version the review does
+* not record. A comment moves from any version recorded before that one, and from a later one read from other bytes of
+* the model or of a model file of its composition, as after the files went back to earlier bytes. It stays on a later
+* version read from the same bytes, as when the other Arcue read a texture this one has not read again yet, or another
+* build read the same bytes into other meshes or could not parse a file of the composition, so two Arcues never move
+* comments to and fro.
+*/
+function movesOnto(comment, version, versions) {
+	if (comment.anchorVersion === version) return false;
+	const shown = versions.findIndex((entry) => entry.id === version);
+	const anchored = versions.findIndex((entry) => entry.id === comment.anchorVersion);
+	const onScreen = versions[shown];
+	const anchoredOn = versions[anchored];
+	if (onScreen === void 0) return false;
+	if (anchoredOn === void 0 || anchored < shown) return true;
+	return !sameMeshBytes(anchoredOn, onScreen);
+}
+/**
+* Whether two versions were read from the same bytes of the model and of each model file of the composition that both
+* record the full hash of. Textures change no mesh, and a file only one of them records does not count, since another
+* build may read the composition another way.
+*/
+function sameMeshBytes(a, b) {
+	if (a.hash !== b.hash || a.size !== b.size) return false;
+	const read = new Map((b.files ?? []).map((entry) => [entry.file, entry]));
+	return (a.files ?? []).every((entry) => {
+		const other = read.get(entry.file);
+		if (!hasExtension(entry.file, MODEL_EXTENSIONS) || entry.hash === void 0 || other?.hash === void 0) return true;
+		return entry.hash === other.hash && entry.size === other.size;
+	});
 }
 /**
 * The versions with the record added, or with the file identity filled in when an older build recorded the same
@@ -5617,6 +6633,7 @@ var systemClock = {
 };
 var RENAME_ATTEMPTS = 5;
 var POLL_INTERVAL_MS = 1e3;
+var LOCK_TIMEOUT_MS = 15e3;
 /** The `Platform` on Node's file system. Paths use "/" separators on every system and are converted at the edge. */
 var NodePlatform = class {
 	appDataDir;
@@ -5625,12 +6642,14 @@ var NodePlatform = class {
 	#writeClipboard;
 	#style;
 	#folders = new FolderWatchers();
+	#lockTimeoutMs;
 	constructor(options) {
 		this.#style = options.pathStyle ?? hostPathStyle;
 		this.appDataDir = normalizePath(options.appDataDir);
 		this.clock = options.clock ?? systemClock;
 		this.#startImportWorker = options.startImportWorker;
 		this.#writeClipboard = options.writeClipboard ?? null;
+		this.#lockTimeoutMs = options.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
 	}
 	async readFile(path) {
 		const bytes = await this.#call(path, (native) => readFile(native));
@@ -5640,12 +6659,12 @@ var NodePlatform = class {
 		return this.#call(path, (native) => readFile(native, "utf8"));
 	}
 	async writeFile(path, data) {
-		await this.mkdir(dirname(path));
+		await this.mkdir(dirname$1(path));
 		await this.#call(path, (native) => writeFile(native, data));
 	}
 	async writeFileAtomic(path, data) {
-		await this.mkdir(dirname(path));
-		const temporary = joinPath(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+		await this.mkdir(dirname$1(path));
+		const temporary = joinPath(dirname$1(path), `.${basename(path)}.${randomUUID()}.tmp`);
 		try {
 			await this.#call(temporary, (native) => writeFile(native, data, { flush: true }));
 			await this.#call(path, (native) => renameWithRetry(this.#native(temporary), native));
@@ -5678,7 +6697,7 @@ var NodePlatform = class {
 	}
 	async remove(path) {
 		const target = normalizePath(path);
-		if (dirname(target) === target) throw new ArcueError("invalid-input", "The root folder cannot be removed.");
+		if (dirname$1(target) === target) throw new ArcueError("invalid-input", "The root folder cannot be removed.");
 		await this.#call(target, (native) => rm(native, {
 			recursive: true,
 			force: true
@@ -5689,7 +6708,7 @@ var NodePlatform = class {
 	}
 	async rename(from, to) {
 		if (await this.#lstat(to)) throw new ArcueError("conflict", `${to} already exists.`);
-		await this.mkdir(dirname(to));
+		await this.mkdir(dirname$1(to));
 		await this.#call(from, (native) => renameWithRetry(native, this.#native(to)));
 	}
 	watch(path, listener) {
@@ -5697,6 +6716,15 @@ var NodePlatform = class {
 	}
 	findWorkspaceRoot(path) {
 		return findGitRoot(path, (candidate) => this.exists(candidate));
+	}
+	/** Takes a lock file in the app data folder's `locks` folder, named after the canonical folder and the lock's name. */
+	async lock(folder, name) {
+		const key = createHash("sha256").update(`${await this.#canonical(folder)}\n${name}`).digest("hex").slice(0, 32);
+		const file = joinPath(this.appDataDir, LOCKS_FOLDER, `${key}.lock`);
+		return acquireFileLock(this.#native(file), {
+			timeoutMs: this.#lockTimeoutMs,
+			label: `the ${name} of ${folder}`
+		});
 	}
 	startImportWorker() {
 		return this.#startImportWorker();
@@ -5707,6 +6735,26 @@ var NodePlatform = class {
 	}
 	#native(path) {
 		return toNativePath(path, this.#style);
+	}
+	/**
+	* The folder with the links in it resolved as far as it exists, in Unicode NFC and lower case, so that every
+	* spelling of one folder, and a folder that does not exist yet behind a link, locks the same.
+	*/
+	async #canonical(folder) {
+		const missing = [];
+		let existing = normalizePath(folder);
+		for (;;) {
+			const real = await realpath(this.#native(existing)).catch(() => null);
+			if (real !== null) {
+				existing = fromNativePath(real, this.#style);
+				break;
+			}
+			const parent = dirname$1(existing);
+			if (parent === existing) break;
+			missing.unshift(basename(existing));
+			existing = parent;
+		}
+		return joinPath(existing, ...missing).normalize("NFC").toLowerCase();
 	}
 	async #lstat(path) {
 		try {
@@ -5741,7 +6789,7 @@ function toArcueError(error, path) {
 	const message = error instanceof Error ? error.message : String(error);
 	if (isMissing(error)) return new ArcueError("not-found", `${path} does not exist.`, { cause: error });
 	if (code === "EISDIR" || code === "EEXIST" || code === "ENOTEMPTY") return new ArcueError("conflict", `${path}: ${message}`, { cause: error });
-	if (code === "EACCES" || code === "EPERM") return new ArcueError("forbidden", `${path}: ${message}`, { cause: error });
+	if (code === "EACCES" || code === "EPERM" || code === "EROFS") return new ArcueError("forbidden", `${path}: ${message}`, { cause: error });
 	return new ArcueError("internal", `${path}: ${message}`, { cause: error });
 }
 /** Windows refuses a rename while another program, such as a virus scanner, holds the target open; it retries. */
@@ -5762,7 +6810,7 @@ async function renameWithRetry(from, to) {
 */
 function watchPath(path, native, folders, listener) {
 	const name = basename(path);
-	const parent = dirname(path);
+	const parent = dirname$1(path);
 	let unlisten = null;
 	let watching = null;
 	let polling = false;
@@ -5797,7 +6845,7 @@ function watchPath(path, native, folders, listener) {
 	const arm = async () => {
 		let folder = parent;
 		while (!await isFolder(native(folder))) {
-			const up = dirname(folder);
+			const up = dirname$1(folder);
 			if (up === folder) return poll();
 			folder = up;
 		}
@@ -5841,6 +6889,7 @@ function watchPath(path, native, folders, listener) {
 var WindowPresence = class {
 	#counts = /* @__PURE__ */ new Map();
 	#waiters = [];
+	#disposed = false;
 	#requestWindow;
 	#setTimer;
 	#timeoutMs;
@@ -5871,12 +6920,17 @@ var WindowPresence = class {
 	*/
 	ensure(view = null) {
 		if (this.#canShow(view)) return Promise.resolve();
+		if (this.#disposed) return Promise.reject(stopping());
 		return new Promise((resolve, reject) => {
 			const waiter = {
 				view,
 				resolve: () => {
 					cancel();
 					resolve();
+				},
+				reject: (error) => {
+					cancel();
+					reject(error);
 				}
 			};
 			const cancel = this.#setTimer(this.#timeoutMs, () => {
@@ -5887,18 +6941,39 @@ var WindowPresence = class {
 			if (this.#waiters.length === 1) this.#requestWindow();
 		});
 	}
+	/** Rejects every waiter as "disconnected" and cancels its timer, as the core stops; later waiters reject at once. */
+	dispose() {
+		this.#disposed = true;
+		for (const waiter of this.#waiters.splice(0)) waiter.reject(stopping());
+	}
 	#canShow(view) {
 		return this.count(null) > 0 || view !== null && this.count(view) > 0;
 	}
 };
+function stopping() {
+	return new ArcueError("disconnected", "Arcue is stopping.");
+}
 //#endregion
 //#region src/app-connection.ts
-/** The app's data folder: `ARCUE_USER_DATA` when set, otherwise where Electron keeps an app named "Arcue". */
+/**
+* The app's data folder: `ARCUE_USER_DATA` when set, resolved against the working folder, otherwise where Electron
+* keeps an app named "Arcue".
+*/
 function userDataDir(env = process.env, platform = process.platform, home = homedir()) {
-	if (env.ARCUE_USER_DATA) return env.ARCUE_USER_DATA;
+	if (env.ARCUE_USER_DATA) return resolve(env.ARCUE_USER_DATA);
 	if (platform === "darwin") return join(home, "Library", "Application Support", "Arcue");
 	if (platform === "win32") return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Arcue");
 	return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Arcue");
+}
+/** What `arcue open` says when nothing runs and the desktop app has never started on this computer. */
+var NOT_STARTED = "Arcue is not running, and the Arcue app has not been started on this computer yet. Start the app once, or run arcue serve --detach to use Arcue in a browser.";
+/** What `arcue open` says when the app that `launch.json` names did not start. */
+function launchFailed({ command, reason }) {
+	return `The Arcue app could not be started from ${command}: ${reason}. Start it from where it is installed, or run arcue serve --detach to use Arcue in a browser.`;
+}
+/** What `arcue open` says when the app it started did not answer in time. */
+function didNotStart(timeoutMs) {
+	return `Arcue did not start within ${Math.round(timeoutMs / 1e3)} seconds. Start the app from where it is installed, or run arcue serve --detach to use Arcue in a browser.`;
 }
 async function readJson(path) {
 	try {
@@ -5911,46 +6986,77 @@ async function readLaunchInfo(userData) {
 	const parsed = launchInfoSchema.safeParse(await readJson(join(userData, LAUNCH_INFO_FILE)));
 	return parsed.success ? parsed.data : null;
 }
-/** Starts the app the way `launch.json` recorded, detached from this process. */
+/**
+* Starts the app the way `launch.json` recorded, detached from this process, and settles once its process has spawned
+* or failed to. Null without `launch.json`.
+*/
 async function launchApp(userData) {
 	const launch = await readLaunchInfo(userData);
-	if (!launch) return false;
-	const child = spawn(launch.command, launch.args, {
-		detached: true,
-		stdio: "ignore"
+	if (!launch) return null;
+	const failed = (error) => ({
+		launched: false,
+		command: launch.command,
+		reason: error instanceof Error ? error.message : String(error)
 	});
-	child.on("error", () => void 0);
-	child.unref();
-	return true;
+	let child;
+	try {
+		child = spawn(launch.command, launch.args, {
+			detached: true,
+			stdio: "ignore"
+		});
+	} catch (error) {
+		return failed(error);
+	}
+	return new Promise((resolvePromise) => {
+		child.on("error", (error) => resolvePromise(failed(error)));
+		child.once("spawn", () => {
+			child.unref();
+			resolvePromise({ launched: true });
+		});
+	});
 }
 /**
-* Connects to the app, starting it first when nothing listens, and waits up to `timeoutMs` for its socket. A refused
-* handshake is retried too, since a starting core writes its new `bridge.json` only after it listens.
+* Connects to the app at `bridge.json`, starting it first when nothing listens, and waits up to `timeoutMs` for its
+* socket. A refused handshake is retried too, since a starting core writes its new `bridge.json` only after it listens.
+* Throws at once when the app has never started on this computer, or when its process does not spawn.
 */
-async function connectOrLaunch(userData, { timeoutMs = 3e4, pollMs = 200 } = {}) {
-	const deadline = Date.now() + timeoutMs;
-	let lastError = null;
-	const attempt = () => connectToCore(userData).catch((error) => {
-		lastError = error;
+async function connectOrLaunch(userData, options = {}) {
+	let refused = null;
+	const first = await connectToCore(userData, "desktop").catch((error) => {
+		refused = error;
 		return null;
 	});
-	const first = await attempt();
 	if (first) return first;
-	if (lastError === null && !await launchApp(userData)) throw new Error("Arcue is not running, and it has not been started on this computer yet. Start it once first, or run \"arcue serve\" to use it in a browser.");
+	if (refused === null) {
+		const launch = await launchApp(userData);
+		if (launch === null) throw new Error(NOT_STARTED);
+		if (!launch.launched) throw new Error(launchFailed(launch));
+	}
+	return waitForApp(userData, options, refused);
+}
+/** Waits up to `timeoutMs` for the app that was just started to answer at `bridge.json`, retrying refused handshakes. */
+async function waitForApp(userData, { timeoutMs = 3e4, pollMs = 200 } = {}, refused = null) {
+	const deadline = Date.now() + timeoutMs;
+	let lastError = refused;
 	while (Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, pollMs));
-		const connection = await attempt();
+		await setTimeout$1(pollMs);
+		const connection = await connectToCore(userData, "desktop").catch((error) => {
+			lastError = error;
+			return null;
+		});
 		if (connection) return connection;
 	}
 	if (lastError instanceof Error) throw lastError;
-	throw new Error(`Arcue did not start within ${Math.round(timeoutMs / 1e3)} seconds.`);
+	throw new Error(didNotStart(timeoutMs));
 }
 var USAGE = `Usage:
   arcue open <file> [--clip <name>] [--frame <number>] [--view <name>] [--move]
-      Opens a model in the running Arcue app, starting the app when it is not running. The model loads with the
-      files its composition lists. Run by an agent, it shows the model in that agent session's view: the page whose
-      address "arcue status" prints, and until that page is open Arcue holds the model for it. The desktop app, which
-      has no such pages, shows it in its window. Run by a person, it shows the model only outside views.
+      Opens a model in Arcue. The model loads with the files its composition lists. Run by an agent, it shows the
+      model in that agent session's view: the page of Arcue in the browser whose address "arcue status" prints, which
+      holds the model until that page is open. Without Arcue in the browser, the desktop app shows it in its window,
+      starting when it is not running, unless Arcue last ran in a browser: then it says to run "arcue serve --detach".
+      Run by a person, it shows the model in the desktop app, starting the app when it is not running, or, where the
+      app has never run or cannot start, in Arcue in the browser.
       --clip names a clip by its name in the file, such as "Armature|Walk" in an FBX or "Walk" in a .blend.
       --frame is a whole frame number from 0.
       --view names the session, in place of ARCUE_VIEW, CLAUDE_CODE_SESSION_ID, CODEX_SESSION_ID or CODEX_THREAD_ID,
@@ -5960,13 +7066,19 @@ var USAGE = `Usage:
       Imports a model without the app and summarizes its meshes, parts, bones, materials, clips and warnings,
       composed with the files its composition lists, as opening it would.
       --json prints the full result for scripts and agents. Exits with 1 when the file cannot be read or parsed.
-  arcue serve [--port <number>]
-      Runs Arcue in a browser instead of the desktop app, until stopped: serves its window at
-      http://localhost:4530, or at the given port, to this computer only. "arcue open" then shows models
-      there. Exits with 1 when Arcue already runs.
+  arcue serve [--detach] [--port <number>]
+      Runs Arcue in a browser beside the desktop app, serving its pages at http://localhost:4530, or at the given
+      port, to this computer only. Agents' "arcue open" shows their models there. It runs until stopped, and exits
+      with 1 when Arcue already runs in a browser or an Arcue that can't share reviews runs.
+      --detach runs it in the background: it returns once Arcue answers and prints its address, and Arcue stops by
+      itself after 30 minutes with no page open. When Arcue already runs in a browser, it prints that address
+      instead. Without --port it uses the port Arcue in the browser ran on last, when that port is free.
+  arcue stop
+      Stops Arcue in the browser for every agent session, once its changes in flight are saved. The desktop app
+      keeps running. Exits with 1 when it does not stop.
   arcue status [--view <name>]
-      Reports whether Arcue is running, where a browser shows it and this session's view, and which assets it has open.
-      Exits with 1 when it is not running.
+      Reports whether Arcue runs in a browser and in the desktop app, this session's view, and which assets each has
+      open. Exits with 1 when neither runs.
   arcue setup
       Through the agent plugin's launcher, on a computer without Node 24 or later: downloads the Node build the
       plugin pins from nodejs.org once, checks its SHA-256 checksum, and keeps it in this user's cache. No other
@@ -5986,6 +7098,10 @@ function parseArgs(args) {
 	const [command, ...rest] = args;
 	if (command === void 0 || command === "help" || command === "--help" || command === "-h") return { command: "help" };
 	if (command === "status") return parseStatus(rest);
+	if (command === "stop") {
+		if (rest.length > 0) throw new UsageError(`"arcue stop" takes no arguments, got "${rest.join(" ")}".`);
+		return { command: "stop" };
+	}
 	if (command === "setup") {
 		if (rest.length > 0) throw new UsageError(`"arcue setup" takes no arguments, got "${rest.join(" ")}".`);
 		return { command: "setup" };
@@ -6053,23 +7169,42 @@ function parseInspect(args) {
 }
 function parseServe(args) {
 	let port;
+	let detach = false;
+	let idleStopMs;
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index] ?? "";
 		const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? splitOnce(arg, "=") : [arg, void 0];
-		if (flag !== "--port") throw new UsageError(arg.startsWith("--") ? `Unknown option "${arg}".` : `"arcue serve" takes no file, got "${arg}".`);
+		if (flag === "--detach") {
+			if (inline !== void 0) throw new UsageError("--detach takes no value.");
+			detach = true;
+			continue;
+		}
+		if (flag !== "--port" && flag !== "--idle-stop-ms") throw new UsageError(arg.startsWith("--") ? `Unknown option "${arg}".` : `"arcue serve" takes no file, got "${arg}".`);
 		const value = inline ?? args[++index];
-		if (value === void 0 || value === "") throw new UsageError("--port needs a value.");
-		port = parsePort(value);
+		if (value === void 0 || value === "") throw new UsageError(`${flag} needs a value.`);
+		if (flag === "--port") port = parsePort(value);
+		else idleStopMs = parseIdleStop(value);
 	}
+	if (detach && idleStopMs !== void 0) throw new UsageError("--idle-stop-ms is set by --detach.");
 	return {
 		command: "serve",
-		...port !== void 0 ? { port } : {}
+		...port !== void 0 ? { port } : {},
+		...detach ? { detach } : {},
+		...idleStopMs !== void 0 ? { idleStopMs } : {}
 	};
 }
 function parsePort(value) {
 	const port = /^\d+$/.test(value) ? Number(value) : NaN;
 	if (!(port >= 1 && port <= 65535)) throw new UsageError(`--port takes a port from 1 to 65535, got "${value}".`);
 	return port;
+}
+/** The longest delay a Node timer keeps; a longer one fires at once. */
+var MAX_TIMER_MS = 2147483647;
+function parseIdleStop(value) {
+	const ms = /^\d+$/.test(value) ? Number(value) : NaN;
+	if (!(ms >= 1)) throw new UsageError(`--idle-stop-ms takes a whole number of milliseconds from 1, got "${value}".`);
+	if (ms > MAX_TIMER_MS) throw new UsageError(`--idle-stop-ms takes at most ${MAX_TIMER_MS} milliseconds, got "${value}".`);
+	return ms;
 }
 function parseFrame(value) {
 	if (!/^\d+$/.test(value)) throw new UsageError(`--frame takes a whole number from 0, got "${value}".`);
@@ -6080,6 +7215,294 @@ function parseFrame(value) {
 function splitOnce(value, separator) {
 	const index = value.indexOf(separator);
 	return [value.slice(0, index), value.slice(index + 1)];
+}
+//#endregion
+//#region src/build-id.ts
+/** Which arcue.js this is: the first 16 hex digits of the SHA-256 of the file, or null when it cannot be read. */
+async function buildId(script) {
+	try {
+		return createHash("sha256").update(await readFile(script)).digest("hex").slice(0, 16);
+	} catch {
+		return null;
+	}
+}
+//#endregion
+//#region src/session-view.ts
+/**
+* The environment variables that name the agent session a command runs for, in the order they are taken. Codex sets
+* CODEX_SESSION_ID to its conversation's root thread, which the conversation's subagents share; releases before it set
+* only CODEX_THREAD_ID, which differs for each subagent.
+*/
+var SESSION_VARIABLES = [
+	"ARCUE_VIEW",
+	"CLAUDE_CODE_SESSION_ID",
+	"CODEX_SESSION_ID",
+	"CODEX_THREAD_ID"
+];
+/**
+* The view of the agent session a command runs for: the first of `--view` and the session variables that is set,
+* hashed into a short name. Subagents inherit the variables, so they reach their session's view. Null when none is set,
+* as for a person at a terminal.
+*/
+function sessionView(env, given) {
+	const identity = [given, ...SESSION_VARIABLES.map((name) => env[name])].find((value) => value !== void 0 && value !== "");
+	if (identity === void 0) return null;
+	return createHash("sha256").update(identity).digest("hex").slice(0, 12);
+}
+/** A copy of the environment without the variables that name an agent session, for a process that belongs to none. */
+function outsideSessions(env) {
+	const copy = { ...env };
+	for (const name of SESSION_VARIABLES) delete copy[name];
+	return copy;
+}
+//#endregion
+//#region src/detach.ts
+/** The arcue.js the build writes, which `arcue serve --detach` runs in the background. */
+var bundledEntry = fileURLToPath(new URL("./arcue.js", import.meta.url));
+/** How long Arcue in the browser that `--detach` starts runs with no page open. */
+var IDLE_STOP_MS = 18e5;
+var DETACH_TIMEOUT_MS = 3e4;
+var LOG_LIMIT_BYTES = 1048576;
+var POLL_MS$1 = 100;
+var PROBE_MS = 1e3;
+var AFTER_EXIT_MS = 2e3;
+var LOSER_EXIT_MS = 5e3;
+/** What `status` and `serve --detach` say about Arcue in the browser that runs from another arcue.js. */
+var OTHER_BUILD = "It runs from another arcue build: run arcue stop, then arcue serve --detach to use this one.";
+/** The Node and the arcue.js this command runs on, which `--detach` starts again in the background. */
+function selfOf(options) {
+	return options.self ?? {
+		execPath: process.execPath,
+		script: bundledEntry
+	};
+}
+/** Which arcue.js this command is, or null when it cannot tell. */
+async function buildOf(options) {
+	return options.build !== void 0 ? options.build : buildId(selfOf(options).script);
+}
+/** Whether Arcue in the browser that the bridge file names runs from another arcue.js than `build`, when both are known. */
+function otherBuild(info, build) {
+	return build !== null && info.build !== void 0 && info.build !== build;
+}
+/** The port of an address, as a browser takes it. */
+function portOf(url) {
+	return url === void 0 ? void 0 : Number(new URL(url).port || 80);
+}
+/**
+* Runs `arcue serve` in the background and returns once it answers, printing its address and this session's view. When
+* Arcue in the browser already runs and shares reviews, it prints that one's address instead, and never stops it. The
+* child belongs to no agent session, so it gets none of their variables, and runs in the root of the data folder's
+* drive, so on Windows it keeps no folder someone may remove, such as the data folder, whose removal stops it. It
+* records Arcue in the browser as the last core before the child starts, so an open for an agent session's view
+* meanwhile never starts the desktop app, and puts the earlier record back when the child fails to start.
+*/
+async function detachServe(command, env, output, options) {
+	const userData = userDataDir(env);
+	const view = sessionView(env);
+	const self = selfOf(options);
+	const build = await buildOf(options);
+	const viewLine = (url) => view !== null && url !== void 0 ? [`This session's view: ${viewAddress(url, view)}`] : [];
+	const already = (info) => {
+		const lines = [`Arcue already runs in a browser at ${info.url} (process ${info.pid}).`];
+		if (otherBuild(info, build)) lines.push(OTHER_BUILD);
+		output.out(`${[...lines, ...viewLine(info.url)].join("\n")}\n`);
+		return 0;
+	};
+	const blocking = await blockingCore(userData, "serve");
+	if (blocking?.reason === "unshared") {
+		const platform = options.platform ?? process.platform;
+		output.err(`${new CoreRunningError(blocking.info, "unshared", "serve", platform).message}\n`);
+		return 1;
+	}
+	if (blocking) {
+		let connection;
+		try {
+			connection = await connectToCore(userData, "serve");
+		} catch (error) {
+			const { url, pid } = blocking.info;
+			output.err(`Arcue in the browser at ${url} (process ${pid}) does not answer: ${messageOf$2(error)}\n`);
+			return 1;
+		}
+		connection?.close();
+		if (connection) {
+			const { info } = connection;
+			if (command.port !== void 0 && command.port !== portOf(info.url)) {
+				output.out(`Arcue already runs in a browser at ${info.url} (process ${info.pid}). Run arcue stop first to run it on port ${command.port}.\n`);
+				return 1;
+			}
+			return already(info);
+		}
+	}
+	const port = command.port ?? await freePort(portOf((await readLastCore(userData))?.serveUrl)) ?? 4530;
+	if (!(await stat(self.script).catch(() => null))?.isFile()) {
+		output.out(`This arcue has no arcue.js in ${dirname(self.script)}.\n`);
+		return 1;
+	}
+	const logs = join(userData, "logs");
+	await mkdir(logs, {
+		recursive: true,
+		mode: 448
+	});
+	const log = join(logs, "serve.log");
+	if (((await stat(log).catch(() => null))?.size ?? 0) > LOG_LIMIT_BYTES) await rename(log, join(logs, "serve.old.log")).catch(() => void 0);
+	let descriptor = null;
+	let offset;
+	try {
+		descriptor = openSync(log, "a", 384);
+		offset = fstatSync(descriptor).size;
+	} catch (error) {
+		if (descriptor !== null) closeSync(descriptor);
+		output.out(`Could not write Arcue's log at ${log}: ${messageOf$2(error)}\n`);
+		return 1;
+	}
+	const putBackLastCore = await recordLastCore(userData, "serve");
+	let child;
+	try {
+		child = spawn(self.execPath, [
+			self.script,
+			"serve",
+			"--port",
+			String(port),
+			"--idle-stop-ms",
+			String(IDLE_STOP_MS)
+		], {
+			detached: true,
+			stdio: [
+				"ignore",
+				descriptor,
+				descriptor
+			],
+			windowsHide: true,
+			cwd: parse(userData).root,
+			env: {
+				...outsideSessions(env),
+				ARCUE_USER_DATA: userData
+			}
+		});
+	} catch (error) {
+		await putBackLastCore();
+		output.out(`Could not start Arcue in the browser: ${messageOf$2(error)}\n`);
+		return 1;
+	} finally {
+		closeSync(descriptor);
+	}
+	const timeoutMs = options.detachTimeoutMs ?? DETACH_TIMEOUT_MS;
+	const outcome = await watchStart(child, userData, timeoutMs);
+	if (outcome.kind !== "started" && outcome.kind !== "other") await putBackLastCore();
+	switch (outcome.kind) {
+		case "started":
+			output.out(`${[`Arcue runs in a browser at ${outcome.info.url} (process ${outcome.info.pid}). It stops by itself after 30 minutes with no page open.`, ...viewLine(outcome.info.url)].join("\n")}\n`);
+			return 0;
+		case "other": return already(outcome.info);
+		case "error":
+			output.out(`Could not start Arcue in the browser: ${outcome.error.message}\n`);
+			return 1;
+		case "exited": {
+			const said = (await readFile(log).catch(() => Buffer.alloc(0))).subarray(offset).toString("utf8").trim();
+			output.err(`${said || `arcue serve exited with code ${outcome.code} before it answered. Its log is ${log}.`}\n`);
+			return 1;
+		}
+		case "timeout":
+			output.out(`Arcue in the browser did not answer within ${Math.round(timeoutMs / 1e3)} seconds, so it was stopped. Its log is ${log}.\n`);
+			return 1;
+	}
+}
+/**
+* Waits until the child answers at `serve.json`, another start wins, the child fails to spawn or exits, or the time is
+* up, which kills it. Lets go of the child once it runs, so this process can exit.
+*/
+async function watchStart(child, userData, timeoutMs) {
+	let failed = null;
+	let exitCode = null;
+	const { promise: changed, resolve: change } = Promise.withResolvers();
+	const onError = (error) => {
+		failed ??= error;
+		change();
+	};
+	const onExit = (code, signal) => {
+		exitCode = code ?? signal ?? 1;
+		change();
+	};
+	child.on("error", onError);
+	child.once("exit", onExit);
+	const exited = new Promise((resolvePromise) => {
+		if (child.exitCode !== null || child.signalCode !== null) resolvePromise();
+		else child.once("exit", () => resolvePromise());
+	});
+	const deadline = Date.now() + timeoutMs;
+	try {
+		for (;;) {
+			if (failed) return {
+				kind: "error",
+				error: failed
+			};
+			if (exitCode !== null) {
+				const winner = await answeringWithin(userData, AFTER_EXIT_MS);
+				return winner ? {
+					kind: "other",
+					info: winner
+				} : {
+					kind: "exited",
+					code: exitCode
+				};
+			}
+			const info = await answering$1(userData);
+			if (info && info.pid === child.pid) {
+				child.unref();
+				return {
+					kind: "started",
+					info
+				};
+			}
+			if (info) {
+				await Promise.race([exited, setTimeout$1(LOSER_EXIT_MS, void 0, { ref: false })]);
+				if (child.exitCode === null && child.signalCode === null) child.kill();
+				return {
+					kind: "other",
+					info
+				};
+			}
+			if (Date.now() >= deadline) {
+				child.kill();
+				return { kind: "timeout" };
+			}
+			await Promise.race([changed, setTimeout$1(Math.min(POLL_MS$1, Math.max(0, deadline - Date.now())), void 0, { ref: false })]);
+		}
+	} finally {
+		child.off("error", onError);
+		child.off("exit", onExit);
+		child.on("error", () => void 0);
+	}
+}
+/** What the core at `serve.json` says of itself when it answers. */
+async function answering$1(userData) {
+	const connection = await connectToCore(userData, "serve", PROBE_MS).catch(() => null);
+	connection?.close();
+	return connection?.info ?? null;
+}
+async function answeringWithin(userData, ms) {
+	const deadline = Date.now() + ms;
+	for (;;) {
+		const info = await answering$1(userData);
+		if (info || Date.now() >= deadline) return info;
+		await setTimeout$1(POLL_MS$1);
+	}
+}
+/** The port when nothing listens on it on 127.0.0.1 or ::1, the addresses `arcue serve` takes it on, or undefined. */
+async function freePort(port) {
+	if (port === void 0 || !await listensOn(port, "127.0.0.1")) return void 0;
+	return await listensOn(port, "::1", { lacking: true }) ? port : void 0;
+}
+/** Whether a server can listen on the port at the address, or, with `lacking`, the computer has no such address. */
+function listensOn(port, host, { lacking = false } = {}) {
+	return new Promise((resolvePromise) => {
+		const server = createServer();
+		server.once("error", (error) => resolvePromise(lacking && (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT")));
+		server.listen(port, host, () => server.close(() => resolvePromise(true)));
+	});
+}
+function messageOf$2(error) {
+	return error instanceof Error ? error.message : String(error);
 }
 //#endregion
 //#region src/inspect.ts
@@ -6153,6 +7576,82 @@ function formatNumber(value) {
 }
 function slotName(slot) {
 	return slot.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`);
+}
+//#endregion
+//#region src/routing.ts
+/** What `arcue open` says when nothing runs and Arcue ran in a browser last. */
+var BROWSER_STOPPED = "Arcue in the browser has stopped. Run arcue serve --detach, then arcue open again; an open page reconnects by itself.";
+/**
+* Picks the core an open goes to, launching the desktop app when the rules say so. An open for an agent session's view
+* goes to Arcue in the browser, else to the desktop app; any other open goes to the desktop app, which starts if
+* needed, and to Arcue in the browser only where the app cannot start. While nothing answers, it waits for a core that
+* is starting. When nothing answers and Arcue ran in a browser last, an open for a view never starts the app and
+* throws `BROWSER_STOPPED`; an open outside views starts the app whenever launch.json names one that spawns, and throws
+* `BROWSER_STOPPED` only when it does not, and goes to Arcue in the browser when the app it started does not answer in
+* time. It also throws when the app does not start or has never started on this computer, and when a core listens but
+* does not answer.
+*/
+async function connectForOpen(userData, view, options = {}) {
+	return view === null ? routeOutsideViews(userData, options) : routeForView(userData, options);
+}
+async function routeForView(userData, options) {
+	const running = await answering(userData, ["serve", "desktop"]) ?? await afterStarts(userData, ["serve", "desktop"]);
+	if (running) return running;
+	if ((await readLastCore(userData))?.kind === "serve") throw new Error(BROWSER_STOPPED);
+	return routed(await connectOrLaunch(userData, options), "desktop");
+}
+async function routeOutsideViews(userData, options) {
+	const desktop = await answering(userData, ["desktop"]);
+	if (desktop) return desktop;
+	const launch = await launchApp(userData);
+	if (launch?.launched) try {
+		return routed(await waitForApp(userData, options), "desktop");
+	} catch (error) {
+		const served = await answering(userData, ["serve"]).catch(() => null);
+		if (served) return served;
+		throw error;
+	}
+	const running = await answering(userData, ["serve"]) ?? await afterStarts(userData, ["desktop", "serve"]);
+	if (running) return running;
+	if ((await readLastCore(userData))?.kind === "serve") throw new Error(BROWSER_STOPPED);
+	throw new Error(launch === null ? NOT_STARTED : launchFailed(launch));
+}
+/** The first core of the kinds, in order, that answers. Rejects, naming it, when one listens but does not answer. */
+async function answering(userData, kinds) {
+	for (const kind of kinds) {
+		const connection = await connectToCore(userData, kind).catch(async (error) => {
+			const message = `${doesNotAnswer(await readBridgeInfo(userData, kind), kind)}: ${messageOf$1(error)}`;
+			throw new ArcueError(error instanceof ArcueError ? error.code : "unavailable", message, { cause: error });
+		});
+		if (connection) return routed(connection, kind);
+	}
+	return null;
+}
+/** Waits for a core that is starting, then looks again. */
+async function afterStarts(userData, kinds) {
+	await waitForStarts(userData);
+	return answering(userData, kinds);
+}
+function routed(connection, file) {
+	const { info } = connection;
+	return {
+		connection,
+		kind: file === "serve" ? "serve" : coreKindOf(info),
+		older: !sharesReviews(info)
+	};
+}
+/** Whether the core a bridge file names is Arcue in the browser: in `serve.json`, or an older `arcue serve`. */
+function inBrowser(info, file) {
+	return (file === "serve" || coreKindOf(info) === "serve") && info.url !== void 0;
+}
+/** Names the core a bridge file names, for a core that listens but does not answer. */
+function doesNotAnswer(info, file) {
+	if (!info) return file === "serve" ? "Arcue in the browser does not answer" : "The Arcue app does not answer";
+	if (inBrowser(info, file)) return `Arcue in the browser at ${info.url} (process ${info.pid}) does not answer`;
+	return `The Arcue app (process ${info.pid}) does not answer`;
+}
+function messageOf$1(error) {
+	return error instanceof Error ? error.message : String(error);
 }
 //#endregion
 //#region ../../node_modules/.pnpm/ws@8.22.0/node_modules/ws/lib/constants.js
@@ -9783,10 +11282,25 @@ var PAGE_HEADERS = {
 	"Referrer-Policy": "no-referrer",
 	"X-Content-Type-Options": "nosniff"
 };
+/** The addresses of the page itself, whose load counts the idle time again, as its socket connects only once it runs. */
+var PAGE_PATHS = /* @__PURE__ */ new Set(["/", "/index.html"]);
 /**
-* Runs a core on this computer's files and serves its window to a browser on localhost, as the desktop app shows it in
-* its own window. The core takes the desktop app's place: it writes `bridge.json`, so `arcue open` and `arcue status`
-* reach it, and it refuses to start while another core runs.
+* Whether a request loads the page into a tab. A fetch of the page from a script, as an open page's probe of its
+* address is, does not, so a page left open on another Arcue in the browser keeps no idle serve running.
+*/
+function loadsPage(request, address) {
+	const destination = request.headers["sec-fetch-dest"];
+	return PAGE_PATHS.has(address?.pathname ?? "") && (destination === void 0 || destination === "document");
+}
+var HEARTBEAT_MS = 3e4;
+var CHECK_MS = 5e3;
+var PAGE_CLOSE_MS = 1e3;
+/**
+* Runs a core on this computer's files beside the desktop app's, on the same reviews, which both change only under
+* `Platform.lock`. It answers the command line at `serve.json`, refuses to start beside another `arcue serve` or a
+* core that takes no review locks, and stops itself when one starts or its files are removed. A detached one stops
+* after `idleStopMs` with no page connected. It serves its window to a browser on localhost, as the desktop app shows
+* it in its own window.
 *
 * A page whose address names an agent session's view, `/?view=<name>`, connects as that view's page and shows the
 * models that session opens. While that page is not open, the core holds them for the page rather than show them in a
@@ -9799,50 +11313,100 @@ var PAGE_HEADERS = {
 */
 async function startServer(options) {
 	const webUi = await realpath(options.webUi).catch(() => null);
-	if (!webUi || !(await stat(resolve(webUi, "index.html")).catch(() => null))?.isFile()) throw new Error(`This arcue has no web UI in ${options.webUi}.`);
-	const running = await runningCore(options.userData);
-	if (running) {
-		const where = running.url ? ` at ${running.url}` : "";
-		throw new Error(`Arcue is already running${where} (process ${running.pid}). "arcue open" shows models there.`);
-	}
-	const { servers: http, port } = await listenLocally(options.port);
-	const url = `http://localhost:${port}`;
-	const hosts = localHosts(port);
-	const allowed = (request) => hosts.has(request.headers.host?.toLowerCase() ?? "");
+	if (!webUi || !await isFile(resolve(webUi, "index.html"))) throw new Error(`This arcue has no web UI in ${options.webUi}.`);
+	const { userData } = options;
+	const setTimer = options.setTimer ?? systemClock.setTimer;
+	const claim = await claimStart(userData, "serve");
+	const dataFolder = await folderIdentity(userData);
+	const owner = await pageOwner(userData);
+	let url = "";
 	const windows = new WindowPresence({
-		requestWindow: () => options.onWaitingForWindow?.(),
+		requestWindow: () => options.onWaitingForWindow?.(url),
 		setTimer: systemClock.setTimer
 	});
+	const stopped = Promise.withResolvers();
+	let stopping = null;
+	let closing = null;
+	let pages = 0;
+	let cancelIdle = () => void 0;
+	const armIdle = () => {
+		cancelIdle();
+		const idleStopMs = options.idleStopMs;
+		if (idleStopMs === void 0 || closing) return;
+		cancelIdle = setTimer(idleStopMs, () => stop("idle", `Arcue stops: no page was open for ${Number((idleStopMs / 6e4).toFixed(2))} minutes.`));
+	};
+	const stop = (reason, message) => {
+		if (stopping || closing) return;
+		stopping = {
+			reason,
+			message
+		};
+		stopped.resolve(stopping);
+	};
+	const removed = (folder) => stop("removed", `Arcue stops: its files in ${folder} were removed. Run arcue serve --detach to start the current one.`);
+	let http = [];
 	let core = null;
+	let port;
 	let bridge;
+	let unregisterStop = () => void 0;
 	try {
+		const listening = await listenLocally(options.port);
+		http = listening.servers;
+		port = listening.port;
+		url = `http://localhost:${port}`;
 		const platform = new NodePlatform({
-			appDataDir: fromNativePath(options.userData),
-			startImportWorker: () => startNodeImportWorker(options.importWorkerEntry, options.onError)
+			appDataDir: fromNativePath(userData),
+			startImportWorker: () => startNodeImportWorker(options.importWorkerEntry, options.onError),
+			lockTimeoutMs: options.lockTimeoutMs
 		});
 		core = await ArcueCore.start({
 			platform,
 			onError: options.onError
 		});
+		unregisterStop = core.registry.handleCommand("serve.stop", (_input, context) => {
+			if (context.caller !== "bridge") throw new ArcueError("forbidden", "Only the arcue command can stop Arcue in the browser.");
+			setImmediate(() => stop("requested", "Arcue stops: arcue stop asked it to."));
+		});
 		bridge = await startBridgeServer({
 			core,
-			userData: options.userData,
-			ensureWindow: (view) => view === null ? windows.ensure(null) : Promise.resolve(),
+			userData,
+			kind: "serve",
+			ensureWindow: (view) => {
+				if (pages === 0) armIdle();
+				return view === null ? windows.ensure(null) : Promise.resolve();
+			},
+			onConnection: () => {
+				if (pages === 0) armIdle();
+			},
 			onError: options.onError,
-			url
+			url,
+			build: options.build,
+			claim
 		});
 	} catch (error) {
+		await claim.release();
 		core?.dispose();
 		await Promise.all(http.map((server) => closeServer(server)));
 		throw error;
 	}
 	const started = core;
+	const hosts = localHosts(port);
+	const allowed = (request) => hosts.has(request.headers.host?.toLowerCase() ?? "");
 	const sockets = new import_websocket_server.default({
 		noServer: true,
 		maxPayload: MAX_FRAME_BYTES
 	});
+	const answered = /* @__PURE__ */ new WeakMap();
 	let next = 1;
 	sockets.on("connection", (socket, request) => {
+		pages++;
+		cancelIdle();
+		answered.set(socket, true);
+		socket.on("pong", () => answered.set(socket, true));
+		socket.once("close", () => {
+			pages--;
+			if (pages === 0) armIdle();
+		});
 		const view = socketView(URL.parse(request.url ?? "/", url)) ?? null;
 		const channel = messageChannel(webSocketStream(socket), binaryFrameCodec);
 		const peer = started.connect(framedEndpoint(channel), {
@@ -9859,11 +11423,14 @@ async function startServer(options) {
 		});
 	});
 	for (const server of http) {
+		server.removeAllListeners("request");
+		server.removeAllListeners("upgrade");
 		server.on("request", (request, response) => {
 			for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
 			if (!allowed(request)) return refuse(response, 403);
 			if (request.method !== "GET" && request.method !== "HEAD") return refuse(response, 405);
-			sendFile(webUi, request, response).catch((error) => {
+			if (pages === 0 && loadsPage(request, URL.parse(request.url ?? "/", url))) armIdle();
+			sendFile(webUi, owner, request, response, () => removed(webUi)).catch((error) => {
 				options.onError(error);
 				if (!response.headersSent) refuse(response, 500);
 				else response.destroy();
@@ -9879,19 +11446,86 @@ async function startServer(options) {
 				socket.end(`HTTP/1.1 400 Bad Request\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
 				return;
 			}
+			if (closing) {
+				socket.end(`HTTP/1.1 503 Service Unavailable\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
+				return;
+			}
 			sockets.handleUpgrade(request, socket, head, (connected) => sockets.emit("connection", connected, request));
 		});
 	}
-	return {
-		url,
-		async close() {
-			for (const client of sockets.clients) client.terminate();
-			await Promise.all(http.map((server) => closeServer(server)));
-			await bridge.close();
-			await started.idle();
-			started.dispose();
+	let cancelHeartbeat = () => void 0;
+	const heartbeat = () => {
+		for (const client of sockets.clients) {
+			if (answered.get(client) === false) {
+				client.terminate();
+				continue;
+			}
+			answered.set(client, false);
+			client.ping();
+		}
+		cancelHeartbeat = setTimer(options.heartbeatMs ?? HEARTBEAT_MS, heartbeat);
+	};
+	cancelHeartbeat = setTimer(options.heartbeatMs ?? HEARTBEAT_MS, heartbeat);
+	const check = async () => {
+		const workerFolder = dirname(options.importWorkerEntry);
+		if (!await isFile(resolve(webUi, "index.html"))) return removed(webUi);
+		if (!await isFile(options.importWorkerEntry)) return removed(workerFolder);
+		const folder = await folderIdentity(userData);
+		if (folder === null || dataFolder !== null && folder !== dataFolder) return stop("data-gone", `Arcue stops: its data folder ${userData} was removed.`);
+		const held = await bridge.holdsInfo();
+		const other = held === "other-live" ? await readBridgeInfo(userData, "serve") : null;
+		if (other) return stop("replaced", `Arcue stops: another Arcue in the browser took its place (process ${other.pid}).`);
+		if (held === "missing") await bridge.rewriteInfo();
+		const desktop = await readBridgeInfo(userData, "desktop");
+		if (desktop && !sharesReviews(desktop)) {
+			const live = await runningCore(userData, "desktop");
+			if (live?.token === desktop.token) stop("unshared", `Arcue stops: an Arcue that can't share reviews started beside it (process ${live.pid}).`);
 		}
 	};
+	let cancelChecks = () => void 0;
+	const checkLater = () => {
+		cancelChecks = setTimer(options.checkMs ?? CHECK_MS, () => {
+			check().catch((error) => options.onError(error)).finally(() => {
+				if (!closing && !stopping) checkLater();
+			});
+		});
+	};
+	checkLater();
+	armIdle();
+	return {
+		url,
+		pid: process.pid,
+		stopped: stopped.promise,
+		close(code = SERVE_STOPPED_CLOSE_CODE) {
+			closing ??= (async () => {
+				cancelIdle();
+				cancelHeartbeat();
+				cancelChecks();
+				unregisterStop();
+				await recordLastCore(userData, "serve", url);
+				await bridge.close().catch((error) => options.onError(error));
+				await closePages(sockets, code);
+				await Promise.all(http.map((server) => closeServer(server)));
+				windows.dispose();
+				await started.shutdown().catch((error) => options.onError(error));
+			})();
+			return closing;
+		}
+	};
+}
+/** Closes every page's socket with the code, and ends those still open a second later. */
+async function closePages(sockets, code) {
+	const open = [...sockets.clients];
+	const closed = Promise.all(open.map((client) => new Promise((resolvePromise) => {
+		if (client.readyState === client.CLOSED) resolvePromise();
+		else client.once("close", () => resolvePromise());
+	})));
+	for (const client of open) client.close(code);
+	let timer;
+	await Promise.race([closed, new Promise((resolvePromise) => timer = setTimeout(resolvePromise, PAGE_CLOSE_MS))]);
+	clearTimeout(timer);
+	for (const client of sockets.clients) client.terminate();
+	sockets.close();
 }
 /** The agent session's view a page's socket address names, null for none, or undefined for a name that is not one. */
 function socketView(address) {
@@ -9909,9 +11543,13 @@ function localHosts(port) {
 	];
 	return new Set(port === 80 ? names : names.map((name) => `${name}:${port}`));
 }
-/** Listens on 127.0.0.1 and, where the computer has it, on ::1 too, since "localhost" may resolve to either. */
+/**
+* Listens on the port on 127.0.0.1 and, where the computer has it, on ::1 too, since "localhost" may resolve to either.
+* Until the caller takes their requests over, the servers answer 503, since a request that arrives while a server has
+* no listener is never answered.
+*/
 async function listenLocally(port) {
-	const first = createServer$1();
+	const first = startingServer();
 	try {
 		await listen(first, port, "127.0.0.1");
 	} catch (error) {
@@ -9919,7 +11557,7 @@ async function listenLocally(port) {
 		throw error;
 	}
 	const bound = first.address().port;
-	const second = createServer$1();
+	const second = startingServer();
 	try {
 		await listen(second, bound, "::1");
 		return {
@@ -9936,6 +11574,38 @@ async function listenLocally(port) {
 		throw error;
 	}
 }
+/**
+* The folder's device and inode, which a folder made again in its place does not share, as when a lock or a save in
+* flight makes a removed data folder again. Null when it is gone.
+*/
+async function folderIdentity(path) {
+	const found = await stat(path, { bigint: true }).catch(() => null);
+	return found ? `${found.dev}:${found.ino}` : null;
+}
+/** Names the data folder and user, the same on every start, so the page tells this Arcue in the browser from another. */
+async function pageOwner(userData) {
+	const folder = await realpath(userData).catch(() => resolve(userData));
+	const user = process.getuid?.() ?? userInfo().username;
+	return createHash("sha256").update(`${user}\0${folder}`).digest("hex").slice(0, 16);
+}
+/** The page with the meta tag that names its owner, first in its head. */
+function withOwner(html, owner) {
+	const meta = `<meta name="${LOCAL_PAGE_OWNER}" content="${owner}" />`;
+	const head = /<head(\s[^>]*)?>/i.exec(html);
+	if (!head) return `${meta}${html}`;
+	const at = head.index + head[0].length;
+	return `${html.slice(0, at)}${meta}${html.slice(at)}`;
+}
+function startingServer() {
+	const server = createServer$1((_request, response) => {
+		for (const [name, value] of Object.entries(PAGE_HEADERS)) response.setHeader(name, value);
+		refuse(response, 503);
+	});
+	server.on("upgrade", (_request, socket) => {
+		socket.end(`HTTP/1.1 503 Service Unavailable\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
+	});
+	return server;
+}
 function listen(server, port, host) {
 	return new Promise((resolvePromise, reject) => {
 		server.once("error", reject);
@@ -9951,6 +11621,9 @@ function closeServer(server) {
 		server.closeAllConnections();
 	});
 }
+async function isFile(path) {
+	return (await stat(path).catch(() => null))?.isFile() ?? false;
+}
 function isCode(error, code) {
 	return error instanceof Error && error.code === code;
 }
@@ -9961,8 +11634,11 @@ function refuse(response, status) {
 function rawHeaders(headers) {
 	return Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
 }
-/** Sends a file from the web UI's folder, `index.html` for "/". Anything outside the folder is not found. */
-async function sendFile(webUi, request, response) {
+/**
+* Sends a file from the web UI's folder, `index.html` for "/". Anything outside the folder is not found. Calls
+* `onPageMissing` when `index.html` is gone.
+*/
+async function sendFile(webUi, owner, request, response, onPageMissing) {
 	let path;
 	try {
 		path = decodeURIComponent(URL.parse(request.url ?? "/", "http://localhost")?.pathname ?? "");
@@ -9973,7 +11649,20 @@ async function sendFile(webUi, request, response) {
 	const file = resolve(webUi, relative);
 	if (path.includes("\0") || !file.startsWith(`${webUi}${sep}`)) return refuse(response, 404);
 	const found = await stat(file).catch(() => null);
-	if (!found?.isFile()) return refuse(response, 404);
+	if (!found?.isFile()) {
+		if (relative === "index.html") onPageMissing();
+		return refuse(response, 404);
+	}
+	if (relative === "index.html") {
+		const page = Buffer.from(withOwner(await readFile(file, "utf8"), owner));
+		response.writeHead(200, {
+			"Content-Type": CONTENT_TYPES[".html"],
+			"Content-Length": page.length,
+			"Cache-Control": "no-cache"
+		});
+		response.end(request.method === "HEAD" ? void 0 : page);
+		return;
+	}
 	response.writeHead(200, {
 		"Content-Type": CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
 		"Content-Length": found.size,
@@ -10012,31 +11701,129 @@ function webSocketStream(socket) {
 	};
 }
 //#endregion
-//#region src/session-view.ts
+//#region src/stop.ts
+var STOP_TIMEOUT_MS = 3e4;
+var POLL_MS = 100;
+/** How long a process may linger once its bridge file and socket are gone, as a zombie or a reused pid. */
+var LINGER_MS = 1e4;
+var NOTHING_LISTENS = /* @__PURE__ */ new Set([
+	"ENOENT",
+	"ECONNREFUSED",
+	"ENOTSOCK"
+]);
 /**
-* The environment variables that name the agent session a command runs for, in the order they are taken. Codex sets
-* CODEX_SESSION_ID to its conversation's root thread, which the conversation's subagents share; releases before it set
-* only CODEX_THREAD_ID, which differs for each subagent.
+* Stops Arcue in the browser: asks the core at `serve.json` to stop and waits until it has, or stops an older
+* `arcue serve` at `bridge.json` with SIGTERM where the system allows it. It never stops the desktop app.
 */
-var SESSION_VARIABLES = [
-	"ARCUE_VIEW",
-	"CLAUDE_CODE_SESSION_ID",
-	"CODEX_SESSION_ID",
-	"CODEX_THREAD_ID"
-];
+async function stopServe(env, output, options) {
+	const userData = userDataDir(env);
+	const stopped = await stopRunning(userData, output, options);
+	if (stopped !== null) return stopped;
+	await waitForStarts(userData);
+	const afterStart = await stopRunning(userData, output, options);
+	if (afterStart !== null) return afterStart;
+	output.out("Arcue is not running in a browser.\n");
+	return 0;
+}
+/** Stops the Arcue in the browser that runs and returns the exit code, or null when none runs. */
+async function stopRunning(userData, output, options) {
+	const timeoutMs = options.stopTimeoutMs ?? STOP_TIMEOUT_MS;
+	const connection = await connectOrRefuse(userData, "serve", output);
+	if (connection === "refused") return 1;
+	if (connection) {
+		const { info } = connection;
+		try {
+			await connection.client.execute("serve.stop", {});
+		} catch (error) {
+			if (!(error instanceof ArcueError && error.code === "disconnected")) throw error;
+		} finally {
+			connection.close();
+		}
+		if (await waitStopped(userData, "serve", info, timeoutMs)) {
+			output.out(`Stopped Arcue in the browser at ${info.url} (process ${info.pid}).\n`);
+			return 0;
+		}
+		output.out(`Arcue in the browser (process ${info.pid}) did not stop within ${seconds(timeoutMs)} seconds.\n`);
+		return 1;
+	}
+	const older = await readBridgeInfo(userData, "desktop");
+	if (!older || !isOlderServe(older)) return null;
+	const olderConnection = await connectOrRefuse(userData, "desktop", output);
+	if (olderConnection === "refused") return 1;
+	if (!olderConnection) return null;
+	olderConnection.close();
+	const { info } = olderConnection;
+	if (!isOlderServe(info)) return null;
+	if ((options.platform ?? process.platform) === "win32") {
+		output.out(`The arcue serve at ${info.url} (process ${info.pid}) is older than this arcue command and cannot be stopped by it. Stop it where it runs.\n`);
+		return 1;
+	}
+	const signal = options.signal ?? ((pid, name) => process.kill(pid, name));
+	try {
+		signal(info.pid, "SIGTERM");
+	} catch (error) {
+		if (error.code !== "ESRCH") throw error;
+	}
+	if (await waitStopped(userData, "desktop", info, timeoutMs)) {
+		output.out(`Stopped the older arcue serve at ${info.url} (process ${info.pid}).\n`);
+		return 0;
+	}
+	output.out(`Arcue in the browser (process ${info.pid}) did not stop within ${seconds(timeoutMs)} seconds.\n`);
+	return 1;
+}
+/** An `arcue serve` from before cores ran side by side, which wrote `bridge.json` with its address and no kind. */
+function isOlderServe(info) {
+	return info.url !== void 0 && info.kind === void 0;
+}
+/** Connects to the core in the bridge file of `kind`, or says that it does not answer. */
+async function connectOrRefuse(userData, kind, output) {
+	try {
+		return await connectToCore(userData, kind);
+	} catch (error) {
+		const info = await readBridgeInfo(userData, kind);
+		const where = info ? ` at ${info.url} (process ${info.pid})` : "";
+		const message = error instanceof Error ? error.message : String(error);
+		output.out(`Arcue in the browser${where} does not answer, so it was not stopped: ${message}\n`);
+		return "refused";
+	}
+}
 /**
-* The view of the agent session a command runs for: the first of `--view` and the session variables that is set,
-* hashed into a short name. Subagents inherit the variables, so they reach their session's view. Null when none is set,
-* as for a person at a terminal.
+* Waits until the core's process has ended. Once its bridge file no longer names it and nothing listens on its socket,
+* a process that lingers with its pid, as a zombie or a pid used again, counts as stopped after a while.
 */
-function sessionView(env, given) {
-	const identity = [given, ...SESSION_VARIABLES.map((name) => env[name])].find((value) => value !== void 0 && value !== "");
-	if (identity === void 0) return null;
-	return createHash("sha256").update(identity).digest("hex").slice(0, 12);
+async function waitStopped(userData, kind, info, timeoutMs) {
+	const deadline = Date.now() + timeoutMs;
+	let goneSince = null;
+	for (;;) {
+		if (!isRunning(info.pid)) return true;
+		if (goneSince === null) {
+			if ((await readBridgeInfo(userData, kind))?.token !== info.token && !await listens(info.socket)) goneSince = Date.now();
+		} else if (Date.now() - goneSince >= LINGER_MS) return true;
+		if (Date.now() >= deadline) return false;
+		await setTimeout$1(POLL_MS);
+	}
+}
+/** Whether something accepts connections on the socket. */
+function listens(socket) {
+	return new Promise((resolve) => {
+		const connection = connect(socket);
+		connection.once("connect", () => {
+			connection.destroy();
+			resolve(true);
+		});
+		connection.once("error", (error) => {
+			connection.destroy();
+			resolve(!NOTHING_LISTENS.has(error.code ?? ""));
+		});
+	});
+}
+function seconds(ms) {
+	return Math.round(ms / 1e3);
 }
 //#endregion
 //#region src/run.ts
 var NODE_MAJOR = 24;
+var ANOTHER_VERSION = "It runs another version of Arcue, which can't share reviews with this arcue command.";
 /**
 * Runs the command line in an environment, which names the data folder and the agent session, and returns its exit
 * code: 0 on success, 1 on failure, 2 for a usage error, and 3 when `setup` runs on a Node older than 24.
@@ -10055,10 +11842,11 @@ async function run(args, output, env, cwd = process.cwd(), options = {}) {
 			case "help":
 				output.out(USAGE);
 				return 0;
-			case "status": return await status(command, env, output);
-			case "open": return await open(command, env, cwd, output);
+			case "status": return await status(command, env, output, options);
+			case "open": return await open(command, env, cwd, output, options.platform ?? process.platform);
 			case "inspect": return await inspect(command, env, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
 			case "serve": return await serve(command, env, output, options);
+			case "stop": return await stopServe(env, output, options);
 			case "setup": return setup(output, options.node ?? {
 				version: process.versions.node,
 				execPath: process.execPath
@@ -10077,25 +11865,60 @@ function setup(output, node) {
 	output.err(`Arcue needs Node ${NODE_MAJOR} or later, and runs on Node ${node.version} at ${node.execPath}. Install Node ${NODE_MAJOR} or later and put it on PATH; with the agent plugin, run setup through the launcher in the skill's scripts folder.\n`);
 	return 3;
 }
-async function status(command, env, output) {
-	const connection = await connectToCore(userDataDir(env));
-	if (!connection) {
-		output.out("Arcue is not running.\n");
-		return 1;
-	}
+async function status(command, env, output, options) {
+	const userData = userDataDir(env);
+	const view = sessionView(env, command.view);
+	const cores = await Promise.all(["serve", "desktop"].map((file) => connectToCore(userData, file).then((connection) => ({
+		file,
+		connection,
+		error: null
+	}), (error) => ({
+		file,
+		connection: null,
+		error
+	}))));
 	try {
-		const { assets } = await connection.client.query("asset.list", {});
-		const { url, pid } = connection.info;
-		const view = sessionView(env, command.view);
-		const lines = [url ? `Arcue is running in a browser at ${url} (process ${pid}).` : `Arcue is running (process ${pid}).`];
-		if (url && view !== null) lines.push(`This session's view: ${viewAddress(url, view)}`);
-		if (assets.length === 0) lines.push("No assets are open.");
-		else lines.push(`Open assets:`, ...assets.map((asset) => `  ${asset.assetId}  ${asset.status.padEnd(7)}  ${asset.path}`));
-		output.out(`${lines.join("\n")}\n`);
-		return 0;
+		const build = cores.some(({ connection }) => connection?.info.build !== void 0) ? await buildOf(options) : null;
+		const blocks = [];
+		const platform = options.platform ?? process.platform;
+		for (const { file, connection, error } of cores) if (connection) blocks.push(await describeCore(connection, file, view, build, platform));
+		else if (error !== null) {
+			const info = await readBridgeInfo(userData, file);
+			output.err(`${doesNotAnswer(info, file)}: ${messageOf(error)}\n`);
+		}
+		if (blocks.length > 0) output.out(`${blocks.join("\n\n")}\n`);
+		else if (cores.every(({ error }) => error === null)) output.out("Arcue is not running.\n");
+		return blocks.length > 0 ? 0 : 1;
 	} finally {
-		connection.close();
+		for (const { connection } of cores) connection?.close();
 	}
+}
+/** One core's lines in `status`: where it runs, this session's view in a browser, and its assets. */
+async function describeCore(connection, file, view, build, platform) {
+	const { info } = connection;
+	const { assets } = await connection.client.query("asset.list", {});
+	const lines = [];
+	if (inBrowser(info, file)) {
+		lines.push(`Arcue is running in a browser at ${info.url} (process ${info.pid}).`);
+		if (info.kind === void 0) lines.push(`It is older than this arcue command: ${stopOlderServe(platform)}, then arcue serve --detach.`);
+		else if (!sharesReviews(info)) lines.push(ANOTHER_VERSION);
+		else if (otherBuild(info, build)) lines.push(OTHER_BUILD);
+		if (view !== null) lines.push(`This session's view: ${viewAddress(info.url, view)}`);
+	} else if (info.kind === void 0) lines.push(`An older Arcue app is running (process ${info.pid}).`);
+	else {
+		lines.push(`The Arcue app is running (process ${info.pid}).`);
+		if (!sharesReviews(info)) lines.push(ANOTHER_VERSION);
+	}
+	if (assets.length === 0) lines.push("No assets are open.");
+	else lines.push("Open assets:", ...assets.map((asset) => `  ${asset.assetId}  ${asset.status.padEnd(7)}  ${asset.path}`));
+	return lines.join("\n");
+}
+/** How to stop an older `arcue serve`, which `arcue stop` can't do on Windows. */
+function stopOlderServe(platform) {
+	return platform === "win32" ? "stop it where it runs" : "run arcue stop";
+}
+function messageOf(error) {
+	return error instanceof Error ? error.message : String(error);
 }
 async function existingFile(cwd, relative) {
 	const given = resolve(cwd, relative);
@@ -10117,12 +11940,12 @@ async function inspect(command, env, cwd, output, importWorkerEntry) {
 	output.out(command.json ? `${JSON.stringify(inspection, null, 2)}\n` : formatInspection(inspection));
 	return 0;
 }
-async function open(command, env, cwd, output) {
+async function open(command, env, cwd, output, platform) {
 	const view = sessionView(env, command.view);
 	if (command.move && view === null) throw new Error("--move takes a model into an agent session's view, and no session names one. Give --view <name>.");
 	const path = await existingFile(cwd, command.path);
-	const connection = await connectOrLaunch(userDataDir(env));
-	const { url } = connection.info;
+	const { connection, kind } = await connectForOpen(userDataDir(env), view);
+	const url = kind === "serve" ? connection.info.url : void 0;
 	const at = {
 		path,
 		...command.clip !== void 0 ? { clip: command.clip } : {},
@@ -10143,7 +11966,8 @@ async function open(command, env, cwd, output) {
 		return shown ? 0 : 1;
 	} catch (error) {
 		if (!(error instanceof ArcueError)) throw error;
-		if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info));
+		if (view !== null && error.code === "unknown-command") throw new Error(olderCore(connection.info, kind, platform));
+		if (kind === "serve" && error.code === "disconnected") throw new Error(`Arcue in the browser stopped while opening ${path}. Run arcue serve --detach, then arcue open again.`);
 		if (url && error.code === "unavailable") throw new Error(`${error.message} Arcue runs in a browser: open ${url} first.`);
 		if (view !== null && error.code === "conflict" && !command.move) throw new Error(`${error.message} Add --move to show it in this session's view instead.`);
 		throw error;
@@ -10152,8 +11976,8 @@ async function open(command, env, cwd, output) {
 	}
 }
 /** What `arcue open` says when the running core predates agent sessions' views. */
-function olderCore({ url, pid }) {
-	const [running, restart] = url ? [`The Arcue at ${url}`, "stop that arcue serve and run arcue serve again"] : ["The Arcue app", "quit the app and run arcue open again"];
+function olderCore({ url, pid }, kind, platform) {
+	const [running, restart] = kind === "serve" ? [`The Arcue at ${url}`, `${stopOlderServe(platform)}, then arcue serve --detach`] : ["The Arcue app", "quit the app and run arcue open again"];
 	return `${running} (process ${pid}) is older than this arcue command and cannot show models in a session's view. Restart it: ${restart}.`;
 }
 /**
@@ -10179,38 +12003,59 @@ function openedInView(path, { assetId, shown }, address, url) {
 	};
 }
 async function serve(command, env, output, options) {
+	if (command.detach) return detachServe(command, env, output, options);
+	const view = sessionView(env);
+	const build = await buildOf(options);
 	const server = await startServer({
 		userData: userDataDir(env),
 		importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
 		webUi: options.webUi ?? bundledWebUi,
 		port: command.port ?? 4530,
+		idleStopMs: command.idleStopMs,
+		build: build ?? void 0,
 		onError: (error) => output.err(`${error instanceof Error ? error.message : String(error)}\n`),
-		onWaitingForWindow: () => output.err(`Waiting for a browser to open ${server.url}.\n`)
+		onWaitingForWindow: (url) => output.err(`Waiting for a browser to open ${url}.\n`)
 	});
-	output.out(`Arcue runs at ${server.url}. Open it in a browser; "arcue open" shows models there.\n`);
-	await (options.stop ?? signalled());
-	await server.close();
+	output.out(`Arcue runs at ${server.url}. Open it in a browser; agents' "arcue open" shows their models there.\n`);
+	if (view !== null) output.out(`This session's view: ${viewAddress(server.url, view)}\n`);
+	const signals = stopSignal(options.stop);
+	const stop = await Promise.race([signals.stopped.then(() => null), server.stopped]);
+	signals.dispose();
+	options.onStopping?.();
+	if (stop) output.out(`${stop.message}\n`);
+	await server.close(SERVE_STOPPED_CLOSE_CODE);
 	return 0;
 }
-function signalled() {
-	return new Promise((resolve) => {
-		const signals = [
-			"SIGINT",
-			"SIGTERM",
-			"SIGHUP"
-		];
-		const stop = () => {
-			for (const signal of signals) process.off(signal, stop);
-			resolve();
-		};
-		for (const signal of signals) process.on(signal, stop);
-	});
+/** The stop a caller gives, or else one that resolves when the process receives SIGINT, SIGTERM or SIGHUP. */
+function stopSignal(given) {
+	if (given) return {
+		stopped: given,
+		dispose: () => void 0
+	};
+	const signals = [
+		"SIGINT",
+		"SIGTERM",
+		"SIGHUP"
+	];
+	const { promise, resolve: stopped } = Promise.withResolvers();
+	const dispose = () => {
+		for (const signal of signals) process.off(signal, stop);
+	};
+	const stop = () => {
+		dispose();
+		stopped();
+	};
+	for (const signal of signals) process.on(signal, stop);
+	return {
+		stopped: promise,
+		dispose
+	};
 }
 //#endregion
 //#region src/bin.ts
-process.exitCode = await run(process.argv.slice(2), {
+exitAfterRun(await run(process.argv.slice(2), {
 	out: (text) => process.stdout.write(text),
 	err: (text) => process.stderr.write(text)
-}, process.env);
+}, process.env, process.cwd(), { onStopping: () => armHardExit(3e4) }));
 //#endregion
 export {};

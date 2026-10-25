@@ -6110,20 +6110,61 @@ function framedEndpoint(channel) {
 }
 //#endregion
 //#region ../../packages/protocol/src/bridge.ts
+var coreKindSchema = _enum(["desktop", "serve"]);
 /**
-* The file in the desktop app's data folder that tells the command line where the core listens and which token to
-* present. The core rewrites it with a new token every time it starts, readable only by the user.
+* The desktop app's bridge file. Builds from before cores ran side by side also wrote it for `arcue serve`, with a
+* `url`.
 */
 var BRIDGE_INFO_FILE = "bridge.json";
+/** The bridge file of Arcue in the browser, which `arcue serve` runs beside the desktop app. */
+var SERVE_INFO_FILE = "serve.json";
+/** The bridge file a core of this kind writes in the data folder. */
+function bridgeInfoFile(kind) {
+	return kind === "serve" ? SERVE_INFO_FILE : BRIDGE_INFO_FILE;
+}
+/**
+* A bridge file, which tells the command line where a core listens and which token to present. The core rewrites it
+* with a new token every time it starts, readable only by the user.
+*/
 var bridgeInfoSchema = object({
+	/** Never raised: older readers take a file with any other version for no core at all. */
 	version: literal(1),
 	/** A Unix domain socket path, or a Windows named pipe such as "\\\\.\\pipe\\arcue-…". */
 	socket: string().min(1),
 	token: string().min(32),
 	pid: int().positive(),
-	/** Where a browser shows the core's window, when `arcue serve` runs the core rather than the desktop app. */
-	url: url().optional()
+	/** Where a browser shows the core's pages, for Arcue in the browser. */
+	url: url().optional(),
+	/** Which core wrote the file. Builds from before cores ran side by side leave it out and take no locks. */
+	kind: coreKindSchema.optional(),
+	/** The lock protocol the core follows. */
+	locks: int().positive().optional(),
+	/** Which arcue.js runs the core, for Arcue in the browser: the first 16 hex digits of its SHA-256. */
+	build: string().regex(/^[0-9a-f]{16}$/).optional()
 });
+/** Whether the core takes the same review locks as this build, so it may run beside it. */
+function sharesReviews(info) {
+	return info.kind !== void 0 && info.locks === 1;
+}
+/** The kind of core a bridge file names: its `kind`, or for older builds "serve" when it has a url. */
+function coreKindOf(info) {
+	return info.kind ?? (info.url === void 0 ? "desktop" : "serve");
+}
+/** Which kind of core started, stopped cleanly or was being started last, for "arcue open" while nothing runs. */
+var LAST_CORE_FILE = "last-core.json";
+var lastCoreSchema = object({
+	version: literal(1),
+	kind: coreKindSchema,
+	/** Where Arcue in the browser served its pages last, which `arcue serve --detach` takes its port from. */
+	serveUrl: url().optional()
+});
+/** The close code a page's socket gets when Arcue in the browser stops on purpose. */
+var SERVE_STOPPED_CLOSE_CODE = 4e3;
+/**
+* The meta tag that `arcue serve` adds to its page, naming its data folder and user, so a page that reconnects never
+* attaches to another Arcue in the browser that took its address.
+*/
+var LOCAL_PAGE_OWNER = "arcue-owner";
 /**
 * Where the page an `arcue serve` server serves connects to its core as a window, over a WebSocket that carries one
 * `binaryFrameCodec` frame per message. The path names the format, so a page left open across an update of its server
@@ -7680,6 +7721,14 @@ var viewStateSchema = object({
 	/** The person dismissed the offer to continue an earlier review, so the tab never offers one again. */
 	relinkOfferDismissed: boolean().optional()
 });
+object({
+	tabs: array(object({
+		/** The model's path, which opens the same asset again. */
+		path: string().min(1).max(4096),
+		view: viewStateSchema.nullable()
+	})).max(500),
+	active: int().min(0).nullable()
+});
 //#endregion
 //#region ../../packages/protocol/src/composition.ts
 /** The name of a model's composition file, which lives in the model's review folder. */
@@ -8228,6 +8277,12 @@ var commands = {
 		input: settingsSchema.partial(),
 		output: settingsSchema
 	}),
+	"serve.stop": command({
+		description: "Stops Arcue in the browser, the core arcue serve runs: it closes the command line's connections and its pages, lets the changes in flight finish saving, and exits. Only the command line may call it; the desktop app does not handle it.",
+		runsIn: "core",
+		input: object({}),
+		output: _void()
+	}),
 	"review.undo": command({
 		description: "Undo the asset's latest review edit, if there is one: a comment edit or a change to its composition file. A composition file that changed since the edit is not touched, and the call fails with conflict.",
 		runsIn: "core",
@@ -8285,11 +8340,34 @@ var commands = {
 			...assetRef$1,
 			/**
 			* Leaves the tab where it is when another window shows the asset, or the asset belongs to another view, as a page
-			* that reopens after a reload does. Without it, an asset of another view fails with conflict.
+			* that reopens after a reload does, except that it takes back an asset another page of its view adopted in the
+			* last 30 seconds (see `adopt`). Without it, an asset of another view fails with conflict.
 			*/
-			unlessShown: boolean().optional()
+			unlessShown: boolean().optional(),
+			/**
+			* Shows an asset the core holds for the calling page's view, as a page that reconnects does with the other assets
+			* of its view, and never one another window shows. For a while, a page of the view that reopens a saved tab of it
+			* with `unlessShown` takes it back, since both pages may have lost their connection and this one came back first.
+			*/
+			adopt: boolean().optional(),
+			/**
+			* The view the calling page kept for the tab, which an asset the core keeps no view for starts from, as one an
+			* agent opened while no page of its view was open. The clip and frame that open asked for still win.
+			*/
+			viewState: viewStateSchema.optional()
 		}),
-		output: _void()
+		output: object({
+			/**
+			* The core held the asset for the calling page's view, as for an agent's open while no page of the view could show
+			* it, and shows it now, at the clip and frame that open asked for.
+			*/
+			held: boolean(),
+			/**
+			* With `held`, the place of that open among the opens the core held assets for, which grows with each, so the
+			* asset with the greatest is the one an agent opened last.
+			*/
+			heldOrder: number().int().positive().optional()
+		})
 	}),
 	"view.releaseAsset": command({
 		description: "Remove an asset's tab from this window without closing the asset, and return what the tab showed. The core sends it before moving the tab to another window. A window refuses with conflict while the tab's comment box has unsaved text.",
@@ -8687,7 +8765,7 @@ object({ asset: assetSummarySchema }), object({ asset: assetSummarySchema }), ob
 }), object({
 	assetId: assetIdSchema,
 	round: int().positive()
-});
+}), object({ settings: settingsSchema });
 //#endregion
 //#region ../../packages/protocol/src/listener-errors.ts
 /** The default for a listener that throws: the error surfaces as an unhandled rejection, and delivery continues. */
@@ -8746,19 +8824,7 @@ function createPeer(endpoint, options = {}) {
 			});
 		} catch {}
 	};
-	const respond = async ({ id, kind, name, input }) => {
-		let output;
-		try {
-			if (!options.handleRequest) throw new ArcueError("unavailable", `This side does not answer requests ("${name}").`);
-			output = await options.handleRequest({
-				kind,
-				name,
-				input
-			});
-		} catch (error) {
-			postFailure(id, error);
-			return;
-		}
+	const answer = (id, output) => {
 		try {
 			const transfer = typeof output === "object" && output !== null ? resultTransfers.get(output) : void 0;
 			post({
@@ -8770,6 +8836,26 @@ function createPeer(endpoint, options = {}) {
 		} catch (error) {
 			postFailure(id, error);
 		}
+	};
+	/**
+	* Answers at once when the handler returns a value, before the work its change sets off in later microtasks, such as
+	* a window's render, and otherwise once its promise settles.
+	*/
+	const respond = ({ id, kind, name, input }) => {
+		let output;
+		try {
+			if (!options.handleRequest) throw new ArcueError("unavailable", `This side does not answer requests ("${name}").`);
+			output = options.handleRequest({
+				kind,
+				name,
+				input
+			});
+		} catch (error) {
+			postFailure(id, error);
+			return;
+		}
+		if (isPromiseLike(output)) output.then((value) => answer(id, value), (error) => postFailure(id, error));
+		else answer(id, output);
 	};
 	const settle = (id, settleWith) => {
 		const entry = pending.get(id);
@@ -8849,6 +8935,9 @@ function createPeer(endpoint, options = {}) {
 		},
 		close
 	};
+}
+function isPromiseLike(value) {
+	return typeof value === "object" && value !== null && "then" in value && typeof value.then === "function";
 }
 //#endregion
 //#region ../../packages/protocol/src/import-worker.ts
@@ -9121,6 +9210,31 @@ var queries = {
 function isQueryName(name) {
 	return Object.hasOwn(queries, name);
 }
+//#endregion
+//#region ../../packages/protocol/src/locks.ts
+/** The folder in the app's data folder that holds the lock files every Arcue on the computer honours. */
+var LOCKS_FOLDER = "locks";
+/** The lock in `LOCKS_FOLDER` that an Arcue holds while it checks and writes the bridge files to start or stop a core. */
+var START_LOCK_FILE = "start.lock";
+var lockTokenSchema = string().regex(/^[0-9a-f]{32}$/);
+/** What a lock file holds: who took the lock, so another process can tell whether its holder still runs. */
+var lockRecordSchema = object({
+	arcueLock: literal(1),
+	token: lockTokenSchema,
+	/** The process that took the lock, which a reused pid does not share. */
+	instance: lockTokenSchema,
+	pid: int().positive(),
+	host: string().max(255),
+	/** The pid namespace and boot the holder runs in, or null when unknown. */
+	ns: string().max(512).nullable(),
+	acquiredAt: number()
+});
+/** What a lock's waiting file holds: a waiter in another process, so this process lets it take its turn. */
+var lockWaitingSchema = object({
+	arcueLockWaiting: literal(1),
+	token: lockTokenSchema,
+	pid: int().positive()
+});
 //#endregion
 //#region ../../packages/protocol/src/round.ts
 /** `posed` is null when the 3D view did not compute the target's position at the comment's time. */
@@ -9442,4 +9556,4 @@ function portEndpoint(port) {
 	};
 }
 //#endregion
-export { splitMemberPath as $, compositionFileSchema as A, countInRanges as B, settingsSchema as C, ArcueError as Ct, IMAGE_FILE_EXTENSIONS as D, COMPOSITION_FILE_NAME as E, unshownUvSetWarnings as F, parseStoredPath as G, encodeRanges as H, frameCountFor as I, sameTopology as J, fileNameOf as K, isKeyedEveryFrame as L, keysModelBones as M, memberRoles as N, MODEL_FILE_EXTENSIONS as O, viewStateSchema as P, memberPath as Q, lastFrame as R, viewNameSchema as S, messageChannel as St, screenshotOwner as T, rangesWithin as U, decodeRanges as V, materialSlots as W, composeScene as X, topologyFingerprint as Y, findNode as Z, reviewFormat as _, connectBridge as _t, isQueryName as a, knownPartView as at, VIEW_PARAMETER as b, framedChannel as bt, importReadFileInputSchema as c, TEXTURE_REF_NAMES as ct, createPeer as d, BRIDGE_INFO_FILE as dt, describeTextureUses as et, withTransfer as f, HANDSHAKE_MAX_FRAME_BYTES as ft, reviewFileSchema as g, bridgeInfoSchema as gt, reportListenerError as h, acceptBridge as ht, roundDataSchema as i, isDefaultPartView as it, joinsByName as j, animatesModel as k, importRequests as l, TEXTURE_SLOTS as lt, callEach as m, SERVE_CORE_PATH as mt, binaryFrameCodec as n, defaultViewBounds as nt, queries as o, shownByDefault as ot, isEnvelope as p, LAUNCH_INFO_FILE as pt, imageMimeType as q, jsonFrameCodec as r, describeParts as rt, importFindFileInputSchema as s, TEXTURE_REF_KEYS as st, portEndpoint as t, importWarning as tt, serveImportWorker as u, TEXTURE_SLOT_KEYS as ut, commands as v, launchInfoSchema as vt, warningId as w, COMMENT_ID_PATTERN as wt, viewAddress as x, framedEndpoint as xt, isCommandName as y, MAX_FRAME_BYTES as yt, mergeKeyTimes as z };
+export { topologyFingerprint as $, COMPOSITION_FILE_NAME as A, framedChannel as At, frameCountFor as B, isCommandName as C, bridgeInfoSchema as Ct, settingsSchema as D, launchInfoSchema as Dt, viewNameSchema as E, lastCoreSchema as Et, joinsByName as F, decodeRanges as G, lastFrame as H, keysModelBones as I, materialSlots as J, encodeRanges as K, memberRoles as L, MODEL_FILE_EXTENSIONS as M, messageChannel as Mt, animatesModel as N, ArcueError as Nt, warningId as O, sharesReviews as Ot, compositionFileSchema as P, COMMENT_ID_PATTERN as Pt, sameTopology as Q, viewStateSchema as R, commands as S, bridgeInfoFile as St, viewAddress as T, coreKindOf as Tt, mergeKeyTimes as U, isKeyedEveryFrame as V, countInRanges as W, fileNameOf as X, parseStoredPath as Y, imageMimeType as Z, isEnvelope as _, LAUNCH_INFO_FILE as _t, LOCKS_FOLDER as a, importWarning as at, reviewFileSchema as b, SERVE_STOPPED_CLOSE_CODE as bt, lockWaitingSchema as c, isDefaultPartView as ct, importFindFileInputSchema as d, TEXTURE_REF_KEYS as dt, composeScene as et, importReadFileInputSchema as f, TEXTURE_REF_NAMES as ft, withTransfer as g, LAST_CORE_FILE as gt, createPeer as h, HANDSHAKE_MAX_FRAME_BYTES as ht, roundDataSchema as i, describeTextureUses as it, IMAGE_FILE_EXTENSIONS as j, framedEndpoint as jt, screenshotOwner as k, MAX_FRAME_BYTES as kt, isQueryName as l, knownPartView as lt, serveImportWorker as m, TEXTURE_SLOT_KEYS as mt, binaryFrameCodec as n, memberPath as nt, START_LOCK_FILE as o, defaultViewBounds as ot, importRequests as p, TEXTURE_SLOTS as pt, rangesWithin as q, jsonFrameCodec as r, splitMemberPath as rt, lockRecordSchema as s, describeParts as st, portEndpoint as t, findNode as tt, queries as u, shownByDefault as ut, callEach as v, LOCAL_PAGE_OWNER as vt, VIEW_PARAMETER as w, connectBridge as wt, reviewFormat as x, acceptBridge as xt, reportListenerError as y, SERVE_CORE_PATH as yt, unshownUvSetWarnings as z };
