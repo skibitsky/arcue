@@ -1,11 +1,12 @@
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
 import { startFakeCore, writeLaunchInfo } from "@arcue/platform-node/test";
-import { ArcueError, BRIDGE_INFO_FILE, SERVE_INFO_FILE } from "@arcue/protocol";
+import type { LaunchInfo } from "@arcue/protocol";
+import { ArcueError, BRIDGE_INFO_FILE, LAUNCH_INFO_FILE, SERVE_INFO_FILE } from "@arcue/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectOrLaunch, userDataDir } from "./app-connection";
+import { appEnvironment, bundledApp, connectOrLaunch, userDataDir } from "./app-connection";
 import { run } from "./run";
 import { sessionView } from "./session-view";
 
@@ -80,9 +81,75 @@ describe("starting the app", () => {
     connection.close();
   });
 
+  it("starts the given app rather than launch.json's, and never as Node", async () => {
+    const recorded = join(userData, "recorded");
+    const started = join(userData, "started");
+    writeLaunchInfo(userData, `require("node:fs").writeFileSync(${JSON.stringify(recorded)}, "")`);
+    const script = `require("node:fs").writeFileSync(${JSON.stringify(started)}, process.env.ELECTRON_RUN_AS_NODE ?? "unset")`;
+    const previous = process.env.ELECTRON_RUN_AS_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    try {
+      const connecting = connectOrLaunch(userData, {
+        timeoutMs: 10_000,
+        pollMs: 20,
+        app: { version: 1, command: process.execPath, args: ["-e", script] },
+      });
+      await vi.waitFor(() => expect(existsSync(started)).toBe(true), { timeout: 5000 });
+      await fakeCore();
+      (await connecting).close();
+    } finally {
+      if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = previous;
+    }
+    expect(readFileSync(started, "utf8")).toBe("unset");
+    expect(existsSync(recorded)).toBe(false);
+  });
+
   it("gives up when the started app never listens", async () => {
     writeLaunchInfo(userData, "");
-    await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(/did not start within/);
+    await expect(connectOrLaunch(userData, { timeoutMs: 300, pollMs: 20 })).rejects.toThrow(
+      /^Arcue did not start within \d+ seconds\. Start the app from where it is installed, or run arcue serve --detach to use Arcue in a browser\.$/,
+    );
+  });
+
+  it("keeps waiting when the started app exits with 0, as a second instance does", async () => {
+    const marker = join(userData, "launched");
+    writeLaunchInfo(userData, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`);
+    const connecting = connectOrLaunch(userData, { timeoutMs: 10_000, pollMs: 20 });
+    await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await fakeCore();
+    (await connecting).close();
+  });
+
+  it("says so at once when the app is no longer where launch.json says", async () => {
+    const gone = join(userData, "gone", "Arcue");
+    const info: LaunchInfo = { version: 1, command: gone, args: [] };
+    writeFileSync(join(userData, LAUNCH_INFO_FILE), JSON.stringify(info));
+    const started = Date.now();
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 30_000, pollMs: 20 })).rejects.toThrow(
+      `The Arcue app could not be started from ${gone}: spawn ${gone} ENOENT. Start it from where it is installed, or run arcue serve --detach to use Arcue in a browser.`,
+    );
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("says so at once when the started app quits with an error", async () => {
+    writeLaunchInfo(userData, "process.exit(3)");
+    const started = Date.now();
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 30_000, pollMs: 20 })).rejects.toThrow(
+      "Arcue quit as it started (exit code 3). Run arcue serve --detach to use Arcue in a browser.",
+    );
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it.skipIf(process.platform === "win32")("names the signal that ended the started app", async () => {
+    writeLaunchInfo(userData, 'process.kill(process.pid, "SIGKILL")');
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 30_000, pollMs: 20 })).rejects.toThrow(
+      "Arcue quit as it started (signal SIGKILL).",
+    );
   });
 
   it("says so when the app was never started on this computer", async () => {
@@ -123,6 +190,18 @@ describe("starting the app", () => {
     await fakeCore({ refuse: true });
     await expect(connectOrLaunch(userData, { timeoutMs: 200, pollMs: 20 })).rejects.toMatchObject({
       code: "forbidden",
+      message:
+        "Arcue refused the connection. The token does not match the running app. Quit Arcue and open it again, or run arcue serve --detach to use Arcue in a browser.",
+    });
+  });
+
+  it("says what to do when the app accepts the connection but never answers", async () => {
+    await fakeCore({ silent: true });
+
+    await expect(connectOrLaunch(userData, { timeoutMs: 200, pollMs: 20, handshakeMs: 50 })).rejects.toMatchObject({
+      code: "timeout",
+      message:
+        "The handshake took longer than 50 ms. Quit Arcue and open it again, or run arcue serve --detach to use Arcue in a browser.",
     });
   });
 });
@@ -173,6 +252,75 @@ describe("the arcue command", () => {
     const { lines, output } = capture();
     await expect(run(["open"], output, env())).resolves.toBe(2);
     expect(lines.err).toContain("Usage:");
+  });
+});
+
+describe("bundledApp", () => {
+  it("is the Electron that runs the command line from its own resources", () => {
+    expect(
+      bundledApp({
+        execPath: "/Applications/Arcue.app/Contents/MacOS/Arcue",
+        electron: "44.6.0",
+        scriptDir: "/Applications/Arcue.app/Contents/Resources/cli",
+        platform: "darwin",
+      }),
+    ).toEqual({ version: 1, command: "/Applications/Arcue.app/Contents/MacOS/Arcue", args: [] });
+    expect(
+      bundledApp({
+        execPath: "/usr/lib/arcue/Arcue",
+        electron: "44.6.0",
+        scriptDir: "/usr/lib/arcue/resources/cli",
+        platform: "linux",
+      }),
+    ).toEqual({ version: 1, command: "/usr/lib/arcue/Arcue", args: [] });
+    expect(
+      bundledApp({
+        execPath: "C:\\Users\\Me\\AppData\\Local\\Programs\\Arcue\\Arcue.exe",
+        electron: "44.6.0",
+        scriptDir: "c:\\users\\me\\appdata\\local\\programs\\arcue\\resources\\cli",
+        platform: "win32",
+      }),
+    ).toEqual({ version: 1, command: "C:\\Users\\Me\\AppData\\Local\\Programs\\Arcue\\Arcue.exe", args: [] });
+  });
+
+  it("is nothing on Node, or for a command line outside the Electron app", () => {
+    expect(
+      bundledApp({
+        execPath: "/usr/bin/node",
+        electron: undefined,
+        scriptDir: "/usr/bin/resources/cli",
+        platform: "linux",
+      }),
+    ).toBeNull();
+    expect(
+      bundledApp({
+        execPath: "/work/node_modules/electron/dist/electron",
+        electron: "44.6.0",
+        scriptDir: "/work/apps/cli/dist",
+        platform: "linux",
+      }),
+    ).toBeNull();
+    expect(
+      bundledApp({
+        execPath: "/Applications/Arcue.app/Contents/MacOS/Arcue",
+        electron: "44.6.0",
+        scriptDir: "/Applications/Arcue.app/Contents/Resources/cli/web",
+        platform: "darwin",
+      }),
+    ).toBeNull();
+  });
+
+  it("is nothing for the command line under test", () => {
+    expect(bundledApp()).toBeNull();
+  });
+});
+
+describe("appEnvironment", () => {
+  it("keeps everything but ELECTRON_RUN_AS_NODE, in any letter case", () => {
+    expect(appEnvironment({ PATH: "/bin", ELECTRON_RUN_AS_NODE: "1", Electron_Run_As_Node: "1", HOME: "/h" })).toEqual({
+      PATH: "/bin",
+      HOME: "/h",
+    });
   });
 });
 

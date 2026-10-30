@@ -175,6 +175,59 @@ describe("an open for an agent session's view", () => {
 });
 
 describe("an open outside views", () => {
+  it.each([null, VIEW])("starts the bundled app without launch.json for view %s", async (view) => {
+    const script = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, process.env.ELECTRON_RUN_AS_NODE ?? "unset")`;
+    const opening = connectForOpen(userData, view, {
+      timeoutMs: 10_000,
+      pollMs: 20,
+      app: { version: 1, command: process.execPath, args: ["-e", script] },
+    });
+    await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
+    const app = await desktop();
+
+    const routed = await opening;
+    routes.push(routed);
+    expect(routed).toMatchObject({ kind: "desktop" });
+    expect(routed.connection.info.token).toBe(app.info.token);
+  });
+
+  it("uses the browser for a session even when a bundled app can start", async () => {
+    const served = await serve();
+    const routed = await connectForOpen(userData, VIEW, {
+      app: { version: 1, command: process.execPath, args: ["-e", "process.exit(3)"] },
+    });
+    routes.push(routed);
+
+    expect(routed.connection.info.token).toBe(served.info.token);
+  });
+
+  it("falls back to the browser at once when the bundled app exits with an error", async () => {
+    const served = await serve();
+    const started = Date.now();
+    const routed = await connectForOpen(userData, null, {
+      timeoutMs: 30_000,
+      pollMs: 20,
+      app: { version: 1, command: process.execPath, args: ["-e", "process.exit(3)"] },
+    });
+    routes.push(routed);
+
+    expect(routed.connection.info.token).toBe(served.info.token);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("reports a bundled app's early exit at once when no browser runs", async () => {
+    const started = Date.now();
+
+    await expect(
+      connectForOpen(userData, null, {
+        timeoutMs: 30_000,
+        pollMs: 20,
+        app: { version: 1, command: process.execPath, args: ["-e", "process.exit(3)"] },
+      }),
+    ).rejects.toThrow("Arcue quit as it started (exit code 3).");
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
   it("goes to the desktop app while it runs", async () => {
     await serve();
     const app = await desktop();

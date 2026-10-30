@@ -6,7 +6,7 @@ Arcue is where you and your agent work on models and animations side by side. Pl
 
 https://github.com/user-attachments/assets/cbef69b8-c7e6-4593-bdf7-054b418fe986
 
-[Try it in your browser](https://arcue-web.skibitsky.workers.dev) · [Add it to your agent app](#use-it-with-agent-apps)
+[Try it in your browser](https://arcue-web.skibitsky.workers.dev) · [Add it to your agent app](#use-it-with-agent-apps) · [Download the desktop app](https://github.com/skibitsky/arcue/releases/latest)
 
 Arcue is in early development. It opens FBX and Blender files.
 
@@ -42,7 +42,7 @@ Arcue is in early development. It opens FBX and Blender files.
 | Where | How |
 |---|---|
 | Claude and Codex apps | [Install the plugin](#use-it-with-agent-apps). Arcue opens in the app's built-in browser, right next to the conversation. |
-| Other agents and terminals | Use the desktop app. It reloads a model every time you export it, and keeps reviews in `.arcue/` in your repository. Until releases are ready, [build it from source](#run-from-source). |
+| Other agents and terminals | [Install the desktop app](INSTALL.md#desktop-app), which puts the `arcue` command on your PATH. It reloads a model every time you export it, and keeps reviews in `.arcue/` in your repository. |
 | Just trying it | Open the [web version](https://arcue-web.skibitsky.workers.dev) and drop in a file or pick a sample. Comments stay in the tab until you reload. |
 
 ## Use it with agent apps
@@ -79,18 +79,17 @@ Use the desktop app, and paste each round of comments into your agent. Add the A
 npx skills add skibitsky/arcue
 ```
 
-Desktop app releases will put the `arcue` command on your PATH, so the agent can also open models and inspect files from a bash, zsh or Git Bash shell. Until then, it works from the comments you paste.
+The [desktop app](INSTALL.md#desktop-app) puts the `arcue` command on your PATH, so the agent can also open models at a clip and frame and inspect files, in bash, zsh, Git Bash or PowerShell.
 
 ## Build it into your own workflow
 
-- **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve --detach` runs Arcue in any browser on your own files beside the desktop app, `arcue stop` stops it, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. Call it from scripts, CI or your own tools.
+- **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve --detach` runs Arcue in any browser on your own files beside the desktop app, `arcue stop` stops it, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. It comes with the desktop app and the plugin. Call it from scripts, CI or your own tools.
 - **Review files.** Every copied prompt is also saved as [`round.json`](skills/arcue/references/round-json.md) with its screenshots in `.arcue/reviews/`, so any script can read the feedback.
 - **Composition files.** A [`composition.json`](skills/arcue/references/composition.md) loads animation files, attachments and textures together with a model.
 - **Commands.** Every action in Arcue is a typed command with a JSON Schema in [`packages/protocol`](packages/protocol). The window and the `arcue` command call the same commands, and the planned MCP server will too.
 
 ## Roadmap
 
-- Desktop app releases, ready to download and install, that put the `arcue` command on your PATH.
 - glTF and GLB files, then OBJ and USD.
 - Feedback that arrives in your running agent session, without copy and paste.
 - An MCP server, so the agent can read comments with their screenshots, reply to them and mark them fixed.
@@ -109,7 +108,7 @@ You need Node 22.12 or later and pnpm.
 pnpm install
 pnpm dev                              # web version at http://localhost:5173
 pnpm --filter @arcue/desktop dev      # desktop app
-pnpm --filter @arcue/desktop package  # desktop app build, in apps/desktop/out
+pnpm --filter @arcue/desktop package  # desktop app with its arcue command, in apps/desktop/out
 ```
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers tests and the rest of the development setup.

@@ -47,10 +47,10 @@ async function routeForView(userData: string, options: ConnectOrLaunchOptions): 
 async function routeOutsideViews(userData: string, options: ConnectOrLaunchOptions): Promise<Routed> {
   const desktop = await answering(userData, ["desktop"]);
   if (desktop) return desktop;
-  const launch = await launchApp(userData);
+  const launch = await launchApp(userData, options.app);
   if (launch?.launched) {
     try {
-      return routed(await waitForApp(userData, options), "desktop");
+      return routed(await waitForApp(userData, options, null, launch), "desktop");
     } catch (error) {
       const served = await answering(userData, ["serve"]).catch(() => null);
       if (served) return served;

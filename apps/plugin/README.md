@@ -6,7 +6,7 @@
 - the `arcue` command line, in the skill's `scripts` folder, with a small launcher that runs it on Node 24 or later. It reads model files on your computer and talks to the Arcue app over a local connection that only your user account can open. Apart from `arcue setup`, below, it sends nothing over the network.
 - Arcue's window as a web page, which `arcue serve --detach` serves on localhost. In the Claude desktop app and the Codex app the agent opens it in the app's built-in browser, so you review models beside the conversation. Pages from other sites can't reach it, but, as with any local web server, other programs on your computer can while it runs. It stops by itself after 30 minutes with no page open, or with `arcue stop`.
 
-Without a built-in browser, opening a model uses the Arcue desktop app, started at least once, or `arcue serve --detach` in your own browser. Inspecting a file needs neither.
+Without a built-in browser, opening a model uses the [Arcue desktop app](https://github.com/skibitsky/arcue/blob/main/INSTALL.md#desktop-app), started at least once, or `arcue serve --detach` in your own browser. Inspecting a file needs neither. Your agent runs the plugin's own command line, which matches its skill, even when the desktop app is installed.
 
 ## Install
 
