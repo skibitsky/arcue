@@ -1,0 +1,20 @@
+# How GitHub groups the pull requests in a release's generated notes, which the Release workflow puts under the
+# summary it writes. A pull request goes under the first category whose label it has; one labelled internal is left out.
+changelog:
+  exclude:
+    labels:
+      - internal
+  categories:
+    - title: Desktop app
+      labels:
+        - desktop
+    - title: Agent plugin and skill
+      labels:
+        - plugin
+    - title: Fixes
+      labels:
+        - fix
+        - bug
+    - title: Other changes
+      labels:
+        - "*"

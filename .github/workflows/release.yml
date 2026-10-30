@@ -19,7 +19,10 @@ name: Release
 #   variables ARTIFACT_SIGNING_ENDPOINT, ARTIFACT_SIGNING_ACCOUNT and ARTIFACT_SIGNING_PROFILE, sign the app and its
 #   setup program with Azure Artifact Signing.
 # - Linux packages are not signed. The checksums and attestations cover every platform's files.
-# Each macOS and Windows build checks and records how its app is signed, and the release notes say what they found.
+# Each macOS and Windows build checks and records how its app is signed, and the release notes name what is not.
+# The notes start with apps/desktop/release-notes/<version>.md, which a tag needs, then link each file and say how to
+# open what is not signed and how to check a download. GitHub's list of the merged pull requests follows, grouped as
+# .github/release.yml says.
 
 on:
   push:
@@ -75,12 +78,13 @@ jobs:
         with:
           node-version: 24
           cache: ${{ env.SIGN != 'true' && 'pnpm' || '' }}
-      - name: Check that the tag names the app's version and is on main
+      - name: Check that the tag names the app's version, has release notes and is on main
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           node apps/desktop/scripts/version.ts "$GITHUB_REF_NAME"
+          node apps/desktop/scripts/release-notes.ts "$GITHUB_REF_NAME" > /dev/null
           status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
           if [ "$status" != identical ] && [ "$status" != behind ]; then
             echo "::error::The tag $GITHUB_REF_NAME is on a commit that is not on main."
@@ -509,35 +513,15 @@ jobs:
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           releases="$RUNNER_TEMP/releases.json"
-          signing() { cat "$RUNNER_TEMP/signing/$1"; }
-          mac_arm64=$(signing mac-arm64)
-          mac_x64=$(signing mac-x64)
-          win_x64=$(signing win-x64)
-          win_arm64=$(signing win-arm64)
-          notes="$RUNNER_TEMP/notes.md"
-          {
-            echo "Install the desktop app as [INSTALL.md](https://github.com/$GITHUB_REPOSITORY/blob/$TAG/INSTALL.md#desktop-app) describes. It puts the \`arcue\` command on PATH."
-            echo
-            if [ "$mac_arm64" = notarized ] && [ "$mac_x64" = notarized ]; then
-              echo "- macOS: signed with a Developer ID and notarized."
-            else
-              echo "- macOS: not notarized. Open Arcue once from System Settings > Privacy & Security > Open Anyway."
-            fi
-            if [ "$win_x64" = signed ] && [ "$win_arm64" = signed ]; then
-              echo "- Windows: signed."
-            else
-              echo "- Windows: not signed. In the SmartScreen warning, choose More info > Run anyway."
-            fi
-            echo "- Every file: checked by SHA256SUMS.txt, and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml\` proves this workflow built it."
-            echo
-          } > "$notes"
-
           latest=false
           if [ "$PRERELEASE" != true ]; then
             highest=$(jq -r --arg version "$VERSION" '[$version] + [add | .[] | select((.draft or .prerelease) | not)
               | .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")] | .[]' "$releases" | sort -V | tail -n 1)
             if [ "$highest" = "$VERSION" ]; then latest=true; fi
           fi
+          notes="$RUNNER_TEMP/notes.md"
+          LATEST="$latest" node apps/desktop/scripts/release-notes.ts "$TAG" "$RUNNER_TEMP/signing" > "$notes"
+          echo >> "$notes"
           for id in $(jq -r --arg tag "$TAG" 'add | .[] | select(.tag_name == $tag and .draft) | .id' "$releases"); do
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
           done
