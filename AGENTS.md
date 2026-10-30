@@ -40,6 +40,7 @@ Arcue is a desktop app for reviewing 3D models and animations and handing anchor
 
 - Dependencies point one way: apps import packages, never the reverse. Only `core` reads or writes files, and only through `Platform`. `viewport` and `ui` never import `core`; they use `CoreClient`.
 - The schemas in `packages/protocol` are the contract. Change a command, file format or event there first.
+- This repository is public. Keep pull request descriptions short and written for outside readers: what changes and why in a few sentences or bullets, then how it was tested. Leave out local paths, internal process and step-by-step history.
 - Give each pull request one label for the desktop app's release notes: `desktop` for the app and its window, `plugin` for the agent plugin, skill or command line, `fix` for a bug fix people would notice, and `internal` for tests, CI, tooling and docs that people who use Arcue never see.
 - Clips are identified by their name in the file, such as "Armature|Charge", made unique by `clipNames`; a composition's other files prefix theirs as `<file>//<clip>`. Display names are only for people.
 - A model's composition file, `composition.json` in its review folder, loads other files into its view. Its paths are relative to the model's folder. Their nodes, parts and anchors are named `<file>//<node path>`; `splitMemberPath` splits them. The core never writes beside the model.
