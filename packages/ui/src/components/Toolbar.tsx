@@ -11,7 +11,7 @@ import { useSelect } from "../store/observable";
 import { hasOutline, lodOptions, lodShown, visibilityChanged } from "../store/outline";
 import { slotLabel } from "../store/view-files";
 import type { WorkspaceStore } from "../store/workspace-store";
-import { IconButton, Tip } from "./controls";
+import { IconButton, SegmentThumb, Tip } from "./controls";
 import { Icon } from "./Icon";
 import { outlineButtonDomId } from "./Outline";
 
@@ -29,6 +29,7 @@ export function Toolbar({ store, session }: { store: WorkspaceStore; session: As
     <div className="toolbar">
       <OutlineButton session={session} />
       <fieldset className="seg" aria-label="Tool">
+        <SegmentThumb />
         <IconButton
           icon="view"
           label="View"
@@ -49,6 +50,7 @@ export function Toolbar({ store, session }: { store: WorkspaceStore; session: As
       {tool === "comment" ? <BrushSize session={session} /> : null}
       <span className="grow" />
       <fieldset className="seg" aria-label="Display mode">
+        <SegmentThumb />
         {displayModes.map(({ mode, label, icon }) => (
           <IconButton
             key={mode}
@@ -125,6 +127,7 @@ function LodSwitch({ session }: { session: AssetSession }) {
   const shown = lodShown(options, parts.lod);
   return (
     <fieldset className="seg lod" aria-label="LOD">
+      <SegmentThumb />
       <span className="lod-label" aria-hidden="true">
         LOD
       </span>

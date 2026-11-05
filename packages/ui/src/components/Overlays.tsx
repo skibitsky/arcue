@@ -1,5 +1,5 @@
 import { Dialog } from "radix-ui";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isMacPlatform } from "../format";
 import { useSelect } from "../store/observable";
 import type { WorkspaceStore } from "../store/workspace-store";
@@ -7,15 +7,18 @@ import { Icon } from "./Icon";
 
 const toastIcons = { copied: "check", info: "info", alert: "alert" } as const;
 
+/** The latest toast. It keeps its words while it fades out, and a toast that replaces it fades its own words in. */
 export function ToastView({ store }: { store: WorkspaceStore }) {
   const toast = useSelect(store.state, (state) => state.toast);
+  const [shown, setShown] = useState(toast);
+  if (toast && toast !== shown) setShown(toast);
   return (
-    <div className={`toast${toast ? " is-on" : ""}`} role="status" aria-live="polite" data-kind={toast?.kind}>
-      {toast ? (
-        <>
-          <Icon name={toastIcons[toast.kind]} />
-          <span>{toast.message}</span>
-        </>
+    <div className={`toast${toast ? " is-on" : ""}`} role="status" aria-live="polite" data-kind={shown?.kind}>
+      {shown ? (
+        <span key={shown.id} className="toast-body" aria-hidden={toast ? undefined : true}>
+          <Icon name={toastIcons[shown.kind]} />
+          <span>{shown.message}</span>
+        </span>
       ) : null}
     </div>
   );

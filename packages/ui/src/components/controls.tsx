@@ -1,6 +1,6 @@
 import { Tooltip } from "radix-ui";
 import type { ComponentProps, FocusEvent, ReactElement, ReactNode } from "react";
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import type { IconName } from "./Icon";
 import { Icon } from "./Icon";
 
@@ -127,6 +127,51 @@ export function Chip({
     </span>
   );
   return tip ? <Tip label={tip}>{chip}</Tip> : chip;
+}
+
+/**
+ * The pressed look of a segmented group, which slides from one pressed button to the next. Render it first in the
+ * group, which it measures on every render of its parent.
+ */
+export function SegmentThumb() {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (ref.current) placeThumb(ref.current);
+  });
+  useLayoutEffect(() => {
+    const thumb = ref.current;
+    const group = thumb?.parentElement;
+    if (!thumb || !group) return;
+    const settle = () => {
+      void thumb.offsetWidth;
+      thumb.dataset.ready = "";
+    };
+    settle();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      delete thumb.dataset.ready;
+      placeThumb(thumb);
+      settle();
+    });
+    observer.observe(group);
+    return () => observer.disconnect();
+  }, []);
+  return <span ref={ref} className="seg-thumb" aria-hidden="true" />;
+}
+
+function placeThumb(thumb: HTMLElement): void {
+  const group = thumb.parentElement;
+  const pressed = group?.querySelector<HTMLElement>(':scope > [aria-pressed="true"]');
+  if (!group || !pressed) {
+    thumb.dataset.off = "";
+    return;
+  }
+  delete thumb.dataset.off;
+  const outer = group.getBoundingClientRect();
+  const inner = pressed.getBoundingClientRect();
+  thumb.style.translate = `${inner.left - outer.left - group.clientLeft}px ${inner.top - outer.top - group.clientTop}px`;
+  thumb.style.width = `${inner.width}px`;
+  thumb.style.height = `${inner.height}px`;
 }
 
 /** Grows a text field with its content, up to `max` pixels. */
