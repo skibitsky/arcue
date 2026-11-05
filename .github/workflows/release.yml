@@ -290,6 +290,7 @@ jobs:
       - name: Update as the app does, which closes it, upgrades and starts it again
         if: runner.os == 'Windows'
         shell: pwsh
+        timeout-minutes: 15
         run: |
           $setup = (Get-ChildItem apps/desktop/out/make/*-setup.exe).FullName
           $app = Join-Path $env:LOCALAPPDATA 'Programs\Arcue'
@@ -308,8 +309,11 @@ jobs:
           $window = Start-Process -FilePath (Join-Path $app 'Arcue.exe') -PassThru
           Wait-Status 'before the update'
           $log = Join-Path $env:RUNNER_TEMP 'relaunch.log'
-          $installer = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log", '/RELAUNCH' -Wait -PassThru
+          # Not -Wait, which also waits for the Arcue that Setup starts again, and that one keeps running.
+          $installer = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log", '/RELAUNCH' -PassThru
+          $null = $installer.Handle
           try {
+            if (-not $installer.WaitForExit(300000)) { Get-Content $log; throw 'The setup program did not finish within 5 minutes.' }
             if ($installer.ExitCode -ne 0) { Get-Content $log; throw "The setup program exited with $($installer.ExitCode)." }
             if (-not $window.HasExited) { Get-Content $log; throw 'The update left the Arcue that ran before it running.' }
             if (-not (Select-String -LiteralPath $log -Pattern 'Starting Arcue again' -Quiet)) { Get-Content $log; throw 'Setup did not start Arcue again.' }
