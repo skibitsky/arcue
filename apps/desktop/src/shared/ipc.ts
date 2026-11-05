@@ -22,6 +22,9 @@ export const channels = {
   editText: "arcue:edit-text",
   closeRequest: "arcue:close-request",
   closeReady: "arcue:close-ready",
+  updateState: "arcue:update-state",
+  updateAction: "arcue:update-action",
+  notice: "arcue:notice",
 } as const;
 
 /** The message the preload posts to the page with the core's port, since a port cannot cross the context bridge. */
@@ -54,7 +57,30 @@ export const openDialogResultSchema = z.array(pathSchema);
 /** What the open dialog offers when a file is added to a view: models, or images for a texture slot. */
 export const fileKindSchema = z.enum(["model", "image"]);
 
+const versionSchema = z.string().min(1).max(64);
+const pageSchema = z.url({ protocol: /^https?$/ });
+
+/**
+ * What the window shows of the app's updates: nothing, an update to restart into, one to download from its release
+ * page because this app cannot install it, or one that is installing as the app restarts.
+ */
+export const updateStateSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("none") }),
+  z.object({ status: z.literal("ready"), version: versionSchema, page: pageSchema }),
+  z.object({ status: z.literal("manual"), version: versionSchema, page: pageSchema, reason: z.string().max(500) }),
+  z.object({ status: z.literal("installing"), version: versionSchema }),
+]);
+
+/** What the window asks of an update: restart into it, or download it, which says why the app cannot install it. */
+export const updateActionSchema = z.enum(["restart", "download"]);
+
+/** A message the main process has for the person, such as how the last update went. */
+export const noticeSchema = z.object({ message: z.string().min(1).max(500), kind: z.enum(["info", "alert"]) });
+
 export type WindowInit = z.output<typeof windowInitSchema>;
+export type UpdateState = z.output<typeof updateStateSchema>;
+export type UpdateAction = z.output<typeof updateActionSchema>;
+export type Notice = z.output<typeof noticeSchema>;
 export type MenuCommand = z.output<typeof menuCommandSchema>;
 export type TextEdit = z.output<typeof textEditSchema>;
 export type FileKind = z.output<typeof fileKindSchema>;
@@ -85,4 +111,8 @@ export interface DesktopBridge {
   /** The main process asks the window to close its assets before the window closes; answer with `closeReady`. */
   onCloseRequest(listener: () => void): () => void;
   closeReady(tabs: WindowTabs): void;
+  /** Calls the listener with the app's update state now and whenever it changes. */
+  onUpdateState(listener: (state: UpdateState) => void): () => void;
+  updateAction(action: UpdateAction): void;
+  onNotice(listener: (notice: Notice) => void): () => void;
 }

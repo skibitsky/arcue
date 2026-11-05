@@ -199,11 +199,12 @@ export type { CoreChannel, ReconnectingClientOptions } from "./transport/reconne
 export { ReconnectingClient } from "./transport/reconnecting-client";
 export type { RemoteClientOptions } from "./transport/remote-client";
 export { createRemoteClient } from "./transport/remote-client";
-export type { DisplayMode, PartView, SavedTab, ViewState, WindowTabs } from "./view-state";
+export type { DisplayMode, PartView, SavedBox, SavedTab, ViewState, WindowTabs } from "./view-state";
 export {
   displayModeSchema,
   partIdSchema,
   partViewSchema,
+  savedBoxSchema,
   savedTabSchema,
   viewStateSchema,
   windowTabsSchema,

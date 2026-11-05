@@ -6,11 +6,13 @@ import type { WindowManager } from "./windows";
 /**
  * The native menus. Tab commands go to the focused window; the rest run in the main process. Undo and redo go to the
  * focused window too, which undoes text in a focused text field and the visible tab's review otherwise; the window
- * leaves those keys to these items, so one key press never undoes twice.
+ * leaves those keys to these items, so one key press never undoes twice. The update item, when the app updates, goes
+ * in the app menu on macOS and in Help elsewhere; install the menu again when it changes.
  */
-export function installMenu(windows: WindowManager): void {
+export function installMenu(windows: WindowManager, update: MenuItemConstructorOptions | null): void {
   const mac = process.platform === "darwin";
   const developer = !app.isPackaged;
+  const updateItem = update ? [{ id: "update", ...update }] : [];
   const template: MenuItemConstructorOptions[] = [
     ...(mac
       ? [
@@ -18,6 +20,7 @@ export function installMenu(windows: WindowManager): void {
             role: "appMenu" as const,
             submenu: [
               { role: "about" as const },
+              ...updateItem,
               ...(developer
                 ? []
                 : [
@@ -78,6 +81,7 @@ export function installMenu(windows: WindowManager): void {
       ],
     },
     { role: "windowMenu" },
+    ...(!mac && updateItem.length > 0 ? [{ label: "Help", submenu: updateItem }] : []),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

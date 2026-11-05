@@ -147,7 +147,7 @@ const striker = join(models, "stone striker & co.fbx");
 const golem = join(models, "pebble golem.fbx");
 await copyFile(join(repo, "samples", "stone-striker.fbx"), striker);
 await copyFile(join(repo, "samples", "pebble-golem.fbx"), golem);
-const env: NodeJS.ProcessEnv = { ...process.env, ARCUE_USER_DATA: userData };
+const env: NodeJS.ProcessEnv = { ...process.env, ARCUE_USER_DATA: userData, ARCUE_UPDATE_URL: "off" };
 for (const name of ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "ARCUE_VIEW"]) delete env[name];
 
 try {

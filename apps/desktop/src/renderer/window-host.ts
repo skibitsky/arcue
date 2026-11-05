@@ -1,8 +1,8 @@
 import type { CoreChannel } from "@arcue/protocol";
 import { ReconnectingClient } from "@arcue/protocol";
 import type { FileHost, WorkspaceStore } from "@arcue/ui";
-import { createWorkspaceStore, TabRestore } from "@arcue/ui";
-import type { DesktopBridge, MenuCommand, TextEdit, WindowTabs } from "../shared/ipc";
+import { createWorkspaceStore, Store, TabRestore } from "@arcue/ui";
+import type { DesktopBridge, MenuCommand, TextEdit, UpdateAction, UpdateState, WindowTabs } from "../shared/ipc";
 
 export interface WindowHostOptions {
   bridge: DesktopBridge;
@@ -33,6 +33,8 @@ const defaultTimer = (delayMs: number, callback: () => void) => {
 export class WindowHost {
   readonly client: ReconnectingClient;
   readonly store: WorkspaceStore;
+  /** The app's update, which the title bar offers to restart into. */
+  readonly update = new Store<{ state: UpdateState }>({ state: { status: "none" } });
   readonly #bridge: DesktopBridge;
   readonly #options: WindowHostOptions;
   readonly #setTimer: (delayMs: number, callback: () => void) => () => void;
@@ -78,6 +80,8 @@ export class WindowHost {
       bridge.onAdoptTab((assetId) => void this.moveHere(assetId)),
       bridge.onMenuCommand((command) => this.#menu(command)),
       bridge.onCloseRequest(() => void this.#close()),
+      bridge.onUpdateState((state) => this.update.set({ state })),
+      bridge.onNotice((notice) => this.store.notify(notice)),
       this.store.state.subscribe(() => this.#onStateChange()),
       this.#interval(),
     );
@@ -92,6 +96,11 @@ export class WindowHost {
     } catch (error) {
       this.store.notify({ message: error instanceof Error ? error.message : String(error), kind: "alert" });
     }
+  }
+
+  /** Restarts into the ready update, which reopens this window's tabs as they are, or opens its release page. */
+  updateAction(action: UpdateAction): void {
+    this.#bridge.updateAction(action);
   }
 
   async openDialog(): Promise<void> {

@@ -6,11 +6,13 @@ import { fileURLToPath } from "node:url";
 import { blockingCore } from "@arcue/platform-node";
 import type { LaunchInfo } from "@arcue/protocol";
 import { LAUNCH_INFO_FILE } from "@arcue/protocol";
-import { app, dialog, protocol, session, shell } from "electron";
+import type { MenuItemConstructorOptions } from "electron";
+import { app, dialog, powerMonitor, protocol, session, shell } from "electron";
 import type { Log } from "../shared/log";
 import { fileLog } from "../shared/log";
 import type { RunningCore } from "./already-running";
 import { alreadyRunningLogLine, alreadyRunningNotice } from "./already-running";
+import { checkFromMenu, createUpdater, offerDownload, startServe } from "./app-updates";
 import { assetPathsFromArgv, launchDataSchema } from "./args";
 import { CoreHost } from "./core-host";
 import { installMenu } from "./menu";
@@ -23,6 +25,7 @@ import {
   rendererFile,
 } from "./security";
 import { loadSession, SESSION_FILE, saveSession } from "./session";
+import type { Updater } from "./updater";
 import { WindowManager } from "./windows";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -96,6 +99,11 @@ async function run(): Promise<void> {
       );
   };
 
+  const updater = createUpdater({ userData, logs, log });
+  const restartToUpdate = () => {
+    if (updater.requestRestart()) app.quit();
+  };
+
   const core = new CoreHost({
     entry: join(here, "core.js"),
     userData,
@@ -116,12 +124,28 @@ async function run(): Promise<void> {
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => void saveNow(), 500);
     },
+    updateState: () => updater.state,
+    onUpdateAction: (action) => {
+      const phase = updater.phase;
+      if (action === "restart") restartToUpdate();
+      else if (phase.kind === "manual") void offerDownload(phase.manifest, phase.reason);
+    },
   });
   windows = manager;
-  installMenu(manager);
+  const showUpdates = () => installMenu(manager, updateMenuItem(updater, restartToUpdate));
+  updater.onChange(() => {
+    manager.sendUpdateState(updater.state);
+    showUpdates();
+  });
+  showUpdates();
   core.start();
   manager.restore(await loadSession(sessionPath));
   manager.openPaths(pendingOpens.splice(0));
+  void updater.start().then(({ notice, servePort }) => {
+    if (notice) manager.notify(notice);
+    if (servePort !== null) startServe(servePort, { log });
+  });
+  powerMonitor.on("resume", () => updater.checkIfDue());
 
   app.on("activate", () => {
     if (manager.count === 0) manager.create();
@@ -130,6 +154,7 @@ async function run(): Promise<void> {
     if (process.platform !== "darwin") app.quit();
   });
   let quitPrepared = false;
+  let quitFinished = false;
   app.on("before-quit", (event) => {
     if (quitPrepared) return;
     quitPrepared = true;
@@ -138,10 +163,39 @@ async function run(): Promise<void> {
       await manager.prepareQuit();
       await saveNow();
       await core.stop();
+      if (updater.installsOnQuit) manager.hideAll();
+      await updater.finishQuit();
       log.info("Arcue quits");
+      quitFinished = true;
       app.quit();
     })();
   });
+  app.on("will-quit", (event) => {
+    if (quitPrepared && !quitFinished) event.preventDefault();
+  });
+}
+
+/** The update item of the menu, which says what the updater does, or null when the app does not update. */
+function updateMenuItem(updater: Updater, restart: () => void): MenuItemConstructorOptions | null {
+  if (!updater.enabled) return null;
+  const phase = updater.phase;
+  switch (phase.kind) {
+    case "checking":
+      return { label: "Checking for Updates…", enabled: false };
+    case "downloading":
+      return { label: "Downloading Update…", enabled: false };
+    case "installing":
+      return { label: "Installing Update…", enabled: false };
+    case "ready":
+      return { label: `Restart to Update to ${phase.manifest.version}`, click: restart };
+    case "manual":
+      return {
+        label: `Download Arcue ${phase.manifest.version}…`,
+        click: () => void offerDownload(phase.manifest, phase.reason),
+      };
+    case "idle":
+      return { label: "Check for Updates…", click: () => void checkFromMenu(updater, restart) };
+  }
 }
 
 /**
