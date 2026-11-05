@@ -126,7 +126,9 @@ export function StatusBar({
       <Tip label={watch.tip}>
         <span className={`sb-live is-${watch.tone}`} role="status">
           <i />
-          {watch.text}
+          <span key={watch.text} className="sb-live-text">
+            {watch.text}
+          </span>
         </span>
       </Tip>
       <WarningsStatus store={store} session={session} />

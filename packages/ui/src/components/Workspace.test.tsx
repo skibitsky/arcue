@@ -7,6 +7,13 @@ import type { FileHost } from "../store/view-files";
 import { flush, NOW, setup, TestViewport, withPoseClips } from "../test-helpers";
 import { Workspace } from "./Workspace";
 
+/** Ends a CSS animation. jsdom has no AnimationEvent, so React listens for the prefixed event there. */
+function endAnimation(element: Element, animationName: string): void {
+  act(() => {
+    element.dispatchEvent(Object.assign(new Event("webkitAnimationEnd", { bubbles: true }), { animationName }));
+  });
+}
+
 async function renderStone(options: Parameters<typeof setup>[0] = {}) {
   const context = setup(options);
   const viewports: TestViewport[] = [];
@@ -74,6 +81,22 @@ describe("Workspace", () => {
       target: null,
     });
     expect(within(screen.getByRole("list", { name: "Drafts" })).getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("opens room for a draft added to the queue on screen, but not for the drafts it opened with", async () => {
+    await renderStone();
+    const user = userEvent.setup();
+    const items = () => within(screen.getByRole("list", { name: "Drafts" })).getAllByRole("listitem");
+    expect(items().filter((item) => item.classList.contains("is-entering"))).toEqual([]);
+    await user.type(screen.getByRole("textbox", { name: "Comment without a pin" }), "Slower charge.{Enter}");
+    await act(() => flush());
+    const added = items().at(-1);
+    if (!added) throw new Error("No new draft.");
+    expect(added.classList.contains("is-entering")).toBe(true);
+    endAnimation(added, "added");
+    expect(added.classList.contains("is-entering")).toBe(true);
+    endAnimation(added, "qi-in");
+    expect(added.classList.contains("is-entering")).toBe(false);
   });
 
   it("runs the spec's shortcuts on the visible tab", async () => {
@@ -311,6 +334,22 @@ describe("Workspace", () => {
     expect(zone.classList.contains("is-over")).toBe(false);
     fireEvent.drop(zone, { dataTransfer: { files: [file], types: ["Files"] } });
     expect(document.querySelector(".toast")?.textContent).toBe("Run arcue open <file>.");
+  });
+
+  it("keeps a toast's words while it fades out, hidden from screen readers, until the next toast replaces them", () => {
+    const { store } = setup();
+    render(<Workspace store={store} createViewport={() => new TestViewport()} />);
+    const toast = screen.getByRole("status");
+    act(() => store.notify({ message: "Copied 3 comments", kind: "copied" }));
+    expect(toast.classList.contains("is-on")).toBe(true);
+    act(() => store.state.patch({ toast: null }));
+    expect(toast.classList.contains("is-on")).toBe(false);
+    expect(toast.textContent).toBe("Copied 3 comments");
+    expect(toast.querySelector(".toast-body")?.getAttribute("aria-hidden")).toBe("true");
+    act(() => store.notify({ message: "Added Sword.fbx", kind: "info" }));
+    expect(toast.textContent).toBe("Added Sword.fbx");
+    expect(toast.getAttribute("data-kind")).toBe("info");
+    expect(toast.querySelector(".toast-body")?.hasAttribute("aria-hidden")).toBe(false);
   });
 
   it("reports dropped files to the host", async () => {

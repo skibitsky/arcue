@@ -44,7 +44,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
         { width: form.offsetWidth, height: form.offsetHeight },
         { width: layer.clientWidth, height: layer.clientHeight },
       );
-      form.style.transform = `translate3d(${Math.round(placement.x)}px, ${Math.round(placement.y)}px, 0)`;
+      form.style.translate = `${Math.round(placement.x)}px ${Math.round(placement.y)}px`;
       form.dataset.side = placement.side;
     };
     place();

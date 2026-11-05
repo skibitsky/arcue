@@ -43,7 +43,7 @@ export const VIEWPORT_CSS = `
   top: 0;
   width: ${cssToken("--size-pin")};
   height: ${cssToken("--size-pin")};
-  transform: translate(-50%, -50%);
+  translate: -50% -50%;
   border-radius: ${cssToken("--radius-full")};
   background: ${cssVar("feedback")};
   color: ${cssVar("feedbackInk")};
@@ -55,14 +55,25 @@ export const VIEWPORT_CSS = `
     opacity ${cssToken("--duration-fast")} ${cssToken("--ease-standard")},
     box-shadow ${cssToken("--duration-fast")} ${cssToken("--ease-standard")},
     background-color ${cssToken("--duration-fast")} ${cssToken("--ease-standard")};
+  animation: arcue-vp-pin-in ${cssToken("--duration-slow")} ${cssToken("--ease-standard")};
+}
+@keyframes arcue-vp-pin-in {
+  from {
+    scale: 0.4;
+    opacity: 0;
+    color: transparent;
+  }
+  50% {
+    color: transparent;
+  }
 }
 .arcue-vp-pin:hover .arcue-vp-pin-dot,
 .arcue-vp-pin.is-hovered .arcue-vp-pin-dot {
-  transform: translate(-50%, -50%) scale(1.14);
+  transform: scale(1.14);
   background: ${cssVar("feedbackHover")};
 }
 .arcue-vp-pin.is-selected .arcue-vp-pin-dot {
-  transform: translate(-50%, -50%) scale(1.14);
+  transform: scale(1.14);
   background: ${cssVar("feedback")};
   box-shadow: 0 0 0 2px ${cssVar("surfaceDesk")}, 0 0 0 6px ${cssVar("feedbackRing")},
     ${cssToken("--shadow-tooltip")};
@@ -81,15 +92,19 @@ export const VIEWPORT_CSS = `
   inset: -6px;
   border-radius: 50%;
   border: 1.5px solid ${cssVar("feedback")};
-  animation: arcue-vp-pulse 1.6s ease-out infinite;
+  opacity: 0;
+  animation: arcue-vp-pin-lock ${cssToken("--duration-slow")} ${cssToken("--ease-standard")} 0.08s both;
 }
-@keyframes arcue-vp-pulse {
+@keyframes arcue-vp-pin-lock {
   from {
-    transform: scale(0.8);
-    opacity: 0.9;
+    scale: 1.7;
+    opacity: 0;
+  }
+  45% {
+    opacity: 0.85;
   }
   to {
-    transform: scale(1.6);
+    scale: 1;
     opacity: 0;
   }
 }
@@ -109,6 +124,9 @@ export const VIEWPORT_CSS = `
   opacity: 0.8;
   pointer-events: none;
   z-index: 3;
+  transition: border-color ${cssToken("--duration-fast")} ${cssToken("--ease-standard")},
+    background-color ${cssToken("--duration-fast")} ${cssToken("--ease-standard")},
+    opacity ${cssToken("--duration-fast")} ${cssToken("--ease-standard")};
 }
 .arcue-vp-brush.is-painting {
   opacity: 1;
@@ -116,9 +134,11 @@ export const VIEWPORT_CSS = `
   background: ${cssToken("--feedback-soft")};
 }
 @media (prefers-reduced-motion: reduce) {
-  .arcue-vp-pin-dot {
+  .arcue-vp-pin-dot,
+  .arcue-vp-brush {
     transition: none;
   }
+  .arcue-vp-pin-dot,
   .arcue-vp-pin.is-pending .arcue-vp-pin-dot::after {
     animation: none;
   }

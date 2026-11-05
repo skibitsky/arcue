@@ -14,6 +14,10 @@ export function CommentsPanel({ session, now }: { session: AssetSession; now: ()
   const review = useSelect(session.state, (state) => state.review);
   const queue = useMemo(() => (review ? queuedComments(review) : []), [review]);
   const rounds = useMemo(() => (review ? historyRounds(review) : []), [review]);
+  const [listed, setListed] = useState(false);
+  useEffect(() => {
+    if (review) setListed(true);
+  }, [review]);
   return (
     <aside className="panel" aria-label="Comments">
       <div className="panel-head">
@@ -23,7 +27,7 @@ export function CommentsPanel({ session, now }: { session: AssetSession; now: ()
         {queue.length > 0 ? (
           <ol className="queue" aria-label="Drafts">
             {queue.map((comment, index) => (
-              <QueueItem key={comment.id} session={session} comment={comment} number={index + 1} />
+              <QueueItem key={comment.id} session={session} comment={comment} number={index + 1} arrives={listed} />
             ))}
           </ol>
         ) : null}
@@ -71,7 +75,19 @@ function AnchorStateChip({ comment }: { comment: Comment }) {
   return <Chip small tone="alert" label={comment.anchorState === "moved" ? "Moved" : "Detached"} />;
 }
 
-function QueueItem({ session, comment, number }: { session: AssetSession; comment: Comment; number: number }) {
+function QueueItem({
+  session,
+  comment,
+  number,
+  arrives,
+}: {
+  session: AssetSession;
+  comment: Comment;
+  number: number;
+  /** Whether it joined a queue already on screen, so it opens its room instead of being there from the start. */
+  arrives: boolean;
+}) {
+  const [entering, setEntering] = useState(arrives);
   const selected = useSelect(session.state, (state) => state.selection === comment.id);
   const added = useSelect(session.state, (state) => state.added === comment.id);
   const thumbnail = useSelect(session.thumbnails, (state) => state.urls[comment.id] ?? null);
@@ -82,10 +98,18 @@ function QueueItem({ session, comment, number }: { session: AssetSession; commen
   useEffect(() => {
     if (selected) itemRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [selected]);
-  const classes = ["qi", selected ? "is-selected" : "", added ? "is-added" : ""].filter(Boolean).join(" ");
+  const classes = ["qi", selected ? "is-selected" : "", added ? "is-added" : "", entering ? "is-entering" : ""]
+    .filter(Boolean)
+    .join(" ");
   const text = currentMessage(comment);
   return (
-    <li className={classes} ref={itemRef}>
+    <li
+      className={classes}
+      ref={itemRef}
+      onAnimationEnd={(event) => {
+        if (event.target === event.currentTarget && event.animationName === "qi-in") setEntering(false);
+      }}
+    >
       <button
         type="button"
         className="qi-main"

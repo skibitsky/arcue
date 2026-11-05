@@ -67,7 +67,8 @@ export const TOKEN_DEFAULTS: Readonly<Record<string, string>> = {
   "--font-sans": '"Figtree Variable", "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
   "--shadow-tooltip": "0 6px 18px rgba(0, 0, 0, 0.45)",
   "--duration-fast": "0.15s",
-  "--ease-standard": "ease-out",
+  "--duration-slow": "0.32s",
+  "--ease-standard": "cubic-bezier(0.25, 0.8, 0.25, 1)",
 };
 
 export function readPalette(element: Element): Palette {
