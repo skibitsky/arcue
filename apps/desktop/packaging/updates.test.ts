@@ -112,7 +112,8 @@ describe("updateKeysSource", () => {
   });
 
   it("keeps update-key.ts as the script writes it", async () => {
-    const source = await readFile(fileURLToPath(new URL("./update-key.ts", import.meta.url)), "utf8");
+    const file = await readFile(fileURLToPath(new URL("./update-key.ts", import.meta.url)), "utf8");
+    const source = file.replaceAll("\r\n", "\n");
     const keys = [...source.matchAll(/"(MCow[^"]+)"/g)].map((match) => match[1] ?? "");
     expect(source).toBe(updateKeysSource(keys));
   });
