@@ -12,13 +12,14 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { DesktopBridge } from "../shared/ipc";
 import { CORE_PORT_MESSAGE } from "../shared/ipc";
+import { UpdateButton } from "./UpdateButton";
 import { WindowHost } from "./window-host";
 
 declare global {
   interface Window {
     arcueDesktop: DesktopBridge;
-    /** For tests and agents: this window's core client and workspace store. */
-    arcueWindow: { client: CoreClient; store: WorkspaceStore };
+    /** For tests and agents: this window's core client, workspace store and the app's update. */
+    arcueWindow: { client: CoreClient; store: WorkspaceStore; update: WindowHost["update"] };
   }
 }
 
@@ -40,7 +41,7 @@ const host = new WindowHost({
   hasFocus: () => document.hasFocus(),
   inTextField: () => inTextField(document.activeElement),
 });
-window.arcueWindow = { client: host.client, store: host.store };
+window.arcueWindow = { client: host.client, store: host.store, update: host.update };
 
 const root = document.getElementById("app");
 if (!root) throw new Error("index.html has no #app element.");
@@ -50,6 +51,7 @@ createRoot(root).render(
       store={host.store}
       createViewport={createViewport}
       windowControls={navigator.userAgent.includes("Macintosh") ? <div className="mac-lights" /> : undefined}
+      titleBarEnd={<UpdateButton update={host.update} onAction={(action) => host.updateAction(action)} />}
       onOpenFile={() => void host.openDialog()}
       onDropFiles={(files) => host.openFiles(files)}
       onTabDragEnd={(assetId, event) => bridge.tabDragEnd(assetId, event.dataTransfer.dropEffect !== "none")}

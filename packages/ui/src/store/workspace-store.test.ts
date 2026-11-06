@@ -2,7 +2,7 @@ import { ArcueError, commands } from "@arcue/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { FakeCoreClient } from "../../dev/fake-core";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
-import { flush, ManualTimers, openStone, POINT, setup, withPoseClips } from "../test-helpers";
+import { flush, ManualTimers, openStone, POINT, setup, TestViewport, withPoseClips } from "../test-helpers";
 import { NEW_COMMENT_OVERLAY } from "./asset-session";
 import { currentMessage } from "./history";
 import { createWorkspaceStore, VIEW_COMMANDS } from "./workspace-store";
@@ -386,6 +386,65 @@ describe("view state and settings", () => {
     expect(reports().at(-1)?.input).toMatchObject({
       state: { clip: "Armature|Charge", frame: 11, display: { mode: "clay", skeleton: false } },
     });
+  });
+
+  it("keeps an open comment box and its text with the tab's view, and opens it again", async () => {
+    const { client, store, session, timers, viewport } = await openStone();
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("Raise the left arm");
+    timers.advance(400);
+    await flush();
+    const report = client.calls.filter((call) => call.name === "view.reportState").at(-1);
+    expect(report?.input).toMatchObject({ state: { box: { mode: "new", text: "Raise the left arm", target: POINT } } });
+
+    const released = store.releaseAsset(session.assetId);
+    await client.execute("view.reportState", { assetId: session.assetId, state: released ?? fail() });
+    store.showAsset({ assetId: session.assetId });
+    const reopened = store.session(session.assetId) ?? fail();
+    reopened.attachViewport(new TestViewport(), document.createElement("div"));
+    await flush();
+    expect(reopened.state.get().box).toMatchObject({ mode: "new", text: "Raise the left arm", target: POINT });
+    expect(reopened.hasUnsavedBox()).toBe(true);
+  });
+
+  it("keeps text typed for a comment without a pin with the tab's view", async () => {
+    const { client, store, session, timers } = await openStone();
+    session.setNoteText("The whole walk feels slow");
+    timers.advance(400);
+    await flush();
+    const report = client.calls.filter((call) => call.name === "view.reportState").at(-1);
+    expect(report?.input).toMatchObject({ state: { note: "The whole walk feels slow" } });
+
+    const released = store.releaseAsset(session.assetId);
+    await client.execute("view.reportState", { assetId: session.assetId, state: released ?? fail() });
+    store.showAsset({ assetId: session.assetId });
+    const reopened = store.session(session.assetId) ?? fail();
+    reopened.attachViewport(new TestViewport(), document.createElement("div"));
+    await flush();
+    expect(reopened.state.get().note).toBe("The whole walk feels slow");
+    expect(reopened.viewState()).not.toHaveProperty("box");
+  });
+
+  it("drops a saved edit box whose draft is gone when the tab opens again", async () => {
+    const { client, store, session, viewport } = await openStone();
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("Raise the left arm");
+    await session.submitBox();
+    await flush();
+    const [draftId] = session.state.get().review?.queue ?? [];
+    if (!draftId) throw new Error("No draft was added.");
+    session.selectComment(draftId);
+    session.setBoxText("Raise both arms");
+    const released = store.releaseAsset(session.assetId);
+    expect(released?.box).toMatchObject({ mode: "edit", commentId: draftId, text: "Raise both arms" });
+
+    await client.execute("view.reportState", { assetId: session.assetId, state: released ?? fail() });
+    await client.execute("comment.delete", { assetId: session.assetId, commentId: draftId });
+    store.showAsset({ assetId: session.assetId });
+    const reopened = store.session(session.assetId) ?? fail();
+    reopened.attachViewport(new TestViewport(), document.createElement("div"));
+    await flush();
+    expect(reopened.state.get().box).toBeNull();
   });
 
   it("loads and changes the prompt coordinate convention", async () => {

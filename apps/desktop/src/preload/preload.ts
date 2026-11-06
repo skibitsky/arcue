@@ -7,9 +7,12 @@ import {
   CORE_PORT_MESSAGE,
   channels,
   menuCommandSchema,
+  noticeSchema,
   openDialogResultSchema,
   openPathsSchema,
   textEditSchema,
+  updateActionSchema,
+  updateStateSchema,
   windowInitSchema,
 } from "../shared/ipc";
 
@@ -62,6 +65,9 @@ const bridge: DesktopBridge = {
     };
   },
   closeReady: (tabs) => ipcRenderer.send(channels.closeReady, tabs),
+  onUpdateState: (listener) => on(channels.updateState, updateStateSchema, listener),
+  updateAction: (action) => ipcRenderer.send(channels.updateAction, updateActionSchema.parse(action)),
+  onNotice: (listener) => on(channels.notice, noticeSchema, listener),
 };
 
 contextBridge.exposeInMainWorld("arcueDesktop", bridge);

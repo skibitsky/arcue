@@ -22,3 +22,18 @@ body,
   flex: none;
   width: 64px;
 }
+
+.update-button {
+  height: var(--size-control-sm);
+  padding: 0 var(--space-10);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.update-button:disabled {
+  color: var(--text-faint);
+}
+
+.update-button:disabled:hover {
+  background: var(--surface-raised);
+}

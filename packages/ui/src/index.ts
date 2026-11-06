@@ -1,4 +1,7 @@
+export { Tip } from "./components/controls";
 export type { SampleAsset } from "./components/EmptyState";
+export type { IconName } from "./components/Icon";
+export { Icon } from "./components/Icon";
 export type { TabDragHandlers } from "./components/TitleBar";
 export { TAB_DRAG_TYPE } from "./components/TitleBar";
 export type { WorkspaceProps } from "./components/Workspace";

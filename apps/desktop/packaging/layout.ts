@@ -55,6 +55,37 @@ export function parseVersion(value: string): Version {
   };
 }
 
+/**
+ * Orders two release versions as Semantic Versioning does: below zero when `a` comes first. A prerelease comes before
+ * its release, and 1.3.0-beta before 1.3.0-beta.2.
+ */
+export function compareVersions(a: string, b: string): number {
+  const [left, right] = [versionParts(a), versionParts(b)];
+  for (let index = 0; index < 3; index++) {
+    const difference = (left.numbers[index] ?? 0) - (right.numbers[index] ?? 0);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    return Math.sign(right.prerelease.length - left.prerelease.length);
+  }
+  for (let index = 0; index < Math.max(left.prerelease.length, right.prerelease.length); index++) {
+    const [x, y] = [left.prerelease[index], right.prerelease[index]];
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    if (x === y) continue;
+    const [xNumber, yNumber] = [/^\d+$/.test(x), /^\d+$/.test(y)];
+    if (xNumber && yNumber) return Math.sign(Number(x) - Number(y));
+    if (xNumber !== yNumber) return xNumber ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+function versionParts(value: string): { numbers: number[]; prerelease: string[] } {
+  const match = VERSION.exec(value);
+  if (!match) throw new Error(`"${value}" is not a release version.`);
+  return { numbers: [match[1], match[2], match[3]].map(Number), prerelease: match[4]?.split(".") ?? [] };
+}
+
 /** The version a release tag names, which must be the desktop app's version. */
 export function versionOfTag(tag: string, appVersion: string): Version {
   const version = parseVersion(appVersion);

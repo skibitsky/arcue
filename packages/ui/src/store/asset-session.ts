@@ -9,6 +9,7 @@ import type {
   PartView,
   ReviewCandidate,
   ReviewFile,
+  SavedBox,
   TimeSelection,
   ViewState,
   WarningSubject,
@@ -113,6 +114,8 @@ export interface SessionState {
   range: FrameRange | null;
   selection: string | null;
   box: CommentBox | null;
+  /** Text typed in the field for a comment without a pin, which is no comment yet. */
+  note: string;
   /** A draft that was just added, which the queue flashes. */
   added: string | null;
   /** The import warnings of the version on screen, errors first, as `warning.list` gives them. */
@@ -163,6 +166,7 @@ export class AssetSession {
   #copying = false;
   #warningSequence = 0;
   #offerDismissed = false;
+  #reported: Pick<SessionState, "box" | "note"> = { box: null, note: "" };
   #disposed = false;
 
   constructor(summary: AssetSummary, host: SessionHost) {
@@ -187,11 +191,24 @@ export class AssetSession {
       range: null,
       selection: null,
       box: null,
+      note: "",
       added: null,
       warnings: [],
       highlight: null,
       offer: null,
     });
+    this.state.subscribe(() => this.#onUnsavedChange());
+  }
+
+  /**
+   * The open box and the typed note travel with the view state, so the core and the window's saved session always have
+   * text that is no comment yet.
+   */
+  #onUnsavedChange(): void {
+    const { box, note } = this.state.get();
+    if (box === this.#reported.box && note === this.#reported.note) return;
+    this.#reported = { box, note };
+    this.#scheduleReport();
   }
 
   get #client(): CoreClient {
@@ -410,6 +427,28 @@ export class AssetSession {
     } else {
       this.setClip(scene.clips[0]?.name ?? null, 0);
     }
+    if (saved?.box) this.#restoreBox(saved.box);
+    if (saved?.note && this.state.get().note === "") this.state.patch({ note: saved.note });
+  }
+
+  /**
+   * Opens a box the saved view had open, with its text, unless the comment it edits or reopens is gone or changed
+   * status since.
+   */
+  #restoreBox(saved: SavedBox): void {
+    const comment = saved.commentId === null ? null : this.comment(saved.commentId);
+    if (saved.commentId !== null && this.state.get().review !== null) {
+      if (!comment) return;
+      if (saved.mode === "edit" && comment.status !== "draft") return;
+      if (saved.mode === "reopen" && comment.status === "draft") return;
+    }
+    const box: CommentBox = { ...saved, id: nextBoxId++, nudge: 0, busy: false };
+    const review = this.state.get().review;
+    this.state.patch({
+      selection: saved.mode === "edit" ? saved.commentId : null,
+      box: review ? this.#refreshBox(box, review) : box,
+    });
+    this.#syncSelection();
   }
 
   /** After a reload the viewport keeps the clip when the new scene has it, and the frame clamped to its length. */
@@ -869,6 +908,10 @@ export class AssetSession {
     this.deselect();
   }
 
+  setNoteText(note: string): void {
+    this.state.patch({ note });
+  }
+
   setBoxText(text: string): void {
     const box = this.state.get().box;
     if (box) this.state.patch({ box: { ...box, text } });
@@ -1323,7 +1366,7 @@ export class AssetSession {
   viewState(): ViewState | null {
     const viewport = this.#viewport;
     if (!viewport || !this.#initialViewApplied) return null;
-    const { clip, range, displayMode, skeleton, parts, outlineOpen } = this.state.get();
+    const { clip, range, displayMode, skeleton, parts, outlineOpen, box, note } = this.state.get();
     return {
       camera: viewport.getCamera(),
       clip,
@@ -1333,6 +1376,8 @@ export class AssetSession {
       parts,
       outlineOpen,
       ...(this.#offerDismissed ? { relinkOfferDismissed: true } : {}),
+      ...(box ? { box: savedBox(box) } : {}),
+      ...(note !== "" ? { note } : {}),
     };
   }
 
@@ -1382,4 +1427,10 @@ function samePartView(a: PartView, b: PartView): boolean {
 
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** What a view state keeps of a box: everything but what only this window's view of it needs. */
+function savedBox(box: CommentBox): SavedBox {
+  const { id: _id, nudge: _nudge, busy: _busy, ...saved } = box;
+  return saved;
 }

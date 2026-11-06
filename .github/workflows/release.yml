@@ -19,6 +19,9 @@ name: Release
 #   variables ARTIFACT_SIGNING_ENDPOINT, ARTIFACT_SIGNING_ACCOUNT and ARTIFACT_SIGNING_PROFILE, sign the app and its
 #   setup program with Azure Artifact Signing.
 # - Linux packages are not signed. The checksums and attestations cover every platform's files.
+# - Every release: the UPDATE_SIGNING_KEY secret, the Ed25519 private key whose public key apps/desktop/packaging/
+#   update-key.ts names, signs update.json, which lists each installer's checksum. Installed apps update only from a
+#   manifest such a key signed, so a tag fails without it.
 # Each macOS and Windows build checks and records how its app is signed, and the release notes name what is not.
 # The notes start with apps/desktop/release-notes/<version>.md, which a tag needs, then link each file and say how to
 # open what is not signed and how to check a download. GitHub's list of the merged pull requests follows, grouped as
@@ -69,6 +72,8 @@ jobs:
       PLATFORM: ${{ matrix.platform }}
       ARCH: ${{ matrix.arch }}
       SIGN: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+      # The apps these jobs install never update themselves from a real release while they are tested.
+      ARCUE_UPDATE_URL: "off"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,6 +90,7 @@ jobs:
         run: |
           node apps/desktop/scripts/version.ts "$GITHUB_REF_NAME"
           node apps/desktop/scripts/release-notes.ts "$GITHUB_REF_NAME" > /dev/null
+          node apps/desktop/scripts/update-manifest.ts check
           status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
           if [ "$status" != identical ] && [ "$status" != behind ]; then
             echo "::error::The tag $GITHUB_REF_NAME is on a commit that is not on main."
@@ -281,6 +287,43 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "arcue help exited with $LASTEXITCODE in Windows PowerShell." }
           node apps/desktop/scripts/smoke.ts arcue (Join-Path $app 'Arcue.exe')
           if ($LASTEXITCODE -ne 0) { throw "The smoke test failed." }
+      - name: Update as the app does, which closes it, upgrades and starts it again
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $setup = (Get-ChildItem apps/desktop/out/make/*-setup.exe).FullName
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Arcue'
+          $env:Path = "$([Environment]::GetEnvironmentVariable('Path', 'User'));$env:Path"
+          $env:ARCUE_USER_DATA = Join-Path $env:RUNNER_TEMP 'arcue-relaunch'
+          function Get-Window { @(Get-CimInstance Win32_Process -Filter "Name = 'Arcue.exe'" | Where-Object { $_.ExecutablePath -eq (Join-Path $app 'Arcue.exe') -and $_.CommandLine -notmatch '--type=' }) }
+          function Wait-Status([string] $what) {
+            $deadline = (Get-Date).AddMinutes(2)
+            while ($true) {
+              $status = arcue status
+              if ($LASTEXITCODE -eq 0) { return }
+              if ((Get-Date) -gt $deadline) { throw "Arcue did not start $what`: $status" }
+              Start-Sleep -Seconds 1
+            }
+          }
+          $window = Start-Process -FilePath (Join-Path $app 'Arcue.exe') -PassThru
+          Wait-Status 'before the update'
+          $log = Join-Path $env:RUNNER_TEMP 'relaunch.log'
+          # Not -Wait, which also waits for the Arcue that Setup starts again, and that one keeps running.
+          $installer = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log", '/RELAUNCH' -PassThru
+          $null = $installer.Handle
+          try {
+            if (-not $installer.WaitForExit(300000)) { Get-Content $log; throw 'The setup program did not finish within 5 minutes.' }
+            if ($installer.ExitCode -ne 0) { Get-Content $log; throw "The setup program exited with $($installer.ExitCode)." }
+            if (-not $window.HasExited) { Get-Content $log; throw 'The update left the Arcue that ran before it running.' }
+            if (-not (Select-String -LiteralPath $log -Pattern 'Starting Arcue again' -Quiet)) { Get-Content $log; throw 'Setup did not start Arcue again.' }
+            Wait-Status 'again after the update'
+            if ((Get-Window).Count -ne 1) { throw "Expected one Arcue window process after the update, found $((Get-Window).Count)." }
+          } finally {
+            Get-Window | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-CimInstance Win32_Process -Filter "Name = 'Arcue.exe'" | Where-Object { $_.ExecutablePath -like "$app\*" }) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+          }
       - name: Upgrade and uninstall while the app and arcue serve run
         if: runner.os == 'Windows'
         shell: pwsh
@@ -456,6 +499,7 @@ jobs:
     needs: build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       id-token: write
@@ -483,6 +527,11 @@ jobs:
           pattern: signing-*
           merge-multiple: true
           path: ${{ runner.temp }}/signing
+      - name: Sign the update manifest that installed apps update from
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: node apps/desktop/scripts/update-manifest.ts sign "$TAG" "$RUNNER_TEMP/release"
       - name: Write the checksums
         working-directory: ${{ runner.temp }}/release
         run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt

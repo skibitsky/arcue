@@ -2,7 +2,8 @@
 ; user, without asking for administrator rights, and adds the app's bin folder, which holds arcue.exe, to that user's
 ; PATH. Uninstalling removes that folder from PATH again. Keep AppId: it is how Windows knows an update from another app.
 ; Setup and the uninstaller first close the Arcue.exe and bin\arcue.exe that run from the app's folder, such as the window
-; or an agent's arcue serve, and ask before they do unless they run silently.
+; or an agent's arcue serve, and ask before they do unless they run silently. The app's update runs Setup silently with
+; /RELAUNCH, which starts Arcue again when Setup ends, whether or not the install succeeded.
 
 #ifndef AppVersion
   #error Pass /DAppVersion=<version>, /DNumericVersion, /DArch, /DSourceDir, /DOutputDir, /DOutputName and /DIconFile.
@@ -70,6 +71,16 @@ function GetTickCount: DWORD;
 function BinFolder: String;
 begin
   Result := ExpandConstant('{app}\bin');
+end;
+
+function HasParameter(Name: String): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+    if CompareText(ParamStr(Index), Name) = 0 then
+      Result := True;
 end;
 
 function UpgradesArcue: Boolean;
@@ -289,6 +300,28 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if (CurStep = ssPostInstall) and WizardIsTaskSelected('addtopath') then
     AddToPath;
+end;
+
+{ Starts the app in its folder again for an update that asked for it, also after a failed install, which leaves the
+  version that ran. }
+procedure DeinitializeSetup;
+var
+  Executable: String;
+  ResultCode: Integer;
+begin
+  if not HasParameter('/RELAUNCH') then
+    Exit;
+  try
+    Executable := ExpandConstant('{app}\Arcue.exe');
+  except
+    Log('Not starting Arcue again: Setup ended before it knew where Arcue is.');
+    Exit;
+  end;
+  if FileExists(Executable) then
+  begin
+    Log('Starting Arcue again: ' + Executable);
+    Exec(Executable, '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ResultCode);
+  end;
 end;
 
 { usAppMutexCheck comes after the user confirms the uninstall and before anything is removed. }

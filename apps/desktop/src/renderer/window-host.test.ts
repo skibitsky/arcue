@@ -2,7 +2,16 @@ import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
 import type { CoreChannel, MemoryEndpoint } from "@arcue/protocol";
 import { createMemoryChannel } from "@arcue/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopBridge, MenuCommand, TextEdit, WindowInit, WindowTabs } from "../shared/ipc";
+import type {
+  DesktopBridge,
+  MenuCommand,
+  Notice,
+  TextEdit,
+  UpdateAction,
+  UpdateState,
+  WindowInit,
+  WindowTabs,
+} from "../shared/ipc";
 import { WindowHost } from "./window-host";
 
 const HERO = "/work/Hero.fbx";
@@ -35,6 +44,9 @@ class FakeDesktop {
   #coreLost: (() => void) | null = null;
   #menu: ((command: MenuCommand) => void) | null = null;
   #close: (() => void) | null = null;
+  #update: ((state: UpdateState) => void) | null = null;
+  #notice: ((notice: Notice) => void) | null = null;
+  readonly updateActions: UpdateAction[] = [];
 
   readonly init: WindowInit;
 
@@ -121,7 +133,26 @@ class FakeDesktop {
     closeReady: (tabs) => {
       this.closed.push(tabs);
     },
+    onUpdateState: (listener) => {
+      this.#update = listener;
+      return () => undefined;
+    },
+    updateAction: (action) => {
+      this.updateActions.push(action);
+    },
+    onNotice: (listener) => {
+      this.#notice = listener;
+      return () => undefined;
+    },
   };
+
+  sendUpdate(state: UpdateState): void {
+    this.#update?.(state);
+  }
+
+  sendNotice(notice: Notice): void {
+    this.#notice?.(notice);
+  }
 }
 
 const cleanups: (() => void)[] = [];
@@ -335,6 +366,22 @@ describe("WindowHost", () => {
       ]),
     );
     expect(desktop.textEdits).toHaveLength(2);
+  });
+
+  it("keeps the app's update state, asks the main process to restart into it, and shows its notices", async () => {
+    const desktop = new FakeDesktop({ platform: "darwin", restore: null, adopt: null });
+    const host = await startHost(desktop);
+    expect(host.update.get().state).toEqual({ status: "none" });
+    desktop.sendUpdate({
+      status: "ready",
+      version: "0.2.0",
+      page: "https://github.com/skibitsky/arcue/releases/tag/v0.2.0",
+    });
+    expect(host.update.get().state).toMatchObject({ status: "ready", version: "0.2.0" });
+    host.updateAction("restart");
+    expect(desktop.updateActions).toEqual(["restart"]);
+    desktop.sendNotice({ message: "Updated to Arcue 0.2.0.", kind: "info" });
+    expect(host.store.state.get().toast).toMatchObject({ message: "Updated to Arcue 0.2.0.", kind: "info" });
   });
 
   it("takes a tab from another window with view.moveAsset", async () => {

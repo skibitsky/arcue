@@ -74,8 +74,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Test the launchers
         run: pnpm exec vitest run --project @arcue/plugin apps/plugin/launcher
-      - name: Test the desktop app's arcue command
-        run: pnpm exec vitest run --project @arcue/desktop apps/desktop/packaging
+      - name: Test the desktop app's arcue command and how it installs updates
+        run: pnpm exec vitest run --project @arcue/desktop apps/desktop/packaging apps/desktop/src/main/update-install.test.ts
       - name: Test the file lock and the Node platform
         shell: bash
         run: pnpm exec vitest run --project "@arcue/platform-node" packages/platform-node/src/file-lock.test.ts packages/platform-node/src/node-platform.test.ts

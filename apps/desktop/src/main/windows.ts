@@ -1,8 +1,24 @@
 import { IMAGE_FILE_EXTENSIONS } from "@arcue/protocol";
 import type { IpcMainEvent, IpcMainInvokeEvent, Rectangle, WebContents } from "electron";
 import { BrowserWindow, dialog, ipcMain, screen, webContents } from "electron";
-import type { FileKind, MenuCommand, TextEdit, WindowInit, WindowTabs } from "../shared/ipc";
-import { channels, fileKindSchema, tabDragEndSchema, textEditSchema, windowTabsSchema } from "../shared/ipc";
+import type {
+  FileKind,
+  MenuCommand,
+  Notice,
+  TextEdit,
+  UpdateAction,
+  UpdateState,
+  WindowInit,
+  WindowTabs,
+} from "../shared/ipc";
+import {
+  channels,
+  fileKindSchema,
+  tabDragEndSchema,
+  textEditSchema,
+  updateActionSchema,
+  windowTabsSchema,
+} from "../shared/ipc";
 import type { Log } from "../shared/log";
 import { ASSET_EXTENSIONS } from "./args";
 import type { CoreHost } from "./core-host";
@@ -19,6 +35,9 @@ export interface WindowManagerOptions {
   devServer: string | null;
   /** Called whenever what a session restore needs changed: tabs, bounds, or the set of windows. */
   onSessionChange(): void;
+  /** The app's update state, which each window gets once it is ready. */
+  updateState(): UpdateState;
+  onUpdateAction(action: UpdateAction): void;
 }
 
 interface CreateOptions {
@@ -79,6 +98,7 @@ export class WindowManager {
   #lastUsed: number | null = null;
   #lastClosed: SavedWindow | null = null;
   #quitting = false;
+  #notices: Notice[] = [];
 
   constructor(options: WindowManagerOptions) {
     this.#options = options;
@@ -213,6 +233,20 @@ export class WindowManager {
     this.openPaths(paths);
   }
 
+  /** Sends every ready window the app's update state. */
+  sendUpdateState(state: UpdateState): void {
+    for (const entry of this.#windows.values()) {
+      if (entry.ready && !entry.contents.isDestroyed()) entry.contents.send(channels.updateState, state);
+    }
+  }
+
+  /** Shows a message in the window used last, or in the first window that becomes ready. */
+  notify(notice: Notice): void {
+    this.#notices.push(notice);
+    const target = this.#lastUsedWindow();
+    if (target) this.#flush(target);
+  }
+
   /** Tells every window that the core stopped, so each shows "reconnecting" and asks for a new port. */
   coreLost(): void {
     for (const entry of this.#windows.values()) {
@@ -225,6 +259,11 @@ export class WindowManager {
     this.#quitting = true;
     await Promise.all([...this.#windows.values()].map((entry) => this.#closeAssets(entry)));
     for (const entry of this.#windows.values()) entry.closeAllowed = true;
+  }
+
+  /** Hides every window for an update that installs as the app quits, once they closed their assets. */
+  hideAll(): void {
+    for (const entry of this.#windows.values()) if (!entry.window.isDestroyed()) entry.window.hide();
   }
 
   session(): Session {
@@ -248,6 +287,7 @@ export class WindowManager {
     const paths = entry.pendingOpens.splice(0);
     if (paths.length > 0) entry.contents.send(channels.openPaths, { paths });
     for (const assetId of entry.pendingAdopts.splice(0)) entry.contents.send(channels.adoptTab, { assetId });
+    for (const notice of this.#notices.splice(0)) entry.contents.send(channels.notice, notice);
   }
 
   #closeAssets(entry: AppWindow): Promise<void> {
@@ -334,7 +374,12 @@ export class WindowManager {
       const entry = this.#sender(event);
       if (!entry) return;
       entry.ready = true;
+      entry.contents.send(channels.updateState, this.#options.updateState());
       this.#flush(entry);
+    });
+    ipcMain.on(channels.updateAction, (event, payload: unknown) => {
+      const action = updateActionSchema.safeParse(payload);
+      if (this.#sender(event) && action.success) this.#options.onUpdateAction(action.data);
     });
     ipcMain.on(channels.reportTabs, (event, payload: unknown) => {
       const entry = this.#sender(event);

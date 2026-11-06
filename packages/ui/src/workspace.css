@@ -207,6 +207,15 @@
   color: var(--text);
 }
 
+.titlebar-end {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  -webkit-app-region: no-drag;
+}
+
 .ibtn {
   width: var(--size-control);
   height: var(--size-control);

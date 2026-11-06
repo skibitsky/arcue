@@ -21,11 +21,13 @@ export interface TabDragHandlers {
 export function TitleBar({
   store,
   windowControls,
+  end,
   onNewTab,
   drag,
 }: {
   store: WorkspaceStore;
   windowControls?: ReactNode;
+  end?: ReactNode;
   onNewTab: () => void;
   drag: TabDragHandlers;
 }) {
@@ -99,6 +101,7 @@ export function TitleBar({
           </button>
         </Tip>
       </div>
+      {end ? <div className="titlebar-end">{end}</div> : null}
     </header>
   );
 }

@@ -1,6 +1,6 @@
 import type { Comment } from "@arcue/protocol";
 import type { KeyboardEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clipDisplayName, formatWhen, modShortcut, targetLabel, timeLabel } from "../format";
 import type { AssetSession } from "../store/asset-session";
 import type { HistoryItem } from "../store/history";
@@ -258,9 +258,13 @@ function HistoryRow({ session, item, round }: { session: AssetSession; item: His
 }
 
 function NoteField({ session }: { session: AssetSession }) {
-  const [text, setText] = useState("");
+  const text = useSelect(session.state, (state) => state.note);
   const [busy, setBusy] = useState(false);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const field = fieldRef.current;
+    if (field?.value === text) fitHeight(field, 110);
+  }, [text]);
   const scene = useSelect(session.state, (state) => state.scene);
   useSelect(session.state, (state) => state.clip);
   useSelect(session.state, (state) => state.range);
@@ -273,10 +277,7 @@ function NoteField({ session }: { session: AssetSession }) {
     setBusy(true);
     const added = await session.addTextComment(text);
     setBusy(false);
-    if (added) {
-      setText("");
-      if (fieldRef.current) fieldRef.current.style.height = "auto";
-    }
+    if (added) session.setNoteText("");
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -300,10 +301,7 @@ function NoteField({ session }: { session: AssetSession }) {
         value={text}
         placeholder={placeholder}
         aria-label="Comment without a pin"
-        onChange={(event) => {
-          setText(event.target.value);
-          fitHeight(event.target, 110);
-        }}
+        onChange={(event) => session.setNoteText(event.target.value)}
         onKeyDown={onKeyDown}
       />
       <Tip label="Add to queue" shortcut="↵">

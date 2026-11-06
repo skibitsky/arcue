@@ -59,6 +59,14 @@ Before the first release, create the `release` environment in the repository's S
 
 Only a tag push signs, with that environment's values. A tag pushed before the environment exists gets an empty one, which GitHub creates, and publishes unsigned installers. A platform with none of its values builds unsigned, and one with only some fails. The release notes say which macOS and Windows installers are not signed, and how to open them.
 
+Installed apps update from the latest release's `update.json`, which lists every installer with its SHA-256 and which the workflow signs with an Ed25519 key. An app installs only what a key in `apps/desktop/packaging/update-key.ts` signed, so a tag fails until that file names a key and the `release` environment holds its private key as the `UPDATE_SIGNING_KEY` secret. Make the key once, outside the repository, and follow what the command prints:
+
+```sh
+pnpm --filter @arcue/desktop update-key ~/arcue-update-key.pem
+```
+
+Keep the private key where it cannot be lost, such as a password manager: without it, installed apps cannot update, and everyone has to reinstall Arcue by hand. To change keys, run the command again and keep the old public key in the file until the apps that trust only it have updated. A prerelease never becomes the latest release, so installed apps update only to stable versions.
+
 To publish a release, set `version` in `apps/desktop/package.json`, write what the release brings in `apps/desktop/release-notes/<version>.md`, merge both to main, and push the tag `v<version>` on a commit of main. A version is `x.y.z`, or `x.y.z-name` or `x.y.z-name.N` for a prerelease, such as `0.2.0-beta` or `0.2.0-beta.1`. Only the highest stable version becomes the latest release, which the install links in [INSTALL.md](INSTALL.md) download, so they need a stable release. A tag that does not match `version`, has no release notes file, or is not on main, fails every build. Delete it and tag again:
 
 ```sh

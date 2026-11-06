@@ -41,6 +41,8 @@ export interface WorkspaceProps extends TabDragHandlers {
   onNewTab?: () => void;
   /** Drawn at the left of the title bar, such as window buttons or the space macOS keeps for its own. */
   windowControls?: ReactNode;
+  /** Drawn at the right of the title bar, such as the desktop app's offer to restart into an update. */
+  titleBarEnd?: ReactNode;
   /** The clock for relative times in History. */
   now?: () => Date;
   /**
@@ -61,6 +63,7 @@ export function Workspace(props: WorkspaceProps) {
     onOpenFile,
     onDropFiles,
     windowControls,
+    titleBarEnd,
     now = systemNow,
     historyKeys = true,
   } = props;
@@ -84,6 +87,7 @@ export function Workspace(props: WorkspaceProps) {
         <TitleBar
           store={store}
           windowControls={windowControls}
+          end={titleBarEnd}
           onNewTab={props.onNewTab ?? (() => store.openNewTab())}
           drag={props}
         />
