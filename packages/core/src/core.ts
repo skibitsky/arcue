@@ -61,7 +61,7 @@ import { exporterName, inspectMembers, inspectScene } from "./inspect";
 import { insideWithoutLinks } from "./links";
 import type { LostFile } from "./lost-files";
 import { findLostFiles, lostFiles, withMovedFiles } from "./lost-files";
-import type { ShowAt } from "./open-asset";
+import type { Retry, RetryKind, ShowAt } from "./open-asset";
 import { FIRST_RETRY_MS, findComment, LAST_RETRY_MS, OpenAsset, readRootFor } from "./open-asset";
 import { basename, dirname, joinPath, normalizePath, pathInside, relativePath } from "./paths";
 import type { FileStat, Platform, Unlock } from "./platform";
@@ -856,23 +856,33 @@ export class ArcueCore {
     for (const stop of asset.compositionWatchers.values()) stop();
     asset.compositionWatchers.clear();
     asset.cancelStabilityCheck();
-    asset.cancelRetry();
+    for (const retry of asset.retries.values()) retry.cancel();
+    asset.retries.clear();
   }
 
   /**
    * Runs background work again later, after it met a reviews lock another Arcue kept busy: after one second at first,
-   * then twice as long each time up to thirty seconds, until the asset starts closing. A later retry replaces an
-   * earlier one.
+   * then twice as long each time up to thirty seconds, until the asset starts closing. Each kind of work has its own
+   * retry and wait: a retry replaces only a pending retry of the same kind, and that kind's wait starts from one
+   * second again once `#retrySucceeded` reports its work done.
    */
-  #retryLater(asset: OpenAsset, task: () => Promise<unknown>): void {
+  #retryLater(asset: OpenAsset, kind: RetryKind, task: () => Promise<unknown>): void {
     if (asset.ending) return;
-    asset.cancelRetry();
-    const delay = asset.retryDelayMs;
-    asset.retryDelayMs = Math.min(delay * 2, LAST_RETRY_MS);
-    asset.cancelRetry = this.#platform.clock.setTimer(delay, () => {
-      asset.cancelRetry = () => undefined;
+    const earlier = asset.retries.get(kind);
+    earlier?.cancel();
+    const delay = earlier?.delayMs ?? FIRST_RETRY_MS;
+    const retry: Retry = { cancel: () => undefined, delayMs: Math.min(delay * 2, LAST_RETRY_MS) };
+    retry.cancel = this.#platform.clock.setTimer(delay, () => {
+      retry.cancel = () => undefined;
       void task().catch(() => undefined);
     });
+    asset.retries.set(kind, retry);
+  }
+
+  /** Lets the next retry of a kind of work wait one second again, since that work succeeded. */
+  #retrySucceeded(asset: OpenAsset, kind: RetryKind): void {
+    const retry = asset.retries.get(kind);
+    if (retry) retry.delayMs = FIRST_RETRY_MS;
   }
 
   #fileChanged(asset: OpenAsset): void {
@@ -928,14 +938,17 @@ export class ArcueCore {
     if (lost.length === 0) return;
     for (const file of lost) asset.searched.add(file.path);
     const taken = new Set([asset.path, ...files.members.keys(), ...files.textures.map((texture) => texture.path)]);
-    const relinked = this.#relinkLostFiles(asset, lost, taken).catch((error: unknown) => {
-      if (hasCode(error, "timeout")) {
-        for (const file of lost) asset.searched.delete(file.path);
-        this.#retryLater(asset, () => this.#load(asset, true));
-      } else if (!hasCode(error, "conflict")) {
-        this.#onError(error);
-      }
-    });
+    const relinked = this.#relinkLostFiles(asset, lost, taken).then(
+      () => this.#retrySucceeded(asset, "lost-files"),
+      (error: unknown) => {
+        if (hasCode(error, "timeout")) {
+          for (const file of lost) asset.searched.delete(file.path);
+          this.#retryLater(asset, "lost-files", () => this.#load(asset, true));
+        } else if (!hasCode(error, "conflict")) {
+          this.#onError(error);
+        }
+      },
+    );
     void this.#track(relinked);
   }
 
@@ -981,15 +994,17 @@ export class ArcueCore {
       const renamed = await this.#findRenamed(asset);
       if (renamed !== null) {
         await this.#follow(asset, renamed, true);
+        this.#retrySucceeded(asset, "model-gone");
         return;
       }
     } catch (error) {
       if (hasCode(error, "timeout")) {
-        this.#retryLater(asset, () => this.#track(this.#modelGone(asset)));
+        this.#retryLater(asset, "model-gone", () => this.#track(this.#modelGone(asset)));
         return;
       }
       if (!hasCode(error, "conflict") && !hasCode(error, "not-found")) this.#onError(error);
     }
+    this.#retrySucceeded(asset, "model-gone");
     if (asset.ending || asset.missing || (await this.#isFile(asset.path))) return;
     asset.missing = true;
     this.#failed(asset, new Error(`Model not found: ${asset.name}`));
@@ -1202,14 +1217,14 @@ export class ArcueCore {
             asset.loadedFiles = kept;
             asset.loadedStats = files.stats;
             asset.reanchorPending = false;
-            asset.retryDelayMs = FIRST_RETRY_MS;
+            this.#retrySucceeded(asset, "version");
           },
         };
       });
       if (outcome === "superseded") return null;
     } catch (error) {
       if (recording && hasCode(error, "timeout")) {
-        this.#retryLater(asset, () => this.#load(asset, force));
+        this.#retryLater(asset, "version", () => this.#load(asset, force));
       } else {
         this.#failed(asset, error);
       }
@@ -1257,12 +1272,13 @@ export class ArcueCore {
           apply: () => {
             asset.session.history.mapComments(reanchor);
             asset.reanchorPending = false;
+            this.#retrySucceeded(asset, "reanchor");
           },
         };
       });
       if (outcome === "stale") asset.reanchorPending = true;
     } catch (error) {
-      if (hasCode(error, "timeout")) this.#retryLater(asset, () => this.#load(asset, true));
+      if (hasCode(error, "timeout")) this.#retryLater(asset, "reanchor", () => this.#load(asset, true));
       else if (!asset.ending && !hasCode(error, "conflict")) this.#onError(error);
     }
   }

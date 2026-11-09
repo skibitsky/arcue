@@ -16,6 +16,15 @@ export const FIRST_RETRY_MS = 1000;
 /** The longest wait between two retries. */
 export const LAST_RETRY_MS = 30_000;
 
+/** Background work that tries again later on its own after it met a reviews lock another Arcue kept busy. */
+export type RetryKind = "version" | "reanchor" | "lost-files" | "model-gone";
+
+/** The pending retry of one kind of background work, and how long the retry after it waits. */
+export interface Retry {
+  cancel: () => void;
+  delayMs: number;
+}
+
 /** Where to show an asset in its tab, as `asset.open` asks. */
 export interface ShowAt {
   clip?: string | undefined;
@@ -88,10 +97,8 @@ export class OpenAsset {
   loadedFiles: ReadonlySet<string> = new Set();
   /** The sizes and modification times of the files the version on screen was read from, by path. */
   loadedStats: FileStats = new Map();
-  /** Cancels the retry of background work that met a held reviews lock. */
-  cancelRetry: () => void = () => undefined;
-  /** How long until that work is tried again, doubling with each try. */
-  retryDelayMs = FIRST_RETRY_MS;
+  /** The retries of background work that met a held reviews lock, by kind, so one kind never drops another's. */
+  readonly retries = new Map<RetryKind, Retry>();
   /**
    * Comments another Arcue saved wait to move onto the version on screen, because its files changed on disk; the next
    * load moves them, even when it reads the same version.
