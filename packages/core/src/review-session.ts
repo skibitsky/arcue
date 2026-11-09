@@ -159,11 +159,12 @@ export class ReviewSession {
 
   /**
    * Refuses a change while neither review.json nor the model is on disk: every move of a review needs its model gone,
-   * so another core moved this one, and saving here would start a second copy of it.
+   * so another core moved this one, and saving here would start a second copy of it. Anything but a file at the
+   * model's path counts as gone, as it does for a core that follows the model to a new name.
    */
   async #checkModelThere(): Promise<void> {
     const model = modelPathOf(this.#location);
-    if ((await this.#platform.stat(model)) !== null) return;
+    if ((await this.#platform.stat(model))?.kind === "file") return;
     throw new ArcueError(
       "conflict",
       `${basename(model)} and its review are gone from disk, so the change was not saved. If the model was renamed, Arcue follows it in a moment; otherwise open the model at its new path.`,

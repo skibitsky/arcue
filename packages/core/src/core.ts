@@ -875,7 +875,7 @@ export class ArcueCore {
   /**
    * Parses the files once two checks a short interval apart see the same size and modification time for the model
    * and every file of its composition, so an export that writes several files reloads once. A model that stays
-   * missing for `MISSING_MODEL_MS` is looked for under a new name.
+   * missing for `MISSING_MODEL_MS`, as when anything but a file stands at its path, is looked for under a new name.
    */
   async #checkStable(
     asset: OpenAsset,
@@ -889,7 +889,7 @@ export class ArcueCore {
     if (asset.closed || check !== asset.stabilityCheck) return;
     const model = current.get(asset.path) ?? null;
     const now = this.#platform.clock.now();
-    const missing = model === null ? (missingSince ?? now) : null;
+    const missing = model?.kind === "file" ? null : (missingSince ?? now);
     if (missing !== null && now - missing >= MISSING_MODEL_MS) {
       void this.#track(this.#modelGone(asset));
       return;
@@ -980,9 +980,13 @@ export class ArcueCore {
       }
       if (!hasCode(error, "conflict") && !hasCode(error, "not-found")) this.#onError(error);
     }
-    if (asset.closed || asset.missing || (await this.#platform.exists(asset.path))) return;
+    if (asset.closed || asset.missing || (await this.#isFile(asset.path))) return;
     asset.missing = true;
     this.#failed(asset, new Error(`Model not found: ${asset.name}`));
+  }
+
+  async #isFile(path: string): Promise<boolean> {
+    return (await this.#platform.stat(path))?.kind === "file";
   }
 
   /**
@@ -1026,14 +1030,15 @@ export class ArcueCore {
    * review folder run with the opens, so no other tab opens the new path meanwhile. The move refuses a file that has
    * a review of its own, except, when the person chose the file, a review that holds nothing but versions. The asset
    * keeps its id, watches the new files and reloads. Windows retitle the tab on "asset.updated" and learn of the move
-   * from "review.relinked". An automatic follow stops when the old file is back. The asset stays where it is when its
-   * review is gone from disk while its reviews root is still there, since another Arcue moved it to another model.
+   * from "review.relinked". An automatic follow stops when the old file is back; anything but a file there counts as
+   * gone. The asset stays where it is when its review is gone from disk while its reviews root is still there, since
+   * another Arcue moved it to another model.
    */
   #follow(asset: OpenAsset, path: string, automatic: boolean): Promise<void> {
     return this.#inCompositionLine(asset, async () => {
       const from = asset.path;
       const followed = await this.#opening.run(async () => {
-        if (await this.#platform.exists(from)) {
+        if (await this.#isFile(from)) {
           if (automatic) return false;
           throw new ArcueError("conflict", `${asset.name} still exists, so its review stays with it.`);
         }

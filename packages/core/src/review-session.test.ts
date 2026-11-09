@@ -328,6 +328,15 @@ describe("ReviewSession and the reviews lock", () => {
     await expect(platform.exists(REVIEW)).resolves.toBe(true);
   });
 
+  it("refuses while a folder stands where the model was and the review is gone", async () => {
+    const { platform, session } = await lockedSession();
+    await platform.remove(MODEL);
+    await platform.mkdir(MODEL);
+    await platform.remove(REVIEW);
+    await expect(session.run(dismiss)).rejects.toMatchObject(movedAway);
+    await expect(platform.exists(REVIEW)).resolves.toBe(false);
+  });
+
   it("refuses for a session that never saw review.json once the model is gone", async () => {
     const { platform, session } = await lockedSession({ saved: false });
     await platform.remove(MODEL);
