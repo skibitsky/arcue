@@ -9,7 +9,8 @@ export interface RunningCore {
   older: boolean;
 }
 
-export interface AlreadyRunningNotice {
+/** The dialog the app shows before it quits because it cannot run. */
+export interface QuitNotice {
   message: string;
   detail: string;
   buttons: string[];
@@ -24,7 +25,7 @@ export interface AlreadyRunningNotice {
 export function alreadyRunningNotice(
   { info, reason, older }: RunningCore,
   platform: NodeJS.Platform = process.platform,
-): AlreadyRunningNotice {
+): QuitNotice {
   const message = "Arcue is already running";
   if (reason === "same") {
     return { message, detail: "Only one Arcue app can run at a time.", buttons: ["Quit"], open: null };

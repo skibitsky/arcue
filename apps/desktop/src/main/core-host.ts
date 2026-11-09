@@ -17,6 +17,8 @@ export interface CoreHostOptions {
   onLost(): void;
   /** A core that this one cannot run beside answers for the data folder, so this one stopped for good. */
   onAlreadyRunning(running: RunningCore): void;
+  /** The core could not start several times in a row, so the host stopped trying. */
+  onFailed(reason: string): void;
 }
 
 interface PortRequest {
@@ -27,10 +29,12 @@ interface PortRequest {
 const STOP_TIMEOUT_MS = 20_000;
 const MAX_RESTART_DELAY_MS = 10_000;
 const CRASH_WINDOW_MS = 60_000;
+export const MAX_START_FAILURES = 3;
 
 /**
- * Runs the core in an Electron utility process and restarts it when it crashes. Each window gets its own channel to
- * the core: the main process creates a MessageChannelMain pair and hands one port to each side.
+ * Runs the core in an Electron utility process and restarts it when it crashes. A core that exits before it is ready
+ * is tried again only a few times in a row. Each window gets its own channel to the core: the main process creates a
+ * MessageChannelMain pair and hands one port to each side.
  */
 export class CoreHost {
   readonly #options: CoreHostOptions;
@@ -39,6 +43,8 @@ export class CoreHost {
   #stopping = false;
   #queue: PortRequest[] = [];
   #crashes: number[] = [];
+  #startFailures = 0;
+  #failure: string | null = null;
   #restartTimer: NodeJS.Timeout | null = null;
 
   constructor(options: CoreHostOptions) {
@@ -107,6 +113,7 @@ export class CoreHost {
     switch (message.type) {
       case "started":
         this.#ready = true;
+        this.#startFailures = 0;
         this.#options.log.info(
           message.socket
             ? `The core is ready; the bridge listens on ${message.socket}`
@@ -116,6 +123,7 @@ export class CoreHost {
         return;
       case "failed":
         this.#options.log.error(`The core could not start: ${message.message}`);
+        this.#failure = message.message;
         return;
       case "already-running":
         void this.stop();
@@ -144,17 +152,26 @@ export class CoreHost {
 
   #onExit(child: UtilityProcess, code: number): void {
     if (this.#child !== child) return;
+    const wasReady = this.#ready;
+    const failure = this.#failure;
     this.#child = null;
     this.#ready = false;
+    this.#failure = null;
     if (this.#stopping) {
       this.#options.log.info(`The core exited with code ${code}`);
+      return;
+    }
+    if (!wasReady && ++this.#startFailures >= MAX_START_FAILURES) {
+      this.#stopping = true;
+      this.#options.log.error(`The core exited with code ${code} before it was ready; it is not started again`);
+      this.#options.onFailed(failure ?? `Its process exited with code ${code} as it started.`);
       return;
     }
     const now = Date.now();
     this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_WINDOW_MS), now];
     const delay = Math.min(MAX_RESTART_DELAY_MS, 250 * 2 ** (this.#crashes.length - 1));
     this.#options.log.error(`The core exited with code ${code}; restarting it in ${delay} ms`);
-    this.#options.onLost();
+    if (wasReady) this.#options.onLost();
     this.#restartTimer = setTimeout(() => {
       this.#restartTimer = null;
       this.start();

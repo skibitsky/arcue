@@ -10,7 +10,7 @@ import type { MenuItemConstructorOptions } from "electron";
 import { app, dialog, powerMonitor, protocol, session, shell } from "electron";
 import type { Log } from "../shared/log";
 import { fileLog } from "../shared/log";
-import type { RunningCore } from "./already-running";
+import type { QuitNotice, RunningCore } from "./already-running";
 import { alreadyRunningLogLine, alreadyRunningNotice } from "./already-running";
 import { checkFromMenu, createUpdater, offerDownload, startServe } from "./app-updates";
 import { assetPathsFromArgv, launchDataSchema } from "./args";
@@ -112,6 +112,7 @@ async function run(): Promise<void> {
     onNeedWindow: () => windows?.ensureWindow(),
     onLost: () => windows?.coreLost(),
     onAlreadyRunning: (other) => void quitBeside(other, log),
+    onFailed: (reason) => void quitWithoutCore(reason, logs, log),
   });
   const manager = new WindowManager({
     core,
@@ -204,10 +205,25 @@ function updateMenuItem(updater: Updater, restart: () => void): MenuItemConstruc
  */
 async function quitBeside(running: RunningCore, log: Log): Promise<void> {
   log.info(alreadyRunningLogLine(running));
-  const notice = alreadyRunningNotice(running);
+  await quitSaying(alreadyRunningNotice(running), "info", log);
+}
+
+/** Says that the core could not start and where its log is, and quits. */
+async function quitWithoutCore(reason: string, logs: string, log: Log): Promise<void> {
+  const notice: QuitNotice = {
+    message: "Arcue could not start",
+    detail: `${reason}\n\nThe details are in core.log in ${logs}.`,
+    buttons: ["Quit"],
+    open: null,
+  };
+  await quitSaying(notice, "error", log);
+}
+
+/** Shows the notice, opens the address of its first button when the person chooses it, and quits. */
+async function quitSaying(notice: QuitNotice, type: "info" | "error", log: Log): Promise<void> {
   try {
     const { response } = await dialog.showMessageBox({
-      type: "info",
+      type,
       title: "Arcue",
       message: notice.message,
       detail: notice.detail,
@@ -218,7 +234,7 @@ async function quitBeside(running: RunningCore, log: Log): Promise<void> {
     });
     if (notice.open && response === 0) await shell.openExternal(notice.open);
   } catch (error) {
-    log.error("Could not show where Arcue runs", error);
+    log.error("Could not say why Arcue quits", error);
   } finally {
     app.quit();
   }
