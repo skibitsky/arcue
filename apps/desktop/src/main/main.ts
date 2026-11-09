@@ -91,6 +91,7 @@ async function run(): Promise<void> {
 
   const sessionPath = join(userData, SESSION_FILE);
   let saveTimer: NodeJS.Timeout | null = null;
+  let savedForQuit = false;
   const saveNow = async () => {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = null;
@@ -123,6 +124,7 @@ async function run(): Promise<void> {
     rendererUrl: devServer ?? `${RENDERER_ORIGIN}/index.html`,
     devServer,
     onSessionChange: () => {
+      if (savedForQuit) return;
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => void saveNow(), 500);
     },
@@ -159,6 +161,7 @@ async function run(): Promise<void> {
     steps: async () => {
       updater.stopChecks();
       await manager.prepareQuit();
+      savedForQuit = true;
       await saveNow();
       await core.stop();
       if (updater.installsOnQuit) manager.hideAll();
