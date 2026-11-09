@@ -41,8 +41,8 @@ export class WindowPresence {
 
   /**
    * Resolves once a window that may show a model opened for the view is connected: the view's page or a window outside
-   * views, or with a null view only a window outside views. Asks for a window when none is; rejects as "unavailable"
-   * after the timeout.
+   * views, or with a null view only a window outside views. Asks for a window when none is, and again when a waiter
+   * before it gives up; rejects as "unavailable" after the timeout.
    */
   ensure(view: string | null = null): Promise<void> {
     if (this.#canShow(view)) return Promise.resolve();
@@ -62,6 +62,7 @@ export class WindowPresence {
       const cancel = this.#setTimer(this.#timeoutMs, () => {
         this.#waiters = this.#waiters.filter((entry) => entry !== waiter);
         reject(new ArcueError("unavailable", "No window opened in time to show the asset."));
+        if (this.#waiters.length > 0) this.#requestWindow();
       });
       this.#waiters.push(waiter);
       if (this.#waiters.length === 1) this.#requestWindow();
