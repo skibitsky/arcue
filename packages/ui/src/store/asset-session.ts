@@ -164,6 +164,7 @@ export class AssetSession {
   readonly #thumbnailKeys = new Map<string, string>();
   readonly #thumbnailAttempts = new Map<string, number>();
   #copying = false;
+  #relinking = false;
   /** The send of the busy box, which a copy waits for. */
   #sending: Promise<boolean> | null = null;
   #warningSequence = 0;
@@ -263,11 +264,16 @@ export class AssetSession {
   /** Moves the offered review onto this asset. */
   async continueReview(): Promise<void> {
     const { offer } = this.state.get();
-    if (!offer) return;
-    await this.#run(async () => {
-      await this.#client.execute("review.relink", { assetId: this.assetId, from: offer.path });
-      this.setOffer(null);
-    });
+    if (!offer || this.#relinking) return;
+    this.#relinking = true;
+    try {
+      await this.#run(async () => {
+        await this.#client.execute("review.relink", { assetId: this.assetId, from: offer.path });
+        this.setOffer(null);
+      });
+    } finally {
+      this.#relinking = false;
+    }
   }
 
   /** Hides the offer for good in this tab; the view state remembers it across window reloads and moves. */

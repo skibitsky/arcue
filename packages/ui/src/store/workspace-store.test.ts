@@ -592,6 +592,16 @@ describe("continuing an earlier review", () => {
     expect(store.state.get().toast).toBeNull();
   });
 
+  it("moves the review once when Continue is pressed twice", async () => {
+    const { client, store, session } = await openStone();
+    client.simulateOffer(session.assetId, candidate);
+    await flush();
+    await Promise.all([session.continueReview(), session.continueReview()]);
+    expect(client.calls.filter((call) => call.name === "review.relink")).toHaveLength(1);
+    expect(session.state.get().offer).toBeNull();
+    expect(store.state.get().toast).toBeNull();
+  });
+
   it("shows the offer a tab's asset already has when the tab opens", async () => {
     const { client, store, session } = await openStone();
     client.simulateOffer(session.assetId, candidate);
