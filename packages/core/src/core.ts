@@ -343,15 +343,17 @@ export class ArcueCore {
       registry.handleCommand("view.reportFocus", (_args, context) => {
         if (context.caller === "window" && context.connection !== null) this.#windows.focus(context.connection);
       }),
-      registry.handleCommand(VIEW_SHOW_ASSET, async (args, context) => {
-        const asset = this.#asset(args.assetId);
-        if (context.caller === "window" && this.#windows.has(context.connection)) {
-          this.#checkSameView(asset, context.connection);
-          await this.#showAsset(asset, context.connection, args);
-        } else {
-          await this.#reveal(asset, { view: this.#ownerOf(asset), window: null }, args, false);
-        }
-      }),
+      registry.handleCommand(VIEW_SHOW_ASSET, (args, context) =>
+        this.#opening.run(async () => {
+          const asset = this.#asset(args.assetId);
+          if (context.caller === "window" && this.#windows.has(context.connection)) {
+            this.#checkSameView(asset, context.connection);
+            await this.#showAsset(asset, context.connection, args);
+          } else {
+            await this.#reveal(asset, { view: this.#ownerOf(asset), window: null }, args, false);
+          }
+        }),
+      ),
       registry.handleQuery("asset.list", () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) })),
       registry.handleQuery("review.get", (args) => this.#asset(args.assetId).session.review),
       registry.handleQuery("review.candidates", (args) => ({ candidates: this.#asset(args.assetId).candidates })),
@@ -486,6 +488,9 @@ export class ArcueCore {
       ms: this.#showAssetTimeoutMs,
       clock: this.#platform.clock,
     });
+    if (!this.#windows.has(window)) {
+      throw new ArcueError("unavailable", `The window closed as it showed ${asset.name}.`);
+    }
     this.#shownIn(asset, window);
     asset.adoptedAt = null;
   }

@@ -117,6 +117,26 @@ describe("view state", () => {
     expect(test.window.requests).toEqual([]);
   });
 
+  it("shows a tab whose move is under way only once the move ends, in the window it moved to", async () => {
+    const test = await setup();
+    const second = new FakeWindow(test.core, "window-2");
+    const released = Promise.withResolvers<null>();
+    test.window.respond = ({ name }) => (name === "view.releaseAsset" ? released.promise : undefined);
+    const moving = second.client.execute("view.moveAsset", { assetId: test.assetId });
+    while (test.window.requests.length === 0) await flush();
+    const showing = test.core.client.execute("view.showAsset", { assetId: test.assetId, frame: 12 });
+    await flush();
+
+    released.resolve(null);
+    await moving;
+    await showing;
+    expect(test.window.requestNames).toEqual(["view.releaseAsset"]);
+    expect(second.requests).toEqual([
+      { kind: "command", name: "view.showAsset", input: { assetId: test.assetId } },
+      { kind: "command", name: "view.showAsset", input: { assetId: test.assetId, frame: 12 } },
+    ]);
+  });
+
   it("follows a tab to the window that reports its state", async () => {
     const test = await setup();
     const second = new FakeWindow(test.core, "window-2");
