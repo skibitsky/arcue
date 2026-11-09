@@ -101,9 +101,10 @@ export interface ScreenPosition {
  */
 export interface Viewport {
   /**
-   * Resolves once textures are decoded and the first frame is drawn. Replacing a scene, as on reload after an
-   * export, keeps the camera, keeps the clip when the new scene has a clip of that name and shows the rest pose
-   * otherwise, and clamps the time to the clip's length.
+   * Resolves once textures are decoded and the first frame is drawn, or, when a later call replaced the scene before
+   * then, without drawing it. Replacing a scene, as on reload after an export, keeps the camera, keeps the clip when
+   * the new scene has a clip of that name and shows the rest pose otherwise, and clamps the time to the clip's length.
+   * A clip set while the scene loads, with its time and playing state, applies to it once it is shown.
    */
   setScene(scene: SceneDescription | null): Promise<void>;
   setClip(clip: string | null): void;

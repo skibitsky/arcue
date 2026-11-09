@@ -82,6 +82,7 @@ vi.mock("./render/stage", async (importOriginal) => {
 });
 
 const NO_HIT = { mesh: -1, triangle: -1, depth: Number.POSITIVE_INFINITY };
+const BEND = "Armature|Bend";
 
 const frames = new Map<number, FrameRequestCallback>();
 let nextFrame = 1;
@@ -389,5 +390,72 @@ describe("pin visibility", () => {
     await resolveReads();
     runFrames();
     expect(pin("c1").classList.contains("is-hidden-surface")).toBe(false);
+  });
+});
+
+describe("playback", () => {
+  it("applies a clip set while a scene loads to that scene once it is shown", async () => {
+    await view.setScene({ ...stripScene(), clips: [] });
+    const shown = view.setScene(stripScene());
+    view.setClip(BEND);
+    view.setTime(0.5);
+    view.setPlaying(true);
+    await shown;
+    expect(times.at(-1)?.seconds).toBeCloseTo(0.5, 6);
+    expect(times.at(-1)?.playing).toBe(true);
+  });
+
+  it("stops playing when the clip has no length", async () => {
+    const scene = stripScene();
+    const bend = scene.clips[0];
+    if (!bend) throw new Error("No clip.");
+    await view.setScene({ ...scene, clips: [bend, { ...bend, name: "Armature|Still", duration: 0, frameCount: 1 }] });
+    view.setClip(BEND);
+    view.setPlaying(true);
+    expect(times.at(-1)?.playing).toBe(true);
+    view.setClip("Armature|Still");
+    expect(times.at(-1)?.playing).toBe(false);
+    view.setClip(BEND);
+    view.setPlaying(true);
+    await view.setScene({ ...scene, clips: [{ ...bend, duration: 0, frameCount: 1 }] });
+    expect(times.at(-1)?.playing).toBe(false);
+  });
+});
+
+describe("screenshots", () => {
+  it("restores the pose, tint and renderer size when rendering fails", async () => {
+    const scene = stripScene();
+    await view.setScene(scene);
+    view.setClip(BEND);
+    view.setTime(0.5);
+    runFrames();
+    const model = models.at(-1);
+    if (!model) throw new Error("No model.");
+    const applyPose = vi.spyOn(model, "applyPose");
+    fake.failNextRender = true;
+    const overlays: CommentOverlay[] = [
+      { id: "c1", number: 1, state: "draft", anchor: region(scene, [0]), selected: false },
+    ];
+    await expect(
+      view.screenshot({ width: 64, height: 48, time: { kind: "frame", clip: BEND, frame: 0 }, overlays }),
+    ).rejects.toThrow("The GPU went away.");
+    expect(applyPose).toHaveBeenLastCalledWith(expect.objectContaining({ name: BEND }), 0.5);
+    expect([fake.renderer.width, fake.renderer.height]).toEqual([400, 300]);
+    expect(tintAlpha(0)).toBe(0);
+  });
+});
+
+describe("dispose", () => {
+  it("ignores calls after dispose", async () => {
+    await view.setScene(stripScene());
+    const model = models.at(-1);
+    if (!model) throw new Error("No model.");
+    const dispose = vi.spyOn(model, "dispose");
+    view.dispose();
+    await view.setScene(null);
+    view.setOverlays([{ id: "c1", number: 1, state: "draft", anchor: surface(0), selected: false }]);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(view.screenPosition(surface(0))).toBeNull();
+    await expect(view.screenshot({ width: 8, height: 8 })).rejects.toMatchObject({ code: "unavailable" });
   });
 });

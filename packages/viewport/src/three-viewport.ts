@@ -122,6 +122,10 @@ export class ThreeViewport implements Viewport {
   /** Grows when ID pass reads in flight go stale: a new scene, part view, display mode or overlay anchors. */
   private readToken = 0;
   private loadToken = 0;
+  /** The newest `setScene` is still building its model. */
+  private loading = false;
+  /** A clip asked for while a scene loads that the scene on screen lacks, with the time and playing state set since. */
+  private awaited: { clip: string; time: number; playing: boolean } | null = null;
   private disposed = false;
   private active = true;
 
@@ -232,23 +236,31 @@ export class ThreeViewport implements Viewport {
   }
 
   async setScene(scene: SceneDescription | null): Promise<void> {
+    if (this.disposed) return;
     const token = ++this.loadToken;
+    this.loading = scene !== null;
     if (!scene) {
+      this.awaited = null;
       this.replaceModel(null);
       this.renderNow();
       return;
     }
-    const model = await Model.build(scene, this.palette, this.renderer.capabilities.getMaxAnisotropy());
+    const model = await Model.build(scene, this.palette, this.renderer.capabilities.getMaxAnisotropy()).finally(() => {
+      if (token === this.loadToken) this.loading = false;
+    });
     if (token !== this.loadToken || this.disposed) {
       model.dispose();
       return;
     }
     const first = this.model === null;
-    const kept = this.clip ? (scene.clips.find((clip) => clip.name === this.clip?.name) ?? null) : null;
+    const awaited = this.awaited;
+    this.awaited = null;
+    const name = awaited ? awaited.clip : (this.clip?.name ?? null);
+    const kept = name === null ? null : (scene.clips.find((clip) => clip.name === name) ?? null);
     this.clip = kept;
-    this.time = kept ? clampToClip(this.time, kept) : 0;
+    this.time = kept ? clampToClip(awaited ? awaited.time : this.time, kept) : 0;
     this.range = kept ? clampRange(this.range, kept.duration) : null;
-    if (!kept) this.playing = false;
+    this.playing = (awaited ? awaited.playing : this.playing) && playable(kept);
     this.replaceModel(model);
     const extent = extentOf(scene.bounds);
     this.stage.fit(extent);
@@ -258,6 +270,7 @@ export class ThreeViewport implements Viewport {
       this.rig.frameInitial([extent.center.x, extent.center.y, extent.center.z], radius);
     }
     this.renderNow();
+    if (this.playing) this.requestRender();
     this.emitTime();
   }
 
@@ -294,12 +307,17 @@ export class ThreeViewport implements Viewport {
   }
 
   setClip(name: string | null): void {
+    if (this.disposed) return;
     const clip = name === null ? null : (this.model?.scene.clips.find((candidate) => candidate.name === name) ?? null);
+    this.awaited =
+      this.loading && name !== null && clip === null
+        ? { clip: name, time: 0, playing: this.awaited?.playing ?? this.playing }
+        : null;
     if (clip === this.clip) return;
     this.clip = clip;
     this.time = 0;
     this.range = null;
-    if (!clip) this.playing = false;
+    if (!playable(clip)) this.playing = false;
     this.poseDirty = true;
     this.lastTick = 0;
     this.requestRender();
@@ -307,6 +325,8 @@ export class ThreeViewport implements Viewport {
   }
 
   setTime(seconds: number): void {
+    if (this.disposed) return;
+    if (this.awaited) this.awaited.time = seconds;
     const time = this.clip ? clampToClip(seconds, this.clip) : 0;
     if (time === this.time && !this.playing) {
       this.emitTime();
@@ -319,7 +339,9 @@ export class ThreeViewport implements Viewport {
   }
 
   setPlaying(playing: boolean): void {
-    const next = playing && this.clip !== null && this.clip.duration > 0;
+    if (this.disposed) return;
+    if (this.awaited) this.awaited.playing = playing;
+    const next = playing && playable(this.clip);
     if (next && !this.playing && this.clip) {
       this.time = playbackStart(this.time, this.clip.duration, this.playbackSettings());
       this.poseDirty = true;
@@ -335,11 +357,12 @@ export class ThreeViewport implements Viewport {
   }
 
   setSpeed(speed: number): void {
+    if (this.disposed) return;
     this.speed = clampSpeed(speed);
   }
 
   setActive(active: boolean): void {
-    if (active === this.active) return;
+    if (this.disposed || active === this.active) return;
     this.active = active;
     this.lastTick = 0;
     if (!active) {
@@ -353,10 +376,12 @@ export class ThreeViewport implements Viewport {
   }
 
   setLoop(loop: boolean): void {
+    if (this.disposed) return;
     this.loop = loop;
   }
 
   setPlaybackRange(range: PlaybackRange | null): void {
+    if (this.disposed) return;
     this.range = range ? { start: range.start, end: range.end } : null;
     if (this.playing) this.requestRender();
   }
@@ -375,7 +400,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setDisplayMode(mode: DisplayMode): void {
-    if (mode === this.displayMode) return;
+    if (this.disposed || mode === this.displayMode) return;
     this.displayMode = mode;
     this.model?.setDisplayMode(mode);
     this.readToken++;
@@ -388,12 +413,14 @@ export class ThreeViewport implements Viewport {
   }
 
   setSkeletonVisible(visible: boolean): void {
+    if (this.disposed) return;
     this.skeletonVisible = visible;
     if (this.skeleton) this.skeleton.object.visible = visible;
     this.requestRender();
   }
 
   setPartView(view: PartView): void {
+    if (this.disposed) return;
     this.partView = { ...view, hidden: [...view.hidden], shown: [...view.shown] };
     const model = this.model;
     if (!model) return;
@@ -412,7 +439,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setTool(tool: ToolId): void {
-    if (tool === this.tool) return;
+    if (this.disposed || tool === this.tool) return;
     this.tool = tool;
     this.cancelGesture();
     this.updateBrush();
@@ -420,6 +447,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setBrushSize(radius: number): void {
+    if (this.disposed) return;
     this.brush.setRadius(radius);
     this.brush.moveTo(this.pointer.x, this.pointer.y);
   }
@@ -429,6 +457,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setCamera(camera: CameraAnchor, options?: { animate?: boolean }): void {
+    if (this.disposed) return;
     this.rig.setAnchor(camera, this.active && (options?.animate ?? false));
     this.requestRender();
   }
@@ -483,6 +512,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setHighlight(meshes: readonly string[] | null): void {
+    if (this.disposed) return;
     const next = new Set(meshes ?? []);
     if (next.size === this.highlighted.size && [...next].every((path) => this.highlighted.has(path))) return;
     this.highlighted = next;
@@ -491,6 +521,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setOverlays(overlays: readonly CommentOverlay[]): void {
+    if (this.disposed) return;
     const previous = new Map(this.overlays.map((entry) => [entry.overlay.id, entry]));
     let anchorsChanged = overlays.length !== this.overlays.length;
     let changed = this.strokeFinished || anchorsChanged;
@@ -626,6 +657,7 @@ export class ThreeViewport implements Viewport {
   }
 
   async screenshot(options: ScreenshotOptions): Promise<Uint8Array> {
+    if (this.disposed) throw new ArcueError("unavailable", "The 3D view is closed.");
     if (this.contextLost) throw new ArcueError("unavailable", "The 3D view lost its graphics context.");
     const model = this.model;
     const time = options.time && model ? resolveTimeSelection(model.scene.clips, options.time) : null;
@@ -633,27 +665,31 @@ export class ThreeViewport implements Viewport {
       throw new ArcueError("not-found", "The screenshot's clip is not in the scene.");
     }
     this.ensurePose();
-    const canvas = renderScreenshot({
-      renderer: this.renderer,
-      scene: this.stage.scene,
-      camera: this.rig.camera,
-      cameraAnchor: options.camera ?? this.rig.getAnchor(),
-      width: Math.min(4096, Math.max(1, Math.round(options.width))),
-      height: Math.min(4096, Math.max(1, Math.round(options.height))),
-      palette: this.palette,
-      modelSize: model ? extentOf(model.scene.bounds).size : 1,
-      setPose: (clip, seconds) => {
-        model?.applyPose(clip, seconds);
-        if (model) this.skeleton?.update(model.worlds);
-      },
-      pose: time,
-      overlays: model ? (options.overlays ?? []).map((overlay) => this.resolveEntry(overlay)) : [],
-      paintTint: (entries) => this.paintTint(entries, null, new Set()),
-      judgeVisible: (resolved, point, depth, sample) => this.judgeVisible(resolved, point, depth, sample),
-    });
-    if (model) model.applyPose(this.clip, this.shownTime());
-    this.tintDirty = true;
-    this.renderNow();
+    let canvas: HTMLCanvasElement;
+    try {
+      canvas = renderScreenshot({
+        renderer: this.renderer,
+        scene: this.stage.scene,
+        camera: this.rig.camera,
+        cameraAnchor: options.camera ?? this.rig.getAnchor(),
+        width: Math.min(4096, Math.max(1, Math.round(options.width))),
+        height: Math.min(4096, Math.max(1, Math.round(options.height))),
+        palette: this.palette,
+        modelSize: model ? extentOf(model.scene.bounds).size : 1,
+        setPose: (clip, seconds) => {
+          model?.applyPose(clip, seconds);
+          if (model) this.skeleton?.update(model.worlds);
+        },
+        pose: time,
+        overlays: model ? (options.overlays ?? []).map((overlay) => this.resolveEntry(overlay)) : [],
+        paintTint: (entries) => this.paintTint(entries, null, new Set()),
+        judgeVisible: (resolved, point, depth, sample) => this.judgeVisible(resolved, point, depth, sample),
+      });
+    } finally {
+      if (model) model.applyPose(this.clip, this.shownTime());
+      this.tintDirty = true;
+      this.renderNow();
+    }
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new ArcueError("internal", "The browser could not encode the screenshot.");
     return new Uint8Array(await blob.arrayBuffer());
@@ -1180,6 +1216,8 @@ export class ThreeViewport implements Viewport {
     this.rig.dispose();
     this.model?.dispose();
     this.skeleton?.dispose();
+    this.model = null;
+    this.skeleton = null;
     this.stage.dispose();
     this.idPass.dispose();
     this.pins.dispose();
@@ -1189,6 +1227,10 @@ export class ThreeViewport implements Viewport {
     this.root.remove();
     this.emitter.clear();
   }
+}
+
+function playable(clip: Clip | null): clip is Clip {
+  return clip !== null && clip.duration > 0;
 }
 
 function anchorKey(anchor: SpatialAnchor): string {
