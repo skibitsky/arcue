@@ -137,9 +137,14 @@ export class WindowHost {
 
   /**
    * A new port to the core. After the first connection the core may be a fresh process that knows none of this window's
-   * assets, so the window drops its tabs and opens them again by path, starting each from the view it showed.
+   * assets, so the window drops its tabs and opens them again by path, starting each from the view it showed. A window
+   * that closes opens nothing again.
    */
   #connect(channel: CoreChannel): void {
+    if (this.#closing) {
+      channel.close();
+      return;
+    }
     const generation = this.#restore.detach();
     this.client.attach(channel);
     if (this.#hasFocus()) this.store.reportFocus();
@@ -191,10 +196,10 @@ export class WindowHost {
 
   /** Closes this window's assets in the core, so their writes finish, and hands the main process the final tabs. */
   async #close(): Promise<void> {
-    await this.#reopening;
-    const tabs = this.tabs();
     this.#closing = true;
     this.#cancelReport?.();
+    await this.#reopening;
+    const tabs = this.tabs();
     await Promise.all(
       this.store.state
         .get()

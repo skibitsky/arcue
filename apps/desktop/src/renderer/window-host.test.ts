@@ -38,6 +38,8 @@ class FakeDesktop {
   readonly textEdits: TextEdit[] = [];
   readyCount = 0;
   crashes = 0;
+  /** The ports the window got. */
+  ports = 0;
   #connections = 0;
   #windowSide: MemoryEndpoint | null = null;
   #portListener: ((channel: CoreChannel) => void) | null = null;
@@ -100,6 +102,7 @@ class FakeDesktop {
         const [coreSide, windowSide] = createMemoryChannel();
         this.#windowSide = windowSide;
         core.connect(coreSide, { connection: `window-${++this.#connections}`, caller: "window" });
+        this.ports++;
         this.#portListener?.(windowSide);
       })();
     },
@@ -326,6 +329,24 @@ describe("WindowHost", () => {
     await vi.waitFor(() => expect(desktop.closed).toHaveLength(1));
     expect(desktop.closed[0]?.tabs.map((tab) => tab.path)).toEqual([HERO]);
     await expect(window.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
+
+  it("opens nothing in a core that starts again while the window closes", async () => {
+    const desktop = new FakeDesktop({
+      platform: "linux",
+      restore: { tabs: [{ path: HERO, view: null }], active: 0 },
+      adopt: null,
+    });
+    const window = await startHost(desktop);
+    await vi.waitFor(() => expect(paths(window)).toEqual([HERO]));
+
+    desktop.requestClose();
+    desktop.crash();
+    await vi.waitFor(() => expect(desktop.ports).toBe(2));
+    await vi.waitFor(() => expect(desktop.closed).toHaveLength(1));
+    expect(desktop.closed[0]?.tabs.map((tab) => tab.path)).toEqual([HERO]);
+    expect(window.client.connectionState).toBe("reconnecting");
+    await expect(desktop.core?.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
   });
 
   it("opens a new tab and closes the active tab from the menu", async () => {
