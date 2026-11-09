@@ -259,6 +259,19 @@ describe("overlapping reloads", () => {
   });
 });
 
+describe("a scene the 3D view cannot show", () => {
+  it("shows the error when a reloaded scene fails, though an earlier scene was ready", async () => {
+    const { client, session, viewport } = await openStone();
+    expect(session.state.get().viewportReady).toBe(true);
+    viewport.setScene = async () => {
+      throw new Error("Out of GPU memory.");
+    };
+    await client.simulateExport(session.assetId);
+    await flush();
+    expect(session.state.get()).toMatchObject({ sceneError: "Out of GPU memory.", viewportReady: false });
+  });
+});
+
 describe("playback", () => {
   it("starts again from the range start at the range end, and from 0 at the clip end without looping", async () => {
     const { session, viewport } = await openStone();

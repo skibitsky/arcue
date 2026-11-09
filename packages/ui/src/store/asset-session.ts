@@ -398,7 +398,9 @@ export class AssetSession {
     try {
       await viewport.setScene(scene);
     } catch (error) {
-      if (this.state.get().scene === scene) this.state.patch({ sceneError: messageOf(error) });
+      if (this.#viewport === viewport && this.state.get().scene === scene) {
+        this.state.patch({ sceneError: messageOf(error), viewportReady: false });
+      }
       return;
     }
     if (this.#viewport !== viewport || this.state.get().scene !== scene) return;
