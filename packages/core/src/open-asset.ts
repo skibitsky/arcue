@@ -72,6 +72,8 @@ export class OpenAsset {
   waiting: { at: ShowAt; order: number } | null = null;
   /** When a page took the asset with `adopt`, until it shows anywhere again: a page that saved its tab may take it back. */
   adoptedAt: number | null = null;
+  /** Set once "asset.opened" announced the asset. A close before then waits for its open to end. */
+  opened = false;
   closed = false;
   /** Set while `asset.close` waits for the edits in flight. */
   closing: Promise<void> | null = null;

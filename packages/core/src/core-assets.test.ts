@@ -391,4 +391,47 @@ describe("asset.close", () => {
       queue: [commentId],
     });
   });
+
+  /** Opens the hero while its window answers "view.showAsset" only once `answer` settles. */
+  async function placing(test: TestCore, answer: Promise<unknown>) {
+    test.window.respond = (request) => (request.name === "view.showAsset" ? answer : undefined);
+    const opening = test.window.client.execute("asset.open", { path: HERO }).catch((error: unknown) => error);
+    while (test.window.requests.length === 0) await flush();
+    const { assetId } = (test.window.requests[0]?.input ?? {}) as { assetId?: string };
+    if (assetId === undefined) throw new Error("The window was not asked to show the asset.");
+    return { opening, assetId };
+  }
+
+  it("closes an asset its open is still placing only after announcing it, and that open fails", async () => {
+    const test = await startTestCore(heroFiles());
+    const events = record(test, "asset.opened", "asset.closed");
+    const shown = Promise.withResolvers<undefined>();
+    const { opening, assetId } = await placing(test, shown.promise);
+    const closing = test.window.client.execute("asset.close", { assetId });
+    await flush();
+    expect(events).toEqual([]);
+
+    shown.resolve(undefined);
+    await closing;
+    await expect(opening).resolves.toMatchObject({ code: "conflict", message: "Hero.fbx was closed as it opened." });
+    expect(events.map((event) => event.name)).toEqual(["asset.opened", "asset.closed"]);
+    await test.core.idle();
+    await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+    expect(test.clock.pendingTimers).toBe(0);
+    await expect(test.platform.exists(`${HERO_REVIEW}/review.json`)).resolves.toBe(false);
+  });
+
+  it("closes an asset whose open then fails to place it without announcing either", async () => {
+    const test = await startTestCore(heroFiles());
+    const events = record(test, "asset.opened", "asset.closed");
+    const { opening, assetId } = await placing(test, new Promise(() => undefined));
+    const closing = test.window.client.execute("asset.close", { assetId });
+    await flush();
+    test.clock.advance(10_000);
+
+    await expect(opening).resolves.toMatchObject({ code: "unavailable" });
+    await closing;
+    expect(events).toEqual([]);
+    await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
 });

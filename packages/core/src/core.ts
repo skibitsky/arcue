@@ -621,7 +621,9 @@ export class ArcueCore {
       this.#assets.delete(asset.id);
       throw error;
     }
+    asset.opened = true;
     this.registry.emit("asset.opened", { asset: asset.summary });
+    if (asset.closing) throw new ArcueError("conflict", `${asset.name} was closed as it opened.`);
     if (earlier.moved !== null) {
       this.registry.emit("review.relinked", { assetId: asset.id, from: earlier.moved, automatic: true });
     }
@@ -830,11 +832,17 @@ export class ArcueCore {
     });
   }
 
+  /**
+   * Closes the asset once the edits in flight are saved. An asset whose open is still placing it closes once that open
+   * ends: after "asset.opened" when the open placed it, and without any event when the open failed.
+   */
   #close(assetId: string): Promise<void> {
     const asset = this.#asset(assetId);
     asset.closing ??= (async () => {
+      if (!asset.opened) await this.#opening.run(async () => undefined);
       await asset.session.close();
       this.#stop(asset);
+      if (this.#assets.get(assetId) !== asset) return;
       this.#assets.delete(assetId);
       this.registry.emit("asset.closed", { assetId });
     })();
