@@ -990,9 +990,9 @@ export class ArcueCore {
   /**
    * The model stayed missing for `MISSING_MODEL_MS`, so an export did not replace it. When exactly one file in its
    * folder has the bytes of the version on screen or of the last parse, or the model's Unity GUID, the asset follows
-   * that file; otherwise the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a
-   * refused move are expected, so they only end the search. A reviews lock another Arcue kept busy makes it look again
-   * later.
+   * that file; otherwise the asset reports "model-not-found", after the loads in flight, so none of them replaces that
+   * error with its own. A folder that is gone, a tab that closed meanwhile and a refused move are expected, so they only
+   * end the search. A reviews lock another Arcue kept busy makes it look again later.
    */
   async #modelGone(asset: OpenAsset): Promise<void> {
     try {
@@ -1010,9 +1010,11 @@ export class ArcueCore {
       if (!hasCode(error, "conflict") && !hasCode(error, "not-found")) this.#onError(error);
     }
     this.#retrySucceeded(asset, "model-gone");
-    if (asset.ending || asset.missing || (await this.#isFile(asset.path))) return;
-    asset.missing = true;
-    this.#failed(asset, new Error(`Model not found: ${asset.name}`));
+    await asset.loads.run(async () => {
+      if (asset.ending || asset.missing || (await this.#isFile(asset.path))) return;
+      asset.missing = true;
+      this.#failed(asset, new Error(`Model not found: ${asset.name}`));
+    });
   }
 
   async #isFile(path: string): Promise<boolean> {
