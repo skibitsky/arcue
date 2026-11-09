@@ -133,7 +133,6 @@ async function run(): Promise<void> {
       else if (phase.kind === "manual") void offerDownload(phase.manifest, phase.reason);
     },
   });
-  windows = manager;
   const showUpdates = () => installMenu(manager, updateMenuItem(updater, restartToUpdate));
   updater.onChange(() => {
     manager.sendUpdateState(updater.state);
@@ -142,6 +141,7 @@ async function run(): Promise<void> {
   showUpdates();
   core.start();
   manager.restore(await loadSession(sessionPath));
+  windows = manager;
   manager.openPaths(pendingOpens.splice(0));
   void updater.start().then(({ notice, servePort }) => {
     if (notice) manager.notify(notice);
