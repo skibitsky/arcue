@@ -137,6 +137,11 @@ export class OpenAsset {
     return basename(this.path);
   }
 
+  /** Whether the asset is closing or closed, so no new work starts for it. */
+  get ending(): boolean {
+    return this.closed || this.closing !== null;
+  }
+
   get summary(): AssetSummary {
     const summary: AssetSummary = {
       assetId: this.id,

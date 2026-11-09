@@ -11,6 +11,7 @@ import {
   HERO_REVIEW,
   heroFiles,
   heroSpec,
+  looseComment,
   openAsset,
   pinComment,
   readJson,
@@ -432,6 +433,38 @@ describe("asset.close", () => {
     await expect(opening).resolves.toMatchObject({ code: "unavailable" });
     await closing;
     expect(events).toEqual([]);
+    await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
+
+  it("starts no work for an asset while it closes, and refuses to reload it", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    const saving = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    test.platform.beforeWrite = async (path, _op, actor) => {
+      if (actor === null || path !== `${HERO_REVIEW}/review.json`) return;
+      saving.resolve();
+      await released.promise;
+    };
+    const created = test.core.client.execute("comment.create", looseComment(assetId));
+    await saving.promise;
+    const closing = test.core.client.execute("asset.close", { assetId });
+    await flush();
+
+    await expect(test.core.client.execute("asset.reload", { assetId })).rejects.toMatchObject({
+      code: "conflict",
+      message: "Hero.fbx is closing.",
+    });
+    const parsed = test.platform.parsed.length;
+    await test.platform.writeFile(HERO, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4 }] }));
+    await flush();
+    expect(test.clock.pendingTimers).toBe(0);
+
+    released.resolve();
+    await created;
+    await closing;
+    await test.core.idle();
+    expect(test.platform.parsed).toHaveLength(parsed);
     await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
   });
 });
