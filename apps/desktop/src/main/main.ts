@@ -157,6 +157,7 @@ async function run(): Promise<void> {
   });
   const quit = new QuitSequence({
     steps: async () => {
+      updater.stopChecks();
       await manager.prepareQuit();
       await saveNow();
       await core.stop();

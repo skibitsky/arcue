@@ -121,6 +121,12 @@ async function harness(
   return { updater, timers, requests, installs, feed, folder };
 }
 
+/** Records, as a launch before this one would, that a version did not install. */
+async function failedBefore(folder: string, version: string): Promise<void> {
+  const record = { version: 1, installing: null, failed: version, servePort: null };
+  await writeFile(join(folder, RECORD_FILE), JSON.stringify(record));
+}
+
 describe("Updater", () => {
   it("checks after launch, downloads a newer release in the background, and offers to restart into it", async () => {
     const { updater, timers, requests } = await harness();
@@ -276,6 +282,53 @@ describe("Updater", () => {
     const [first, second] = [updater.check(), updater.check()];
     expect(first).toBe(second);
     await first;
+  });
+
+  it("starts no check once the quit begins, and the check that runs keeps the ready update", async () => {
+    const { updater, feed, folder, requests, timers, installs } = await harness();
+    await failedBefore(folder, "0.3.0");
+    await updater.start();
+    await updater.check();
+    expect(updater.phase).toMatchObject({ kind: "ready", manifest: { version: "0.2.0" } });
+    feed.release = "0.3.0";
+    const running = updater.check();
+
+    updater.stopChecks();
+    await running;
+    expect(updater.phase).toMatchObject({ kind: "ready", manifest: { version: "0.2.0" } });
+    const fetched = requests.length;
+    expect(await updater.check()).toEqual({ kind: "off" });
+    timers.advance(CHECK_INTERVAL_MS);
+    updater.checkIfDue();
+    expect(requests).toHaveLength(fetched);
+    await updater.finishQuit();
+    expect(installs).toEqual([{ method: "bundle", relaunch: false }]);
+  });
+
+  it("forgets a restart asked into an update that is no longer the one ready", async () => {
+    const { updater, feed, folder } = await harness({ method: { kind: "setup" }, platform: "win32" });
+    await failedBefore(folder, "0.3.0");
+    await updater.start();
+    await updater.check();
+    expect(updater.requestRestart()).toBe(true);
+    feed.release = "0.3.0";
+    await updater.check();
+    expect(updater.state).toMatchObject({ status: "manual", version: "0.3.0" });
+
+    feed.release = "0.4.0";
+    await updater.check();
+    expect(updater.state).toMatchObject({ status: "ready", version: "0.4.0" });
+    expect(updater.installsOnQuit).toBe(false);
+  });
+
+  it("waits for the record of the last launch before a check that came first downloads anything", async () => {
+    const { updater, folder, requests } = await harness();
+    await failedBefore(folder, "0.2.0");
+    const checking = updater.check();
+    await updater.start();
+    await checking;
+    expect(updater.state).toMatchObject({ status: "manual", version: "0.2.0" });
+    expect(requests).toEqual([FEED]);
   });
 
   it("does nothing without a feed", async () => {
