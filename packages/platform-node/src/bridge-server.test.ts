@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { rename } from "node:fs/promises";
+import type { Socket } from "node:net";
 import { connect, Server } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -23,6 +24,7 @@ import {
   createPeer,
   createRemoteClient,
   framedChannel,
+  HANDSHAKE_MAX_FRAME_BYTES,
   jsonFrameCodec,
   LAST_CORE_FILE,
   LOCKS_FOLDER,
@@ -190,6 +192,33 @@ describe("the bridge server", () => {
 
   it("closes connections without the token", async () => {
     await expect(connectWith("x".repeat(43))).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("reports failed handshakes, but not a probe that sends nothing or a handshake the server ends as it closes", async () => {
+    const opened = async (): Promise<Socket> => {
+      const socket = connect(readInfo().socket);
+      await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+      return socket;
+    };
+    const frame = (length: number) => {
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(length);
+      return header;
+    };
+    (await opened()).destroy();
+    const partial = await opened();
+    partial.write(Buffer.concat([frame(100), Buffer.from("{")]));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(errors).toEqual([]);
+
+    (await opened()).write(frame(HANDSHAKE_MAX_FRAME_BYTES + 1));
+    await expect(connectWith("x".repeat(43))).rejects.toMatchObject({ code: "forbidden" });
+    await vi.waitFor(() => expect(errors).toHaveLength(2));
+    await stopDefault();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(errors.map((error) => (error as { code?: string }).code).sort()).toEqual(["disconnected", "forbidden"]);
+    partial.destroy();
   });
 
   it("removes bridge.json when it closes", async () => {
