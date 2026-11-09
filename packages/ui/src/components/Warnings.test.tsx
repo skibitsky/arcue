@@ -65,6 +65,25 @@ describe("import warnings in the status bar", () => {
     expect(viewport.highlighted).toBeNull();
   });
 
+  it("clears the tint when the list empties while it is open", async () => {
+    const { client, store, viewport } = await renderStone();
+    const user = userEvent.setup();
+    await user.click(statusItem());
+    const row = rows().find((item) => item.textContent?.includes("Eyes.png"));
+    if (!row) throw new Error("No row for Eyes.png.");
+    await user.hover(row);
+    expect(viewport.highlighted?.length).toBe(1);
+    const session = store.activeSession();
+    if (!session) throw new Error("No active session.");
+    await act(async () => {
+      await client.execute("warning.dismissAll", { assetId: session.assetId });
+      await flush();
+    });
+    expect(screen.queryByRole("dialog", { name: "Import warnings" })).toBeNull();
+    expect(session.state.get().highlight).toBeNull();
+    expect(viewport.highlighted).toBeNull();
+  });
+
   it("adds a row as a comment, after which the row shows the draft's number", async () => {
     await renderStone();
     const user = userEvent.setup();

@@ -27,8 +27,10 @@ export function WarningsStatus({ store, session }: { store: WorkspaceStore; sess
   const [open, setOpen] = useState(false);
   const first = warnings[0];
   useEffect(() => {
-    if (first === undefined) setOpen(false);
-  }, [first]);
+    if (first !== undefined || !open) return;
+    setOpen(false);
+    session.highlightSubject(null);
+  }, [first, open, session]);
   if (!first) return null;
   const onOpenChange = (next: boolean) => {
     setOpen(next);
