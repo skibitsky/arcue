@@ -16,6 +16,7 @@ import { checkFromMenu, createUpdater, offerDownload, startServe } from "./app-u
 import { assetPathsFromArgv, launchDataSchema } from "./args";
 import { CoreHost } from "./core-host";
 import { installMenu } from "./menu";
+import { QuitSequence } from "./quit";
 import {
   contentSecurityPolicy,
   isAllowedRequest,
@@ -154,26 +155,20 @@ async function run(): Promise<void> {
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
   });
-  let quitPrepared = false;
-  let quitFinished = false;
-  app.on("before-quit", (event) => {
-    if (quitPrepared) return;
-    quitPrepared = true;
-    event.preventDefault();
-    void (async () => {
+  const quit = new QuitSequence({
+    steps: async () => {
       await manager.prepareQuit();
       await saveNow();
       await core.stop();
       if (updater.installsOnQuit) manager.hideAll();
       await updater.finishQuit();
       log.info("Arcue quits");
-      quitFinished = true;
-      app.quit();
-    })();
+    },
+    quit: () => app.quit(),
+    onError: (error) => log.error("Could not close everything before quitting", error),
   });
-  app.on("will-quit", (event) => {
-    if (quitPrepared && !quitFinished) event.preventDefault();
-  });
+  app.on("before-quit", (event) => quit.beforeQuit(event));
+  app.on("will-quit", (event) => quit.willQuit(event));
 }
 
 /** The update item of the menu, which says what the updater does, or null when the app does not update. */
