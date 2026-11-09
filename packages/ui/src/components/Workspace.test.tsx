@@ -237,6 +237,24 @@ describe("Workspace", () => {
     expect(controls().every(([, on]) => on)).toBe(true);
   });
 
+  it("plays on after a click on the ruler loses the pointer, and ends a press when the ruler goes", async () => {
+    const { session } = await renderStone();
+    const ruler = () => document.querySelector(".tl-ruler") as HTMLElement;
+    act(() => session.setPlaying(true));
+    fireEvent.pointerDown(ruler(), { button: 0, pointerId: 1 });
+    expect(session.time.get().playing).toBe(false);
+    fireEvent(ruler(), new Event("lostpointercapture"));
+    expect(session.time.get().playing).toBe(true);
+
+    const pressed = ruler();
+    fireEvent.pointerDown(pressed, { button: 0, pointerId: 1 });
+    act(() => session.setClip(null));
+    expect(document.querySelector(".tl-ruler")).toBeNull();
+    act(() => session.setClip("Armature|Charge"));
+    fireEvent.pointerUp(pressed, { pointerId: 1 });
+    expect(session.time.get().playing).toBe(false);
+  });
+
   it("selects a comment from its timeline marker", async () => {
     const { session } = await renderStone();
     const user = userEvent.setup();
