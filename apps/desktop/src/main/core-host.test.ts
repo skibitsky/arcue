@@ -145,4 +145,19 @@ describe("CoreHost", () => {
     expect(children.list).toHaveLength(2 + 2 * MAX_START_FAILURES + 2 * (MAX_START_FAILURES - 1));
   });
 
+  it("gives a window that asked again while the core was down only its newest port", () => {
+    const { core } = host();
+    core.start();
+    const delivered: string[] = [];
+    core.requestPort("window-1", "window-1-1", () => delivered.push("window-1-1"));
+    core.requestPort("window-2", "window-2-1", () => delivered.push("window-2-1"));
+    core.requestPort("window-1", "window-1-2", () => delivered.push("window-1-2"));
+    last().send({ type: "started", socket: null });
+
+    expect(delivered).toEqual(["window-2-1", "window-1-2"]);
+    expect(last().posted.filter((message) => message.type === "connect")).toEqual([
+      { type: "connect", connection: "window-2-1" },
+      { type: "connect", connection: "window-1-2" },
+    ]);
+  });
 });

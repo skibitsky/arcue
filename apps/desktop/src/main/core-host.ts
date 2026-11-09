@@ -22,6 +22,7 @@ export interface CoreHostOptions {
 }
 
 interface PortRequest {
+  requester: string;
   connection: string;
   deliver(port: MessagePortMain): void;
 }
@@ -66,10 +67,13 @@ export class CoreHost {
     log.info(`Started the core process (pid ${child.pid ?? "unknown"})`);
   }
 
-  /** Delivers a port to the core under a connection name, now or as soon as the core is running. */
-  requestPort(connection: string, deliver: (port: MessagePortMain) => void): void {
-    this.#queue = this.#queue.filter((request) => request.connection !== connection);
-    this.#queue.push({ connection, deliver });
+  /**
+   * Delivers a port to the core under a connection name, now or as soon as the core is running. A newer request from
+   * the same requester, such as a window that reloaded, replaces one that still waits.
+   */
+  requestPort(requester: string, connection: string, deliver: (port: MessagePortMain) => void): void {
+    this.#queue = this.#queue.filter((request) => request.requester !== requester);
+    this.#queue.push({ requester, connection, deliver });
     this.#flush();
   }
 

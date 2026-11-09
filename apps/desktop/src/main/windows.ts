@@ -365,7 +365,7 @@ export class WindowManager {
       if (!entry) return;
       const contents = entry.contents;
       entry.connections += 1;
-      this.#options.core.requestPort(`window-${entry.id}-${entry.connections}`, (port) => {
+      this.#options.core.requestPort(`window-${entry.id}`, `window-${entry.id}-${entry.connections}`, (port) => {
         if (contents.isDestroyed()) port.close();
         else contents.postMessage(channels.corePort, null, [port]);
       });
