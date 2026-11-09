@@ -912,14 +912,15 @@ export class AssetSession {
     this.state.patch({ note });
   }
 
+  /** A box keeps the text it is sending until the send ends. */
   setBoxText(text: string): void {
     const box = this.state.get().box;
-    if (box) this.state.patch({ box: { ...box, text } });
+    if (box && !box.busy) this.state.patch({ box: { ...box, text } });
   }
 
   removeBoxChip(chip: "time" | "target" | "followUp"): void {
     const box = this.state.get().box;
-    if (!box) return;
+    if (!box || box.busy) return;
     if (chip === "time" && box.mode !== "reopen") {
       this.state.patch({ box: { ...box, time: { kind: "none" }, timeEdited: true } });
     }
@@ -974,7 +975,7 @@ export class AssetSession {
         const commentId = await this.#create(text, box.time, box.target, box.anchorVersion);
         this.#flashAdded(commentId);
       }
-      if (this.state.get().box?.busy) this.state.patch({ box: null, selection: null });
+      if (this.state.get().box?.id === box.id) this.state.patch({ box: null, selection: null });
       this.#releaseRange(box.time);
       this.#syncSelection();
       return true;
@@ -982,7 +983,7 @@ export class AssetSession {
       const current = this.state.get().box;
       const reloaded =
         error instanceof ArcueError && error.code === "conflict" && box.mode !== "reopen" && box.target !== null;
-      if (current) this.state.patch({ box: { ...current, busy: false, needsRepick: reloaded } });
+      if (current?.id === box.id) this.state.patch({ box: { ...current, busy: false, needsRepick: reloaded } });
       this.#host.notify({
         message: reloaded ? "The model changed since you picked this spot. Click or paint it again." : messageOf(error),
         kind: "alert",

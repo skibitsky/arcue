@@ -1,6 +1,7 @@
 import type { QueryInput, QueryName, QueryOutput } from "@arcue/protocol";
+import { ArcueError } from "@arcue/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { flush, openStone, POINT } from "../test-helpers";
+import { flush, holdCommand, openStone, POINT } from "../test-helpers";
 
 const callsNamed = (calls: readonly { name: string; input: unknown }[], name: string) =>
   calls.filter((call) => call.name === name);
@@ -52,6 +53,47 @@ describe("events while a box is open", () => {
     await deleting;
     await flush();
     expect(session.state.get().box).toMatchObject({ mode: "edit", commentId: "c8" });
+  });
+});
+
+describe("sending a box", () => {
+  it("keeps a box's text while it sends, and closes only the box that was sent", async () => {
+    const { client, session, viewport } = await openStone();
+    const held = holdCommand(client, "comment.create");
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("The first box.");
+    const first = session.submitBox();
+    session.setBoxText("Typed while it sends.");
+    session.removeBoxChip("target");
+    expect(session.state.get().box).toMatchObject({ text: "The first box.", target: POINT, busy: true });
+
+    session.escape();
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("The second box.");
+    const second = session.submitBox();
+    await flush();
+    held[0]?.release();
+    expect(await first).toBe(true);
+    expect(session.state.get().box).toMatchObject({ text: "The second box.", busy: true });
+
+    held[1]?.refuse(new ArcueError("unavailable", "The core is busy."));
+    expect(await second).toBe(false);
+    expect(session.state.get().box).toMatchObject({ text: "The second box.", busy: false, needsRepick: false });
+  });
+
+  it("leaves a box opened since alone when an earlier send fails", async () => {
+    const { client, session, viewport } = await openStone();
+    const held = holdCommand(client, "comment.create");
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("Sent first.");
+    const first = session.submitBox();
+    session.escape();
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("Still writing.");
+    await flush();
+    held[0]?.refuse(new ArcueError("conflict", "The model changed."));
+    expect(await first).toBe(false);
+    expect(session.state.get().box).toMatchObject({ text: "Still writing.", busy: false, needsRepick: false });
   });
 });
 

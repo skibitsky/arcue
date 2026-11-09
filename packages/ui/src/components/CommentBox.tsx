@@ -163,6 +163,7 @@ function CommentBox({ session, box }: { session: AssetSession; box: CommentBoxSt
         className="cbox-text"
         rows={2}
         value={box.text}
+        readOnly={box.busy}
         placeholder={box.mode === "reopen" ? "What still needs to change?" : "What should change?"}
         aria-label="Comment text"
         onChange={(event) => {

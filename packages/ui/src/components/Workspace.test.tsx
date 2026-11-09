@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { fakeScene, STONE_RESONATOR, STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import type { FileHost } from "../store/view-files";
-import { flush, NOW, setup, TestViewport, withPoseClips } from "../test-helpers";
+import { flush, holdCommand, NOW, POINT, setup, TestViewport, withPoseClips } from "../test-helpers";
 import { Workspace } from "./Workspace";
 
 /** Ends a CSS animation. jsdom has no AnimationEvent, so React listens for the prefixed event there. */
@@ -81,6 +81,54 @@ describe("Workspace", () => {
       target: null,
     });
     expect(within(screen.getByRole("list", { name: "Drafts" })).getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("takes no typing in the comment box while it sends, then closes it", async () => {
+    const { client, viewport } = await renderStone();
+    const held = holdCommand(client, "comment.create");
+    const user = userEvent.setup();
+    act(() => viewport()?.emit("pinPlaced", { anchor: POINT }));
+    const text = within(screen.getByRole("form", { name: /^Comment/ })).getByRole("textbox", { name: "Comment text" });
+    await user.type(text, "Raise the left arm{Enter}");
+    await act(() => flush());
+    expect((text as HTMLTextAreaElement).readOnly).toBe(true);
+    await user.type(text, " higher");
+    expect((text as HTMLTextAreaElement).value).toBe("Raise the left arm");
+    await act(async () => {
+      held[0]?.release();
+      await flush();
+    });
+    expect(client.calls.find((call) => call.name === "comment.create")?.input).toMatchObject({
+      text: "Raise the left arm",
+    });
+    expect(screen.queryByRole("form", { name: /^Comment/ })).toBeNull();
+  });
+
+  it("takes no typing in the panel field while it adds, and keeps text it did not send", async () => {
+    const { client, session } = await renderStone();
+    const held = holdCommand(client, "comment.create");
+    const user = userEvent.setup();
+    const field = screen.getByRole("textbox", { name: "Comment without a pin" }) as HTMLTextAreaElement;
+    await user.type(field, "The charge reads too slow.{Enter}");
+    await act(() => flush());
+    expect(field.readOnly).toBe(true);
+    await user.type(field, " Much");
+    expect(field.value).toBe("The charge reads too slow.");
+    await act(async () => {
+      held[0]?.release();
+      await flush();
+    });
+    expect(field.readOnly).toBe(false);
+    expect(field.value).toBe("");
+
+    await user.type(field, "Slower still.{Enter}");
+    await act(() => flush());
+    act(() => session.setNoteText("Typed elsewhere."));
+    await act(async () => {
+      held[1]?.release();
+      await flush();
+    });
+    expect(field.value).toBe("Typed elsewhere.");
   });
 
   it("opens room for a draft added to the queue on screen, but not for the drafts it opened with", async () => {

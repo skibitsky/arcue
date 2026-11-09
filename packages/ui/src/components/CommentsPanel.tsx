@@ -277,7 +277,7 @@ function NoteField({ session }: { session: AssetSession }) {
     setBusy(true);
     const added = await session.addTextComment(text);
     setBusy(false);
-    if (added) session.setNoteText("");
+    if (added && session.state.get().note === text) session.setNoteText("");
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -299,6 +299,7 @@ function NoteField({ session }: { session: AssetSession }) {
         ref={fieldRef}
         rows={1}
         value={text}
+        readOnly={busy}
         placeholder={placeholder}
         aria-label="Comment without a pin"
         onChange={(event) => session.setNoteText(event.target.value)}
