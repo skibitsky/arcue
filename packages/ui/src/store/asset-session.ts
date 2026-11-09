@@ -279,17 +279,24 @@ export class AssetSession {
 
   setReview(review: ReviewFile): void {
     this.#reviewSequence++;
-    const { selection, box } = this.state.get();
+    const { selection, box, review: previous } = this.state.get();
     const ids = new Set(review.comments.map((comment) => comment.id));
     const keepSelection = selection !== null && ids.has(selection) ? selection : null;
-    this.state.patch({ review, selection: keepSelection, box: this.#refreshBox(box, review) });
+    this.state.patch({ review, selection: keepSelection, box: this.#refreshBox(box, review, previous === null) });
     this.#dropThumbnails(review);
     this.#syncSelection();
     void this.refreshWarnings();
   }
 
-  /** An edit box follows its comment's stored time and target until the user changes them in the box. */
-  #refreshBox(box: CommentBox | null, review: ReviewFile): CommentBox | null {
+  /**
+   * An edit box follows its comment's stored time and target until the user changes them in the box. A reopen box
+   * restored before the first review loaded closes with that review when its comment is gone or a draft again.
+   */
+  #refreshBox(box: CommentBox | null, review: ReviewFile, first = false): CommentBox | null {
+    if (first && box?.mode === "reopen" && box.commentId !== null) {
+      const comment = review.comments.find((candidate) => candidate.id === box.commentId);
+      return comment && comment.status !== "draft" ? box : null;
+    }
     if (box?.mode !== "edit" || box.commentId === null) return box;
     if (!review.queue.includes(box.commentId)) return null;
     const comment = review.comments.find((candidate) => candidate.id === box.commentId);

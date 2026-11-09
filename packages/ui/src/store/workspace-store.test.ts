@@ -1,3 +1,4 @@
+import type { QueryInput, QueryName, QueryOutput } from "@arcue/protocol";
 import { ArcueError, commands } from "@arcue/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { FakeCoreClient } from "../../dev/fake-core";
@@ -445,6 +446,46 @@ describe("view state and settings", () => {
     reopened.attachViewport(new TestViewport(), document.createElement("div"));
     await flush();
     expect(reopened.state.get().box).toBeNull();
+  });
+
+  it("checks a saved reopen box against the review when the review loads after the scene", async () => {
+    const { client, store, session } = await openStone();
+    session.reopen("c4");
+    session.setBoxText("The foot still slides.");
+    const released = store.releaseAsset(session.assetId);
+    expect(released?.box).toMatchObject({ mode: "reopen", commentId: "c4" });
+    await client.execute("view.reportState", { assetId: session.assetId, state: released ?? fail() });
+    const reopen = async (change: () => Promise<unknown>) => {
+      await change();
+      const query = client.query.bind(client);
+      let answered = false;
+      client.query = async <Name extends QueryName>(
+        name: Name,
+        input: QueryInput<Name>,
+      ): Promise<QueryOutput<Name>> => {
+        if (name === "review.get" && !answered) {
+          answered = true;
+          throw new ArcueError("unavailable", "The core is busy.");
+        }
+        return query(name, input);
+      };
+      store.showAsset({ assetId: session.assetId });
+      const tab = store.session(session.assetId) ?? fail();
+      tab.attachViewport(new TestViewport(), document.createElement("div"));
+      await flush();
+      expect(tab.state.get()).toMatchObject({ review: null, box: { mode: "reopen", commentId: "c4" } });
+      await tab.refresh();
+      return tab;
+    };
+
+    const kept = await reopen(async () => {});
+    expect(kept.state.get().box).toMatchObject({ mode: "reopen", commentId: "c4", text: "The foot still slides." });
+    const saved = store.releaseAsset(session.assetId);
+    await client.execute("view.reportState", { assetId: session.assetId, state: saved ?? fail() });
+    const dropped = await reopen(() =>
+      client.execute("comment.reopen", { assetId: session.assetId, commentId: "c4", text: "Elsewhere" }),
+    );
+    expect(dropped.state.get().box).toBeNull();
   });
 
   it("loads and changes the prompt coordinate convention", async () => {
