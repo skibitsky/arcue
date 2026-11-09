@@ -25,6 +25,7 @@ export class SettingsStore {
   readonly #serial = new Serial();
   #settings: Settings = defaultSettings;
   #stopWatching: (() => void) | null = null;
+  #disposed = false;
 
   constructor(platform: Platform, changed?: (settings: Settings) => void) {
     this.#platform = platform;
@@ -57,6 +58,12 @@ export class SettingsStore {
     return this.#serial.run(async () => undefined);
   }
 
+  /** Watches the file, then reads it, so a change made while it starts is not missed. */
+  async start(onError: ListenerErrorHandler): Promise<void> {
+    this.watch(onError);
+    await this.reload();
+  }
+
   /** Reloads whenever settings.json changes on disk. */
   watch(onError: ListenerErrorHandler): void {
     this.#stopWatching?.();
@@ -87,8 +94,9 @@ export class SettingsStore {
     });
   }
 
-  /** Stops watching the file. */
+  /** Stops watching the file. A read or write in flight still sets the settings, but tells nobody. */
   dispose(): void {
+    this.#disposed = true;
     this.#stopWatching?.();
     this.#stopWatching = null;
   }
@@ -96,7 +104,7 @@ export class SettingsStore {
   #set(settings: Settings): void {
     if (sortedJson(settings) === sortedJson(this.#settings)) return;
     this.#settings = settings;
-    this.#changed?.(settings);
+    if (!this.#disposed) this.#changed?.(settings);
   }
 
   async #read(): Promise<Settings> {

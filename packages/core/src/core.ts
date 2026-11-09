@@ -200,8 +200,7 @@ export class ArcueCore {
   /** Creates the core, reads its settings and watches them. */
   static async start(options: ArcueCoreOptions): Promise<ArcueCore> {
     const core = new ArcueCore(options);
-    await core.#settings.load();
-    core.#settings.watch(core.#onError);
+    await core.#settings.start(core.#onError);
     return core;
   }
 
