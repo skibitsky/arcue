@@ -164,6 +164,8 @@ export class AssetSession {
   readonly #thumbnailKeys = new Map<string, string>();
   readonly #thumbnailAttempts = new Map<string, number>();
   #copying = false;
+  /** The send of the busy box, which a copy waits for. */
+  #sending: Promise<boolean> | null = null;
   #warningSequence = 0;
   #offerDismissed = false;
   #reported: Pick<SessionState, "box" | "note"> = { box: null, note: "" };
@@ -966,6 +968,17 @@ export class AssetSession {
       return false;
     }
     this.state.patch({ box: { ...box, busy: true } });
+    const sending = this.#send(box, text);
+    this.#sending = sending;
+    try {
+      return await sending;
+    } finally {
+      if (this.#sending === sending) this.#sending = null;
+    }
+  }
+
+  /** Success closes, and failure frees for editing, only the box that was sent, never one opened since. */
+  async #send(box: CommentBox, text: string): Promise<boolean> {
     try {
       if (box.mode === "reopen" && box.commentId) {
         await this.#client.execute("comment.reopen", { assetId: this.assetId, commentId: box.commentId, text });
@@ -1121,7 +1134,9 @@ export class AssetSession {
 
   async #copyPrompt(): Promise<void> {
     const box = this.state.get().box;
-    if (box?.mode === "edit" && this.hasUnsavedBox()) {
+    if (box?.mode === "edit" && box.busy) {
+      if (!(await this.#sending)) return;
+    } else if (box?.mode === "edit" && this.hasUnsavedBox()) {
       if (!(await this.submitBox())) return;
     }
     const count = this.state.get().review?.queue.length ?? 0;

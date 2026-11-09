@@ -146,6 +146,24 @@ describe("copy prompt", () => {
     expect(session.state.get().box).toMatchObject({ mode: "reopen", commentId: "c4" });
   });
 
+  it("waits for an edit that is saving, and copies it with its new text", async () => {
+    const { client, session } = await openStone();
+    const held = holdCommand(client, "comment.update");
+    session.selectComment("c7");
+    session.setBoxText("Fold the thumb inward.");
+    const saving = session.submitBox();
+    const copying = session.copyPrompt();
+    await flush();
+    expect(callsNamed(client.calls, "round.copy")).toHaveLength(0);
+    held[0]?.release();
+    await Promise.all([saving, copying]);
+    const names = client.calls
+      .map((call) => call.name)
+      .filter((name) => name === "comment.update" || name === "round.copy");
+    expect(names).toEqual(["comment.update", "round.copy"]);
+    expect(client.lastPrompt).toContain("Fold the thumb inward.");
+  });
+
   it("copies once when asked twice before the first copy finishes", async () => {
     const { client, session } = await openStone();
     await Promise.all([session.copyPrompt(), session.copyPrompt()]);
