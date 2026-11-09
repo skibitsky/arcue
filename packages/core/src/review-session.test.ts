@@ -112,6 +112,19 @@ describe("ReviewSession", () => {
     expect(session.review).toBe(review);
   });
 
+  it("saves nothing once disposed, not even the change whose compute was running", async () => {
+    const { platform, session } = await savedSession();
+    const before = await platform.readText(reviewFilePath(location));
+    await expect(
+      session.run(async (review) => {
+        session.dispose();
+        return { next: { ...review, dismissedWarnings: ["a:b:c"] }, result: undefined };
+      }),
+    ).rejects.toMatchObject({ code: "not-found" });
+    await expect(platform.readText(reviewFilePath(location))).resolves.toBe(before);
+    expect(session.review.revision).toBe(3);
+  });
+
   it("refuses a move once the review it saw went elsewhere in its reviews root, and moves once the whole root is gone", async () => {
     const elsewhere = { ...location, folder: "/app-data/reviews/work/Striker.fbx", assetPath: "/work/Striker.fbx" };
     const moved = await savedSession();

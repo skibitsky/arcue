@@ -122,6 +122,7 @@ export class ReviewSession {
       if (this.#diskHash === null) await this.#checkModelThere();
       const current = this.#review;
       const change = await compute(current);
+      this.#checkUsable();
       if (change.next === null || (!change.prepare && !change.clearHistory && this.#unchanged(change.next, current))) {
         change.apply?.();
         if (change.edit) this.history.record(change.edit);
@@ -195,6 +196,7 @@ export class ReviewSession {
       }
       const unlock = await lockReviews(this.#platform, this.#location);
       try {
+        this.#checkUsable();
         try {
           await move();
         } catch (error) {
@@ -224,6 +226,11 @@ export class ReviewSession {
     return this.#edits.run(async () => {
       this.#closed = true;
     });
+  }
+
+  /** Refuses every change from now on without waiting, so a change whose compute is running saves nothing. */
+  dispose(): void {
+    this.#closed = true;
   }
 
   #checkUsable(): void {

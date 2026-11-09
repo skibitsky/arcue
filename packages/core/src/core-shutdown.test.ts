@@ -225,3 +225,21 @@ describe("ArcueCore.shutdown", () => {
     expect(await test.platform.exists(`${test.platform.appDataDir}/settings.json`)).toBe(false);
   });
 });
+
+describe("ArcueCore.dispose", () => {
+  it("saves nothing once disposed, not even a version record that waits for the reviews lock", async () => {
+    const test = await startTestCore(heroFiles());
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    await test.window.client.execute("asset.open", { path: HERO });
+    await vi.waitFor(() => expect(test.platform.lockWaiters(key)).toBe(1));
+
+    test.core.dispose();
+    await unlock();
+    await flush();
+    await test.core.idle();
+    await expect(test.platform.exists(REVIEW_JSON)).resolves.toBe(false);
+    expect(test.platform.writes).toEqual([]);
+    expect(test.platform.heldLocks()).toEqual([]);
+  });
+});

@@ -272,9 +272,15 @@ export class ArcueCore {
     this.dispose();
   }
 
-  /** Stops watching files and removes the handlers. Open assets are dropped without events. */
+  /**
+   * Stops watching files and removes the handlers. Open assets are dropped without events, and their reviews save
+   * nothing from now on, not even a change already in flight.
+   */
   dispose(): void {
-    for (const asset of this.#assets.values()) this.#stop(asset);
+    for (const asset of this.#assets.values()) {
+      asset.session.dispose();
+      this.#stop(asset);
+    }
     this.#assets.clear();
     this.#settings.dispose();
     for (const unregister of this.#unregister.splice(0)) unregister();
