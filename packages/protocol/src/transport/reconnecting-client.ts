@@ -57,10 +57,10 @@ export class ReconnectingClient implements CoreClient {
     this.#peer = peer;
     this.#channel = channel;
     peer.onEvent((name, payload) => this.#dispatch(name, payload));
+    this.#setState("connected");
     peer.onClose(() => {
       if (this.#peer === peer) this.lost();
     });
-    this.#setState("connected");
   }
 
   /** The connection is gone, as when the main process reports that the core stopped. */
