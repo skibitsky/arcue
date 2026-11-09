@@ -1,4 +1,4 @@
-import type { CoreClient, SavedTab, WindowTabs } from "@arcue/protocol";
+import type { CoreClient, SavedTab, ViewState, WindowTabs } from "@arcue/protocol";
 import { messageOf } from "./asset-session";
 import type { WorkspaceStore } from "./workspace-store";
 
@@ -41,6 +41,8 @@ export class TabRestore {
   readonly #client: CoreClient;
   /** Saved tabs not open in the current core yet, in order: the restored session, or the tabs a lost core had. */
   #unopened: SavedTab[] = [];
+  /** The view each saved tab had, by path, which an open tab keeps until its session shows a view of its own. */
+  #views = new Map<string, ViewState | null>();
   /** The path of the saved tab to activate once every saved tab is open again. */
   #wantActive: string | null = null;
   /** What each saved tab showed before the connection changed, by the tab's path. */
@@ -59,6 +61,7 @@ export class TabRestore {
   /** Saved tabs to open on the next connection: a restored session, or tabs a page saved. */
   pending({ tabs, active }: WindowTabs): void {
     this.#unopened = [...tabs];
+    this.#views = new Map(tabs.map((tab) => [tab.path, tab.view]));
     this.#wantActive = active === null ? null : (tabs[active]?.path ?? null);
   }
 
@@ -72,7 +75,7 @@ export class TabRestore {
       const path = session?.state.get().summary.path ?? "";
       if (!session || path === "") continue;
       if (tab.id === active) activeIndex = saved.length;
-      saved.push({ path, view: session.viewState() });
+      saved.push({ path, view: session.viewState() ?? this.#views.get(path) ?? null });
     }
     const open = new Set(saved.map((tab) => tab.path));
     saved.push(...this.#unopened.filter((tab) => !open.has(tab.path)));
