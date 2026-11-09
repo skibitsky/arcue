@@ -171,10 +171,10 @@ export class ReviewSession {
     );
   }
 
-  /** Takes in a change another program made to `review.json`, as a watcher reports it. */
+  /** Takes in a change another program made to `review.json`, as a watcher reports it, unless the session no longer saves. */
   refresh(): Promise<void> {
     return this.#edits.run(async () => {
-      if (!this.#closed) await this.#sync();
+      if (!this.#closed && this.#stranded === null) await this.#sync();
     });
   }
 

@@ -90,6 +90,28 @@ describe("ReviewSession", () => {
     await expect(platform.exists(location.folder)).resolves.toBe(false);
   });
 
+  it("takes in no review another program saves at its old place once a failed move stranded it", async () => {
+    const elsewhere = { ...location, folder: "/app-data/reviews/work/Striker.fbx", assetPath: "/work/Striker.fbx" };
+    const platform = new MemoryPlatform();
+    const review = { ...emptyReview(location.assetPath), revision: 3 };
+    const text = serializeReview(review);
+    await platform.writeFile(reviewFilePath(location), text);
+    const changed: ReviewFile[] = [];
+    const session = new ReviewSession(platform, location, { review, text }, (next) => changed.push(next));
+    await expect(
+      session.moveTo(elsewhere, async () => {
+        await platform.rename(location.folder, elsewhere.folder);
+        throw new Error("The disk is full.");
+      }),
+    ).rejects.toThrow("The disk is full.");
+
+    const other = serializeReview({ ...review, revision: 9, dismissedWarnings: ["a:b:c"] });
+    await platform.writeFile(reviewFilePath(location), other);
+    await session.refresh();
+    expect(changed).toEqual([]);
+    expect(session.review).toBe(review);
+  });
+
   it("refuses a move once the review it saw went elsewhere in its reviews root, and moves once the whole root is gone", async () => {
     const elsewhere = { ...location, folder: "/app-data/reviews/work/Striker.fbx", assetPath: "/work/Striker.fbx" };
     const moved = await savedSession();
