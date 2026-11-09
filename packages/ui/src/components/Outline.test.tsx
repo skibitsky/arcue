@@ -1,3 +1,5 @@
+import type { CommandInput, CommandName, CommandOutput } from "@arcue/protocol";
+import { ArcueError } from "@arcue/protocol";
 import type { SceneDescription } from "@arcue/scene";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -173,6 +175,33 @@ describe("the outline", () => {
       ["composition.attachFile", null],
       ["composition.removeFile", undefined],
     ]);
+  });
+
+  it("gives the focus back to a file's row when the core refuses to attach it", async () => {
+    const { client, store } = await renderStone(composedStone());
+    const execute = client.execute.bind(client);
+    client.execute = async <Name extends CommandName>(
+      name: Name,
+      input: CommandInput<Name>,
+    ): Promise<CommandOutput<Name>> => {
+      if (name === "composition.attachFile") throw new ArcueError("conflict", "The composition changed on disk.");
+      return execute(name, input);
+    };
+    const user = userEvent.setup();
+    await user.keyboard("o");
+    const row = () => within(drawer()).getByRole("treeitem", { name: "beetle-shells.fbx" });
+    act(() => row().focus());
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.keyboard("{ArrowRight}");
+    const bones = screen.getAllByRole("menu").at(-1) as HTMLElement;
+    await user.click(within(bones).getByRole("menuitem", { name: "Bone_7" }));
+    await act(() => flush());
+    expect(store.state.get().toast).toMatchObject({ message: "The composition changed on disk.", kind: "alert" });
+    expect(document.activeElement).toBe(row());
+
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(row());
   });
 
   it("has no plus without a host to add files from", async () => {

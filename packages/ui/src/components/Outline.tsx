@@ -154,8 +154,16 @@ export function OutlineDrawer({ store, session }: { store: WorkspaceStore; sessi
     void store.removeFileFromView(session.assetId, file.file);
   };
   const attach = (file: OutlineFile, bone: number | null) => {
-    moveFocus(fileRowKey(file.file, bone));
-    void session.attachFile(file, bone);
+    const key = fileRowKey(file.file, bone);
+    moveFocus(key);
+    void session.attachFile(file, bone).then((attached) => {
+      if (attached || pendingFocus.current !== key) return;
+      pendingFocus.current = null;
+      const active = document.activeElement;
+      if (active !== null && active !== document.body) return;
+      setFocused(file.key);
+      rowElements.current.get(file.key)?.focus();
+    });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
