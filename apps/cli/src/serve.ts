@@ -92,8 +92,8 @@ export interface ServeOptions {
   build?: string;
 }
 
-/** Why Arcue in the browser stops by itself, or because `arcue stop` asked it to. */
-export type ServeStopReason = "idle" | "requested" | "unshared" | "replaced" | "removed" | "data-gone";
+/** Why Arcue in the browser stops by itself, because `arcue stop` asked it to, or because it was closed first. */
+export type ServeStopReason = "idle" | "requested" | "unshared" | "replaced" | "removed" | "data-gone" | "closed";
 
 export interface ServeStop {
   reason: ServeStopReason;
@@ -105,7 +105,10 @@ export interface ArcueServer {
   /** The address to open, such as "http://localhost:4530". */
   readonly url: string;
   readonly pid: number;
-  /** Resolves once the core should stop: it stops only once `close` is called. */
+  /**
+   * Resolves once the core should stop, when it stops by itself, `arcue stop` asks it to, or `close` is called first.
+   * From then on it refuses new pages and stops pinging its pages; it stops only once `close` is called.
+   */
   readonly stopped: Promise<ServeStop>;
   /**
    * Stops the core: it records in `last-core.json` that Arcue in the browser ran last, so an open for an agent session's
@@ -169,6 +172,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   let closing: Promise<void> | null = null;
   let pages = 0;
   let cancelIdle: () => void = () => undefined;
+  let cancelHeartbeat: () => void = () => undefined;
   const armIdle = () => {
     cancelIdle();
     const idleStopMs = options.idleStopMs;
@@ -180,6 +184,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
   const stop = (reason: ServeStopReason, message: string) => {
     if (stopping || closing) return;
     stopping = { reason, message };
+    cancelHeartbeat();
     stopped.resolve(stopping);
   };
   const removed = (folder: string) =>
@@ -292,7 +297,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
         socket.end(`HTTP/1.1 400 Bad Request\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
         return;
       }
-      if (closing) {
+      if (closing || stopping) {
         socket.end(`HTTP/1.1 503 Service Unavailable\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
         return;
       }
@@ -300,7 +305,6 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
     });
   }
 
-  let cancelHeartbeat: () => void = () => undefined;
   const heartbeat = () => {
     for (const client of sockets.clients) {
       if (answered.get(client) === false) {
@@ -354,6 +358,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
     pid: process.pid,
     stopped: stopped.promise,
     close(code = SERVE_STOPPED_CLOSE_CODE) {
+      stop("closed", "Arcue stops.");
       closing ??= (async () => {
         cancelIdle();
         cancelHeartbeat();

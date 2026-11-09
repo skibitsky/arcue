@@ -651,6 +651,35 @@ describe("arcue serve stopping", () => {
     });
   });
 
+  it("refuses new pages once it is asked to stop, and keeps its pages without pings until it closes", async () => {
+    const clock = new ManualClock();
+    const running = await serve({ setTimer: (ms, run) => clock.setTimer(ms, run), heartbeatMs: 1000, checkMs: 1e9 });
+    const silent = await openSocket(running.url, running.url, SERVE_CORE_PATH, { autoPong: false });
+    const code = new Promise((resolve) => silent.once("close", (closed) => resolve(closed)));
+    const connection = await connectToCore(userData, "serve");
+    await connection?.client.execute("serve.stop", {});
+    connection?.close();
+    await running.stopped;
+
+    await expect(openSocket(running.url, running.url)).rejects.toThrow("503");
+    clock.advance(5000);
+    await settle();
+    expect(silent.readyState).toBe(WebSocket.OPEN);
+
+    await running.close();
+    server = null;
+    expect(await code).toBe(4000);
+  });
+
+  it("resolves its stop when it is closed without one", async () => {
+    const running = await serve();
+
+    await running.close();
+    server = null;
+
+    await expect(running.stopped).resolves.toEqual({ reason: "closed", message: "Arcue stops." });
+  });
+
   it("closes the pages with code 4000, records that it ran last, and frees its port", async () => {
     const running = await serve();
     const page = await openSocket(running.url, running.url);
