@@ -55,7 +55,8 @@ export interface ViewportEvents {
   pinPlaced: { anchor: SurfaceAnchor };
   /**
    * A finished brush stroke. `overlayId` is null for a new region, or names the selected region that a Shift or
-   * Ctrl/Cmd stroke changed. `anchor` is null when the stroke erased the whole region.
+   * Ctrl/Cmd stroke changed. `anchor` is null when the stroke erased the whole region. A listener takes the stroke by
+   * calling `setOverlays` before it returns; a stroke nobody takes is no longer drawn.
    */
   regionPainted: { overlayId: string | null; anchor: RegionAnchor | null };
   /** The surface under the cursor, or null when the cursor is off the model. */

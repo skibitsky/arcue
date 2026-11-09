@@ -261,6 +261,7 @@ export class ThreeViewport implements Viewport {
 
   private replaceModel(model: Model | null): void {
     this.cancelGesture();
+    this.dropStroke();
     this.model?.dispose();
     this.skeleton?.dispose();
     this.model = model;
@@ -868,6 +869,7 @@ export class ThreeViewport implements Viewport {
     const comment = this.tool === "comment" && !event.altKey && event.button === 0;
     this.rig.setLeftButtonOrbits(!(this.tool === "comment" && !event.altKey));
     if (event.button !== 0) return;
+    if (comment) this.rig.stopAnimation();
     const { x, y } = this.localPoint(event);
     this.gesture = {
       pointerId: event.pointerId,
@@ -886,6 +888,11 @@ export class ThreeViewport implements Viewport {
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) {
       if (event.buttons === 0) this.scheduleHover();
+      return;
+    }
+    if (event.buttons === 0) {
+      this.endLostPointer(event);
+      this.scheduleHover();
       return;
     }
     if (!gesture.moved && Math.hypot(x - gesture.startX, y - gesture.startY) > CLICK_SLOP) {
@@ -908,6 +915,13 @@ export class ThreeViewport implements Viewport {
       return;
     }
     this.click(gesture, x, y);
+  }
+
+  /** Cancels a drag whose pointerup never came as the browser cancels one, which also ends the orbit controls' drag. */
+  private endLostPointer(event: PointerEvent): void {
+    this.canvas.dispatchEvent(
+      new PointerEvent("pointercancel", { pointerId: event.pointerId, pointerType: event.pointerType }),
+    );
   }
 
   private onPointerLeave(): void {
@@ -942,12 +956,16 @@ export class ThreeViewport implements Viewport {
 
   private cancelGesture(): void {
     this.gesture = null;
-    if (this.stroke && !this.strokeFinished) {
-      this.stroke = null;
-      this.tintDirty = true;
-      this.requestRender();
-    }
+    if (!this.strokeFinished) this.dropStroke();
     this.brush.setPainting(false);
+  }
+
+  private dropStroke(): void {
+    if (!this.stroke) return;
+    this.stroke = null;
+    this.strokeFinished = false;
+    this.tintDirty = true;
+    this.requestRender();
   }
 
   private pickAt(x: number, y: number): Pick | null {
@@ -1083,7 +1101,7 @@ export class ThreeViewport implements Viewport {
 
   private finishStroke(): void {
     const stroke = this.stroke;
-    if (!stroke) return;
+    if (!stroke || this.strokeFinished) return;
     if (stroke.hasPending) {
       this.ensurePose();
       this.rig.camera.updateMatrixWorld();
@@ -1093,15 +1111,13 @@ export class ThreeViewport implements Viewport {
     this.updateBrush();
     const result = stroke.result();
     if (!result || (result.overlayId !== null && !stroke.changed)) {
-      this.stroke = null;
-      this.strokeFinished = false;
-      this.tintDirty = true;
-      this.requestRender();
+      this.dropStroke();
       return;
     }
     this.tintDirty = true;
     this.requestRender();
     this.emitter.emit("regionPainted", result);
+    if (this.stroke === stroke) this.dropStroke();
   }
 
   private onContextLost(event: Event): void {
