@@ -35,7 +35,7 @@ export class CoreService {
   #core: ArcueCore | null = null;
   #servedFrom: string | null = null;
   #bridge: BridgeServer | null = null;
-  #starting = false;
+  #starting: Promise<void> | null = null;
   #stopping = false;
   #nextClipboardRequest = 1;
   readonly #onError = (error: unknown) => this.#log.error("Background work failed", error);
@@ -57,7 +57,8 @@ export class CoreService {
   handle(message: ToCore, ports: readonly MessagePortMain[]): Promise<void> {
     switch (message.type) {
       case "start":
-        return this.#start(message.userData, message.logFile);
+        this.#starting ??= this.#start(message.userData, message.logFile);
+        return this.#starting;
       case "connect": {
         const [port] = ports;
         if (!port) this.#log.error(`The window connection ${message.connection} arrived without a port`);
@@ -75,8 +76,6 @@ export class CoreService {
   }
 
   async #start(userData: string, logFile: string): Promise<void> {
-    if (this.#starting) return;
-    this.#starting = true;
     this.#log = fileLog(logFile);
     this.#log.info(`The core starts (pid ${process.pid})`);
     try {
@@ -156,12 +155,14 @@ export class CoreService {
   }
 
   /**
-   * Lets no command line in, closes every asset once its changes in flight are saved, and exits. A core that served
-   * windows records that the desktop app ran last; one that never started leaves last-core.json alone.
+   * Lets the start that runs finish, lets no command line in, closes every asset once its changes in flight are saved,
+   * and exits. A core that served windows records that the desktop app ran last; one that never started leaves
+   * last-core.json alone.
    */
   async #stop(): Promise<void> {
     if (this.#stopping) return;
     this.#stopping = true;
+    await this.#starting;
     this.#log.info("The core stops");
     await this.#stopStep("close the bridge", () => this.#bridge?.close());
     await this.#stopStep("save the changes in flight", () => this.#core?.shutdown());

@@ -71,6 +71,16 @@ describe("the desktop app's core", () => {
     expect(lastCoreSchema.parse(JSON.parse(readFile(LAST_CORE_FILE)))).toEqual({ version: 1, kind: "desktop" });
   });
 
+  it("lets a start that a stop interrupts finish, then stops what it started", async () => {
+    const core = runCore();
+    await Promise.all([core.start(), core.stop()]);
+    expect(core.posted.map((message) => message.type)).toEqual(["started"]);
+    expect(core.exits).toEqual([0]);
+    expect(existsSync(join(userData, BRIDGE_INFO_FILE))).toBe(false);
+    const log = core.log();
+    expect(log.indexOf("The core stops")).toBeGreaterThan(log.indexOf("The bridge listens"));
+  });
+
   it("stops beside an older core that takes no review locks, says why, and leaves the files alone", async () => {
     const older = await fakeCore({ file: BRIDGE_INFO_FILE, url: "http://localhost:4599" });
     const before = readFile(BRIDGE_INFO_FILE);
