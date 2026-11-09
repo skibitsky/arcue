@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import type { CameraAnchor, SurfaceAnchor } from "@arcue/scene";
+import type { CameraAnchor, RegionAnchor, SceneDescription, SurfaceAnchor } from "@arcue/scene";
+import { defaultPartView } from "@arcue/scene";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { regionAnchor } from "./math/regions";
 import { stripScene } from "./math/test-fixture";
 import { Model } from "./render/model";
 import { ThreeViewport } from "./three-viewport";
-import type { ViewportEvents } from "./viewport";
+import type { CommentOverlay, ViewportEvents } from "./viewport";
 
 const fake = vi.hoisted(() => {
   interface Sample {
@@ -79,6 +81,8 @@ vi.mock("./render/stage", async (importOriginal) => {
   };
 });
 
+const NO_HIT = { mesh: -1, triangle: -1, depth: Number.POSITIVE_INFINITY };
+
 const frames = new Map<number, FrameRequestCallback>();
 let nextFrame = 1;
 let container: HTMLDivElement;
@@ -150,9 +154,24 @@ function runFrames(now = performance.now()): void {
   for (const callback of due) callback(now);
 }
 
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function resolveReads(): Promise<void> {
+  for (const resolve of fake.pendingReads.splice(0)) resolve();
+  await settle();
+}
+
 function canvas(): HTMLCanvasElement {
   const element = container.querySelector("canvas");
   if (!element) throw new Error("The view has no canvas.");
+  return element;
+}
+
+function pin(id: string): HTMLElement {
+  const element = container.querySelector<HTMLElement>(`[data-overlay-id="${id}"]`);
+  if (!element) throw new Error(`No pin for ${id}.`);
   return element;
 }
 
@@ -178,12 +197,32 @@ function drag(init: PointerEventInit = {}): void {
   send("pointerup", 220, 150, init);
 }
 
+function hoverAt(x: number, y: number): void {
+  send("pointermove", x, y, { buttons: 0 });
+  runFrames();
+}
+
 /** The alpha of a triangle's tint on the shown model's mesh. */
 function tintAlpha(triangle: number): number {
   const data = models.at(-1)?.meshes[0]?.tint.uniforms.regionTint.value.image.data;
   return data?.[triangle * 4 + 3] ?? -1;
 }
 
+function region(scene: SceneDescription, triangles: number[]): RegionAnchor {
+  const mesh = scene.meshes[0];
+  const anchor = mesh ? regionAnchor("Strip", mesh, triangles) : null;
+  if (!anchor) throw new Error("No region.");
+  return anchor;
+}
+
+/** The center of the strip's first or second triangle. */
+function surface(triangle: 0 | 1): SurfaceAnchor {
+  const vertices: [number, number, number] = triangle === 0 ? [0, 1, 3] : [0, 3, 2];
+  return { kind: "surface", mesh: "Strip", vertices, weights: [1 / 3, 1 / 3, 1 / 3] };
+}
+
+const DRAFT = Math.round(0.5 * 255);
+const DRAFT_HOVERED = Math.round(0.58 * 255);
 const DRAFT_SELECTED = Math.round(0.66 * 255);
 
 describe("painting", () => {
@@ -239,5 +278,116 @@ describe("painting", () => {
     runFrames(begun + 2000);
     const now = view.getCamera().position;
     for (const axis of [0, 1, 2]) expect(now[axis]).toBeCloseTo(held[axis] ?? Number.NaN, 6);
+  });
+});
+
+describe("hover", () => {
+  let scene: SceneDescription;
+
+  beforeEach(async () => {
+    scene = stripScene();
+    await view.setScene(scene);
+  });
+
+  it("forgets a hovered pin that goes away, so a new comment with its id is not drawn hovered", () => {
+    const overlay: CommentOverlay = {
+      id: "new",
+      number: null,
+      state: "draft",
+      anchor: region(scene, [0]),
+      selected: false,
+    };
+    view.setOverlays([overlay]);
+    pin("new").dispatchEvent(new PointerEvent("pointerenter"));
+    runFrames();
+    expect(tintAlpha(0)).toBe(DRAFT_HOVERED);
+    view.setOverlays([]);
+    view.setOverlays([overlay]);
+    runFrames();
+    expect(tintAlpha(0)).toBe(DRAFT);
+  });
+
+  it("forgets the hovered pin when the scene is replaced", async () => {
+    view.setOverlays([{ id: "c1", number: 1, state: "draft", anchor: region(scene, [0]), selected: false }]);
+    pin("c1").dispatchEvent(new PointerEvent("pointerenter"));
+    await view.setScene(stripScene());
+    runFrames();
+    expect(tintAlpha(0)).toBe(DRAFT);
+  });
+
+  it("drops a hover read that a part view change made stale", async () => {
+    fake.deferReads = true;
+    hoverAt(200, 150);
+    expect(fake.pendingReads).toHaveLength(1);
+    view.setPartView({ ...defaultPartView(), hidden: ["Strip"] });
+    fake.sample = NO_HIT;
+    await resolveReads();
+    runFrames();
+    await resolveReads();
+    expect(hovers.filter((anchor) => anchor !== null)).toEqual([]);
+  });
+
+  it("applies no hover read while a gesture is active", async () => {
+    fake.deferReads = true;
+    hoverAt(200, 150);
+    send("pointerdown", 200, 150);
+    await resolveReads();
+    expect(hovers).toEqual([]);
+  });
+
+  it("probes again when a drag ends", async () => {
+    hoverAt(200, 150);
+    await settle();
+    expect(hovers.at(-1)).not.toBeNull();
+    send("pointerdown", 200, 150);
+    fake.sample = NO_HIT;
+    send("pointerup", 200, 150);
+    runFrames();
+    await settle();
+    expect(hovers.at(-1)).toBeNull();
+  });
+
+  it("probes again when the camera stops moving", async () => {
+    hoverAt(200, 150);
+    await settle();
+    expect(hovers.at(-1)).not.toBeNull();
+    fake.sample = NO_HIT;
+    const camera = view.getCamera();
+    const [x, y, z] = camera.position;
+    view.setCamera({ ...camera, position: [x + 1, y, z] });
+    runFrames();
+    runFrames();
+    await settle();
+    expect(hovers.at(-1)).toBeNull();
+  });
+});
+
+describe("pin visibility", () => {
+  let scene: SceneDescription;
+  const pinned: CommentOverlay = { id: "c1", number: 1, state: "draft", anchor: surface(0), selected: false };
+
+  beforeEach(async () => {
+    scene = stripScene();
+    await view.setScene(scene);
+    fake.deferReads = true;
+    fake.sample = { mesh: 0, triangle: 3, depth: 0.001 };
+    view.setOverlays([pinned]);
+    runFrames();
+    expect(fake.pendingReads).toHaveLength(1);
+  });
+
+  it("drops a read that a display mode change made stale", async () => {
+    view.setDisplayMode("clay");
+    fake.sample = NO_HIT;
+    await resolveReads();
+    expect(pin("c1").classList.contains("is-hidden-surface")).toBe(false);
+  });
+
+  it("drops a read that an anchor change made stale", async () => {
+    view.setOverlays([{ ...pinned, anchor: surface(1) }]);
+    fake.sample = NO_HIT;
+    await resolveReads();
+    runFrames();
+    expect(pin("c1").classList.contains("is-hidden-surface")).toBe(false);
   });
 });
