@@ -71,7 +71,10 @@ let namespace: string | null | undefined;
 const liveTokens = new Map<string, string>();
 /** The acquires waiting for their turn at each lock file, after the one that has it. */
 const turns = new Map<string, (() => void)[]>();
-/** The other holder this process waits on at each lock file, and since when, by `performance.now()`. */
+/**
+ * The other holder this process waits on at each lock file, and since when, by `performance.now()`, shared by the
+ * acquires that take turns there until the last of them ends.
+ */
 const foreign = new Map<string, { identity: string; since: number }>();
 let exitWatched = false;
 
@@ -209,8 +212,10 @@ function takeTurn(path: string): Promise<void> {
 
 function passTurn(path: string, delayMs: number): void {
   const next = turns.get(path)?.shift();
-  if (!next) turns.delete(path);
-  else if (delayMs > 0) setTimeout(next, delayMs);
+  if (!next) {
+    turns.delete(path);
+    foreign.delete(path);
+  } else if (delayMs > 0) setTimeout(next, delayMs);
   else next();
 }
 
@@ -308,13 +313,31 @@ async function clearDeadClaim(claim: string, attempt: Attempt): Promise<void> {
   if (typeof again === "object" && sameSnapshot(again, seen)) await unlinkWithRetry(claim);
 }
 
+/**
+ * Refreshes the lock file's modification time while its record is still this holder's, and stops once it is not, as
+ * after a waiter broke the lock of this holder while it stalled.
+ */
 function holding(attempt: Attempt): ReleaseLock {
-  const heartbeat = setInterval(() => {
+  let released: Promise<void> | null = null;
+  let beating = false;
+  const beat = async () => {
+    const seen = await inspect(attempt.path, attempt.label).catch(() => "busy" as const);
+    if (seen === "busy" || released) return;
+    if (typeof seen !== "object" || parseRecord(seen.text)?.token !== attempt.token) {
+      clearInterval(heartbeat);
+      return;
+    }
     const at = new Date(attempt.lease.now());
-    fs.utimes(attempt.path, at, at).catch(() => undefined);
+    await fs.utimes(attempt.path, at, at).catch(() => undefined);
+  };
+  const heartbeat = setInterval(() => {
+    if (beating) return;
+    beating = true;
+    void beat().finally(() => {
+      beating = false;
+    });
   }, attempt.lease.heartbeatMs);
   heartbeat.unref();
-  let released: Promise<void> | null = null;
   const release = async () => {
     clearInterval(heartbeat);
     liveTokens.delete(attempt.token);
