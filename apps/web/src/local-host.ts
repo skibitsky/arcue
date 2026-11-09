@@ -103,6 +103,8 @@ export class LocalHost {
   /** The socket that is connecting or in use. */
   #socket: WebSocket | null = null;
   #cancelRetry: (() => void) | null = null;
+  /** The probe that runs before the next attempt, and whether the page asked to connect at once meanwhile. */
+  #retryProbe: { now: boolean } | null = null;
   #cancelSave: (() => void) | null = null;
   #failures = 0;
   #attachedBefore = false;
@@ -158,9 +160,16 @@ export class LocalHost {
     this.#connect();
   }
 
-  /** Connects at once while the page waits to try again, as when the page comes back to the foreground. */
+  /**
+   * Connects at once while the page waits to try again, as when the page comes back to the foreground, or as soon as
+   * the probe before the next attempt answers.
+   */
   retryNow(): void {
     if (!this.#canConnect() || this.#socket !== null || this.client.connectionState !== "reconnecting") return;
+    if (this.#retryProbe) {
+      this.#retryProbe.now = true;
+      return;
+    }
     this.#connect();
   }
 
@@ -281,6 +290,7 @@ export class LocalHost {
     attempt.attached = true;
     this.#attachedBefore = true;
     this.#toldStopped = false;
+    this.#status.patch({ elsewhere: false });
     if (this.#options.hasFocus?.()) this.store.reportFocus();
     this.#reopening = this.#reopening
       .then(() => this.#reopenAll(generation, shows))
@@ -399,7 +409,7 @@ export class LocalHost {
    * browser has the address, first probes the page.
    */
   #retryLater(): void {
-    if (!this.#canConnect() || this.#cancelRetry !== null) return;
+    if (!this.#canConnect() || this.#cancelRetry !== null || this.#retryProbe !== null) return;
     this.#failures++;
     const backoffMs = Math.min(MAX_RETRY_MS, FIRST_RETRY_MS * 2 ** (this.#failures - 1));
     const delayMs = backoffMs * (0.8 + Math.random() * 0.4);
@@ -407,11 +417,15 @@ export class LocalHost {
       this.#schedule(delayMs);
       return;
     }
+    const probing = { now: false };
+    this.#retryProbe = probing;
     void this.#probe().then((page) => {
+      this.#retryProbe = null;
       if (page === "elsewhere") this.#foundElsewhere();
       else this.#status.patch({ elsewhere: false });
       if (typeof page === "object" && this.#socket === null && this.#reloadOnce(page.changed)) return;
-      this.#schedule(delayMs);
+      if (probing.now && !this.#elsewhere) this.retryNow();
+      else this.#schedule(delayMs);
     });
   }
 
