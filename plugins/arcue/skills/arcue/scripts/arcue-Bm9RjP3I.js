@@ -7699,6 +7699,30 @@ var partViewSchema = object({
 	isolated: partIdSchema.nullable(),
 	lod: indexSchema
 });
+/**
+* A comment box that was open, with what it held, so the tab opens it again after a restart, a reload or a move. A
+* "new" box writes a new draft, an "edit" box changes the draft `commentId` names, and a "reopen" box returns that
+* sent or resolved comment to the queue. `anchorVersion` is the asset version the target was picked on, and
+* `timeEdited` and `targetEdited` say what an edit box changed.
+*/
+var savedBoxSchema = object({
+	mode: _enum([
+		"new",
+		"edit",
+		"reopen"
+	]),
+	commentId: string().min(1).nullable(),
+	time: timeSelectionSchema,
+	restPose: boolean(),
+	target: spatialAnchorSchema.nullable(),
+	targetBone: string().min(1).nullable(),
+	followUpRound: indexSchema.nullable(),
+	text: string().max(1e5),
+	anchorVersion: string().min(1).nullable(),
+	timeEdited: boolean(),
+	targetEdited: boolean(),
+	needsRepick: boolean()
+});
 /** What a window shows for one asset. The core keeps the latest report so a window can be rebuilt after a crash. */
 var viewStateSchema = object({
 	camera: cameraAnchorSchema,
@@ -7719,7 +7743,11 @@ var viewStateSchema = object({
 	/** The outline drawer is open. It shows only for models with parts or added files to list. */
 	outlineOpen: boolean().default(false),
 	/** The person dismissed the offer to continue an earlier review, so the tab never offers one again. */
-	relinkOfferDismissed: boolean().optional()
+	relinkOfferDismissed: boolean().optional(),
+	/** The comment box open in the tab. */
+	box: savedBoxSchema.optional(),
+	/** Text typed in the tab's field for a comment without a pin, which is no comment yet. */
+	note: string().max(1e5).optional()
 });
 object({
 	tabs: array(object({
