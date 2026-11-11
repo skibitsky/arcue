@@ -37,6 +37,21 @@ describe("WindowPresence", () => {
     await expect(waiting).rejects.toMatchObject({ code: "unavailable" });
   });
 
+  it("asks again for the waiters left when the one that asked gives up", async () => {
+    const { clock, windows, requests } = presence();
+    const first = windows.ensure();
+    clock.advance(500);
+    const second = windows.ensure("a");
+    expect(requests()).toBe(1);
+
+    clock.advance(500);
+    await expect(first).rejects.toMatchObject({ code: "unavailable" });
+    expect(requests()).toBe(2);
+    clock.advance(500);
+    await expect(second).rejects.toMatchObject({ code: "unavailable" });
+    expect(requests()).toBe(2);
+  });
+
   it("waits for the view's page or a window outside views, never a page of another view", async () => {
     const { windows, requests } = presence();
     windows.added("b");

@@ -7,6 +7,9 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  unwatchFile,
+  watch,
+  watchFile,
   writeFileSync,
 } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -27,7 +30,12 @@ import { buildFixture } from "./test-children";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+  return { ...actual, writeFile: vi.fn(actual.writeFile), lstat: vi.fn(actual.lstat) };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, watch: vi.fn(actual.watch), watchFile: vi.fn(actual.watchFile) };
 });
 
 vi.mock("./file-lock", async (importOriginal) => {
@@ -257,6 +265,42 @@ describe("NodePlatform watching", () => {
     await writeFile(join(native, "export", "Hero.fbx"), "v2");
     await until(() => changes.some((change) => change.kind === "created"));
     stop();
+  });
+
+  it("polls a file whose folder it cannot watch, and only polls it from then on", async () => {
+    await platform.writeFile(at("work/Hero.fbx"), "v1");
+    vi.mocked(watch).mockImplementationOnce(() => {
+      throw Object.assign(new Error("EMFILE: too many open files, watch"), { code: "EMFILE" });
+    });
+    const changes: FileChange[] = [];
+    const stop = platform.watch(at("work/Hero.fbx"), (change) => changes.push(change));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    rmSync(join(native, "work", "Hero.fbx"));
+    await until(() => changes.some((change) => change.kind === "removed"));
+    writeFileSync(join(native, "work", "Hero.fbx"), "v2");
+    await until(() => changes.some((change) => change.kind === "created"));
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(changes.map((change) => change.kind)).toEqual(["removed", "created"]);
+    stop();
+  }, 10_000);
+
+  it("starts no poll once it is stopped while it looks for a folder to watch", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(watchFile).mockClear();
+    vi.mocked(fs.lstat).mockImplementation(() =>
+      Promise.reject(Object.assign(new Error("ENOENT: the test made it fail"), { code: "ENOENT" })),
+    );
+    try {
+      platform.watch(at("work/Hero.fbx"), () => undefined)();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      vi.mocked(fs.lstat).mockImplementation(actual.lstat);
+      unwatchFile(join(native, "work", "Hero.fbx"));
+    }
+
+    expect(watchFile).not.toHaveBeenCalled();
   });
 
   it("watches a file whose folders do not exist yet", async () => {

@@ -1,8 +1,12 @@
 import { ReconnectingClient as ExportedClient } from "@arcue/protocol";
 import { describe, expect, it, vi } from "vitest";
+import type { ByteStream } from "./framed";
+import { framedChannel, framedEndpoint } from "./framed";
+import { jsonFrameCodec } from "./json-codec";
 import type { MemoryEndpoint } from "./memory-channel";
 import { createMemoryChannel } from "./memory-channel";
 import { createPeer } from "./peer";
+import type { CoreChannel } from "./reconnecting-client";
 import { ReconnectingClient } from "./reconnecting-client";
 
 /** A core stand-in on the far side of a fresh channel; returns the window's side and a way to emit events. */
@@ -10,6 +14,19 @@ function fakeCore(): { windowSide: MemoryEndpoint; emit(name: string, payload: u
   const [coreSide, windowSide] = createMemoryChannel();
   const peer = createPeer(coreSide, { handleRequest: () => ({ assets: [] }) });
   return { windowSide, emit: (name, payload) => peer.emit(name, payload) };
+}
+
+/** A channel over a byte stream that has already closed, whose close listeners run at once. */
+function closedChannel(): CoreChannel {
+  const stream: ByteStream = {
+    write: () => undefined,
+    onData: () => () => undefined,
+    onClose: () => () => undefined,
+    close: () => undefined,
+  };
+  const channel = framedChannel(stream, jsonFrameCodec);
+  channel.close();
+  return { ...framedEndpoint(channel), close: () => channel.close() };
 }
 
 describe("ReconnectingClient", () => {
@@ -45,6 +62,24 @@ describe("ReconnectingClient", () => {
     second.emit("asset.closed", { assetId: "a2" });
     await vi.waitFor(() => expect(closed).toEqual(["a1", "a2"]));
     expect(client.connectionState).toBe("connected");
+  });
+
+  it("stays reconnecting and asks again for a channel that closed before it was attached", async () => {
+    const onLost = vi.fn();
+    const client = new ReconnectingClient({ handleRequest: () => null, onLost });
+    const states: string[] = [];
+    client.onConnectionChange((state) => states.push(state));
+
+    client.attach(closedChannel());
+    expect(client.connectionState).toBe("reconnecting");
+    expect(onLost).toHaveBeenCalledTimes(1);
+
+    client.attach(fakeCore().windowSide);
+    client.attach(closedChannel());
+    expect(client.connectionState).toBe("reconnecting");
+    expect(onLost).toHaveBeenCalledTimes(2);
+    expect(states).toEqual(["connected", "reconnecting", "connected", "reconnecting"]);
+    await expect(client.query("asset.list", {})).rejects.toMatchObject({ code: "disconnected" });
   });
 
   it("closes the channel it replaces, so the core drops that connection", async () => {

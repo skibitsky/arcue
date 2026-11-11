@@ -490,6 +490,23 @@ describe("a file lock another holder left", () => {
     await unknown.value();
   });
 
+  it("waits the whole timeout again on a later acquire that meets the holder an earlier one timed out on", async () => {
+    for (const held of ["", JSON.stringify(record({ pid: process.ppid }))]) {
+      writeRecord(lock, held);
+      await expect(acquireFileLock(lock, options({ timeoutMs: 300 }))).rejects.toMatchObject({ code: "timeout" });
+
+      const { value: outcome, ms } = await timed(() =>
+        acquireFileLock(lock, options({ timeoutMs: 300 })).then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+
+      expect(outcome).toMatchObject({ code: "timeout" });
+      expect(ms).toBeGreaterThanOrEqual(290);
+    }
+  });
+
   it("times out on how long one holder keeps it, not on the wait behind several holders in turn", async () => {
     writeRecord(lock, record({ pid: process.ppid }));
     const next = join(temp, "next.lock");
@@ -698,6 +715,20 @@ describe("a file lock across processes", () => {
     expect(readRecord(lock)).toEqual(taken);
     successor.send("release");
     await successor.exited;
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("stops refreshing its file once another holder took it, so that holder's lease still runs out", async () => {
+    const release = await acquireFileLock(lock, options({ heartbeatMs: 50 }));
+    writeRecord(lock, record({ pid: deadPid(), host: `not-${HOST}`.slice(0, 255) }), 3_600_000);
+    const waiter = fixture.start({ mode: "hold", lock, options: { timeoutMs: 3000, ...shortLease } }, temp);
+
+    await holding(waiter);
+
+    expect(readRecord(lock).pid).toBe(waiter.pid);
+    waiter.send("release");
+    await waiter.exited;
+    await release();
     expect(existsSync(lock)).toBe(false);
   });
 

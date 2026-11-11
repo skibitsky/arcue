@@ -245,7 +245,7 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 /**
  * Watches the folder that holds `path`, which also sees an atomic replace, as a removal and creation or as a rename.
  * While that folder does not exist yet, it watches the nearest folder above it and moves down as folders appear.
- * Files in one folder share its watch. When the system cannot watch at all, it polls.
+ * Files in one folder share its watch. When the system cannot watch at all, it polls the file from then on instead.
  */
 function watchPath(
   path: string,
@@ -278,7 +278,10 @@ function watchPath(
   };
 
   const poll = () => {
-    if (polling) return;
+    if (polling || stopped) return;
+    unlisten?.();
+    unlisten = null;
+    watching = null;
     polling = true;
     watchFile(native(path), { interval: POLL_INTERVAL_MS }, report);
   };
@@ -297,7 +300,7 @@ function watchPath(
       if (up === folder) return poll();
       folder = up;
     }
-    if (stopped || folder === watching) return;
+    if (stopped || polling || folder === watching) return;
     unlisten?.();
     unlisten = null;
     watching = folder;

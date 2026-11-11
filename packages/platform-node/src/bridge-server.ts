@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { ArcueCore } from "@arcue/core";
 import type { BridgeInfo, ListenerErrorHandler, MessageEndpoint } from "@arcue/protocol";
 import {
+  ArcueError,
   acceptBridge,
   bridgeInfoFile,
   framedChannel,
@@ -155,6 +156,7 @@ async function listenForBridges(options: BridgeServerOptions): Promise<BridgeSer
   const address = await bridgeAddress(userData);
   const token = randomBytes(32).toString("base64url");
   let next = 1;
+  let stopping = false;
   const open = new Set<Socket>();
   const server = createServer((connection) => {
     open.add(connection);
@@ -175,11 +177,14 @@ async function listenForBridges(options: BridgeServerOptions): Promise<BridgeSer
           onListenerError: options.onError,
         });
       },
-      (error: unknown) => options.onError(error),
+      (error: unknown) => {
+        if (!endedBeforeHello(error, connection, stopping)) options.onError(error);
+      },
     );
   });
   server.on("error", options.onError);
   const stopListening = async () => {
+    stopping = true;
     const closed = new Promise<void>((resolve) => server.close(() => resolve()));
     for (const connection of open) connection.destroy();
     await closed;
@@ -267,6 +272,14 @@ function listen(server: Server, path: string): Promise<void> {
       resolve();
     });
   });
+}
+
+/**
+ * Whether a connection closed before its hello as a routine one does: one that connected only to see that the core
+ * listens and sent nothing, or one that the server ended as it stopped.
+ */
+function endedBeforeHello(error: unknown, connection: Socket, stopping: boolean): boolean {
+  return error instanceof ArcueError && error.code === "disconnected" && (stopping || connection.bytesRead === 0);
 }
 
 function unrefTimer(delayMs: number, callback: () => void): () => void {

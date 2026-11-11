@@ -181,7 +181,7 @@ export type { EmitterPortLike, MessageEndpoint, PortLike, Transfer } from "./tra
 export { emitterEndpoint, portEndpoint } from "./transport/endpoint";
 export type { Envelope, EventEnvelope, RequestEnvelope, RequestKind, ResponseEnvelope } from "./transport/envelope";
 export { isEnvelope } from "./transport/envelope";
-export type { ByteStream, FrameCodec, FramedChannel, FrameLimits } from "./transport/framed";
+export type { ByteStream, ChannelOptions, FrameCodec, FramedChannel, FrameLimits } from "./transport/framed";
 export {
   encodeFrame,
   FrameReader,

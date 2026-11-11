@@ -104,6 +104,43 @@ describe("frames", () => {
     expect(seen).toEqual([{ n: 2 }]);
   });
 
+  it("drops the messages that arrive once its listeners have left, rather than keep them", async () => {
+    const [left, right] = streamPair("messages");
+    const sender = framedChannel(left, json);
+    const receiver = framedChannel(right, json);
+    const seen: unknown[] = [];
+    const unlisten = receiver.listen((value) => seen.push(value));
+    sender.send({ n: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    unlisten();
+    sender.send({ n: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    receiver.listen((value) => seen.push(value));
+    sender.send({ n: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(seen).toEqual([{ n: 1 }, { n: 3 }]);
+  });
+
+  it("runs every close listener when one throws, and reports what it threw", async () => {
+    const [left] = streamPair();
+    const errors: unknown[] = [];
+    const channel = framedChannel(left, json, { onListenerError: (error) => errors.push(error) });
+    const closed: string[] = [];
+    channel.onClose(() => closed.push("first"));
+    channel.onClose(() => {
+      throw new Error("listener failed");
+    });
+    channel.onClose(() => closed.push("last"));
+
+    channel.close();
+    channel.close();
+
+    expect(closed).toEqual(["first", "last"]);
+    expect(errors).toEqual([new Error("listener failed")]);
+  });
+
   it("carries envelopes between peers", async () => {
     const [left, right] = streamPair();
     createPeer(framedEndpoint(framedChannel(left, json)), { handleRequest: () => ({ assets: [] }) });

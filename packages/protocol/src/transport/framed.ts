@@ -1,4 +1,6 @@
 import { ArcueError } from "../errors";
+import type { ListenerErrorHandler } from "../listener-errors";
+import { callEach, reportListenerError } from "../listener-errors";
 import type { MessageEndpoint } from "./endpoint";
 
 /** Bytes in both directions, such as a Node socket or a Windows named pipe. */
@@ -92,7 +94,10 @@ export class FrameReader {
   }
 }
 
-/** Messages framed over a byte stream. Messages that arrive before anyone listens wait in order for the first listener. */
+/**
+ * Messages framed over a byte stream. Messages that arrive before anyone listens wait in order for the first listener;
+ * once a listener has been added, a message that arrives while none listens is dropped.
+ */
 export interface FramedChannel {
   send(value: unknown): void;
   /** Takes the next message that no listener received; rejects as "disconnected" when the channel closes first. */
@@ -102,16 +107,25 @@ export interface FramedChannel {
   close(): void;
 }
 
-export function framedChannel(stream: ByteStream, codec: FrameCodec, limits: FrameLimits = {}): FramedChannel {
-  const reader = new FrameReader(limits);
-  return channel(stream, codec, (chunk) => reader.push(chunk), encodeFrame);
+export interface ChannelOptions {
+  /** Receives errors thrown by close listeners. By default they surface as unhandled rejections. */
+  onListenerError?: ListenerErrorHandler;
+}
+
+export function framedChannel(
+  stream: ByteStream,
+  codec: FrameCodec,
+  options: FrameLimits & ChannelOptions = {},
+): FramedChannel {
+  const reader = new FrameReader(options);
+  return channel(stream, codec, (chunk) => reader.push(chunk), encodeFrame, options);
 }
 
 /**
  * Messages over a stream that delivers each write as one chunk, such as a WebSocket, so a frame needs no length
  * prefix. A chunk larger than `MAX_FRAME_BYTES`, or one the codec cannot decode, closes the channel.
  */
-export function messageChannel(stream: ByteStream, codec: FrameCodec): FramedChannel {
+export function messageChannel(stream: ByteStream, codec: FrameCodec, options: ChannelOptions = {}): FramedChannel {
   return channel(
     stream,
     codec,
@@ -125,6 +139,7 @@ export function messageChannel(stream: ByteStream, codec: FrameCodec): FramedCha
       }
       return payload;
     },
+    options,
   );
 }
 
@@ -133,11 +148,13 @@ function channel(
   codec: FrameCodec,
   toFrames: (chunk: Uint8Array) => Uint8Array[],
   toChunk: (payload: Uint8Array) => Uint8Array,
+  options: ChannelOptions,
 ): FramedChannel {
   const listeners = new Set<(value: unknown) => void>();
   const waiting: unknown[] = [];
   const receivers: { resolve(value: unknown): void; reject(error: unknown): void }[] = [];
   let closed = false;
+  let listened = false;
   const closeListeners = new Set<() => void>();
 
   const close = () => {
@@ -148,9 +165,10 @@ function channel(
     stream.close();
     const error = new ArcueError("disconnected", "The connection closed.");
     for (const receiver of receivers.splice(0)) receiver.reject(error);
-    for (const listener of [...closeListeners]) listener();
+    const closing = [...closeListeners];
     closeListeners.clear();
     listeners.clear();
+    callEach(closing, [], options.onListenerError ?? reportListenerError);
   };
 
   const stopData = stream.onData((chunk) => {
@@ -172,8 +190,8 @@ function channel(
       }
       const receiver = listeners.size === 0 ? receivers.shift() : undefined;
       if (receiver) receiver.resolve(value);
-      else if (listeners.size === 0) waiting.push(value);
-      else for (const listener of [...listeners]) listener(value);
+      else if (listeners.size > 0) for (const listener of [...listeners]) listener(value);
+      else if (!listened) waiting.push(value);
     }
   });
   const stopClose = stream.onClose(close);
@@ -189,6 +207,7 @@ function channel(
     },
     listen(listener) {
       listeners.add(listener);
+      listened = true;
       for (const value of waiting.splice(0)) listener(value);
       return () => {
         listeners.delete(listener);
