@@ -501,6 +501,26 @@ describe("an open model whose file is renamed", () => {
     expect([...test.errors, ...closing.test.errors]).toEqual([]);
   });
 
+  it("takes a folder that replaced the model for a missing model, and follows the model to its new name", async () => {
+    const { test, assetId } = await commented();
+    await test.platform.remove(HERO);
+    await test.platform.mkdir(HERO);
+    await settle(test);
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO, status: "failed", error: "Model not found: Hero.fbx" }],
+    });
+
+    const renamed = await commented();
+    await renamed.test.platform.rename(HERO, STRIKER);
+    await renamed.test.platform.mkdir(HERO);
+    await settle(renamed.test);
+    await expect(renamed.test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId: renamed.assetId, path: STRIKER, status: "ready", error: null }],
+    });
+    await expect(renamed.test.platform.exists(`${STRIKER_REVIEW}/review.json`)).resolves.toBe(true);
+    expect([...test.errors, ...renamed.test.errors]).toEqual([]);
+  });
+
   it("does not follow a file that has a review of its own", async () => {
     const test = await startTestCore({ ...heroFiles(), [STRIKER]: fakeAsset({ ...heroSpec, fps: 30 }) });
     await review(test, STRIKER, (await openVersion(test, STRIKER)) ?? "");

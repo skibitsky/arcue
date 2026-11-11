@@ -245,6 +245,26 @@ describe("holding a model for its view's page", () => {
     expect(reloaded.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
   });
 
+  it("holds the model for the view when its page closes just after it answers that it shows the model", async () => {
+    const test = await setupServe();
+    const page = browserPage(test, "page-a", "a");
+    page.respond = (request) => {
+      if (request.name !== "view.showAsset") return undefined;
+      void Promise.resolve().then(() => {
+        void Promise.resolve().then(() => page.close());
+      });
+      return undefined;
+    };
+    const cli = bridge(test);
+
+    const { assetId, shown } = await cli.execute("asset.openInView", { path: HERO, view: "a", frame: 12 });
+
+    expect(shown).toBe("held");
+    const reloaded = browserPage(test, "page-a-2", "a");
+    await reloaded.client.execute("view.moveAsset", { assetId, unlessShown: true });
+    expect(reloaded.requests).toEqual([{ kind: "command", name: "view.showAsset", input: { assetId, frame: 12 } }]);
+  });
+
   it("lets a page of the view take back for a while a model another page adopted after both dropped", async () => {
     const test = await setupServe();
     const before = browserPage(test, "page-a", "a");

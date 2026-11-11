@@ -1334,6 +1334,46 @@ describe("a reviews lock another holder keeps", () => {
     expect(test.errors).toEqual([]);
   });
 
+  it("keeps the retry of a search for a renamed model when a re-anchor meets the lock before it runs", async () => {
+    const test = await startTestCore(heroFiles(), { lockTimeoutMs: 500 });
+    const assetId = await openAsset(test);
+    await test.core.client.execute("comment.create", pinComment(assetId));
+    const review = await saved(test);
+    const key = test.platform.lockKey("/work/game", "reviews");
+    const waiting = () => test.platform.lockWaiters(key);
+    const unlock = await test.platform.lock("/work/game", "reviews");
+    await test.platform.rename(HERO, STRIKER);
+    for (let check = 0; check < 20 && waiting() === 0; check++) {
+      await flush();
+      test.clock.advance(300);
+    }
+    expect(waiting()).toBe(1);
+    test.clock.advance(500);
+    await flush();
+
+    const elsewhere = review.comments.map((comment) => ({ ...comment, anchorVersion: "v-elsewhere" }));
+    await test.platform.writeFile(
+      REVIEW_JSON,
+      serializeReview({ ...review, revision: review.revision + 1, comments: elsewhere }),
+    );
+    await vi.waitFor(() => expect(waiting()).toBe(1));
+    test.clock.advance(500);
+    await flush();
+    await unlock();
+    for (let check = 0; check < 20; check++) {
+      await flush();
+      await test.core.idle();
+      if (test.clock.pendingTimers === 0) break;
+      test.clock.advance(300);
+    }
+
+    await expect(test.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: STRIKER, status: "ready", error: null }],
+    });
+    await expect(test.platform.exists(`${STRIKER_REVIEW}/review.json`)).resolves.toBe(true);
+    expect(test.errors).toEqual([]);
+  });
+
   it("fails a load whose parse times out instead of trying it again", async () => {
     const gate = gatedImporter();
     gate.hold("Hero.fbx");
@@ -1427,6 +1467,35 @@ describe("a model renamed while a version is parsed", () => {
     const review = await saved(a, `${STRIKER_REVIEW}/review.json`);
     expect(review.comments).toMatchObject([{ id: commentId, anchorVersion: version }]);
     await expect(a.platform.exists(HERO_REVIEW)).resolves.toBe(false);
+    expect(b.errors).toEqual([]);
+  });
+
+  it("says the model is not found once the load that parsed it as it went away has ended", async () => {
+    const gate = gatedImporter();
+    const cores = await twoCores(heroFiles(), { importers: [gate.importer] });
+    const { a, b } = cores;
+    const assetId = await openIn(b);
+    gate.hold("Hero.fbx");
+    await a.platform.writeFile(HERO, finer);
+    for (let check = 0; check < 20 && a.platform.parsed.length < 2; check++) {
+      await flush();
+      a.clock.advance(300);
+    }
+    expect(a.platform.parsed).toEqual(["Hero.fbx", "Hero.fbx"]);
+    await a.platform.remove(HERO);
+    for (let check = 0; check < 10; check++) {
+      await flush();
+      a.clock.advance(300);
+    }
+    gate.release("Hero.fbx");
+    await settle(cores);
+
+    await expect(b.core.client.query("asset.list", {})).resolves.toMatchObject({
+      assets: [{ assetId, path: HERO, status: "failed", error: "Model not found: Hero.fbx" }],
+    });
+    await expect(b.core.client.query("warning.list", { assetId })).resolves.toMatchObject({
+      warnings: [{ code: "model-not-found" }],
+    });
     expect(b.errors).toEqual([]);
   });
 });

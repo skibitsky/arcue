@@ -122,6 +122,7 @@ export class ReviewSession {
       if (this.#diskHash === null) await this.#checkModelThere();
       const current = this.#review;
       const change = await compute(current);
+      this.#checkUsable();
       if (change.next === null || (!change.prepare && !change.clearHistory && this.#unchanged(change.next, current))) {
         change.apply?.();
         if (change.edit) this.history.record(change.edit);
@@ -159,21 +160,22 @@ export class ReviewSession {
 
   /**
    * Refuses a change while neither review.json nor the model is on disk: every move of a review needs its model gone,
-   * so another core moved this one, and saving here would start a second copy of it.
+   * so another core moved this one, and saving here would start a second copy of it. Anything but a file at the
+   * model's path counts as gone, as it does for a core that follows the model to a new name.
    */
   async #checkModelThere(): Promise<void> {
     const model = modelPathOf(this.#location);
-    if ((await this.#platform.stat(model)) !== null) return;
+    if ((await this.#platform.stat(model))?.kind === "file") return;
     throw new ArcueError(
       "conflict",
       `${basename(model)} and its review are gone from disk, so the change was not saved. If the model was renamed, Arcue follows it in a moment; otherwise open the model at its new path.`,
     );
   }
 
-  /** Takes in a change another program made to `review.json`, as a watcher reports it. */
+  /** Takes in a change another program made to `review.json`, as a watcher reports it, unless the session no longer saves. */
   refresh(): Promise<void> {
     return this.#edits.run(async () => {
-      if (!this.#closed) await this.#sync();
+      if (!this.#closed && this.#stranded === null) await this.#sync();
     });
   }
 
@@ -194,6 +196,7 @@ export class ReviewSession {
       }
       const unlock = await lockReviews(this.#platform, this.#location);
       try {
+        this.#checkUsable();
         try {
           await move();
         } catch (error) {
@@ -223,6 +226,11 @@ export class ReviewSession {
     return this.#edits.run(async () => {
       this.#closed = true;
     });
+  }
+
+  /** Refuses every change from now on without waiting, so a change whose compute is running saves nothing. */
+  dispose(): void {
+    this.#closed = true;
   }
 
   #checkUsable(): void {

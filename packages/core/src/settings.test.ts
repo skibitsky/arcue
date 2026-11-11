@@ -1,6 +1,6 @@
 import type { Settings } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ManualClock } from "./manual-clock";
 import { SettingsStore } from "./settings";
 import { flush, RecordingPlatform, unlockedWrites } from "./test-support";
@@ -79,6 +79,46 @@ describe("SettingsStore", () => {
     await platform.writeFile(SETTINGS, JSON.stringify({ coordinates: "y-up" }));
     await flush();
     expect(changes).toHaveLength(1);
+  });
+
+  it("watches the file before it first reads it, so a change made as it starts is not missed", async () => {
+    const { platform, settings, changes } = store({ [SETTINGS]: JSON.stringify({ coordinates: "y-up" }) });
+    const read = platform.readText.bind(platform);
+    let changed = false;
+    vi.spyOn(platform, "readText").mockImplementation(async (path) => {
+      const text = await read(path);
+      if (path === SETTINGS && !changed) {
+        changed = true;
+        await platform.writeFile(SETTINGS, JSON.stringify({ coordinates: "z-up-blender" }));
+      }
+      return text;
+    });
+    await settings.start((error) => {
+      throw error;
+    });
+    await settings.idle();
+    expect(settings.current).toEqual({ coordinates: "z-up-blender" });
+    expect(changes).toEqual([{ coordinates: "z-up-blender" }]);
+  });
+
+  it("tells nobody of a reload that was reading the file when it was disposed", async () => {
+    const { platform, settings, changes } = store();
+    await settings.start((error) => {
+      throw error;
+    });
+    const reading = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    platform.beforeRead = async (path) => {
+      if (path !== SETTINGS) return;
+      reading.resolve();
+      await released.promise;
+    };
+    await platform.writeFile(SETTINGS, JSON.stringify({ coordinates: "z-up-blender" }));
+    await reading.promise;
+    settings.dispose();
+    released.resolve();
+    await settings.idle();
+    expect(changes).toEqual([]);
   });
 
   it("keeps the keys it does not know", async () => {

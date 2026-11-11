@@ -11,6 +11,7 @@ import {
   HERO_REVIEW,
   heroFiles,
   heroSpec,
+  looseComment,
   openAsset,
   pinComment,
   readJson,
@@ -390,5 +391,80 @@ describe("asset.close", () => {
     await expect(test.core.client.query("review.get", { assetId: reopened })).resolves.toMatchObject({
       queue: [commentId],
     });
+  });
+
+  /** Opens the hero while its window answers "view.showAsset" only once `answer` settles. */
+  async function placing(test: TestCore, answer: Promise<unknown>) {
+    test.window.respond = (request) => (request.name === "view.showAsset" ? answer : undefined);
+    const opening = test.window.client.execute("asset.open", { path: HERO }).catch((error: unknown) => error);
+    while (test.window.requests.length === 0) await flush();
+    const { assetId } = (test.window.requests[0]?.input ?? {}) as { assetId?: string };
+    if (assetId === undefined) throw new Error("The window was not asked to show the asset.");
+    return { opening, assetId };
+  }
+
+  it("closes an asset its open is still placing only after announcing it, and that open fails", async () => {
+    const test = await startTestCore(heroFiles());
+    const events = record(test, "asset.opened", "asset.closed");
+    const shown = Promise.withResolvers<undefined>();
+    const { opening, assetId } = await placing(test, shown.promise);
+    const closing = test.window.client.execute("asset.close", { assetId });
+    await flush();
+    expect(events).toEqual([]);
+
+    shown.resolve(undefined);
+    await closing;
+    await expect(opening).resolves.toMatchObject({ code: "conflict", message: "Hero.fbx was closed as it opened." });
+    expect(events.map((event) => event.name)).toEqual(["asset.opened", "asset.closed"]);
+    await test.core.idle();
+    await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+    expect(test.clock.pendingTimers).toBe(0);
+    await expect(test.platform.exists(`${HERO_REVIEW}/review.json`)).resolves.toBe(false);
+  });
+
+  it("closes an asset whose open then fails to place it without announcing either", async () => {
+    const test = await startTestCore(heroFiles());
+    const events = record(test, "asset.opened", "asset.closed");
+    const { opening, assetId } = await placing(test, new Promise(() => undefined));
+    const closing = test.window.client.execute("asset.close", { assetId });
+    await flush();
+    test.clock.advance(10_000);
+
+    await expect(opening).resolves.toMatchObject({ code: "unavailable" });
+    await closing;
+    expect(events).toEqual([]);
+    await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
+  });
+
+  it("starts no work for an asset while it closes, and refuses to reload it", async () => {
+    const test = await startTestCore(heroFiles());
+    const assetId = await openAsset(test);
+    const saving = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    test.platform.beforeWrite = async (path, _op, actor) => {
+      if (actor === null || path !== `${HERO_REVIEW}/review.json`) return;
+      saving.resolve();
+      await released.promise;
+    };
+    const created = test.core.client.execute("comment.create", looseComment(assetId));
+    await saving.promise;
+    const closing = test.core.client.execute("asset.close", { assetId });
+    await flush();
+
+    await expect(test.core.client.execute("asset.reload", { assetId })).rejects.toMatchObject({
+      code: "conflict",
+      message: "Hero.fbx is closing.",
+    });
+    const parsed = test.platform.parsed.length;
+    await test.platform.writeFile(HERO, fakeAsset({ ...heroSpec, meshes: [{ name: "Body", grid: 4 }] }));
+    await flush();
+    expect(test.clock.pendingTimers).toBe(0);
+
+    released.resolve();
+    await created;
+    await closing;
+    await test.core.idle();
+    expect(test.platform.parsed).toHaveLength(parsed);
+    await expect(test.core.client.query("asset.list", {})).resolves.toEqual({ assets: [] });
   });
 });

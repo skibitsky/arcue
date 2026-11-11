@@ -90,6 +90,41 @@ describe("ReviewSession", () => {
     await expect(platform.exists(location.folder)).resolves.toBe(false);
   });
 
+  it("takes in no review another program saves at its old place once a failed move stranded it", async () => {
+    const elsewhere = { ...location, folder: "/app-data/reviews/work/Striker.fbx", assetPath: "/work/Striker.fbx" };
+    const platform = new MemoryPlatform();
+    const review = { ...emptyReview(location.assetPath), revision: 3 };
+    const text = serializeReview(review);
+    await platform.writeFile(reviewFilePath(location), text);
+    const changed: ReviewFile[] = [];
+    const session = new ReviewSession(platform, location, { review, text }, (next) => changed.push(next));
+    await expect(
+      session.moveTo(elsewhere, async () => {
+        await platform.rename(location.folder, elsewhere.folder);
+        throw new Error("The disk is full.");
+      }),
+    ).rejects.toThrow("The disk is full.");
+
+    const other = serializeReview({ ...review, revision: 9, dismissedWarnings: ["a:b:c"] });
+    await platform.writeFile(reviewFilePath(location), other);
+    await session.refresh();
+    expect(changed).toEqual([]);
+    expect(session.review).toBe(review);
+  });
+
+  it("saves nothing once disposed, not even the change whose compute was running", async () => {
+    const { platform, session } = await savedSession();
+    const before = await platform.readText(reviewFilePath(location));
+    await expect(
+      session.run(async (review) => {
+        session.dispose();
+        return { next: { ...review, dismissedWarnings: ["a:b:c"] }, result: undefined };
+      }),
+    ).rejects.toMatchObject({ code: "not-found" });
+    await expect(platform.readText(reviewFilePath(location))).resolves.toBe(before);
+    expect(session.review.revision).toBe(3);
+  });
+
   it("refuses a move once the review it saw went elsewhere in its reviews root, and moves once the whole root is gone", async () => {
     const elsewhere = { ...location, folder: "/app-data/reviews/work/Striker.fbx", assetPath: "/work/Striker.fbx" };
     const moved = await savedSession();
@@ -326,6 +361,15 @@ describe("ReviewSession and the reviews lock", () => {
     await platform.writeFile(MODEL, "model again");
     await expect(session.run(dismiss)).resolves.toBe("saved");
     await expect(platform.exists(REVIEW)).resolves.toBe(true);
+  });
+
+  it("refuses while a folder stands where the model was and the review is gone", async () => {
+    const { platform, session } = await lockedSession();
+    await platform.remove(MODEL);
+    await platform.mkdir(MODEL);
+    await platform.remove(REVIEW);
+    await expect(session.run(dismiss)).rejects.toMatchObject(movedAway);
+    await expect(platform.exists(REVIEW)).resolves.toBe(false);
   });
 
   it("refuses for a session that never saw review.json once the model is gone", async () => {
