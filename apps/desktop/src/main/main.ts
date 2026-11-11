@@ -10,12 +10,13 @@ import type { MenuItemConstructorOptions } from "electron";
 import { app, dialog, powerMonitor, protocol, session, shell } from "electron";
 import type { Log } from "../shared/log";
 import { fileLog } from "../shared/log";
-import type { RunningCore } from "./already-running";
+import type { QuitNotice, RunningCore } from "./already-running";
 import { alreadyRunningLogLine, alreadyRunningNotice } from "./already-running";
 import { checkFromMenu, createUpdater, offerDownload, startServe } from "./app-updates";
 import { assetPathsFromArgv, launchDataSchema } from "./args";
 import { CoreHost } from "./core-host";
 import { installMenu } from "./menu";
+import { QuitSequence } from "./quit";
 import {
   contentSecurityPolicy,
   isAllowedRequest,
@@ -90,6 +91,7 @@ async function run(): Promise<void> {
 
   const sessionPath = join(userData, SESSION_FILE);
   let saveTimer: NodeJS.Timeout | null = null;
+  let savedForQuit = false;
   const saveNow = async () => {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = null;
@@ -112,6 +114,7 @@ async function run(): Promise<void> {
     onNeedWindow: () => windows?.ensureWindow(),
     onLost: () => windows?.coreLost(),
     onAlreadyRunning: (other) => void quitBeside(other, log),
+    onFailed: (reason) => void quitWithoutCore(reason, logs, log),
   });
   const manager = new WindowManager({
     core,
@@ -121,6 +124,7 @@ async function run(): Promise<void> {
     rendererUrl: devServer ?? `${RENDERER_ORIGIN}/index.html`,
     devServer,
     onSessionChange: () => {
+      if (savedForQuit) return;
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => void saveNow(), 500);
     },
@@ -131,7 +135,6 @@ async function run(): Promise<void> {
       else if (phase.kind === "manual") void offerDownload(phase.manifest, phase.reason);
     },
   });
-  windows = manager;
   const showUpdates = () => installMenu(manager, updateMenuItem(updater, restartToUpdate));
   updater.onChange(() => {
     manager.sendUpdateState(updater.state);
@@ -140,6 +143,7 @@ async function run(): Promise<void> {
   showUpdates();
   core.start();
   manager.restore(await loadSession(sessionPath));
+  windows = manager;
   manager.openPaths(pendingOpens.splice(0));
   void updater.start().then(({ notice, servePort }) => {
     if (notice) manager.notify(notice);
@@ -153,26 +157,22 @@ async function run(): Promise<void> {
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
   });
-  let quitPrepared = false;
-  let quitFinished = false;
-  app.on("before-quit", (event) => {
-    if (quitPrepared) return;
-    quitPrepared = true;
-    event.preventDefault();
-    void (async () => {
+  const quit = new QuitSequence({
+    steps: async () => {
+      updater.stopChecks();
       await manager.prepareQuit();
+      savedForQuit = true;
       await saveNow();
       await core.stop();
       if (updater.installsOnQuit) manager.hideAll();
       await updater.finishQuit();
       log.info("Arcue quits");
-      quitFinished = true;
-      app.quit();
-    })();
+    },
+    quit: () => app.quit(),
+    onError: (error) => log.error("Could not close everything before quitting", error),
   });
-  app.on("will-quit", (event) => {
-    if (quitPrepared && !quitFinished) event.preventDefault();
-  });
+  app.on("before-quit", (event) => quit.beforeQuit(event));
+  app.on("will-quit", (event) => quit.willQuit(event));
 }
 
 /** The update item of the menu, which says what the updater does, or null when the app does not update. */
@@ -204,10 +204,25 @@ function updateMenuItem(updater: Updater, restart: () => void): MenuItemConstruc
  */
 async function quitBeside(running: RunningCore, log: Log): Promise<void> {
   log.info(alreadyRunningLogLine(running));
-  const notice = alreadyRunningNotice(running);
+  await quitSaying(alreadyRunningNotice(running), "info", log);
+}
+
+/** Says that the core could not start and where its log is, and quits. */
+async function quitWithoutCore(reason: string, logs: string, log: Log): Promise<void> {
+  const notice: QuitNotice = {
+    message: "Arcue could not start",
+    detail: `${reason}\n\nThe details are in core.log in ${logs}.`,
+    buttons: ["Quit"],
+    open: null,
+  };
+  await quitSaying(notice, "error", log);
+}
+
+/** Shows the notice, opens the address of its first button when the person chooses it, and quits. */
+async function quitSaying(notice: QuitNotice, type: "info" | "error", log: Log): Promise<void> {
   try {
     const { response } = await dialog.showMessageBox({
-      type: "info",
+      type,
       title: "Arcue",
       message: notice.message,
       detail: notice.detail,
@@ -218,7 +233,7 @@ async function quitBeside(running: RunningCore, log: Log): Promise<void> {
     });
     if (notice.open && response === 0) await shell.openExternal(notice.open);
   } catch (error) {
-    log.error("Could not show where Arcue runs", error);
+    log.error("Could not say why Arcue quits", error);
   } finally {
     app.quit();
   }

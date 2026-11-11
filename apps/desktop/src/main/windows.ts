@@ -109,8 +109,13 @@ export class WindowManager {
     return this.#windows.size;
   }
 
-  create(options: CreateOptions = {}): AppWindow {
+  /** Opens a window, or none once the app quits, since a window opened then would keep the app from quitting. */
+  create(options: CreateOptions = {}): AppWindow | null {
     const { log } = this.#options;
+    if (this.#quitting) {
+      log.info("Opened no window, as Arcue quits");
+      return null;
+    }
     const cascadeFrom = this.#lastUsedWindow()?.window.getBounds();
     const bounds = options.bounds ?? (cascadeFrom ? cascade(cascadeFrom) : DEFAULT_SIZE);
     const mac = process.platform === "darwin";
@@ -193,6 +198,7 @@ export class WindowManager {
   openPaths(paths: readonly string[]): void {
     if (paths.length === 0) return;
     const target = this.#lastUsedWindow() ?? this.create();
+    if (!target) return;
     target.pendingOpens.push(...paths);
     this.#flush(target);
     reveal(target.window);
@@ -205,7 +211,8 @@ export class WindowManager {
 
   /** Brings the window used last to the front, opening one when none is open. */
   reveal(): void {
-    reveal((this.#lastUsedWindow() ?? this.create()).window);
+    const target = this.#lastUsedWindow() ?? this.create();
+    if (target) reveal(target.window);
   }
 
   /**
@@ -365,7 +372,7 @@ export class WindowManager {
       if (!entry) return;
       const contents = entry.contents;
       entry.connections += 1;
-      this.#options.core.requestPort(`window-${entry.id}-${entry.connections}`, (port) => {
+      this.#options.core.requestPort(`window-${entry.id}`, `window-${entry.id}-${entry.connections}`, (port) => {
         if (contents.isDestroyed()) port.close();
         else contents.postMessage(channels.corePort, null, [port]);
       });

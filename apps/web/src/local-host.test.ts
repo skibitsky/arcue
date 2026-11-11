@@ -939,6 +939,37 @@ describe("LocalHost", () => {
     expect(server.sockets).toHaveLength(1);
   });
 
+  it("waits for the probe before an attempt when the page comes back, then tries at once, once", async () => {
+    const server = new FakeServer();
+    await server.start();
+    const held = Promise.withResolvers<ServedPage>();
+    const probe = vi.fn(async (): Promise<ServedPage> => "same");
+    probe.mockImplementationOnce(() => held.promise);
+    const page = new Page(server, { probe }).start();
+    await page.connected();
+    await page.opened(HERO);
+
+    await server.stop();
+    await vi.waitFor(() => {
+      if (probe.mock.calls.length === 0) page.timers.advance(PAST_BACKOFF_MS);
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+    const attempts = server.sockets.length;
+    page.host.retryNow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    page.host.retryNow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(server.sockets).toHaveLength(attempts);
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    await server.start();
+    held.resolve("same");
+    await vi.waitFor(() => expect(page.host.client.connectionState).toBe("connected"));
+    expect(server.sockets).toHaveLength(attempts + 1);
+    expect(page.host.status.get()).toEqual({ elsewhere: false });
+    await vi.waitFor(() => expect(page.paths()).toEqual([HERO]));
+  });
+
   it("keeps its tabs every few seconds, and at once when the page is hidden or goes away", async () => {
     const server = new FakeServer();
     await server.start();

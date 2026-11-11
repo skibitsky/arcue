@@ -105,6 +105,7 @@ export class Updater {
   #abort: AbortController | null = null;
   #restart = false;
   #stopped = false;
+  readonly #recordRead = Promise.withResolvers<void>();
 
   constructor(options: UpdaterOptions) {
     this.#options = options;
@@ -148,18 +149,18 @@ export class Updater {
     };
   }
 
-  /** Reads what the last launch recorded, removes old downloads, and schedules the first check. */
+  /**
+   * Reads what the last launch recorded, removes old downloads, and schedules the first check. A check that starts
+   * earlier waits for the record before it downloads anything.
+   */
   async start(): Promise<StartResult> {
-    this.#record = await this.#readRecord();
-    const notice = this.#lastInstall();
-    const servePort = this.#record.servePort;
-    this.#record = { ...this.#record, installing: null, servePort: null };
+    const found = await this.#takeRecord().finally(() => this.#recordRead.resolve());
     await this.#writeRecord().catch((error: unknown) =>
       this.#options.log.error("Could not write the update record", error),
     );
     await this.#removeOldDownloads();
     if (this.enabled) this.#schedule(FIRST_CHECK_MS);
-    return { notice, servePort };
+    return found;
   }
 
   /** Checks now, or joins the check that runs. While an update downloads or installs, reports it instead. */
@@ -178,6 +179,14 @@ export class Updater {
   /** Checks when the last check is older than the interval, as after the computer wakes. */
   checkIfDue(): void {
     if (this.enabled && this.#options.now() - this.#lastCheck >= CHECK_INTERVAL_MS) void this.check();
+  }
+
+  /**
+   * Starts no more checks as the app begins to quit, and stops the one that runs, which then leaves the phase as it is,
+   * so a ready update still installs.
+   */
+  stopChecks(): void {
+    this.#stop();
   }
 
   /** Asks the next quit to install the ready update and start the app again. False when no update is ready. */
@@ -239,7 +248,13 @@ export class Updater {
 
   #set(phase: UpdatePhase): void {
     this.#phase = phase;
+    if (phase.kind !== "ready") this.#restart = false;
     for (const listener of [...this.#listeners]) listener();
+  }
+
+  /** A change a check makes, which it no longer makes once the updater stopped. */
+  #checked(phase: UpdatePhase): void {
+    if (!this.#stopped) this.#set(phase);
   }
 
   #schedule(delayMs: number): void {
@@ -257,24 +272,24 @@ export class Updater {
     if (!feedUrl) return { kind: "off" };
     this.#lastCheck = options.now();
     const previous = this.#phase;
-    if (previous.kind === "idle") this.#set({ kind: "checking" });
+    if (previous.kind === "idle") this.#checked({ kind: "checking" });
     const abort = new AbortController();
     this.#abort = abort;
     try {
       const manifest = await fetchManifest(options.fetch, feedUrl, options.keys, abort.signal);
       if (compareVersions(manifest.version, options.version) <= 0) {
-        if (previous.kind === "idle" || previous.kind === "checking") this.#set({ kind: "idle" });
-        else this.#set(previous);
+        if (previous.kind === "idle" || previous.kind === "checking") this.#checked({ kind: "idle" });
+        else this.#checked(previous);
         return { kind: "current", version: options.version };
       }
       if ((previous.kind === "ready" || previous.kind === "manual") && previous.manifest.version === manifest.version) {
-        this.#set(previous);
+        this.#checked(previous);
         return { kind: "found", phase: previous };
       }
       return { kind: "found", phase: await this.#prepare(manifest, abort.signal) };
     } catch (error) {
       if (abort.signal.aborted) return { kind: "off" };
-      this.#set(previous.kind === "checking" ? { kind: "idle" } : previous);
+      this.#checked(previous.kind === "checking" ? { kind: "idle" } : previous);
       if (error instanceof NoManifestError) return { kind: "unavailable" };
       options.log.error("Could not check for updates", error);
       return { kind: "failed", message: messageOf(error) };
@@ -290,9 +305,10 @@ export class Updater {
     const version = manifest.version;
     const manual = (reason: string): UpdatePhase => {
       const phase: UpdatePhase = { kind: "manual", manifest, reason };
-      this.#set(phase);
+      this.#checked(phase);
       return phase;
     };
+    await this.#recordRead.promise;
     if (this.#record.failed === version)
       return manual("It did not install here before. Download it from its release page.");
     const method = await options.method();
@@ -300,7 +316,7 @@ export class Updater {
     const kind = installerKind(method, options.platform);
     const file = kind ? fileFor(manifest, options.platform, options.arch, kind) : null;
     if (!kind || !file) return manual("The release has no installer for this computer.");
-    if (this.#phase.kind !== "ready") this.#set({ kind: "downloading", version });
+    if (this.#phase.kind !== "ready") this.#checked({ kind: "downloading", version });
     const folder = join(options.folder, parseVersion(version).full);
     const path = join(folder, DOWNLOAD_NAMES[kind]);
     try {
@@ -311,12 +327,21 @@ export class Updater {
       const staged = await options.stage(method, path, folder, version);
       const phase: UpdatePhase = { kind: "ready", manifest, method, staged };
       options.log.info(`Arcue ${version} is ready to install`);
-      this.#set(phase);
+      this.#checked(phase);
       return phase;
     } catch (error) {
       await rm(folder, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Reads the record, and takes from it what the last launch left for this one. */
+  async #takeRecord(): Promise<StartResult> {
+    this.#record = await this.#readRecord();
+    const notice = this.#lastInstall();
+    const servePort = this.#record.servePort;
+    this.#record = { ...this.#record, installing: null, servePort: null };
+    return { notice, servePort };
   }
 
   /** What to tell the person about the update the last launch was installing as it quit. */
