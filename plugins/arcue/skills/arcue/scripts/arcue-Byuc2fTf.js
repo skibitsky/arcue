@@ -5948,6 +5948,20 @@ function fromWireError(error) {
 	return new ArcueError(error.code, error.message, { issues: error.issues });
 }
 //#endregion
+//#region ../../packages/protocol/src/listener-errors.ts
+/** The default for a listener that throws: the error surfaces as an unhandled rejection, and delivery continues. */
+var reportListenerError = (error) => {
+	Promise.reject(error);
+};
+/** Calls every listener; one that throws is reported and does not stop the rest. */
+function callEach(listeners, args, onError) {
+	for (const listener of [...listeners]) try {
+		listener(...args);
+	} catch (error) {
+		onError(error);
+	}
+}
+//#endregion
 //#region ../../packages/protocol/src/transport/framed.ts
 /** The largest frame either side accepts. A scene of a large asset fits comfortably. */
 var MAX_FRAME_BYTES = 1073741824;
@@ -6009,28 +6023,29 @@ var FrameReader = class {
 		return joined;
 	}
 };
-function framedChannel(stream, codec, limits = {}) {
-	const reader = new FrameReader(limits);
-	return channel(stream, codec, (chunk) => reader.push(chunk), encodeFrame);
+function framedChannel(stream, codec, options = {}) {
+	const reader = new FrameReader(options);
+	return channel(stream, codec, (chunk) => reader.push(chunk), encodeFrame, options);
 }
 /**
 * Messages over a stream that delivers each write as one chunk, such as a WebSocket, so a frame needs no length
 * prefix. A chunk larger than `MAX_FRAME_BYTES`, or one the codec cannot decode, closes the channel.
 */
-function messageChannel(stream, codec) {
+function messageChannel(stream, codec, options = {}) {
 	return channel(stream, codec, (chunk) => {
 		if (chunk.byteLength > 1073741824) throw new ArcueError("invalid-input", "A message is too large.");
 		return [chunk];
 	}, (payload) => {
 		if (payload.byteLength > 1073741824) throw new ArcueError("invalid-input", `A message of ${payload.byteLength} bytes is too large to send.`);
 		return payload;
-	});
+	}, options);
 }
-function channel(stream, codec, toFrames, toChunk) {
+function channel(stream, codec, toFrames, toChunk, options) {
 	const listeners = /* @__PURE__ */ new Set();
 	const waiting = [];
 	const receivers = [];
 	let closed = false;
+	let listened = false;
 	const closeListeners = /* @__PURE__ */ new Set();
 	const close = () => {
 		if (closed) return;
@@ -6040,9 +6055,10 @@ function channel(stream, codec, toFrames, toChunk) {
 		stream.close();
 		const error = new ArcueError("disconnected", "The connection closed.");
 		for (const receiver of receivers.splice(0)) receiver.reject(error);
-		for (const listener of [...closeListeners]) listener();
+		const closing = [...closeListeners];
 		closeListeners.clear();
 		listeners.clear();
+		callEach(closing, [], options.onListenerError ?? reportListenerError);
 	};
 	const stopData = stream.onData((chunk) => {
 		if (closed) return;
@@ -6063,8 +6079,8 @@ function channel(stream, codec, toFrames, toChunk) {
 			}
 			const receiver = listeners.size === 0 ? receivers.shift() : void 0;
 			if (receiver) receiver.resolve(value);
-			else if (listeners.size === 0) waiting.push(value);
-			else for (const listener of [...listeners]) listener(value);
+			else if (listeners.size > 0) for (const listener of [...listeners]) listener(value);
+			else if (!listened) waiting.push(value);
 		}
 	});
 	const stopClose = stream.onClose(close);
@@ -6082,6 +6098,7 @@ function channel(stream, codec, toFrames, toChunk) {
 		},
 		listen(listener) {
 			listeners.add(listener);
+			listened = true;
 			for (const value of waiting.splice(0)) listener(value);
 			return () => {
 				listeners.delete(listener);
@@ -8795,20 +8812,6 @@ object({ asset: assetSummarySchema }), object({ asset: assetSummarySchema }), ob
 	round: int().positive()
 }), object({ settings: settingsSchema });
 //#endregion
-//#region ../../packages/protocol/src/listener-errors.ts
-/** The default for a listener that throws: the error surfaces as an unhandled rejection, and delivery continues. */
-var reportListenerError = (error) => {
-	Promise.reject(error);
-};
-/** Calls every listener; one that throws is reported and does not stop the rest. */
-function callEach(listeners, args, onError) {
-	for (const listener of [...listeners]) try {
-		listener(...args);
-	} catch (error) {
-		onError(error);
-	}
-}
-//#endregion
 //#region ../../packages/protocol/src/transport/envelope.ts
 function isRecord(value) {
 	return typeof value === "object" && value !== null;
@@ -9584,4 +9587,4 @@ function portEndpoint(port) {
 	};
 }
 //#endregion
-export { topologyFingerprint as $, COMPOSITION_FILE_NAME as A, framedChannel as At, frameCountFor as B, isCommandName as C, bridgeInfoSchema as Ct, settingsSchema as D, launchInfoSchema as Dt, viewNameSchema as E, lastCoreSchema as Et, joinsByName as F, decodeRanges as G, lastFrame as H, keysModelBones as I, materialSlots as J, encodeRanges as K, memberRoles as L, MODEL_FILE_EXTENSIONS as M, messageChannel as Mt, animatesModel as N, ArcueError as Nt, warningId as O, sharesReviews as Ot, compositionFileSchema as P, COMMENT_ID_PATTERN as Pt, sameTopology as Q, viewStateSchema as R, commands as S, bridgeInfoFile as St, viewAddress as T, coreKindOf as Tt, mergeKeyTimes as U, isKeyedEveryFrame as V, countInRanges as W, fileNameOf as X, parseStoredPath as Y, imageMimeType as Z, isEnvelope as _, LAUNCH_INFO_FILE as _t, LOCKS_FOLDER as a, importWarning as at, reviewFileSchema as b, SERVE_STOPPED_CLOSE_CODE as bt, lockWaitingSchema as c, isDefaultPartView as ct, importFindFileInputSchema as d, TEXTURE_REF_KEYS as dt, composeScene as et, importReadFileInputSchema as f, TEXTURE_REF_NAMES as ft, withTransfer as g, LAST_CORE_FILE as gt, createPeer as h, HANDSHAKE_MAX_FRAME_BYTES as ht, roundDataSchema as i, describeTextureUses as it, IMAGE_FILE_EXTENSIONS as j, framedEndpoint as jt, screenshotOwner as k, MAX_FRAME_BYTES as kt, isQueryName as l, knownPartView as lt, serveImportWorker as m, TEXTURE_SLOT_KEYS as mt, binaryFrameCodec as n, memberPath as nt, START_LOCK_FILE as o, defaultViewBounds as ot, importRequests as p, TEXTURE_SLOTS as pt, rangesWithin as q, jsonFrameCodec as r, splitMemberPath as rt, lockRecordSchema as s, describeParts as st, portEndpoint as t, findNode as tt, queries as u, shownByDefault as ut, callEach as v, LOCAL_PAGE_OWNER as vt, VIEW_PARAMETER as w, connectBridge as wt, reviewFormat as x, acceptBridge as xt, reportListenerError as y, SERVE_CORE_PATH as yt, unshownUvSetWarnings as z };
+export { findNode as $, MODEL_FILE_EXTENSIONS as A, messageChannel as At, lastFrame as B, viewAddress as C, coreKindOf as Ct, screenshotOwner as D, MAX_FRAME_BYTES as Dt, warningId as E, sharesReviews as Et, memberRoles as F, rangesWithin as G, countInRanges as H, viewStateSchema as I, fileNameOf as J, materialSlots as K, unshownUvSetWarnings as L, compositionFileSchema as M, reportListenerError as Mt, joinsByName as N, ArcueError as Nt, COMPOSITION_FILE_NAME as O, framedChannel as Ot, keysModelBones as P, COMMENT_ID_PATTERN as Pt, composeScene as Q, frameCountFor as R, VIEW_PARAMETER as S, connectBridge as St, settingsSchema as T, launchInfoSchema as Tt, decodeRanges as U, mergeKeyTimes as V, encodeRanges as W, sameTopology as X, imageMimeType as Y, topologyFingerprint as Z, isEnvelope as _, SERVE_CORE_PATH as _t, LOCKS_FOLDER as a, describeParts as at, commands as b, bridgeInfoFile as bt, lockWaitingSchema as c, shownByDefault as ct, importFindFileInputSchema as d, TEXTURE_SLOTS as dt, memberPath as et, importReadFileInputSchema as f, TEXTURE_SLOT_KEYS as ft, withTransfer as g, LOCAL_PAGE_OWNER as gt, createPeer as h, LAUNCH_INFO_FILE as ht, roundDataSchema as i, defaultViewBounds as it, animatesModel as j, callEach as jt, IMAGE_FILE_EXTENSIONS as k, framedEndpoint as kt, isQueryName as l, TEXTURE_REF_KEYS as lt, serveImportWorker as m, LAST_CORE_FILE as mt, binaryFrameCodec as n, describeTextureUses as nt, START_LOCK_FILE as o, isDefaultPartView as ot, importRequests as p, HANDSHAKE_MAX_FRAME_BYTES as pt, parseStoredPath as q, jsonFrameCodec as r, importWarning as rt, lockRecordSchema as s, knownPartView as st, portEndpoint as t, splitMemberPath as tt, queries as u, TEXTURE_REF_NAMES as ut, reviewFileSchema as v, SERVE_STOPPED_CLOSE_CODE as vt, viewNameSchema as w, lastCoreSchema as wt, isCommandName as x, bridgeInfoSchema as xt, reviewFormat as y, acceptBridge as yt, isKeyedEveryFrame as z };

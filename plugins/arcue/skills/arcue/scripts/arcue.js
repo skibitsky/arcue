@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as COMPOSITION_FILE_NAME, At as framedChannel, C as isCommandName, Ct as bridgeInfoSchema, D as settingsSchema, Dt as launchInfoSchema, E as viewNameSchema, Et as lastCoreSchema, F as joinsByName, G as decodeRanges, H as lastFrame, I as keysModelBones, J as materialSlots, K as encodeRanges, L as memberRoles, M as MODEL_FILE_EXTENSIONS, Mt as messageChannel, N as animatesModel, Nt as ArcueError, O as warningId, Ot as sharesReviews, P as compositionFileSchema, Pt as COMMENT_ID_PATTERN, Q as sameTopology, R as viewStateSchema, S as commands, St as bridgeInfoFile, T as viewAddress, Tt as coreKindOf, W as countInRanges, X as fileNameOf, Y as parseStoredPath, Z as imageMimeType, _ as isEnvelope, _t as LAUNCH_INFO_FILE, a as LOCKS_FOLDER, at as importWarning, b as reviewFileSchema, bt as SERVE_STOPPED_CLOSE_CODE, c as lockWaitingSchema, ct as isDefaultPartView, d as importFindFileInputSchema, dt as TEXTURE_REF_KEYS, et as composeScene, f as importReadFileInputSchema, ft as TEXTURE_REF_NAMES, g as withTransfer, gt as LAST_CORE_FILE, h as createPeer, ht as HANDSHAKE_MAX_FRAME_BYTES, i as roundDataSchema, it as describeTextureUses, j as IMAGE_FILE_EXTENSIONS, jt as framedEndpoint, k as screenshotOwner, kt as MAX_FRAME_BYTES, l as isQueryName, lt as knownPartView, n as binaryFrameCodec, nt as memberPath, o as START_LOCK_FILE, p as importRequests, pt as TEXTURE_SLOTS, q as rangesWithin, r as jsonFrameCodec, rt as splitMemberPath, s as lockRecordSchema, t as portEndpoint, tt as findNode, u as queries, ut as shownByDefault, v as callEach, vt as LOCAL_PAGE_OWNER, wt as connectBridge, x as reviewFormat, xt as acceptBridge, y as reportListenerError } from "./arcue-Bm9RjP3I.js";
+import { $ as findNode, A as MODEL_FILE_EXTENSIONS, At as messageChannel, B as lastFrame, C as viewAddress, Ct as coreKindOf, D as screenshotOwner, Dt as MAX_FRAME_BYTES, E as warningId, Et as sharesReviews, F as memberRoles, G as rangesWithin, H as countInRanges, I as viewStateSchema, J as fileNameOf, K as materialSlots, M as compositionFileSchema, Mt as reportListenerError, N as joinsByName, Nt as ArcueError, O as COMPOSITION_FILE_NAME, Ot as framedChannel, P as keysModelBones, Pt as COMMENT_ID_PATTERN, Q as composeScene, St as connectBridge, T as settingsSchema, Tt as launchInfoSchema, U as decodeRanges, W as encodeRanges, X as sameTopology, Y as imageMimeType, _ as isEnvelope, a as LOCKS_FOLDER, b as commands, bt as bridgeInfoFile, c as lockWaitingSchema, ct as shownByDefault, d as importFindFileInputSchema, dt as TEXTURE_SLOTS, et as memberPath, f as importReadFileInputSchema, g as withTransfer, gt as LOCAL_PAGE_OWNER, h as createPeer, ht as LAUNCH_INFO_FILE, i as roundDataSchema, j as animatesModel, jt as callEach, k as IMAGE_FILE_EXTENSIONS, kt as framedEndpoint, l as isQueryName, lt as TEXTURE_REF_KEYS, mt as LAST_CORE_FILE, n as binaryFrameCodec, nt as describeTextureUses, o as START_LOCK_FILE, ot as isDefaultPartView, p as importRequests, pt as HANDSHAKE_MAX_FRAME_BYTES, q as parseStoredPath, r as jsonFrameCodec, rt as importWarning, s as lockRecordSchema, st as knownPartView, t as portEndpoint, tt as splitMemberPath, u as queries, ut as TEXTURE_REF_NAMES, v as reviewFileSchema, vt as SERVE_STOPPED_CLOSE_CODE, w as viewNameSchema, wt as lastCoreSchema, x as isCommandName, xt as bridgeInfoSchema, y as reviewFormat, yt as acceptBridge } from "./arcue-Byuc2fTf.js";
 import { createRequire } from "node:module";
 import * as fs from "node:fs/promises";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
@@ -515,7 +515,10 @@ var namespace;
 var liveTokens = /* @__PURE__ */ new Map();
 /** The acquires waiting for their turn at each lock file, after the one that has it. */
 var turns = /* @__PURE__ */ new Map();
-/** The other holder this process waits on at each lock file, and since when, by `performance.now()`. */
+/**
+* The other holder this process waits on at each lock file, and since when, by `performance.now()`, shared by the
+* acquires that take turns there until the last of them ends.
+*/
 var foreign = /* @__PURE__ */ new Map();
 var exitWatched = false;
 /**
@@ -648,8 +651,10 @@ function takeTurn(path) {
 }
 function passTurn(path, delayMs) {
 	const next = turns.get(path)?.shift();
-	if (!next) turns.delete(path);
-	else if (delayMs > 0) setTimeout(next, delayMs);
+	if (!next) {
+		turns.delete(path);
+		foreign.delete(path);
+	} else if (delayMs > 0) setTimeout(next, delayMs);
 	else next();
 }
 /** Creates the file with the record, unless it exists or Windows refuses it. */
@@ -757,13 +762,31 @@ async function clearDeadClaim(claim, attempt) {
 	const again = await inspect$1(claim, attempt.label);
 	if (typeof again === "object" && sameSnapshot(again, seen)) await unlinkWithRetry(claim);
 }
+/**
+* Refreshes the lock file's modification time while its record is still this holder's, and stops once it is not, as
+* after a waiter broke the lock of this holder while it stalled.
+*/
 function holding(attempt) {
-	const heartbeat = setInterval(() => {
+	let released = null;
+	let beating = false;
+	const beat = async () => {
+		const seen = await inspect$1(attempt.path, attempt.label).catch(() => "busy");
+		if (seen === "busy" || released) return;
+		if (typeof seen !== "object" || parseRecord(seen.text)?.token !== attempt.token) {
+			clearInterval(heartbeat);
+			return;
+		}
 		const at = new Date(attempt.lease.now());
-		fs.utimes(attempt.path, at, at).catch(() => void 0);
+		await fs.utimes(attempt.path, at, at).catch(() => void 0);
+	};
+	const heartbeat = setInterval(() => {
+		if (beating) return;
+		beating = true;
+		beat().finally(() => {
+			beating = false;
+		});
 	}, attempt.lease.heartbeatMs);
 	heartbeat.unref();
-	let released = null;
 	const release = async () => {
 		clearInterval(heartbeat);
 		liveTokens.delete(attempt.token);
@@ -1106,6 +1129,7 @@ async function listenForBridges(options) {
 	const address = await bridgeAddress(userData);
 	const token = randomBytes(32).toString("base64url");
 	let next = 1;
+	let stopping = false;
 	const open = /* @__PURE__ */ new Set();
 	const server = createServer((connection) => {
 		open.add(connection);
@@ -1125,10 +1149,13 @@ async function listenForBridges(options) {
 				user: () => user,
 				onListenerError: options.onError
 			});
-		}, (error) => options.onError(error));
+		}, (error) => {
+			if (!endedBeforeHello(error, connection, stopping)) options.onError(error);
+		});
 	});
 	server.on("error", options.onError);
 	const stopListening = async () => {
+		stopping = true;
 		const closed = new Promise((resolve) => server.close(() => resolve()));
 		for (const connection of open) connection.destroy();
 		await closed;
@@ -1213,6 +1240,13 @@ function listen$1(server, path) {
 			resolve();
 		});
 	});
+}
+/**
+* Whether a connection closed before its hello as a routine one does: one that connected only to see that the core
+* listens and sent nothing, or one that the server ended as it stopped.
+*/
+function endedBeforeHello(error, connection, stopping) {
+	return error instanceof ArcueError && error.code === "disconnected" && (stopping || connection.bytesRead === 0);
 }
 function unrefTimer(delayMs, callback) {
 	const handle = setTimeout(callback, delayMs);
@@ -3274,6 +3308,8 @@ var OpenAsset = class {
 	waiting = null;
 	/** When a page took the asset with `adopt`, until it shows anywhere again: a page that saved its tab may take it back. */
 	adoptedAt = null;
+	/** Set once "asset.opened" announced the asset. A close before then waits for its open to end. */
+	opened = false;
 	closed = false;
 	/** Set while `asset.close` waits for the edits in flight. */
 	closing = null;
@@ -3288,10 +3324,8 @@ var OpenAsset = class {
 	loadedFiles = /* @__PURE__ */ new Set();
 	/** The sizes and modification times of the files the version on screen was read from, by path. */
 	loadedStats = /* @__PURE__ */ new Map();
-	/** Cancels the retry of background work that met a held reviews lock. */
-	cancelRetry = () => void 0;
-	/** How long until that work is tried again, doubling with each try. */
-	retryDelayMs = FIRST_RETRY_MS;
+	/** The retries of background work that met a held reviews lock, by kind, so one kind never drops another's. */
+	retries = /* @__PURE__ */ new Map();
 	/**
 	* Comments another Arcue saved wait to move onto the version on screen, because its files changed on disk; the next
 	* load moves them, even when it reads the same version.
@@ -3330,6 +3364,10 @@ var OpenAsset = class {
 	}
 	get name() {
 		return basename(this.path);
+	}
+	/** Whether the asset is closing or closed, so no new work starts for it. */
+	get ending() {
+		return this.closed || this.closing !== null;
 	}
 	get summary() {
 		const summary = {
@@ -4207,6 +4245,7 @@ var ReviewSession = class {
 			if (this.#diskHash === null) await this.#checkModelThere();
 			const current = this.#review;
 			const change = await compute(current);
+			this.#checkUsable();
 			if (change.next === null || !change.prepare && !change.clearHistory && this.#unchanged(change.next, current)) {
 				change.apply?.();
 				if (change.edit) this.history.record(change.edit);
@@ -4241,17 +4280,18 @@ var ReviewSession = class {
 	}
 	/**
 	* Refuses a change while neither review.json nor the model is on disk: every move of a review needs its model gone,
-	* so another core moved this one, and saving here would start a second copy of it.
+	* so another core moved this one, and saving here would start a second copy of it. Anything but a file at the
+	* model's path counts as gone, as it does for a core that follows the model to a new name.
 	*/
 	async #checkModelThere() {
 		const model = modelPathOf(this.#location);
-		if (await this.#platform.stat(model) !== null) return;
+		if ((await this.#platform.stat(model))?.kind === "file") return;
 		throw new ArcueError("conflict", `${basename(model)} and its review are gone from disk, so the change was not saved. If the model was renamed, Arcue follows it in a moment; otherwise open the model at its new path.`);
 	}
-	/** Takes in a change another program made to `review.json`, as a watcher reports it. */
+	/** Takes in a change another program made to `review.json`, as a watcher reports it, unless the session no longer saves. */
 	refresh() {
 		return this.#edits.run(async () => {
-			if (!this.#closed) await this.#sync();
+			if (!this.#closed && this.#stranded === null) await this.#sync();
 		});
 	}
 	/**
@@ -4269,6 +4309,7 @@ var ReviewSession = class {
 			if (location.root !== this.#location.root) throw new ArcueError("internal", "A review moves only inside its reviews root.");
 			const unlock = await lockReviews(this.#platform, this.#location);
 			try {
+				this.#checkUsable();
 				try {
 					await move();
 				} catch (error) {
@@ -4290,6 +4331,10 @@ var ReviewSession = class {
 		return this.#edits.run(async () => {
 			this.#closed = true;
 		});
+	}
+	/** Refuses every change from now on without waiting, so a change whose compute is running saves nothing. */
+	dispose() {
+		this.#closed = true;
 	}
 	#checkUsable() {
 		if (this.#closed) throw new ArcueError("not-found", "The asset was closed.");
@@ -4564,6 +4609,7 @@ var SettingsStore = class {
 	#serial = new Serial();
 	#settings = defaultSettings;
 	#stopWatching = null;
+	#disposed = false;
 	constructor(platform, changed) {
 		this.#platform = platform;
 		this.#changed = changed;
@@ -4588,6 +4634,11 @@ var SettingsStore = class {
 	}
 	idle() {
 		return this.#serial.run(async () => void 0);
+	}
+	/** Watches the file, then reads it, so a change made while it starts is not missed. */
+	async start(onError) {
+		this.watch(onError);
+		await this.reload();
 	}
 	/** Reloads whenever settings.json changes on disk. */
 	watch(onError) {
@@ -4620,15 +4671,16 @@ var SettingsStore = class {
 			}
 		});
 	}
-	/** Stops watching the file. */
+	/** Stops watching the file. A read or write in flight still sets the settings, but tells nobody. */
 	dispose() {
+		this.#disposed = true;
 		this.#stopWatching?.();
 		this.#stopWatching = null;
 	}
 	#set(settings) {
 		if (sortedJson(settings) === sortedJson(this.#settings)) return;
 		this.#settings = settings;
-		this.#changed?.(settings);
+		if (!this.#disposed) this.#changed?.(settings);
 	}
 	async #read() {
 		try {
@@ -4769,8 +4821,7 @@ var ArcueCore = class ArcueCore {
 	/** Creates the core, reads its settings and watches them. */
 	static async start(options) {
 		const core = new ArcueCore(options);
-		await core.#settings.load();
-		core.#settings.watch(core.#onError);
+		await core.#settings.start(core.#onError);
 		return core;
 	}
 	constructor(options) {
@@ -4835,9 +4886,15 @@ var ArcueCore = class ArcueCore {
 		await this.#settings.idle();
 		this.dispose();
 	}
-	/** Stops watching files and removes the handlers. Open assets are dropped without events. */
+	/**
+	* Stops watching files and removes the handlers. Open assets are dropped without events, and their reviews save
+	* nothing from now on, not even a change already in flight.
+	*/
 	dispose() {
-		for (const asset of this.#assets.values()) this.#stop(asset);
+		for (const asset of this.#assets.values()) {
+			asset.session.dispose();
+			this.#stop(asset);
+		}
 		this.#assets.clear();
 		this.#settings.dispose();
 		for (const unregister of this.#unregister.splice(0)) unregister();
@@ -4852,6 +4909,7 @@ var ArcueCore = class ArcueCore {
 			window: null
 		}, args.move))), registry.handleCommand("asset.close", (args) => this.#close(args.assetId)), registry.handleCommand("asset.relink", (args) => this.#relinkAsset(args.assetId, args.path)), registry.handleCommand("asset.reload", async (args) => {
 			const asset = this.#asset(args.assetId);
+			if (asset.ending) throw new ArcueError("conflict", `${asset.name} is closing.`);
 			asset.searched.clear();
 			return { version: await this.#load(asset) };
 		}), registry.handleCommand("comment.create", (args, context) => this.#createComment(args, context.user)), registry.handleCommand("comment.update", (args) => this.#updateComment(args)), registry.handleCommand("comment.delete", (args) => this.#deleteComment(args)), registry.handleCommand("comment.resolve", (args) => this.#resolveComment(args)), registry.handleCommand("comment.reopen", (args, context) => this.#reopenComment(args, context.user)), registry.handleCommand("comment.createFromWarning", (args, context) => this.#createFromWarning(args, context.user)), registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])), registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)), registry.handleCommand("round.copy", (args, context) => this.#inCompositionLine(this.#asset(args.assetId), () => this.#copyRound(args.assetId, context.user))), registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")), registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")), registry.handleCommand("review.relink", (args) => this.#relinkReview(args.assetId, args.from)), registry.handleCommand("composition.addFile", (args) => this.#addCompositionFile(args)), registry.handleCommand("composition.removeFile", (args) => this.#removeCompositionFile(args)), registry.handleCommand("composition.attachFile", (args) => this.#attachCompositionFile(args)), registry.handleCommand("material.setTexture", (args) => this.#setMaterialTexture(args)), registry.handleCommand("settings.set", (args) => {
@@ -4866,7 +4924,7 @@ var ArcueCore = class ArcueCore {
 			asset.viewState = args.state;
 		}), registry.handleCommand("view.moveAsset", (args, context) => this.#opening.run(() => this.#move(args.assetId, context, args))), registry.handleCommand("view.reportFocus", (_args, context) => {
 			if (context.caller === "window" && context.connection !== null) this.#windows.focus(context.connection);
-		}), registry.handleCommand(VIEW_SHOW_ASSET, async (args, context) => {
+		}), registry.handleCommand(VIEW_SHOW_ASSET, (args, context) => this.#opening.run(async () => {
 			const asset = this.#asset(args.assetId);
 			if (context.caller === "window" && this.#windows.has(context.connection)) {
 				this.#checkSameView(asset, context.connection);
@@ -4875,7 +4933,7 @@ var ArcueCore = class ArcueCore {
 				view: this.#ownerOf(asset),
 				window: null
 			}, args, false);
-		}), registry.handleQuery("asset.list", () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) })), registry.handleQuery("review.get", (args) => this.#asset(args.assetId).session.review), registry.handleQuery("review.candidates", (args) => ({ candidates: this.#asset(args.assetId).candidates })), registry.handleQuery("viewState.get", (args) => this.#asset(args.assetId).viewState), registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()), registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })), registry.handleQuery("scene.materials", (args) => ({ materials: materialSlots(this.#asset(args.assetId).loaded().scene).map(({ material, slots }) => ({
+		})), registry.handleQuery("asset.list", () => ({ assets: [...this.#assets.values()].map((asset) => asset.summary) })), registry.handleQuery("review.get", (args) => this.#asset(args.assetId).session.review), registry.handleQuery("review.candidates", (args) => ({ candidates: this.#asset(args.assetId).candidates })), registry.handleQuery("viewState.get", (args) => this.#asset(args.assetId).viewState), registry.handleQuery("scene.get", (args) => this.#asset(args.assetId).loaded()), registry.handleQuery("scene.parts", (args) => ({ parts: partsOf(this.#asset(args.assetId).loaded().scene) })), registry.handleQuery("scene.materials", (args) => ({ materials: materialSlots(this.#asset(args.assetId).loaded().scene).map(({ material, slots }) => ({
 			material,
 			slots: slots.map(({ slot, state, path, overridden }) => ({
 				slot,
@@ -4994,6 +5052,7 @@ var ArcueCore = class ArcueCore {
 			ms: this.#showAssetTimeoutMs,
 			clock: this.#platform.clock
 		});
+		if (!this.#windows.has(window)) throw new ArcueError("unavailable", `The window closed as it showed ${asset.name}.`);
 		this.#shownIn(asset, window);
 		asset.adoptedAt = null;
 	}
@@ -5127,7 +5186,9 @@ var ArcueCore = class ArcueCore {
 			this.#assets.delete(asset.id);
 			throw error;
 		}
+		asset.opened = true;
 		this.registry.emit("asset.opened", { asset: asset.summary });
+		if (asset.closing) throw new ArcueError("conflict", `${asset.name} was closed as it opened.`);
 		if (earlier.moved !== null) this.registry.emit("review.relinked", {
 			assetId: asset.id,
 			from: earlier.moved,
@@ -5279,7 +5340,7 @@ var ArcueCore = class ArcueCore {
 	}
 	/** Watches the model file, its review file, and its composition file until it loads the files that one names. */
 	#watchAsset(asset) {
-		if (asset.closed) return;
+		if (asset.ending) return;
 		for (const stop of asset.stopWatching.splice(0)) stop();
 		asset.stopWatching.push(this.#platform.watch(asset.path, () => this.#fileChanged(asset)), this.#platform.watch(reviewFilePath(asset.location), () => {
 			this.#track(asset.session.refresh().catch((error) => this.#onError(error)));
@@ -5288,7 +5349,7 @@ var ArcueCore = class ArcueCore {
 	}
 	/** Watches the composition file and the files it names, and stops watching files it no longer names. */
 	#watchComposition(asset, paths) {
-		if (asset.closed) return;
+		if (asset.ending) return;
 		const wanted = new Set(paths);
 		for (const [path, stop] of asset.compositionWatchers) {
 			if (wanted.has(path)) continue;
@@ -5320,11 +5381,17 @@ var ArcueCore = class ArcueCore {
 			members: inspectMembers(files)
 		});
 	}
+	/**
+	* Closes the asset once the edits in flight are saved. An asset whose open is still placing it closes once that open
+	* ends: after "asset.opened" when the open placed it, and without any event when the open failed.
+	*/
 	#close(assetId) {
 		const asset = this.#asset(assetId);
 		asset.closing ??= (async () => {
+			if (!asset.opened) await this.#opening.run(async () => void 0);
 			await asset.session.close();
 			this.#stop(asset);
+			if (this.#assets.get(assetId) !== asset) return;
 			this.#assets.delete(assetId);
 			this.registry.emit("asset.closed", { assetId });
 		})();
@@ -5336,24 +5403,37 @@ var ArcueCore = class ArcueCore {
 		for (const stop of asset.compositionWatchers.values()) stop();
 		asset.compositionWatchers.clear();
 		asset.cancelStabilityCheck();
-		asset.cancelRetry();
+		for (const retry of asset.retries.values()) retry.cancel();
+		asset.retries.clear();
 	}
 	/**
 	* Runs background work again later, after it met a reviews lock another Arcue kept busy: after one second at first,
-	* then twice as long each time up to thirty seconds, until the asset closes. A later retry replaces an earlier one.
+	* then twice as long each time up to thirty seconds, until the asset starts closing. Each kind of work has its own
+	* retry and wait: a retry replaces only a pending retry of the same kind, and that kind's wait starts from one
+	* second again once `#retrySucceeded` reports its work done.
 	*/
-	#retryLater(asset, task) {
-		if (asset.closed) return;
-		asset.cancelRetry();
-		const delay = asset.retryDelayMs;
-		asset.retryDelayMs = Math.min(delay * 2, LAST_RETRY_MS);
-		asset.cancelRetry = this.#platform.clock.setTimer(delay, () => {
-			asset.cancelRetry = () => void 0;
+	#retryLater(asset, kind, task) {
+		if (asset.ending) return;
+		const earlier = asset.retries.get(kind);
+		earlier?.cancel();
+		const delay = earlier?.delayMs ?? 1e3;
+		const retry = {
+			cancel: () => void 0,
+			delayMs: Math.min(delay * 2, LAST_RETRY_MS)
+		};
+		retry.cancel = this.#platform.clock.setTimer(delay, () => {
+			retry.cancel = () => void 0;
 			task().catch(() => void 0);
 		});
+		asset.retries.set(kind, retry);
+	}
+	/** Lets the next retry of a kind of work wait one second again, since that work succeeded. */
+	#retrySucceeded(asset, kind) {
+		const retry = asset.retries.get(kind);
+		if (retry) retry.delayMs = FIRST_RETRY_MS;
 	}
 	#fileChanged(asset) {
-		if (asset.closed) return;
+		if (asset.ending) return;
 		asset.cancelStabilityCheck();
 		const check = ++asset.stabilityCheck;
 		this.#track(this.#checkStable(asset, check, void 0));
@@ -5361,16 +5441,16 @@ var ArcueCore = class ArcueCore {
 	/**
 	* Parses the files once two checks a short interval apart see the same size and modification time for the model
 	* and every file of its composition, so an export that writes several files reloads once. A model that stays
-	* missing for `MISSING_MODEL_MS` is looked for under a new name.
+	* missing for `MISSING_MODEL_MS`, as when anything but a file stands at its path, is looked for under a new name.
 	*/
 	async #checkStable(asset, check, previous, missingSince = null) {
 		const paths = [asset.path, ...asset.compositionWatchers.keys()];
 		const stats = await Promise.all(paths.map((path) => this.#platform.stat(path)));
 		const current = new Map(paths.map((path, index) => [path, stats[index] ?? null]));
-		if (asset.closed || check !== asset.stabilityCheck) return;
+		if (asset.ending || check !== asset.stabilityCheck) return;
 		const model = current.get(asset.path) ?? null;
 		const now = this.#platform.clock.now();
-		const missing = model === null ? missingSince ?? now : null;
+		const missing = model?.kind === "file" ? null : missingSince ?? now;
 		if (missing !== null && now - missing >= MISSING_MODEL_MS) {
 			this.#track(this.#modelGone(asset));
 			return;
@@ -5400,10 +5480,10 @@ var ArcueCore = class ArcueCore {
 			...files.members.keys(),
 			...files.textures.map((texture) => texture.path)
 		]);
-		const relinked = this.#relinkLostFiles(asset, lost, taken).catch((error) => {
+		const relinked = this.#relinkLostFiles(asset, lost, taken).then(() => this.#retrySucceeded(asset, "lost-files"), (error) => {
 			if (hasCode(error, "timeout")) {
 				for (const file of lost) asset.searched.delete(file.path);
-				this.#retryLater(asset, () => this.#load(asset, true));
+				this.#retryLater(asset, "lost-files", () => this.#load(asset, true));
 			} else if (!hasCode(error, "conflict")) this.#onError(error);
 		});
 		this.#track(relinked);
@@ -5443,27 +5523,34 @@ var ArcueCore = class ArcueCore {
 	/**
 	* The model stayed missing for `MISSING_MODEL_MS`, so an export did not replace it. When exactly one file in its
 	* folder has the bytes of the version on screen or of the last parse, or the model's Unity GUID, the asset follows
-	* that file; otherwise the asset reports "model-not-found". A folder that is gone, a tab that closed meanwhile and a
-	* refused move are expected, so they only end the search. A reviews lock another Arcue kept busy makes it look again
-	* later.
+	* that file; otherwise the asset reports "model-not-found", after the loads in flight, so none of them replaces that
+	* error with its own. A folder that is gone, a tab that closed meanwhile and a refused move are expected, so they only
+	* end the search. A reviews lock another Arcue kept busy makes it look again later.
 	*/
 	async #modelGone(asset) {
 		try {
 			const renamed = await this.#findRenamed(asset);
 			if (renamed !== null) {
 				await this.#follow(asset, renamed, true);
+				this.#retrySucceeded(asset, "model-gone");
 				return;
 			}
 		} catch (error) {
 			if (hasCode(error, "timeout")) {
-				this.#retryLater(asset, () => this.#track(this.#modelGone(asset)));
+				this.#retryLater(asset, "model-gone", () => this.#track(this.#modelGone(asset)));
 				return;
 			}
 			if (!hasCode(error, "conflict") && !hasCode(error, "not-found")) this.#onError(error);
 		}
-		if (asset.closed || asset.missing || await this.#platform.exists(asset.path)) return;
-		asset.missing = true;
-		this.#failed(asset, /* @__PURE__ */ new Error(`Model not found: ${asset.name}`));
+		this.#retrySucceeded(asset, "model-gone");
+		await asset.loads.run(async () => {
+			if (asset.ending || asset.missing || await this.#isFile(asset.path)) return;
+			asset.missing = true;
+			this.#failed(asset, /* @__PURE__ */ new Error(`Model not found: ${asset.name}`));
+		});
+	}
+	async #isFile(path) {
+		return (await this.#platform.stat(path))?.kind === "file";
 	}
 	/**
 	* The one file in the model's folder with the model's extension and a name the folder did not have when the model
@@ -5498,14 +5585,15 @@ var ArcueCore = class ArcueCore {
 	* review folder run with the opens, so no other tab opens the new path meanwhile. The move refuses a file that has
 	* a review of its own, except, when the person chose the file, a review that holds nothing but versions. The asset
 	* keeps its id, watches the new files and reloads. Windows retitle the tab on "asset.updated" and learn of the move
-	* from "review.relinked". An automatic follow stops when the old file is back. The asset stays where it is when its
-	* review is gone from disk while its reviews root is still there, since another Arcue moved it to another model.
+	* from "review.relinked". An automatic follow stops when the old file is back; anything but a file there counts as
+	* gone. The asset stays where it is when its review is gone from disk while its reviews root is still there, since
+	* another Arcue moved it to another model.
 	*/
 	#follow(asset, path, automatic) {
 		return this.#inCompositionLine(asset, async () => {
 			const from = asset.path;
 			if (!await this.#opening.run(async () => {
-				if (await this.#platform.exists(from)) {
+				if (await this.#isFile(from)) {
 					if (automatic) return false;
 					throw new ArcueError("conflict", `${asset.name} still exists, so its review stays with it.`);
 				}
@@ -5524,7 +5612,7 @@ var ArcueCore = class ArcueCore {
 						replaceUntouched: !automatic
 					});
 				});
-				if (asset.closed) return false;
+				if (asset.ending) return false;
 				asset.cancelStabilityCheck();
 				asset.stabilityCheck++;
 				asset.relocate(path, location);
@@ -5567,7 +5655,7 @@ var ArcueCore = class ArcueCore {
 	}
 	/** One read of the asset's files: the version on screen, or null when the files changed before it was recorded. */
 	async #loadPass(asset, force) {
-		if (asset.closed) throw new ArcueError("not-found", `${asset.name} is closed.`);
+		if (asset.ending) throw new ArcueError("not-found", `${asset.name} is closed.`);
 		let files;
 		try {
 			files = await readAssetFiles(this.#platform, asset.path, asset.compositionPath, asset.readRoot, { brokenComposition: asset.composition === null ? "warn" : "reject" });
@@ -5655,12 +5743,12 @@ var ArcueCore = class ArcueCore {
 						asset.loadedFiles = kept;
 						asset.loadedStats = files.stats;
 						asset.reanchorPending = false;
-						asset.retryDelayMs = 1e3;
+						this.#retrySucceeded(asset, "version");
 					}
 				};
 			}) === "superseded") return null;
 		} catch (error) {
-			if (recording && hasCode(error, "timeout")) this.#retryLater(asset, () => this.#load(asset, force));
+			if (recording && hasCode(error, "timeout")) this.#retryLater(asset, "version", () => this.#load(asset, force));
 			else this.#failed(asset, error);
 			throw error;
 		}
@@ -5674,7 +5762,7 @@ var ArcueCore = class ArcueCore {
 	*/
 	#reanchorAdopted(asset, review, before) {
 		const version = asset.version;
-		if (asset.closed || version === null || asset.scene === null) return;
+		if (asset.ending || version === null || asset.scene === null) return;
 		const earlier = new Map(before.comments.map((comment) => [comment.id, comment.anchorVersion]));
 		if (review.comments.some((comment) => comment.target !== null && movesOnto(comment, version, review.versions) && earlier.get(comment.id) !== comment.anchorVersion)) this.#track(asset.loads.run(() => this.#reanchorOnScreen(asset)));
 	}
@@ -5687,7 +5775,7 @@ var ArcueCore = class ArcueCore {
 		try {
 			if (await asset.session.run(async (review) => {
 				const { version, scene } = asset;
-				if (asset.closed || version === null || scene === null) return {
+				if (asset.ending || version === null || scene === null) return {
 					next: null,
 					result: "unchanged"
 				};
@@ -5706,12 +5794,13 @@ var ArcueCore = class ArcueCore {
 					apply: () => {
 						asset.session.history.mapComments(reanchor);
 						asset.reanchorPending = false;
+						this.#retrySucceeded(asset, "reanchor");
 					}
 				};
 			}) === "stale") asset.reanchorPending = true;
 		} catch (error) {
-			if (hasCode(error, "timeout")) this.#retryLater(asset, () => this.#load(asset, true));
-			else if (!asset.closed && !hasCode(error, "conflict")) this.#onError(error);
+			if (hasCode(error, "timeout")) this.#retryLater(asset, "reanchor", () => this.#load(asset, true));
+			else if (!asset.ending && !hasCode(error, "conflict")) this.#onError(error);
 		}
 	}
 	/** Parses one file of the asset, or takes the scene parsed from the same bytes before. */
@@ -5756,7 +5845,7 @@ var ArcueCore = class ArcueCore {
 		this.#watchComposition(asset, [...files.watch, ...imported]);
 	}
 	#failed(asset, error) {
-		if (asset.closed) return;
+		if (asset.ending) return;
 		asset.status = "failed";
 		asset.error = error instanceof Error ? error.message : String(error);
 		this.registry.emit("asset.updated", { asset: asset.summary });
@@ -6806,7 +6895,7 @@ async function renameWithRetry(from, to) {
 /**
 * Watches the folder that holds `path`, which also sees an atomic replace, as a removal and creation or as a rename.
 * While that folder does not exist yet, it watches the nearest folder above it and moves down as folders appear.
-* Files in one folder share its watch. When the system cannot watch at all, it polls.
+* Files in one folder share its watch. When the system cannot watch at all, it polls the file from then on instead.
 */
 function watchPath(path, native, folders, listener) {
 	const name = basename(path);
@@ -6832,7 +6921,10 @@ function watchPath(path, native, folders, listener) {
 		});
 	};
 	const poll = () => {
-		if (polling) return;
+		if (polling || stopped) return;
+		unlisten?.();
+		unlisten = null;
+		watching = null;
 		polling = true;
 		watchFile(native(path), { interval: POLL_INTERVAL_MS }, report);
 	};
@@ -6849,7 +6941,7 @@ function watchPath(path, native, folders, listener) {
 			if (up === folder) return poll();
 			folder = up;
 		}
-		if (stopped || folder === watching) return;
+		if (stopped || polling || folder === watching) return;
 		unlisten?.();
 		unlisten = null;
 		watching = folder;
@@ -6915,8 +7007,8 @@ var WindowPresence = class {
 	}
 	/**
 	* Resolves once a window that may show a model opened for the view is connected: the view's page or a window outside
-	* views, or with a null view only a window outside views. Asks for a window when none is; rejects as "unavailable"
-	* after the timeout.
+	* views, or with a null view only a window outside views. Asks for a window when none is, and again when a waiter
+	* before it gives up; rejects as "unavailable" after the timeout.
 	*/
 	ensure(view = null) {
 		if (this.#canShow(view)) return Promise.resolve();
@@ -6936,6 +7028,7 @@ var WindowPresence = class {
 			const cancel = this.#setTimer(this.#timeoutMs, () => {
 				this.#waiters = this.#waiters.filter((entry) => entry !== waiter);
 				reject(new ArcueError("unavailable", "No window opened in time to show the asset."));
+				if (this.#waiters.length > 0) this.#requestWindow();
 			});
 			this.#waiters.push(waiter);
 			if (this.#waiters.length === 1) this.#requestWindow();
@@ -11383,6 +11476,7 @@ async function startServer(options) {
 	let closing = null;
 	let pages = 0;
 	let cancelIdle = () => void 0;
+	let cancelHeartbeat = () => void 0;
 	const armIdle = () => {
 		cancelIdle();
 		const idleStopMs = options.idleStopMs;
@@ -11395,6 +11489,7 @@ async function startServer(options) {
 			reason,
 			message
 		};
+		cancelHeartbeat();
 		stopped.resolve(stopping);
 	};
 	const removed = (folder) => stop("removed", `Arcue stops: its files in ${folder} were removed. Run arcue serve --detach to start the current one.`);
@@ -11500,14 +11595,13 @@ async function startServer(options) {
 				socket.end(`HTTP/1.1 400 Bad Request\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
 				return;
 			}
-			if (closing) {
+			if (closing || stopping) {
 				socket.end(`HTTP/1.1 503 Service Unavailable\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
 				return;
 			}
 			sockets.handleUpgrade(request, socket, head, (connected) => sockets.emit("connection", connected, request));
 		});
 	}
-	let cancelHeartbeat = () => void 0;
 	const heartbeat = () => {
 		for (const client of sockets.clients) {
 			if (answered.get(client) === false) {
@@ -11551,6 +11645,7 @@ async function startServer(options) {
 		pid: process.pid,
 		stopped: stopped.promise,
 		close(code = SERVE_STOPPED_CLOSE_CODE) {
+			stop("closed", "Arcue stops.");
 			closing ??= (async () => {
 				cancelIdle();
 				cancelHeartbeat();
