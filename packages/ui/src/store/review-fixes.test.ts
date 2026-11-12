@@ -1,6 +1,7 @@
 import type { QueryInput, QueryName, QueryOutput } from "@arcue/protocol";
+import { ArcueError } from "@arcue/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { flush, openStone, POINT } from "../test-helpers";
+import { flush, holdCommand, openStone, POINT } from "../test-helpers";
 
 const callsNamed = (calls: readonly { name: string; input: unknown }[], name: string) =>
   calls.filter((call) => call.name === name);
@@ -55,6 +56,47 @@ describe("events while a box is open", () => {
   });
 });
 
+describe("sending a box", () => {
+  it("keeps a box's text while it sends, and closes only the box that was sent", async () => {
+    const { client, session, viewport } = await openStone();
+    const held = holdCommand(client, "comment.create");
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("The first box.");
+    const first = session.submitBox();
+    session.setBoxText("Typed while it sends.");
+    session.removeBoxChip("target");
+    expect(session.state.get().box).toMatchObject({ text: "The first box.", target: POINT, busy: true });
+
+    session.escape();
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("The second box.");
+    const second = session.submitBox();
+    await flush();
+    held[0]?.release();
+    expect(await first).toBe(true);
+    expect(session.state.get().box).toMatchObject({ text: "The second box.", busy: true });
+
+    held[1]?.refuse(new ArcueError("unavailable", "The core is busy."));
+    expect(await second).toBe(false);
+    expect(session.state.get().box).toMatchObject({ text: "The second box.", busy: false, needsRepick: false });
+  });
+
+  it("leaves a box opened since alone when an earlier send fails", async () => {
+    const { client, session, viewport } = await openStone();
+    const held = holdCommand(client, "comment.create");
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("Sent first.");
+    const first = session.submitBox();
+    session.escape();
+    viewport.emit("pinPlaced", { anchor: POINT });
+    session.setBoxText("Still writing.");
+    await flush();
+    held[0]?.refuse(new ArcueError("conflict", "The model changed."));
+    expect(await first).toBe(false);
+    expect(session.state.get().box).toMatchObject({ text: "Still writing.", busy: false, needsRepick: false });
+  });
+});
+
 describe("conflicts and repicking", () => {
   it("nudges on Enter while a repick is pending, and lets the user drop the target instead", async () => {
     const { client, session, viewport } = await openStone();
@@ -102,6 +144,24 @@ describe("copy prompt", () => {
     session.setBoxText("The foot still slides.");
     await session.copyPrompt();
     expect(session.state.get().box).toMatchObject({ mode: "reopen", commentId: "c4" });
+  });
+
+  it("waits for an edit that is saving, and copies it with its new text", async () => {
+    const { client, session } = await openStone();
+    const held = holdCommand(client, "comment.update");
+    session.selectComment("c7");
+    session.setBoxText("Fold the thumb inward.");
+    const saving = session.submitBox();
+    const copying = session.copyPrompt();
+    await flush();
+    expect(callsNamed(client.calls, "round.copy")).toHaveLength(0);
+    held[0]?.release();
+    await Promise.all([saving, copying]);
+    const names = client.calls
+      .map((call) => call.name)
+      .filter((name) => name === "comment.update" || name === "round.copy");
+    expect(names).toEqual(["comment.update", "round.copy"]);
+    expect(client.lastPrompt).toContain("Fold the thumb inward.");
   });
 
   it("copies once when asked twice before the first copy finishes", async () => {
@@ -196,6 +256,19 @@ describe("overlapping reloads", () => {
     expect(session.state.get().version).toBe(latest);
     expect(viewport.scene).toBe(session.state.get().scene);
     expect(session.state.get().viewportReady).toBe(true);
+  });
+});
+
+describe("a scene the 3D view cannot show", () => {
+  it("shows the error when a reloaded scene fails, though an earlier scene was ready", async () => {
+    const { client, session, viewport } = await openStone();
+    expect(session.state.get().viewportReady).toBe(true);
+    viewport.setScene = async () => {
+      throw new Error("Out of GPU memory.");
+    };
+    await client.simulateExport(session.assetId);
+    await flush();
+    expect(session.state.get()).toMatchObject({ sceneError: "Out of GPU memory.", viewportReady: false });
   });
 });
 

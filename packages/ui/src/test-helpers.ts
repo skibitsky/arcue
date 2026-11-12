@@ -1,4 +1,11 @@
-import type { ComputedContext, QueryOutput, TimeSelection } from "@arcue/protocol";
+import type {
+  CommandInput,
+  CommandName,
+  CommandOutput,
+  ComputedContext,
+  QueryOutput,
+  TimeSelection,
+} from "@arcue/protocol";
 import type {
   CameraAnchor,
   Material,
@@ -302,6 +309,26 @@ export const withPoseClips: SceneChange = (scene) => {
 export function stoneCatalog(path: string, change: SceneChange = (scene) => scene) {
   if (path !== STONE_RESONATOR_PATH) return null;
   return { scene: change(fakeScene(STONE_RESONATOR)), review: stoneResonatorReview(NOW), version: STONE_VERSION };
+}
+
+/** A call of a held command, which runs once released and fails with the error it is refused with. */
+export interface HeldCall {
+  release(): void;
+  refuse(error: Error): void;
+}
+
+/** Holds each call of a command on the fake core until the test releases or refuses it, in the order they came. */
+export function holdCommand(client: FakeCoreClient, held: CommandName): HeldCall[] {
+  const execute = client.execute.bind(client);
+  const calls: HeldCall[] = [];
+  client.execute = async <Name extends CommandName>(
+    name: Name,
+    input: CommandInput<Name>,
+  ): Promise<CommandOutput<Name>> => {
+    if (name === held) await new Promise<void>((release, refuse) => calls.push({ release, refuse }));
+    return execute(name, input);
+  };
+  return calls;
 }
 
 export async function flush(times = 6): Promise<void> {

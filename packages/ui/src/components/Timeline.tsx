@@ -310,14 +310,18 @@ function Track({ session, clip }: { session: AssetSession; clip: Clip | null }) 
   );
 }
 
-function stripHandler(
+/** A press on a timeline strip, which ends when the pointer is released, the strip loses it, or the strip unmounts. */
+function useStripHandler(
   clip: Clip,
   onStart: (frame: number) => (frame: number, moved: boolean) => void,
   onEnd: (start: number, moved: boolean) => void,
 ) {
+  const endPress = useRef<(() => void) | null>(null);
+  useEffect(() => () => endPress.current?.(), []);
   return (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || (event.target as Element).closest("button")) return;
     event.preventDefault();
+    endPress.current?.();
     const element = event.currentTarget;
     element.setPointerCapture?.(event.pointerId);
     const last = lastFrame(clip);
@@ -333,15 +337,19 @@ function stripHandler(
       if (!moved && Math.abs(moveEvent.clientX - startX) > 3) moved = true;
       onMove(frameFor(moveEvent.clientX), moved);
     };
-    const up = () => {
+    const end = () => {
       element.removeEventListener("pointermove", move);
-      element.removeEventListener("pointerup", up);
-      element.removeEventListener("pointercancel", up);
+      element.removeEventListener("pointerup", end);
+      element.removeEventListener("pointercancel", end);
+      element.removeEventListener("lostpointercapture", end);
+      endPress.current = null;
       onEnd(start, moved);
     };
+    endPress.current = end;
     element.addEventListener("pointermove", move);
-    element.addEventListener("pointerup", up);
-    element.addEventListener("pointercancel", up);
+    element.addEventListener("pointerup", end);
+    element.addEventListener("pointercancel", end);
+    element.addEventListener("lostpointercapture", end);
   };
 }
 
@@ -349,7 +357,7 @@ function Ruler({ session, clip, width }: { session: AssetSession; clip: Clip; wi
   const last = lastFrame(clip);
   const ruler = useMemo(() => rulerTicks(last, width, keyFrames(clip)), [last, width, clip]);
   const wasPlaying = useRef(false);
-  const onPointerDown = stripHandler(
+  const onPointerDown = useStripHandler(
     clip,
     (start) => {
       wasPlaying.current = session.time.get().playing;
@@ -396,7 +404,7 @@ function Lane({ session, clip }: { session: AssetSession; clip: Clip }) {
   const selection = useSelect(session.state, (state) => state.selection);
   const { bars, dots } = useMemo(() => timelineMarkers(review, clip.name, selection), [review, clip.name, selection]);
   const last = lastFrame(clip);
-  const onPointerDown = stripHandler(
+  const onPointerDown = useStripHandler(
     clip,
     (start) => (frame, moved) => {
       if (!moved) return;

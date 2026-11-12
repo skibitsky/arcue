@@ -1,8 +1,8 @@
-import type { SavedTab, WindowTabs } from "@arcue/protocol";
+import type { SavedTab, ViewState, WindowTabs } from "@arcue/protocol";
 import { ArcueError } from "@arcue/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
-import { setup } from "../test-helpers";
+import { flush, setup, TestViewport } from "../test-helpers";
 import type { ReleasedTab } from "./tab-restore";
 import { TabRestore } from "./tab-restore";
 
@@ -231,6 +231,39 @@ describe("TabRestore", () => {
     await restore.reopen(restore.detach(), { open });
     expect(paths()).toEqual([STONE, CRATE]);
     expect(activePath()).toBe(CRATE);
+  });
+
+  it("keeps the view a tab opened again with until its session shows one, also across a second change", async () => {
+    const { restore, store, open } = restoring();
+    const view: ViewState = {
+      camera: { position: [2, 1, 3], target: [0, 1, 0], up: [0, 1, 0], fov: 30 },
+      clip: "Armature|Charge",
+      frame: 12,
+      range: null,
+      display: { mode: "clay", skeleton: false },
+      parts: { hidden: [], shown: [], isolated: null, lod: 0 },
+      outlineOpen: false,
+      note: "The whole walk feels slow",
+    };
+    const tabs: WindowTabs = {
+      tabs: [
+        { path: STONE, view },
+        { path: CRATE, view: null },
+      ],
+      active: 0,
+    };
+    restore.pending(tabs);
+    await restore.reopen(restore.detach(), { open });
+    expect(restore.tabs()).toEqual(tabs);
+    await restore.reopen(restore.detach(), { open });
+    expect(restore.tabs()).toEqual(tabs);
+
+    const [stone] = store.state.get().tabs;
+    store.session(stone?.id ?? "")?.attachViewport(new TestViewport(), document.createElement("div"));
+    await flush();
+    const shown = restore.tabs().tabs[0]?.view;
+    expect(shown?.camera.position).toEqual([0, 1, 4]);
+    expect(shown).not.toHaveProperty("note");
   });
 
   it("drops quiet errors without a toast and alerts the others, dropping both tabs", async () => {

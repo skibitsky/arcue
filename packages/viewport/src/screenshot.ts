@@ -38,7 +38,8 @@ export interface ScreenshotInput<Entry extends ScreenshotEntry> {
 /**
  * Renders the view at another size, camera and time into a 2D canvas: the viewport's background gradient, the model
  * with the given regions tinted, and a dot without a number for each pin. Everything runs in one task, so the page
- * never shows the intermediate frame; the caller restores its own pose, tint and frame afterwards.
+ * never shows the intermediate frame. The renderer's size and target are restored also when it throws; the caller
+ * restores its own pose, tint and frame afterwards.
  */
 export function renderScreenshot<Entry extends ScreenshotEntry>(input: ScreenshotInput<Entry>): HTMLCanvasElement {
   const { renderer, width, height, cameraAnchor } = input;
@@ -61,37 +62,35 @@ export function renderScreenshot<Entry extends ScreenshotEntry>(input: Screensho
   const savedRatio = renderer.getPixelRatio();
   const savedSize = renderer.getSize(new Vector2());
   const savedTarget = renderer.getRenderTarget();
-  renderer.setRenderTarget(null);
-  renderer.setPixelRatio(1);
-  renderer.setSize(width, height, false);
-  renderer.render(input.scene, camera);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (context) {
-    drawBackground(context, width, height, input.palette);
-    context.drawImage(renderer.domElement, 0, 0, width, height);
-  }
-
-  const idScale = Math.min(1, MAX_ID_PASS_SIZE / Math.max(width, height));
-  const pass =
-    context && input.overlays.some((entry) => entry.resolved)
-      ? new IdPass(renderer, Math.round(width * idScale), Math.round(height * idScale))
-      : null;
+  let pass: IdPass | null = null;
   try {
-    if (context && pass) {
+    renderer.setRenderTarget(null);
+    renderer.setPixelRatio(1);
+    renderer.setSize(width, height, false);
+    renderer.render(input.scene, camera);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (context) {
+      drawBackground(context, width, height, input.palette);
+      context.drawImage(renderer.domElement, 0, 0, width, height);
+    }
+
+    const idScale = Math.min(1, MAX_ID_PASS_SIZE / Math.max(width, height));
+    if (context && input.overlays.some((entry) => entry.resolved)) {
+      pass = new IdPass(renderer, Math.round(width * idScale), Math.round(height * idScale));
       pass.render(input.scene, camera, 0);
       drawPins(context, input, camera, pass, idScale);
     }
+    return canvas;
   } finally {
     pass?.dispose();
     renderer.setPixelRatio(savedRatio);
     renderer.setSize(savedSize.x, savedSize.y, false);
     renderer.setRenderTarget(savedTarget);
   }
-  return canvas;
 }
 
 function drawBackground(context: CanvasRenderingContext2D, width: number, height: number, palette: Palette): void {

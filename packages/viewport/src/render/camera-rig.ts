@@ -229,6 +229,11 @@ export class CameraRig {
     return this.tween !== null;
   }
 
+  /** Leaves the camera where the animation has it, as an orbit does. */
+  stopAnimation(): void {
+    this.tween = null;
+  }
+
   private apply(position: Vector3, target: Vector3, fov: number): void {
     this.changes++;
     this.camera.position.copy(position);

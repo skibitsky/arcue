@@ -119,8 +119,13 @@ export class ThreeViewport implements Viewport {
 
   private model: Model | null = null;
   private skeleton: SkeletonOverlay | null = null;
-  private sceneToken = 0;
+  /** Grows when ID pass reads in flight go stale: a new scene, part view, display mode or overlay anchors. */
+  private readToken = 0;
   private loadToken = 0;
+  /** The newest `setScene` is still building its model. */
+  private loading = false;
+  /** A clip asked for while a scene loads that the scene on screen lacks, with the time and playing state set since. */
+  private awaited: { clip: string; time: number; playing: boolean } | null = null;
   private disposed = false;
   private active = true;
 
@@ -165,6 +170,7 @@ export class ThreeViewport implements Viewport {
   private hoverInFlight = false;
   private hoverAgain = false;
   private hoverAnchorKey = "null";
+  private hoverRevision = -1;
   private overModel = false;
 
   constructor(options: ViewportOptions) {
@@ -230,23 +236,31 @@ export class ThreeViewport implements Viewport {
   }
 
   async setScene(scene: SceneDescription | null): Promise<void> {
+    if (this.disposed) return;
     const token = ++this.loadToken;
+    this.loading = scene !== null;
     if (!scene) {
+      this.awaited = null;
       this.replaceModel(null);
       this.renderNow();
       return;
     }
-    const model = await Model.build(scene, this.palette, this.renderer.capabilities.getMaxAnisotropy());
+    const model = await Model.build(scene, this.palette, this.renderer.capabilities.getMaxAnisotropy()).finally(() => {
+      if (token === this.loadToken) this.loading = false;
+    });
     if (token !== this.loadToken || this.disposed) {
       model.dispose();
       return;
     }
     const first = this.model === null;
-    const kept = this.clip ? (scene.clips.find((clip) => clip.name === this.clip?.name) ?? null) : null;
+    const awaited = this.awaited;
+    this.awaited = null;
+    const name = awaited ? awaited.clip : (this.clip?.name ?? null);
+    const kept = name === null ? null : (scene.clips.find((clip) => clip.name === name) ?? null);
     this.clip = kept;
-    this.time = kept ? clampToClip(this.time, kept) : 0;
+    this.time = kept ? clampToClip(awaited ? awaited.time : this.time, kept) : 0;
     this.range = kept ? clampRange(this.range, kept.duration) : null;
-    if (!kept) this.playing = false;
+    this.playing = (awaited ? awaited.playing : this.playing) && playable(kept);
     this.replaceModel(model);
     const extent = extentOf(scene.bounds);
     this.stage.fit(extent);
@@ -256,16 +270,19 @@ export class ThreeViewport implements Viewport {
       this.rig.frameInitial([extent.center.x, extent.center.y, extent.center.z], radius);
     }
     this.renderNow();
+    if (this.playing) this.requestRender();
     this.emitTime();
   }
 
   private replaceModel(model: Model | null): void {
     this.cancelGesture();
+    this.dropStroke();
+    this.setHoveredOverlay(null);
     this.model?.dispose();
     this.skeleton?.dispose();
     this.model = model;
     this.skeleton = null;
-    this.sceneToken++;
+    this.readToken++;
     this.viewStamp++;
     this.poseDirty = true;
     this.idPass.invalidate();
@@ -285,17 +302,22 @@ export class ThreeViewport implements Viewport {
       this.range = null;
     }
     this.overlays = this.overlays.map((entry) => this.resolveEntry(entry.overlay));
-    this.pins.sync(this.overlays.map((entry) => entry.overlay));
+    this.syncPins();
     this.tintDirty = true;
   }
 
   setClip(name: string | null): void {
+    if (this.disposed) return;
     const clip = name === null ? null : (this.model?.scene.clips.find((candidate) => candidate.name === name) ?? null);
+    this.awaited =
+      this.loading && name !== null && clip === null
+        ? { clip: name, time: 0, playing: this.awaited?.playing ?? this.playing }
+        : null;
     if (clip === this.clip) return;
     this.clip = clip;
     this.time = 0;
     this.range = null;
-    if (!clip) this.playing = false;
+    if (!playable(clip)) this.playing = false;
     this.poseDirty = true;
     this.lastTick = 0;
     this.requestRender();
@@ -303,6 +325,8 @@ export class ThreeViewport implements Viewport {
   }
 
   setTime(seconds: number): void {
+    if (this.disposed) return;
+    if (this.awaited) this.awaited.time = seconds;
     const time = this.clip ? clampToClip(seconds, this.clip) : 0;
     if (time === this.time && !this.playing) {
       this.emitTime();
@@ -315,7 +339,9 @@ export class ThreeViewport implements Viewport {
   }
 
   setPlaying(playing: boolean): void {
-    const next = playing && this.clip !== null && this.clip.duration > 0;
+    if (this.disposed) return;
+    if (this.awaited) this.awaited.playing = playing;
+    const next = playing && playable(this.clip);
     if (next && !this.playing && this.clip) {
       this.time = playbackStart(this.time, this.clip.duration, this.playbackSettings());
       this.poseDirty = true;
@@ -331,11 +357,12 @@ export class ThreeViewport implements Viewport {
   }
 
   setSpeed(speed: number): void {
+    if (this.disposed) return;
     this.speed = clampSpeed(speed);
   }
 
   setActive(active: boolean): void {
-    if (active === this.active) return;
+    if (this.disposed || active === this.active) return;
     this.active = active;
     this.lastTick = 0;
     if (!active) {
@@ -349,10 +376,12 @@ export class ThreeViewport implements Viewport {
   }
 
   setLoop(loop: boolean): void {
+    if (this.disposed) return;
     this.loop = loop;
   }
 
   setPlaybackRange(range: PlaybackRange | null): void {
+    if (this.disposed) return;
     this.range = range ? { start: range.start, end: range.end } : null;
     if (this.playing) this.requestRender();
   }
@@ -371,9 +400,10 @@ export class ThreeViewport implements Viewport {
   }
 
   setDisplayMode(mode: DisplayMode): void {
-    if (mode === this.displayMode) return;
+    if (this.disposed || mode === this.displayMode) return;
     this.displayMode = mode;
     this.model?.setDisplayMode(mode);
+    this.readToken++;
     this.viewStamp++;
     this.idPass.invalidate();
     this.surfaceVisibility.clear();
@@ -383,30 +413,33 @@ export class ThreeViewport implements Viewport {
   }
 
   setSkeletonVisible(visible: boolean): void {
+    if (this.disposed) return;
     this.skeletonVisible = visible;
     if (this.skeleton) this.skeleton.object.visible = visible;
     this.requestRender();
   }
 
   setPartView(view: PartView): void {
+    if (this.disposed) return;
     this.partView = { ...view, hidden: [...view.hidden], shown: [...view.shown] };
     const model = this.model;
     if (!model) return;
     this.cancelGesture();
     model.setVisibleMeshes(visibleMeshes(model.scene.parts, this.partView));
+    this.readToken++;
     this.viewStamp++;
     this.idPass.invalidate();
     this.surfaceVisibility.clear();
     this.visibilityVersion = -1;
     this.overlays = this.overlays.map((entry) => this.resolveEntry(entry.overlay));
-    this.pins.sync(this.overlays.map((entry) => entry.overlay));
+    this.syncPins();
     this.tintDirty = true;
     this.requestRender();
     this.scheduleHover();
   }
 
   setTool(tool: ToolId): void {
-    if (tool === this.tool) return;
+    if (this.disposed || tool === this.tool) return;
     this.tool = tool;
     this.cancelGesture();
     this.updateBrush();
@@ -414,6 +447,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setBrushSize(radius: number): void {
+    if (this.disposed) return;
     this.brush.setRadius(radius);
     this.brush.moveTo(this.pointer.x, this.pointer.y);
   }
@@ -423,6 +457,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setCamera(camera: CameraAnchor, options?: { animate?: boolean }): void {
+    if (this.disposed) return;
     this.rig.setAnchor(camera, this.active && (options?.animate ?? false));
     this.requestRender();
   }
@@ -477,6 +512,7 @@ export class ThreeViewport implements Viewport {
   }
 
   setHighlight(meshes: readonly string[] | null): void {
+    if (this.disposed) return;
     const next = new Set(meshes ?? []);
     if (next.size === this.highlighted.size && [...next].every((path) => this.highlighted.has(path))) return;
     this.highlighted = next;
@@ -485,8 +521,10 @@ export class ThreeViewport implements Viewport {
   }
 
   setOverlays(overlays: readonly CommentOverlay[]): void {
+    if (this.disposed) return;
     const previous = new Map(this.overlays.map((entry) => [entry.overlay.id, entry]));
-    let changed = this.strokeFinished || overlays.length !== this.overlays.length;
+    let anchorsChanged = overlays.length !== this.overlays.length;
+    let changed = this.strokeFinished || anchorsChanged;
     this.overlays = overlays.map((overlay, index) => {
       const key = anchorKey(overlay.anchor);
       const old = previous.get(overlay.id);
@@ -494,17 +532,21 @@ export class ThreeViewport implements Viewport {
       if (!same || old?.overlay.state !== overlay.state || old.overlay.selected !== overlay.selected) changed = true;
       if (old?.overlay.pending !== overlay.pending) changed = true;
       if (old?.overlay.number !== overlay.number || this.overlays[index]?.overlay.id !== overlay.id) changed = true;
-      if (!same) this.surfaceVisibility.delete(overlay.id);
+      if (!same) {
+        this.surfaceVisibility.delete(overlay.id);
+        anchorsChanged = true;
+      }
       return same && old ? { overlay: { ...overlay }, key, resolved: old.resolved } : this.resolveEntry(overlay);
     });
     for (const id of this.surfaceVisibility.keys())
       if (!overlays.some((overlay) => overlay.id === id)) this.surfaceVisibility.delete(id);
+    if (anchorsChanged) this.readToken++;
     if (this.strokeFinished) {
       this.stroke = null;
       this.strokeFinished = false;
     }
     if (!changed) return;
-    this.pins.sync(this.overlays.map((entry) => entry.overlay));
+    this.syncPins();
     this.tintDirty = true;
     this.visibilityVersion = -1;
     this.requestRender();
@@ -516,6 +558,13 @@ export class ThreeViewport implements Viewport {
       key: anchorKey(overlay.anchor),
       resolved: this.model ? resolveAnchor(this.model, overlay.anchor) : null,
     };
+  }
+
+  /** A hovered pin that goes away sends no pointerleave, so it stops being hovered here. */
+  private syncPins(): void {
+    this.pins.sync(this.overlays.map((entry) => entry.overlay));
+    const hovered = this.hoveredOverlay;
+    if (hovered !== null && !this.overlays.some((entry) => entry.overlay.id === hovered)) this.setHoveredOverlay(null);
   }
 
   private setHoveredOverlay(id: string | null): void {
@@ -608,6 +657,7 @@ export class ThreeViewport implements Viewport {
   }
 
   async screenshot(options: ScreenshotOptions): Promise<Uint8Array> {
+    if (this.disposed) throw new ArcueError("unavailable", "The 3D view is closed.");
     if (this.contextLost) throw new ArcueError("unavailable", "The 3D view lost its graphics context.");
     const model = this.model;
     const time = options.time && model ? resolveTimeSelection(model.scene.clips, options.time) : null;
@@ -615,27 +665,31 @@ export class ThreeViewport implements Viewport {
       throw new ArcueError("not-found", "The screenshot's clip is not in the scene.");
     }
     this.ensurePose();
-    const canvas = renderScreenshot({
-      renderer: this.renderer,
-      scene: this.stage.scene,
-      camera: this.rig.camera,
-      cameraAnchor: options.camera ?? this.rig.getAnchor(),
-      width: Math.min(4096, Math.max(1, Math.round(options.width))),
-      height: Math.min(4096, Math.max(1, Math.round(options.height))),
-      palette: this.palette,
-      modelSize: model ? extentOf(model.scene.bounds).size : 1,
-      setPose: (clip, seconds) => {
-        model?.applyPose(clip, seconds);
-        if (model) this.skeleton?.update(model.worlds);
-      },
-      pose: time,
-      overlays: model ? (options.overlays ?? []).map((overlay) => this.resolveEntry(overlay)) : [],
-      paintTint: (entries) => this.paintTint(entries, null, new Set()),
-      judgeVisible: (resolved, point, depth, sample) => this.judgeVisible(resolved, point, depth, sample),
-    });
-    if (model) model.applyPose(this.clip, this.shownTime());
-    this.tintDirty = true;
-    this.renderNow();
+    let canvas: HTMLCanvasElement;
+    try {
+      canvas = renderScreenshot({
+        renderer: this.renderer,
+        scene: this.stage.scene,
+        camera: this.rig.camera,
+        cameraAnchor: options.camera ?? this.rig.getAnchor(),
+        width: Math.min(4096, Math.max(1, Math.round(options.width))),
+        height: Math.min(4096, Math.max(1, Math.round(options.height))),
+        palette: this.palette,
+        modelSize: model ? extentOf(model.scene.bounds).size : 1,
+        setPose: (clip, seconds) => {
+          model?.applyPose(clip, seconds);
+          if (model) this.skeleton?.update(model.worlds);
+        },
+        pose: time,
+        overlays: model ? (options.overlays ?? []).map((overlay) => this.resolveEntry(overlay)) : [],
+        paintTint: (entries) => this.paintTint(entries, null, new Set()),
+        judgeVisible: (resolved, point, depth, sample) => this.judgeVisible(resolved, point, depth, sample),
+      });
+    } finally {
+      if (model) model.applyPose(this.clip, this.shownTime());
+      this.tintDirty = true;
+      this.renderNow();
+    }
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new ArcueError("internal", "The browser could not encode the screenshot.");
     return new Uint8Array(await blob.arrayBuffer());
@@ -662,6 +716,7 @@ export class ThreeViewport implements Viewport {
       again = step.playing;
     }
     if (this.rig.step(now)) again = true;
+    else if (this.pointer.inside && !this.gesture && this.rig.revision !== this.hoverRevision) this.scheduleHover();
     this.renderNow();
     if (timeChanged) this.emitTime();
     if (again || this.stroke?.hasPending) this.requestRender();
@@ -816,14 +871,14 @@ export class ThreeViewport implements Viewport {
     if (clusters.length === 0) return;
     this.idPass.render(this.stage.scene, this.rig.camera, version);
     this.visibilityInFlight = true;
-    const token = this.sceneToken;
+    const token = this.readToken;
     const reads = clusters.map(async ({ left, top, width, height, points }) => {
       const pixels = await this.idPass.readAsync(left, top, width, height);
       return points.map((candidate) => ({ candidate, sample: pixels.at(candidate.x, candidate.y) }));
     });
     Promise.all(reads)
       .then((groups) => {
-        if (this.disposed || token !== this.sceneToken) return;
+        if (this.disposed || token !== this.readToken) return;
         for (const { candidate, sample } of groups.flat()) {
           const resolved = candidate.entry.resolved;
           if (!resolved) continue;
@@ -868,6 +923,7 @@ export class ThreeViewport implements Viewport {
     const comment = this.tool === "comment" && !event.altKey && event.button === 0;
     this.rig.setLeftButtonOrbits(!(this.tool === "comment" && !event.altKey));
     if (event.button !== 0) return;
+    if (comment) this.rig.stopAnimation();
     const { x, y } = this.localPoint(event);
     this.gesture = {
       pointerId: event.pointerId,
@@ -888,6 +944,11 @@ export class ThreeViewport implements Viewport {
       if (event.buttons === 0) this.scheduleHover();
       return;
     }
+    if (event.buttons === 0) {
+      this.endLostPointer(event);
+      this.scheduleHover();
+      return;
+    }
     if (!gesture.moved && Math.hypot(x - gesture.startX, y - gesture.startY) > CLICK_SLOP) {
       gesture.moved = true;
       if (gesture.comment) this.beginStroke(gesture.mode, gesture.startX, gesture.startY);
@@ -905,9 +966,17 @@ export class ThreeViewport implements Viewport {
     const { x, y } = this.localPoint(event);
     if (gesture.moved) {
       if (gesture.comment) this.finishStroke();
-      return;
+    } else {
+      this.click(gesture, x, y);
     }
-    this.click(gesture, x, y);
+    this.scheduleHover();
+  }
+
+  /** Cancels a drag whose pointerup never came as the browser cancels one, which also ends the orbit controls' drag. */
+  private endLostPointer(event: PointerEvent): void {
+    this.canvas.dispatchEvent(
+      new PointerEvent("pointercancel", { pointerId: event.pointerId, pointerType: event.pointerType }),
+    );
   }
 
   private onPointerLeave(): void {
@@ -942,12 +1011,16 @@ export class ThreeViewport implements Viewport {
 
   private cancelGesture(): void {
     this.gesture = null;
-    if (this.stroke && !this.strokeFinished) {
-      this.stroke = null;
-      this.tintDirty = true;
-      this.requestRender();
-    }
+    if (!this.strokeFinished) this.dropStroke();
     this.brush.setPainting(false);
+  }
+
+  private dropStroke(): void {
+    if (!this.stroke) return;
+    this.stroke = null;
+    this.strokeFinished = false;
+    this.tintDirty = true;
+    this.requestRender();
   }
 
   private pickAt(x: number, y: number): Pick | null {
@@ -1008,12 +1081,18 @@ export class ThreeViewport implements Viewport {
     this.rig.camera.updateMatrixWorld();
     this.idPass.render(this.stage.scene, this.rig.camera, this.viewVersion());
     const { x, y } = this.pointer;
-    const token = this.sceneToken;
+    const token = this.readToken;
+    this.hoverRevision = this.rig.revision;
     this.hoverInFlight = true;
     this.idPass
       .readAsync(x, y, 1, 1)
       .then((pixels) => {
-        if (this.disposed || token !== this.sceneToken || !this.pointer.inside) return;
+        if (this.disposed || !this.pointer.inside) return;
+        if (token !== this.readToken) {
+          this.hoverAgain = true;
+          return;
+        }
+        if (this.gesture || this.contextLost) return;
         const pick = this.anchorFromSample(pixels.at(x, y), x, y);
         this.overModel = pick !== null;
         this.updateBrush();
@@ -1083,7 +1162,7 @@ export class ThreeViewport implements Viewport {
 
   private finishStroke(): void {
     const stroke = this.stroke;
-    if (!stroke) return;
+    if (!stroke || this.strokeFinished) return;
     if (stroke.hasPending) {
       this.ensurePose();
       this.rig.camera.updateMatrixWorld();
@@ -1093,15 +1172,13 @@ export class ThreeViewport implements Viewport {
     this.updateBrush();
     const result = stroke.result();
     if (!result || (result.overlayId !== null && !stroke.changed)) {
-      this.stroke = null;
-      this.strokeFinished = false;
-      this.tintDirty = true;
-      this.requestRender();
+      this.dropStroke();
       return;
     }
     this.tintDirty = true;
     this.requestRender();
     this.emitter.emit("regionPainted", result);
+    if (this.stroke === stroke) this.dropStroke();
   }
 
   private onContextLost(event: Event): void {
@@ -1139,6 +1216,8 @@ export class ThreeViewport implements Viewport {
     this.rig.dispose();
     this.model?.dispose();
     this.skeleton?.dispose();
+    this.model = null;
+    this.skeleton = null;
     this.stage.dispose();
     this.idPass.dispose();
     this.pins.dispose();
@@ -1148,6 +1227,10 @@ export class ThreeViewport implements Viewport {
     this.root.remove();
     this.emitter.clear();
   }
+}
+
+function playable(clip: Clip | null): clip is Clip {
+  return clip !== null && clip.duration > 0;
 }
 
 function anchorKey(anchor: SpatialAnchor): string {

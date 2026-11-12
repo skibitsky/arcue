@@ -164,6 +164,9 @@ export class AssetSession {
   readonly #thumbnailKeys = new Map<string, string>();
   readonly #thumbnailAttempts = new Map<string, number>();
   #copying = false;
+  #relinking = false;
+  /** The send of the busy box, which a copy waits for. */
+  #sending: Promise<boolean> | null = null;
   #warningSequence = 0;
   #offerDismissed = false;
   #reported: Pick<SessionState, "box" | "note"> = { box: null, note: "" };
@@ -261,11 +264,16 @@ export class AssetSession {
   /** Moves the offered review onto this asset. */
   async continueReview(): Promise<void> {
     const { offer } = this.state.get();
-    if (!offer) return;
-    await this.#run(async () => {
-      await this.#client.execute("review.relink", { assetId: this.assetId, from: offer.path });
-      this.setOffer(null);
-    });
+    if (!offer || this.#relinking) return;
+    this.#relinking = true;
+    try {
+      await this.#run(async () => {
+        await this.#client.execute("review.relink", { assetId: this.assetId, from: offer.path });
+        this.setOffer(null);
+      });
+    } finally {
+      this.#relinking = false;
+    }
   }
 
   /** Hides the offer for good in this tab; the view state remembers it across window reloads and moves. */
@@ -277,17 +285,24 @@ export class AssetSession {
 
   setReview(review: ReviewFile): void {
     this.#reviewSequence++;
-    const { selection, box } = this.state.get();
+    const { selection, box, review: previous } = this.state.get();
     const ids = new Set(review.comments.map((comment) => comment.id));
     const keepSelection = selection !== null && ids.has(selection) ? selection : null;
-    this.state.patch({ review, selection: keepSelection, box: this.#refreshBox(box, review) });
+    this.state.patch({ review, selection: keepSelection, box: this.#refreshBox(box, review, previous === null) });
     this.#dropThumbnails(review);
     this.#syncSelection();
     void this.refreshWarnings();
   }
 
-  /** An edit box follows its comment's stored time and target until the user changes them in the box. */
-  #refreshBox(box: CommentBox | null, review: ReviewFile): CommentBox | null {
+  /**
+   * An edit box follows its comment's stored time and target until the user changes them in the box. A reopen box
+   * restored before the first review loaded closes with that review when its comment is gone or a draft again.
+   */
+  #refreshBox(box: CommentBox | null, review: ReviewFile, first = false): CommentBox | null {
+    if (first && box?.mode === "reopen" && box.commentId !== null) {
+      const comment = review.comments.find((candidate) => candidate.id === box.commentId);
+      return comment && comment.status !== "draft" ? box : null;
+    }
     if (box?.mode !== "edit" || box.commentId === null) return box;
     if (!review.queue.includes(box.commentId)) return null;
     const comment = review.comments.find((candidate) => candidate.id === box.commentId);
@@ -389,7 +404,9 @@ export class AssetSession {
     try {
       await viewport.setScene(scene);
     } catch (error) {
-      if (this.state.get().scene === scene) this.state.patch({ sceneError: messageOf(error) });
+      if (this.#viewport === viewport && this.state.get().scene === scene) {
+        this.state.patch({ sceneError: messageOf(error), viewportReady: false });
+      }
       return;
     }
     if (this.#viewport !== viewport || this.state.get().scene !== scene) return;
@@ -566,12 +583,13 @@ export class AssetSession {
 
   /**
    * Attaches an added file to a model bone, by the bone's node index, or detaches it with null, through one
-   * "composition.attachFile". A file that sits in several places moves only its nodes in this place.
+   * "composition.attachFile". A file that sits in several places moves only its nodes in this place. Returns whether
+   * the core attached it; a refusal shows as a toast.
    */
-  async attachFile(file: OutlineFile, bone: number | null): Promise<void> {
+  async attachFile(file: OutlineFile, bone: number | null): Promise<boolean> {
     const { scene, summary } = this.state.get();
     const path = bone === null ? null : (scene?.nodes[bone]?.path ?? null);
-    if (bone !== null && path === null) return;
+    if (bone !== null && path === null) return false;
     const folder = summary.path.slice(0, summary.path.lastIndexOf("/") + 1);
     const input = { assetId: this.assetId, file: `${folder}${file.file}`, bone: path };
     try {
@@ -579,8 +597,10 @@ export class AssetSession {
         "composition.attachFile",
         file.nodes === null || file.nodes.length === 0 ? input : { ...input, nodes: [...file.nodes] },
       );
+      return true;
     } catch (error) {
       this.#host.notify({ message: messageOf(error), kind: "alert" });
+      return false;
     }
   }
 
@@ -912,14 +932,15 @@ export class AssetSession {
     this.state.patch({ note });
   }
 
+  /** A box keeps the text it is sending until the send ends. */
   setBoxText(text: string): void {
     const box = this.state.get().box;
-    if (box) this.state.patch({ box: { ...box, text } });
+    if (box && !box.busy) this.state.patch({ box: { ...box, text } });
   }
 
   removeBoxChip(chip: "time" | "target" | "followUp"): void {
     const box = this.state.get().box;
-    if (!box) return;
+    if (!box || box.busy) return;
     if (chip === "time" && box.mode !== "reopen") {
       this.state.patch({ box: { ...box, time: { kind: "none" }, timeEdited: true } });
     }
@@ -965,6 +986,17 @@ export class AssetSession {
       return false;
     }
     this.state.patch({ box: { ...box, busy: true } });
+    const sending = this.#send(box, text);
+    this.#sending = sending;
+    try {
+      return await sending;
+    } finally {
+      if (this.#sending === sending) this.#sending = null;
+    }
+  }
+
+  /** Success closes, and failure frees for editing, only the box that was sent, never one opened since. */
+  async #send(box: CommentBox, text: string): Promise<boolean> {
     try {
       if (box.mode === "reopen" && box.commentId) {
         await this.#client.execute("comment.reopen", { assetId: this.assetId, commentId: box.commentId, text });
@@ -974,7 +1006,7 @@ export class AssetSession {
         const commentId = await this.#create(text, box.time, box.target, box.anchorVersion);
         this.#flashAdded(commentId);
       }
-      if (this.state.get().box?.busy) this.state.patch({ box: null, selection: null });
+      if (this.state.get().box?.id === box.id) this.state.patch({ box: null, selection: null });
       this.#releaseRange(box.time);
       this.#syncSelection();
       return true;
@@ -982,7 +1014,7 @@ export class AssetSession {
       const current = this.state.get().box;
       const reloaded =
         error instanceof ArcueError && error.code === "conflict" && box.mode !== "reopen" && box.target !== null;
-      if (current) this.state.patch({ box: { ...current, busy: false, needsRepick: reloaded } });
+      if (current?.id === box.id) this.state.patch({ box: { ...current, busy: false, needsRepick: reloaded } });
       this.#host.notify({
         message: reloaded ? "The model changed since you picked this spot. Click or paint it again." : messageOf(error),
         kind: "alert",
@@ -1120,7 +1152,9 @@ export class AssetSession {
 
   async #copyPrompt(): Promise<void> {
     const box = this.state.get().box;
-    if (box?.mode === "edit" && this.hasUnsavedBox()) {
+    if (box?.mode === "edit" && box.busy) {
+      if (!(await this.#sending)) return;
+    } else if (box?.mode === "edit" && this.hasUnsavedBox()) {
       if (!(await this.submitBox())) return;
     }
     const count = this.state.get().review?.queue.length ?? 0;
