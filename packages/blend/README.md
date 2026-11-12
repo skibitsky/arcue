@@ -6,7 +6,7 @@ Reads Blender `.blend` files in JavaScript, without Blender: meshes, armatures, 
 
 | | |
 |---|---|
-| Blender versions | Files saved by Blender 2.80 and later. Older files are refused. The tests run on files saved by Blender 4.2.0 and 5.2.2 LTS. Files from other versions are expected to work, but no test covers them. |
+| Blender versions | Files saved by Blender 2.80 and later. Older files are refused. The tests run on files saved by Blender 4.2.0 LTS, 5.2.2 LTS and 5.3.0. Files from other versions are expected to work, but no test covers them. |
 | Compression | Uncompressed files, zstd-compressed files (Blender 3.0 and later) and gzip-compressed files (earlier versions). A bundled copy of fzstd decodes zstd. Gzip needs `DecompressionStream`, which browsers and Node have. |
 | Modifiers | Only the Armature modifier and the Smooth by Angle node group are evaluated. Every other modifier that is on in the viewport is skipped, and the object gets a `modifier-not-applied` warning. Physics settings such as Collision change no shape and are skipped without a warning. |
 | Other data it does not evaluate | Constraints, drivers and F-curve modifiers, each with its own warning. Data linked from other `.blend` files is not loaded, instances are not expanded, and only the first layer of a layered action plays. Objects that are not meshes, such as curves and text, come through as empty nodes with a warning. |

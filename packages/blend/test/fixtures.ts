@@ -12,7 +12,7 @@ import type { Faces } from "./loops.js";
 export const fixturesDir = fileURLToPath(new URL("./fixtures/", import.meta.url));
 
 /** The Blender versions `fixtures/generate.py` wrote fixtures with. */
-export const VERSIONS = ["4.2", "5.2"] as const;
+export const VERSIONS = ["4.2", "5.2", "5.3"] as const;
 
 export type Version = (typeof VERSIONS)[number];
 
