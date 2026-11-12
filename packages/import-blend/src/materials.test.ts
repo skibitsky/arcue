@@ -552,7 +552,7 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
       ["UdimBase", "udim is a UDIM tiled image, shown with its first tile"],
       ["SequenceOffset", `sequence-offset is an image sequence, shown as it is at frame ${startFrame}`],
       ["SequenceCyclic", `sequence-cyclic is an image sequence, shown as it is at frame ${startFrame}`],
-      ...(version === "5.2"
+      ...(version !== "4.2"
         ? [
             ["MetallicBase", "Its surface is Metallic BSDF, shown as a plain shader of its color"],
             ["MetallicConductor", "Its surface is Metallic BSDF, shown as a plain shader of its color"],
@@ -720,7 +720,7 @@ describe.each(VERSIONS)("the shading fixture from Blender %s", async (version) =
   it("shows the Specular BSDF's base color as EEVEE renders it, and the Metallic BSDF's as a metal's", () => {
     expectNear(material("SpecularBase").baseColor.slice(0, 3), expected.albedo.SpecularBase, 2);
     expect(material("SpecularBase").metallic).toBe(0);
-    if (version === "5.2") {
+    if (version !== "4.2") {
       expectNear(material("MetallicBase").baseColor.slice(0, 3), expected.eevee.MetallicBase, 4);
       expect(material("MetallicBase").metallic).toBe(1);
       expectNear(material("MetallicConductor").baseColor.slice(0, 3), expected.albedo.MetallicConductor ?? [], 3);

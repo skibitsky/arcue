@@ -1,6 +1,6 @@
 """Build the .blend fixtures of the Blender reader's tests, with Blender's own results for them.
 
-Run from the repository root once with each Blender version the tests cover, 4.2 and 5.2:
+Run from the repository root once with each Blender version the tests cover, 4.2, 5.2 and 5.3:
 
     blender --background --factory-startup --python-exit-code 1 \
         --python packages/blend/test/fixtures/generate.py
