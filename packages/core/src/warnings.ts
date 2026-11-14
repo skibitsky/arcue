@@ -114,8 +114,11 @@ export function commentWarning(warning: AssetWarning): CommentWarning {
 }
 
 /** The text the copy button puts on the clipboard: one instruction for an agent, then each warning not dismissed. */
-export function warningPrompt(assetPath: string, warnings: readonly AssetWarning[]): string {
-  const listed = warnings.filter((warning) => !warning.dismissed);
+export function warningPrompt(
+  assetPath: string,
+  warnings: readonly (Pick<AssetWarning, "message" | "subject" | "file" | "detail"> & { dismissed?: boolean })[],
+): string {
+  const listed = warnings.filter((warning) => warning.dismissed !== true);
   if (listed.length === 0) return `${assetPath} has no import warnings.`;
   const lines = [`Fix these import warnings for ${assetPath}.`];
   listed.forEach((warning, index) => {

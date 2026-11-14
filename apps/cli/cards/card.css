@@ -1,0 +1,335 @@
+@import "@arcue/ui/tokens.css";
+
+/* The host's style variables come first, so the card takes the chat's neutrals and fonts. Outside a host, it falls
+   back to Arcue's own. Arcue's function colors stay: orange feedback, brick sent, olive resolved, sand warnings. */
+:root {
+  color-scheme: light dark;
+  --card-text: var(--color-text-primary, light-dark(var(--palette-charcoal), var(--text)));
+  --card-text-muted: var(--color-text-secondary, light-dark(var(--palette-charcoal-strong), var(--text-muted)));
+  --card-text-faint: var(--color-text-tertiary, light-dark(var(--text-faint), var(--text-faint)));
+  --card-line: var(
+    --color-border-tertiary,
+    light-dark(color-mix(in srgb, var(--palette-charcoal) 12%, transparent), var(--line-strong))
+  );
+  --card-raised: var(
+    --color-background-secondary,
+    light-dark(color-mix(in srgb, var(--palette-charcoal) 4%, transparent), var(--surface-raised))
+  );
+  --card-primary: var(--color-background-inverse, light-dark(var(--palette-charcoal), var(--text)));
+  --card-primary-ink: var(--color-text-inverse, light-dark(var(--text), var(--palette-charcoal)));
+  --card-radius: var(--border-radius-md, var(--radius-md));
+  --card-radius-sm: var(--border-radius-sm, var(--radius-sm));
+  --card-font: var(--font-sans);
+  --card-size: var(--font-text-sm-size, var(--text-lg));
+  --card-size-small: var(--font-text-xs-size, var(--text-sm));
+  --card-size-title: var(--font-heading-sm-size, var(--text-xl));
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--card-text);
+  font-family: var(--card-font);
+  font-size: var(--card-size);
+  line-height: var(--font-text-sm-line-height, var(--line-height));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+h1,
+h2,
+p,
+ul,
+dl,
+dd {
+  margin: 0;
+  padding: 0;
+}
+
+ul {
+  list-style: none;
+}
+
+#card {
+  display: block;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-4);
+}
+
+.is-fullscreen .card {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-24);
+}
+
+.card-header h1 {
+  font-size: var(--card-size-title);
+  font-weight: var(--font-weight-semibold, var(--weight-semibold));
+  overflow-wrap: anywhere;
+}
+
+.card-sub,
+.card-more,
+.comment-meta,
+.row-detail {
+  color: var(--card-text-faint);
+  font-size: var(--card-size-small);
+}
+
+.card-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.card-empty,
+.card-plain {
+  color: var(--card-text-muted);
+}
+
+.card-failure,
+.card-notice {
+  color: var(--card-text-muted);
+  padding-left: var(--space-12);
+  border-left: 2px solid var(--alert);
+}
+
+.card-failure {
+  margin: var(--space-12) var(--space-4);
+}
+
+.status-dot {
+  display: inline-block;
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+  border-radius: var(--radius-full);
+  margin-right: var(--space-4);
+}
+
+.status-dot.is-draft {
+  background: var(--feedback);
+}
+
+.status-dot.is-sent {
+  background: var(--feedback-sent);
+}
+
+.status-dot.is-resolved {
+  background: var(--feedback-resolved);
+}
+
+.status-dot.is-alert {
+  background: var(--alert);
+}
+
+.comments {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--card-line);
+}
+
+.comment {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-10) 0;
+  border-bottom: 1px solid var(--card-line);
+}
+
+.comment-shot {
+  flex: none;
+  width: 72px;
+  height: 48px;
+  border-radius: var(--card-radius-sm);
+  object-fit: cover;
+  background: var(--card-raised);
+}
+
+.is-fullscreen .comment-shot {
+  width: 128px;
+  height: 80px;
+}
+
+.comment-shot.is-loading {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.comment-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.comment-text {
+  overflow-wrap: anywhere;
+}
+
+.comment.is-resolved .comment-text {
+  color: var(--card-text-muted);
+}
+
+.comment-meta {
+  display: flex;
+  align-items: center;
+  margin-top: var(--space-2);
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8) var(--space-24);
+}
+
+.fact dt {
+  color: var(--card-text-faint);
+  font-size: var(--card-size-small);
+}
+
+.fact dd {
+  font-weight: var(--font-weight-medium, var(--weight-medium));
+  font-variant-numeric: tabular-nums;
+}
+
+.warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.warning {
+  display: flex;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+
+.warning .status-dot {
+  transform: translateY(-1px);
+}
+
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+.details h2 {
+  font-size: var(--card-size);
+  font-weight: var(--font-weight-semibold, var(--weight-semibold));
+  margin-bottom: var(--space-6);
+}
+
+.rows li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-12);
+  padding: var(--space-6) 0;
+  border-bottom: 1px solid var(--card-line);
+  overflow-wrap: anywhere;
+}
+
+.row-detail {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.button {
+  min-height: var(--size-primary);
+  padding: 0 var(--space-14);
+  border: 1px solid var(--card-line);
+  border-radius: var(--card-radius);
+  background: transparent;
+  color: var(--card-text);
+  font: inherit;
+  font-weight: var(--font-weight-medium, var(--weight-medium));
+  cursor: pointer;
+}
+
+.button:hover:not([aria-disabled="true"]) {
+  background: var(--card-raised);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--color-ring-primary, var(--focus-ring));
+  outline-offset: 2px;
+}
+
+.button[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.button.is-feedback {
+  border-color: transparent;
+  background: var(--feedback);
+  color: var(--feedback-ink);
+}
+
+.button.is-feedback:hover:not([aria-disabled="true"]) {
+  background: var(--feedback-hover);
+}
+
+.button.is-primary {
+  border-color: transparent;
+  background: var(--card-primary);
+  color: var(--card-primary-ink);
+}
+
+.button.is-primary:hover:not([aria-disabled="true"]) {
+  background: var(--card-primary);
+  opacity: 0.88;
+}
+
+.button.is-small {
+  flex: none;
+  min-height: var(--size-control);
+  padding: 0 var(--space-10);
+  font-size: var(--card-size-small);
+}
+
+.card-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-12) var(--space-4);
+}
+
+.skeleton-line {
+  width: 40%;
+  height: var(--space-12);
+  border-radius: var(--radius-xs);
+  background: var(--card-raised);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.skeleton-line.is-wide {
+  width: 70%;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-line,
+  .comment-shot.is-loading {
+    animation: none;
+  }
+}

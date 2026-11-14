@@ -10,6 +10,7 @@ import type { CommandInput, CoreClient } from "@arcue/protocol";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import { CARD_META_KEY, CARD_URI } from "./card-data";
 import { outsideSessions, sessionView } from "./session-view";
 import { registerPid } from "./test-pids";
 
@@ -31,6 +32,7 @@ let transport: StdioClientTransport;
 interface ToolResult {
   isError?: boolean;
   content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
+  _meta?: Record<string, unknown>;
 }
 
 /** The test's environment for arcue: its own data folder, and no agent session's variables. */
@@ -186,7 +188,27 @@ describe("arcue mcp", () => {
       file: { name: "crate.fbx" },
       meshes: [{ name: "Crate", triangles: 756 }],
     });
+    expect(result._meta?.[CARD_META_KEY]).toMatchObject({
+      card: "inspection",
+      path: join(work, "crate.fbx"),
+      name: "crate.fbx",
+      triangles: 756,
+      meshes: [{ name: "Crate", triangles: 756, skinned: false }],
+      prompt: null,
+    });
     await expect(connectToCore(userData, "serve")).resolves.toBeNull();
+  });
+
+  it("serves the built card", async () => {
+    const { contents } = await client.readResource({ uri: CARD_URI });
+
+    const [page] = contents;
+    expect(page?.mimeType).toBe("text/html;profile=mcp-app");
+    const html = page && "text" in page ? page.text : "";
+    expect(html).toMatch(/^<!doctype html>/);
+    expect(html).toContain('<script type="module">');
+    expect(html).toContain("<style>");
+    expect(html).not.toMatch(/<script[^>]* src=|<link[^>]* href=/);
   });
 
   it("ends when its client closes its input", async () => {

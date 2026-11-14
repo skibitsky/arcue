@@ -1,4 +1,4 @@
-import { realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import type { CoreConnection } from "@arcue/platform-node";
@@ -324,7 +324,7 @@ async function mcp(
     if (failure?.includes(" is in use.")) failure = await detach(await anyFreePort());
     if (failure !== null) throw new Error(failure);
   };
-  const { serveMcp } = await import("./mcp");
+  const { bundledCardPage, serveMcp } = await import("./mcp");
   await serveMcp({
     userData: userDataDir(env),
     view: sessionView(env, command.view),
@@ -332,6 +332,10 @@ async function mcp(
     importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
     startServe,
     version: (await buildOf(options)) ?? "dev",
+    cardHtml: () =>
+      readFile(bundledCardPage, "utf8").catch(() => {
+        throw new Error(`${bundledCardPage} is missing. Build the command line: pnpm --filter @arcue/cli build`);
+      }),
   });
   return 0;
 }

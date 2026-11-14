@@ -29,15 +29,20 @@ export async function inspectFile(nativePath: string, options: InspectOptions): 
 
 const FORMAT_NAMES: Readonly<Record<string, string>> = { fbx: "FBX", blend: ".blend", gltf: "glTF", glb: "GLB" };
 
+/** The file's format and the tool that exported it, such as "FBX from Blender 4.2". */
+export function formatLabel(inspection: Pick<AssetInspection, "format" | "exporter">): string {
+  const format = FORMAT_NAMES[inspection.format] ?? inspection.format;
+  return inspection.exporter ? `${format} from ${inspection.exporter}` : format;
+}
+
 /** A few aligned lines for people. Empty sections are left out. */
 export function formatInspection(inspection: AssetInspection): string {
   const rows: [label: string, lines: string[]][] = [];
   const add = (label: string, lines: string[]) => {
     if (lines.length > 0) rows.push([label, lines]);
   };
-  const format = FORMAT_NAMES[inspection.format] ?? inspection.format;
   add("File", [inspection.file.path]);
-  add("Format", [inspection.exporter ? `${format} from ${inspection.exporter}` : format]);
+  add("Format", [formatLabel(inspection)]);
   if (inspection.clips.length > 0) add("Frame rate", [`${formatNumber(inspection.fps)} fps`]);
   add("Up axis", [inspection.upAxis]);
   if (inspection.unitMeters !== 1) add("Unit", [`${formatNumber(inspection.unitMeters)} m`]);
