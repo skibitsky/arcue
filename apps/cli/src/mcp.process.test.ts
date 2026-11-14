@@ -16,6 +16,7 @@ import { registerPid } from "./test-pids";
 
 const processRun = inject("processRun");
 const crate = fileURLToPath(new URL("../../../samples/crate.fbx", import.meta.url));
+const rockLods = fileURLToPath(new URL("../../../samples/rock-lods.fbx", import.meta.url));
 const png = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
 const camera: CommandInput<"comment.create">["camera"] = {
   position: [0, 1, 3],
@@ -197,6 +198,15 @@ describe("arcue mcp", () => {
       prompt: null,
     });
     await expect(connectToCore(userData, "serve")).resolves.toBeNull();
+  });
+
+  it("counts a model's triangles on its card at the most detailed level, without collision helpers", async () => {
+    copyFileSync(rockLods, join(work, "rock-lods.fbx"));
+
+    const result = await call("inspect_model", { path: "rock-lods.fbx" });
+
+    expect(result.isError, texts(result).join("\n")).toBeFalsy();
+    expect(result._meta?.[CARD_META_KEY]).toMatchObject({ triangles: 1600 });
   });
 
   it("serves the built card", async () => {

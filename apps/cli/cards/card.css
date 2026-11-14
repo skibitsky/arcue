@@ -5,8 +5,15 @@
 :root {
   color-scheme: light dark;
   --card-text: var(--color-text-primary, light-dark(var(--palette-charcoal), var(--text)));
-  --card-text-muted: var(--color-text-secondary, light-dark(var(--palette-charcoal-strong), var(--text-muted)));
-  --card-text-faint: var(--color-text-tertiary, light-dark(var(--text-faint), var(--text-faint)));
+  --card-text-muted: var(
+    --color-text-secondary,
+    light-dark(color-mix(in srgb, var(--palette-charcoal) 78%, transparent), var(--text-muted))
+  );
+  --card-text-faint: var(
+    --color-text-tertiary,
+    light-dark(color-mix(in srgb, var(--palette-charcoal) 64%, transparent), var(--text-faint))
+  );
+  --card-ring: var(--color-ring-primary, light-dark(var(--palette-charcoal), var(--focus-ring)));
   --card-line: var(
     --color-border-tertiary,
     light-dark(color-mix(in srgb, var(--palette-charcoal) 12%, transparent), var(--line-strong))
@@ -57,6 +64,10 @@ ul {
   display: block;
 }
 
+#card:focus {
+  outline: none;
+}
+
 .card {
   display: flex;
   flex-direction: column;
@@ -95,6 +106,13 @@ ul {
 .card-empty,
 .card-plain {
   color: var(--card-text-muted);
+}
+
+.card-plain,
+.card-failure,
+.card-notice {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .card-failure,
@@ -265,7 +283,7 @@ ul {
 }
 
 .button:focus-visible {
-  outline: 2px solid var(--color-ring-primary, var(--focus-ring));
+  outline: 2px solid var(--card-ring);
   outline-offset: 2px;
 }
 

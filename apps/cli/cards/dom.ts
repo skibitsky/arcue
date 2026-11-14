@@ -5,6 +5,7 @@ interface Props {
   title?: string;
   src?: string;
   alt?: string;
+  role?: string;
   /** Names the element across renders, so that focus stays on it. */
   key?: string;
   /** Marks a button unavailable with `aria-disabled`, so that it keeps focus, and leaves out its `onclick`. */
@@ -23,6 +24,7 @@ export function h<Tag extends keyof HTMLElementTagNameMap>(
   if (props?.title) element.title = props.title;
   if (props?.src !== undefined) element.setAttribute("src", props.src);
   if (props?.alt !== undefined) element.setAttribute("alt", props.alt);
+  if (props?.role) element.setAttribute("role", props.role);
   if (props?.key) element.dataset.key = props.key;
   if (props?.disabled) element.setAttribute("aria-disabled", "true");
   else if (props?.onclick) element.addEventListener("click", props.onclick);

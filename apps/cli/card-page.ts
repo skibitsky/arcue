@@ -15,6 +15,7 @@ export async function buildCardPage(logLevel: LogLevel = "warn"): Promise<string
     build: {
       write: false,
       target: "es2022",
+      cssTarget: ["chrome123", "edge123", "firefox120", "safari17.5"],
       cssCodeSplit: false,
       modulePreload: false,
       assetsInlineLimit: Number.MAX_SAFE_INTEGER,
@@ -25,16 +26,17 @@ export async function buildCardPage(logLevel: LogLevel = "warn"): Promise<string
   const files = outputs.flatMap((output) => output.output);
   const page = files.find((file) => file.fileName === "index.html");
   if (page?.type !== "asset") throw new Error("The card build made no page.");
-  let html = String(page.source);
+  let html = typeof page.source === "string" ? page.source : new TextDecoder().decode(page.source);
   for (const file of files) {
     if (file === page) continue;
     const name = file.fileName.replaceAll(".", "\\.");
     if (file.type === "chunk") {
-      const code = file.code.replaceAll("</script", "<\\/script");
+      const code = file.code.replace(/<\/(script)/gi, "<\\/$1").replaceAll("<!--", "<\\x21--");
       const tag = new RegExp(`<script type="module"[^>]*src="\\./${name}"[^>]*></script>`);
       html = replaceOnce(html, tag, `<script type="module">${code}</script>`, file.fileName);
     } else if (file.fileName.endsWith(".css")) {
-      const css = String(file.source).replaceAll("</style", "<\\/style");
+      const source = typeof file.source === "string" ? file.source : new TextDecoder().decode(file.source);
+      const css = source.replace(/<\/(style)/gi, "<\\/$1");
       const tag = new RegExp(`<link rel="stylesheet"[^>]*href="\\./${name}"[^>]*>`);
       html = replaceOnce(html, tag, `<style>${css}</style>`, file.fileName);
     } else {

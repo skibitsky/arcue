@@ -7,7 +7,7 @@ import { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CardComment, CommentsCardData, InspectionCardData } from "../src/card-data";
-import { CARD_META_KEY } from "../src/card-data";
+import { CARD_META_KEY, ROUND_META_KEY } from "../src/card-data";
 import { Card } from "./card";
 
 const PATH = "/work/Hero.fbx";
@@ -40,7 +40,15 @@ afterEach(async () => {
 });
 
 async function host(
-  options: { capabilities?: McpUiHostCapabilities; context?: McpUiHostContext; tools?: Tools; message?: boolean } = {},
+  options: {
+    capabilities?: McpUiHostCapabilities;
+    context?: McpUiHostContext;
+    tools?: Tools;
+    /** How the chat takes a message: it posts it, refuses it, or fails. */
+    message?: "post" | "refuse" | "fail";
+    /** Whether the host grants the full screen. */
+    fullscreen?: boolean;
+  } = {},
 ): Promise<Host> {
   const capabilities = options.capabilities ?? ALL;
   const tools = options.tools ?? {};
@@ -59,13 +67,15 @@ async function host(
   };
   bridge.onmessage = async ({ content }) => {
     messages.push(content);
-    return options.message === false ? { isError: true } : {};
+    if (options.message === "fail") throw new Error("The chat is busy.");
+    return options.message === "refuse" ? { isError: true } : {};
   };
   bridge.onupdatemodelcontext = async ({ content = [] }) => {
     contexts.push(content);
     return {};
   };
   bridge.onrequestdisplaymode = async ({ mode }) => {
+    if (options.fullscreen === false) return { mode: "inline" };
     bridge.setHostContext({ ...(options.context ?? INLINE), displayMode: mode });
     return { mode };
   };
@@ -131,9 +141,11 @@ function inspectionCard(overrides: Partial<InspectionCardData> = {}): Inspection
       { name: "Body", triangles: 12000, skinned: true },
       { name: "Sword", triangles: 480, skinned: false },
     ],
+    meshCount: 2,
     bones: 65,
     materials: 3,
     clips: [{ name: "Armature|Walk", displayName: "Walk", frames: 31 }],
+    clipCount: 1,
     warnings: [],
     prompt: null,
     ...overrides,
@@ -148,6 +160,24 @@ function carded(card: CommentsCardData | InspectionCardData, ...content: Content
 }
 
 const shot = (): ContentBlock => ({ type: "image", data: PNG, mimeType: "image/png" });
+const line = (text: string): ContentBlock => ({ type: "text", text });
+
+/** A result like `send_round`'s: the prompt, each screenshot after its label, and the notes. */
+function round(ids: string[]): CallToolResult {
+  return {
+    content: [line("Round 1 prompt."), line("Screenshot of comment 1:"), shot(), line("Notes.")],
+    _meta: { [ROUND_META_KEY]: { round: 1, comments: ids } },
+  };
+}
+
+/** A promise that the test settles. */
+function gate(): { wait: Promise<void>; open: () => void } {
+  let open: () => void = () => {};
+  const wait = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { wait, open };
+}
 const texts = (root: HTMLElement, selector: string) =>
   [...root.querySelectorAll(selector)].map((element) => element.textContent);
 const button = (root: HTMLElement, label: string) =>
@@ -167,8 +197,8 @@ describe("the comments card", () => {
     await vi.waitFor(() => expect(root.querySelector("h1")?.textContent).toBe("Hero.fbx"));
     expect(root.querySelector(".card-sub")?.textContent).toBe("2 draft · 1 sent");
     expect(texts(root, ".comment-text")).toEqual(["Comment c1", "Comment c2", "Comment c3"]);
-    expect(texts(root, ".comment-meta")).toEqual(["draft · Walk, frame 12", "sent", "draft · Walk, frame 12"]);
-    expect(texts(root, "button")).toEqual(["Send 2 comments"]);
+    expect(texts(root, ".comment-meta")).toEqual(["Draft · Walk, frame 12", "Sent", "Draft · Walk, frame 12"]);
+    expect(texts(root, "button")).toEqual(["Resolve", "Send 2 comments"]);
   });
 
   it("shows the first comments inline and the rest in the full screen", async () => {
@@ -177,7 +207,7 @@ describe("the comments card", () => {
     await result(carded(commentsCard(comments)));
     await vi.waitFor(() => expect(texts(root, ".comment-text")).toHaveLength(3));
     expect(root.querySelector(".card-more")?.textContent).toBe("2 more comments");
-    expect(texts(root, "button")).toEqual(["Show all"]);
+    expect(texts(root, "button")).toEqual(["Resolve", "Resolve", "Resolve", "Show all"]);
 
     click(root, "Show all");
     await vi.waitFor(() => expect(texts(root, ".comment-text")).toHaveLength(5));
@@ -186,12 +216,20 @@ describe("the comments card", () => {
     expect(texts(root, "button")).toEqual(Array(5).fill("Resolve"));
   });
 
-  it("shows every comment, each with Resolve, where the host has no full screen", async () => {
-    const { root, result } = await host({ context: { displayMode: "inline", availableDisplayModes: ["inline"] } });
-    const comments = ["c1", "c2", "c3", "c4"].map((id) => comment(id, { status: "sent" }));
-    await result(carded(commentsCard([...comments, comment("c5", { status: "resolved" })])));
-    await vi.waitFor(() => expect(texts(root, ".comment-text")).toHaveLength(5));
-    expect(texts(root, "button")).toEqual(Array(4).fill("Resolve"));
+  it("shows every comment inline where the host has no full screen or turns it down", async () => {
+    const without = await host({ context: { displayMode: "inline", availableDisplayModes: ["inline"] } });
+    const comments = ["c1", "c2", "c3", "c4"].map((id) => comment(id));
+    await without.result(carded(commentsCard(comments)));
+    await vi.waitFor(() => expect(texts(without.root, ".comment-text")).toHaveLength(4));
+    expect(texts(without.root, "button")).toEqual(["Send 4 comments"]);
+
+    const refusing = await host({ fullscreen: false });
+    await refusing.result(carded(commentsCard(comments)));
+    await vi.waitFor(() => expect(button(refusing.root, "Show all")).toBeDefined());
+    click(refusing.root, "Show all");
+    await vi.waitFor(() => expect(texts(refusing.root, ".comment-text")).toHaveLength(4));
+    expect(refusing.root.classList.contains("is-fullscreen")).toBe(false);
+    expect(texts(refusing.root, "button")).toEqual(["Send 4 comments"]);
   });
 
   it("offers no actions where the host takes no messages or tool calls", async () => {
@@ -202,22 +240,17 @@ describe("the comments card", () => {
     expect(root.querySelector(".comment-shot.is-loading")).toBeNull();
   });
 
-  it("shows the screenshots the result carries and asks for the rest", async () => {
+  it("shows the screenshots the result carries and asks for the ones on screen it left out", async () => {
     const { root, result, calls } = await host({
       tools: {
         get_comments: (args) => {
-          const ids = args.comments as string[];
-          return carded(commentsCard([], { screenshots: ids.slice(0, 1) }), ...ids.slice(0, 1).map(shot));
+          const ids = (args.comments as string[]).slice(0, 1);
+          return carded(commentsCard([], { screenshots: ids }), ...ids.map(shot));
         },
       },
     });
-    const comments = [
-      comment("c1", { hasScreenshot: true }),
-      comment("c2", { hasScreenshot: true }),
-      comment("c3", { hasScreenshot: true }),
-      comment("c4", { hasScreenshot: true }),
-    ];
-    await result(carded(commentsCard(comments, { screenshots: ["c1"] }), { type: "text", text: "A summary." }, shot()));
+    const comments = ["c1", "c2", "c3", "c4"].map((id) => comment(id, { hasScreenshot: true }));
+    await result(carded(commentsCard(comments, { screenshots: ["c1"] }), line("A summary."), shot()));
     await vi.waitFor(() => expect(root.querySelectorAll("img.comment-shot")).toHaveLength(3));
     expect(root.querySelector("img")?.getAttribute("src")).toBe(`data:image/png;base64,${PNG}`);
     expect(calls.map((call) => call.arguments)).toEqual([
@@ -226,61 +259,133 @@ describe("the comments card", () => {
     ]);
   });
 
-  it("stops asking for a screenshot the model does not have", async () => {
+  it("asks for one batch of screenshots at a time", async () => {
+    let running = 0;
+    let most = 0;
     const { root, result, calls } = await host({
-      tools: { get_comments: () => carded(commentsCard([])) },
+      context: { displayMode: "fullscreen" },
+      tools: {
+        get_comments: async (args) => {
+          running++;
+          most = Math.max(most, running);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          running--;
+          const ids = args.comments as string[];
+          return carded(commentsCard([], { screenshots: ids }), ...ids.map(shot));
+        },
+      },
     });
-    await result(carded(commentsCard([comment("c1", { hasScreenshot: true })])));
-    await vi.waitFor(() => expect(root.querySelector(".comment-shot.is-empty:not(.is-loading)")).not.toBeNull());
-    expect(calls).toHaveLength(1);
+    const comments = Array.from({ length: 20 }, (_, index) => comment(`c${index}`, { hasScreenshot: true }));
+    await result(carded(commentsCard(comments)));
+    await vi.waitFor(() => expect(root.querySelectorAll("img.comment-shot")).toHaveLength(20));
+    expect(calls.map((call) => (call.arguments.comments as string[]).length)).toEqual([8, 8, 4]);
+    expect(most).toBe(1);
+  });
+
+  it("stops asking for screenshots the model does not have, or that a failed call did not bring", async () => {
+    const missing = await host({ tools: { get_comments: () => carded(commentsCard([])) } });
+    await missing.result(carded(commentsCard([comment("c1", { hasScreenshot: true })])));
+    await vi.waitFor(() => expect(missing.root.querySelector(".comment-shot.is-loading")).toBeNull());
+    expect(missing.calls).toHaveLength(1);
+
+    const failing = await host({
+      tools: { get_comments: () => ({ isError: true, content: [line("Arcue is not running.")] }) },
+    });
+    const comments = ["c1", "c2", "c3"].map((id) => comment(id, { hasScreenshot: true }));
+    await failing.result(carded(commentsCard(comments)));
+    await vi.waitFor(() => expect(failing.root.querySelector(".comment-shot.is-loading")).toBeNull());
+    expect(failing.calls).toHaveLength(1);
   });
 
   it("sends the queue as a round and posts its prompt with the screenshots", async () => {
-    let finish: () => void = () => {};
-    const sent = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const sending = gate();
     const { root, result, calls, messages } = await host({
       tools: {
         send_round: async () => {
-          await sent;
-          return { content: [{ type: "text", text: "Round 1 prompt." }, shot()] };
+          await sending.wait;
+          return round(["c1"]);
         },
         get_comments: () => carded(commentsCard([comment("c1", { status: "sent" })])),
       },
     });
-    await result(carded(commentsCard([comment("c1")])));
+    await result(carded(commentsCard([comment("c1"), comment("c2", { status: "resolved" })])));
     await vi.waitFor(() => expect(button(root, "Send 1 comment")).toBeDefined());
     click(root, "Send 1 comment");
     await vi.waitFor(() => expect(button(root, "Sending")?.getAttribute("aria-disabled")).toBe("true"));
-    finish();
-    await vi.waitFor(() => expect(texts(root, ".comment-meta")).toEqual(["sent · Walk, frame 12"]));
-    expect(calls.map((call) => call.name)).toEqual(["send_round", "get_comments"]);
+    sending.open();
+    await vi.waitFor(() => expect(calls.map((call) => call.name)).toEqual(["send_round", "get_comments"]));
+    await vi.waitFor(() => expect(texts(root, ".comment-meta")).toEqual(["Sent · Walk, frame 12"]));
     expect(calls[0]?.arguments).toEqual({ path: PATH });
-    expect(calls[1]?.arguments).toEqual({ path: PATH, comments: ["c1"], screenshots: false });
-    expect(messages).toEqual([[{ type: "text", text: "Round 1 prompt." }, shot()]]);
-    expect(texts(root, "button")).toEqual([]);
+    expect(calls[1]?.arguments).toEqual({ path: PATH, comments: ["c1", "c2"], screenshots: false });
+    expect(messages).toEqual([round(["c1"]).content]);
+    expect(texts(root, "button")).toEqual(["Resolve"]);
   });
 
-  it("gives the screenshots to the model's context where messages take only text", async () => {
+  it("keeps the round on the card when the chat refuses its prompt or the card cannot read the comments again", async () => {
+    for (const message of ["refuse", "fail"] as const) {
+      const { root, result } = await host({
+        message,
+        tools: {
+          send_round: () => round(["c1", "c3"]),
+          get_comments: () => ({ isError: true, content: [line("Arcue is not running.")] }),
+        },
+      });
+      await result(carded(commentsCard([comment("c1"), comment("c2", { status: "sent" })], { queued: 2 })));
+      await vi.waitFor(() => expect(button(root, "Send 2 comments")).toBeDefined());
+      click(root, "Send 2 comments");
+      await vi.waitFor(() =>
+        expect(root.querySelector(".card-notice")?.textContent).toBe(
+          "Arcue saved the round, but the chat did not take its prompt.",
+        ),
+      );
+      expect(root.querySelector(".card-sub")?.textContent).toBe("3 sent");
+      expect(texts(root, ".comment-meta")).toEqual(["Sent · Walk, frame 12", "Sent · Walk, frame 12"]);
+      expect(button(root, "Send 2 comments")).toBeUndefined();
+    }
+  });
+
+  it("gives the screenshots and their labels to the model's context where messages take only text", async () => {
     const { root, result, messages, contexts } = await host({
-      capabilities: { serverTools: {}, message: { text: {} }, updateModelContext: { image: {} } },
+      capabilities: { serverTools: {}, message: { text: {} }, updateModelContext: { text: {}, image: {} } },
+      context: { displayMode: "inline", availableDisplayModes: ["inline"] },
       tools: {
-        send_round: () => ({ content: [{ type: "text", text: "Round 1 prompt." }, shot()] }),
+        resolve_comment: () => ({ content: [line("Resolved c2.")] }),
+        send_round: () => round(["c1"]),
+        get_comments: () => carded(commentsCard([comment("c1", { status: "sent" }), comment("c2")])),
+      },
+    });
+    await result(carded(commentsCard([comment("c1"), comment("c2", { status: "sent" })])));
+    await vi.waitFor(() => expect(button(root, "Resolve")).toBeDefined());
+    click(root, "Resolve");
+    await vi.waitFor(() => expect(contexts).toHaveLength(1));
+    click(root, "Send 1 comment");
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    expect(messages[0]).toEqual([line("Round 1 prompt."), line("Notes.")]);
+    expect(contexts[1]).toEqual([
+      line("The person resolved comment c2 on Hero.fbx in Arcue's card."),
+      line("Screenshot of comment 1:"),
+      shot(),
+    ]);
+  });
+
+  it("posts nothing when the round is empty or fails", async () => {
+    const empty = await host({
+      tools: {
+        send_round: () => ({ content: [line("Hero.fbx has no comments in its queue.")] }),
         get_comments: () => carded(commentsCard([comment("c1", { status: "sent" })])),
       },
     });
-    await result(carded(commentsCard([comment("c1")])));
-    await vi.waitFor(() => expect(button(root, "Send 1 comment")).toBeDefined());
-    click(root, "Send 1 comment");
-    await vi.waitFor(() => expect(messages).toHaveLength(1));
-    expect(messages[0]).toEqual([{ type: "text", text: "Round 1 prompt." }]);
-    expect(contexts).toEqual([[shot()]]);
-  });
+    await empty.result(carded(commentsCard([comment("c1")])));
+    await vi.waitFor(() => expect(button(empty.root, "Send 1 comment")).toBeDefined());
+    click(empty.root, "Send 1 comment");
+    await vi.waitFor(() =>
+      expect(empty.root.querySelector(".card-notice")?.textContent).toBe("Hero.fbx has no comments in its queue."),
+    );
+    await vi.waitFor(() => expect(texts(empty.root, ".comment-meta")).toEqual(["Sent · Walk, frame 12"]));
+    expect(empty.messages).toEqual([]);
 
-  it("says so when the round fails or the chat refuses its prompt", async () => {
     const failing = await host({
-      tools: { send_round: () => ({ isError: true, content: [{ type: "text", text: "Arcue is not running." }] }) },
+      tools: { send_round: () => ({ isError: true, content: [line("Arcue is not running.")] }) },
     });
     await failing.result(carded(commentsCard([comment("c1")])));
     await vi.waitFor(() => expect(button(failing.root, "Send 1 comment")).toBeDefined());
@@ -290,63 +395,46 @@ describe("the comments card", () => {
     );
     expect(button(failing.root, "Send 1 comment")?.hasAttribute("aria-disabled")).toBe(false);
     expect(failing.messages).toEqual([]);
-
-    const refused = await host({
-      message: false,
-      tools: {
-        send_round: () => ({ content: [{ type: "text", text: "Round 1 prompt." }] }),
-        get_comments: () => carded(commentsCard([comment("c1", { status: "sent" })])),
-      },
-    });
-    await refused.result(carded(commentsCard([comment("c1")])));
-    await vi.waitFor(() => expect(button(refused.root, "Send 1 comment")).toBeDefined());
-    click(refused.root, "Send 1 comment");
-    await vi.waitFor(() =>
-      expect(refused.root.querySelector(".card-notice")?.textContent).toBe(
-        "Arcue saved the round, but the chat did not take its prompt.",
-      ),
-    );
   });
 
-  it("resolves a sent comment and tells the model", async () => {
+  it("resolves a sent comment inline and tells the model", async () => {
     const { root, result, calls, contexts } = await host({
-      context: { displayMode: "fullscreen", availableDisplayModes: ["inline", "fullscreen"] },
-      tools: { resolve_comment: () => ({ content: [{ type: "text", text: "Resolved c2." }] }) },
+      tools: { resolve_comment: () => ({ content: [line("Resolved c2.")] }) },
     });
     await result(carded(commentsCard([comment("c1"), comment("c2", { status: "sent" })])));
     await vi.waitFor(() => expect(button(root, "Resolve")).toBeDefined());
     click(root, "Resolve");
-    await vi.waitFor(() => expect(texts(root, ".comment-meta")[1]).toBe("resolved · Walk, frame 12"));
+    await vi.waitFor(() => expect(texts(root, ".comment-meta")[1]).toBe("Resolved · Walk, frame 12"));
     expect(calls).toEqual([{ name: "resolve_comment", arguments: { path: PATH, comment: "c2" } }]);
     expect(root.querySelector(".card-sub")?.textContent).toBe("1 draft · 1 resolved");
     expect(texts(root, "button")).toEqual(["Send 1 comment"]);
-    expect(contexts).toEqual([[{ type: "text", text: "The person resolved comment c2 on Hero.fbx in Arcue's card." }]]);
+    expect(contexts).toEqual([[line("The person resolved comment c2 on Hero.fbx in Arcue's card.")]]);
   });
 
-  it("keeps focus on a button while it works", async () => {
-    let finish: () => void = () => {};
-    const resolved = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    const { root, result } = await host({
-      context: { displayMode: "fullscreen" },
+  it("runs one action at a time, and keeps focus on its button while it works", async () => {
+    const resolving = gate();
+    const { root, result, calls } = await host({
       tools: {
         resolve_comment: async () => {
-          await resolved;
-          return { content: [{ type: "text", text: "Resolved." }] };
+          await resolving.wait;
+          return { content: [line("Resolved.")] };
         },
       },
     });
-    await result(carded(commentsCard([comment("c1", { status: "sent" }), comment("c2", { status: "sent" })])));
-    await vi.waitFor(() => expect(root.querySelectorAll("button")).toHaveLength(2));
-    const second = root.querySelectorAll("button")[1];
-    second?.focus();
-    second?.click();
+    await result(carded(commentsCard([comment("c1", { status: "sent" }), comment("c2")])));
+    await vi.waitFor(() => expect(button(root, "Resolve")).toBeDefined());
+    const resolve = button(root, "Resolve");
+    resolve?.focus();
+    resolve?.click();
     await vi.waitFor(() => expect(button(root, "Resolving")).toBeDefined());
     expect(document.activeElement).toBe(button(root, "Resolving"));
-    expect(document.activeElement).not.toBe(second);
-    finish();
-    await vi.waitFor(() => expect(root.querySelectorAll("button")).toHaveLength(1));
+    expect(document.activeElement).not.toBe(resolve);
+    expect(button(root, "Send 1 comment")?.getAttribute("aria-disabled")).toBe("true");
+    click(root, "Send 1 comment");
+    resolving.open();
+    await vi.waitFor(() => expect(button(root, "Resolving")).toBeUndefined());
+    expect(calls.map((call) => call.name)).toEqual(["resolve_comment"]);
+    expect(document.activeElement).toBe(root);
   });
 });
 
@@ -366,9 +454,16 @@ describe("the inspection card", () => {
     expect(texts(root, "button")).toEqual([]);
   });
 
+  it("counts every mesh and clip, past the ones it lists", async () => {
+    const { root, result } = await host({ context: { displayMode: "fullscreen" } });
+    await result(carded(inspectionCard({ meshCount: 350, clipCount: 240 })));
+    await vi.waitFor(() => expect(texts(root, ".fact")).toContain("Meshes350"));
+    expect(texts(root, ".fact")).toContain("Clips240");
+  });
+
   it("leaves out bones and clips a file does not have", async () => {
     const { root, result } = await host({ context: { displayMode: "inline" } });
-    await result(carded(inspectionCard({ bones: 0, clips: [], meshes: [] })));
+    await result(carded(inspectionCard({ bones: 0, clips: [], clipCount: 0, meshes: [], meshCount: 0 })));
     await vi.waitFor(() => expect(texts(root, ".fact dt")).toEqual(["Triangles", "Meshes", "Height"]));
     expect(root.querySelectorAll("button")).toHaveLength(0);
   });
@@ -387,7 +482,7 @@ describe("the inspection card", () => {
   });
 
   it("offers the fix again when the chat refuses it", async () => {
-    const { root, result } = await host({ message: false });
+    const { root, result } = await host({ message: "refuse" });
     const warnings = [{ severity: "error" as const, message: "Broken." }];
     await result(carded(inspectionCard({ warnings, prompt: "Fix it." })));
     await vi.waitFor(() => expect(button(root, "Fix 1 warning")).toBeDefined());
@@ -408,16 +503,33 @@ describe("the card", () => {
     );
   });
 
-  it("shows a cancelled call", async () => {
-    const { root, bridge } = await host();
-    await bridge.sendToolCancelled({});
-    await vi.waitFor(() => expect(root.querySelector(".card-failure")?.textContent).toBe("The call was cancelled."));
+  it("shows a cancelled call, but keeps a result that came before the cancellation", async () => {
+    const cancelled = await host();
+    await cancelled.bridge.sendToolCancelled({});
+    await vi.waitFor(() =>
+      expect(cancelled.root.querySelector(".card-failure")?.textContent).toBe("The call was cancelled."),
+    );
+
+    const finished = await host();
+    await finished.result(carded(inspectionCard()));
+    await vi.waitFor(() => expect(finished.root.querySelector("h1")).not.toBeNull());
+    await finished.bridge.sendToolCancelled({});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(finished.root.querySelector(".card-failure")).toBeNull();
   });
 
   it("shows the text of a result without a card", async () => {
-    const { root, result } = await host();
-    await result({ content: [{ type: "text", text: "Hero.fbx has no comments." }] });
-    await vi.waitFor(() => expect(root.querySelector(".card-plain")?.textContent).toBe("Hero.fbx has no comments."));
+    const plain = await host();
+    await plain.result({ content: [line("Hero.fbx has no comments.")] });
+    await vi.waitFor(() =>
+      expect(plain.root.querySelector(".card-plain")?.textContent).toBe("Hero.fbx has no comments."),
+    );
+
+    const empty = await host();
+    await empty.result({ content: [] });
+    await vi.waitFor(() =>
+      expect(empty.root.querySelector(".card-plain")?.textContent).toBe("The result has nothing to show."),
+    );
   });
 
   it("takes the host's theme and style variables", async () => {

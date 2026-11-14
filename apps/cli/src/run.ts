@@ -333,11 +333,16 @@ async function mcp(
     startServe,
     version: (await buildOf(options)) ?? "dev",
     cardHtml: () =>
-      readFile(bundledCardPage, "utf8").catch(() => {
-        throw new Error(`${bundledCardPage} is missing. Build the command line: pnpm --filter @arcue/cli build`);
+      readFile(bundledCardPage, "utf8").catch((error: unknown) => {
+        if (!isMissing(error)) throw error;
+        throw new Error(`Arcue's card page is missing from ${bundledCardPage}. Reinstall Arcue.`);
       }),
   });
   return 0;
+}
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 function anyFreePort(): Promise<number> {

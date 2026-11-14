@@ -22,8 +22,8 @@ import type { CallToolResult, ImageContent, TextContent } from "@modelcontextpro
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
-import type { CardComment, CardData, CommentsCardData, InspectionCardData } from "./card-data";
-import { CARD_META_KEY, CARD_URI } from "./card-data";
+import type { CardComment, CardData, CommentsCardData, InspectionCardData, RoundMeta } from "./card-data";
+import { CARD_META_KEY, CARD_URI, MAX_SCREENSHOTS, ROUND_META_KEY } from "./card-data";
 import { formatInspection, formatLabel, inspectFile } from "./inspect";
 import { connectForOpen } from "./routing";
 
@@ -47,7 +47,6 @@ export const bundledCardPage = fileURLToPath(new URL("./card.html", import.meta.
 
 /** The view of a server that has no `--view` and no session's variables. */
 const DEFAULT_VIEW = "mcp";
-const MAX_SCREENSHOTS = 8;
 /** The most PNG bytes one result carries, so that it stays within what MCP clients read. */
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const LOAD_POLL_MS = 200;
@@ -118,7 +117,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     server,
     "Arcue card",
     CARD_URI,
-    { description: "Shows a model's comments, or what a model file holds." },
+    { description: "The page that apps showing MCP Apps render for get_comments and inspect_model. It holds no data." },
     async () => ({
       contents: [
         {
@@ -353,7 +352,11 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
             ...(copy.copiedToClipboard ? ["Arcue also copied the prompt to the clipboard."] : []),
             ...(left > 0 ? [`${leftOut(left)} get_comments with their ids gives them.`] : []),
           ];
-          return result(text(copy.prompt), ...images, text(notes.join("\n")));
+          const round: RoundMeta = { round: copy.round, comments: ids };
+          return {
+            ...result(text(copy.prompt), ...images, text(notes.join("\n"))),
+            _meta: { [ROUND_META_KEY]: round },
+          };
         }),
       );
     },
@@ -822,18 +825,30 @@ function inspectionCard(file: string, inspection: AssetInspection): InspectionCa
     name: inspection.file.name,
     format: formatLabel(inspection),
     height: inspection.height,
-    triangles: inspection.triangles,
+    triangles: shownTriangles(inspection.parts),
     meshes: inspection.meshes
       .slice(0, CARD_LIST_LIMIT)
       .map((mesh) => ({ name: mesh.name, triangles: mesh.triangles, skinned: mesh.skinned })),
+    meshCount: inspection.meshes.length,
     bones: inspection.bones.length,
     materials: inspection.materials.length,
     clips: inspection.clips
       .slice(0, CARD_LIST_LIMIT)
       .map((clip) => ({ name: clip.name, displayName: clip.displayName, frames: clip.frames })),
+    clipCount: inspection.clips.length,
     warnings: inspection.warnings.map((warning) => ({ severity: warning.severity, message: warning.message })),
     prompt: inspection.warnings.length > 0 ? warningPrompt(inspection.file.path, inspection.warnings) : null,
   };
+}
+
+/** The triangles the model shows at its most detailed level, without collision helpers, sockets or hidden parts. */
+function shownTriangles(parts: AssetInspection["parts"]): number {
+  return parts
+    .filter((part) => part.role === "model" && part.shownByDefault)
+    .reduce((sum, part) => {
+      const finest = Math.min(...part.levels.map((level) => level.level));
+      return sum + (part.levels.find((level) => level.level === finest)?.triangles ?? 0);
+    }, 0);
 }
 
 /**
