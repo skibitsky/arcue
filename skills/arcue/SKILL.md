@@ -24,6 +24,7 @@ Models are FBX files or Blender's own .blend files, which Arcue reads directly.
 - `arcue stop` stops Arcue in the browser for every session. Run it only when the user asks.
 - `arcue inspect <file> --json` reads a model without the app: meshes and vertex counts, parts, bones, clips, materials, missing textures, composed files and import warnings.
 - `arcue status` says whether Arcue runs in a browser and in the desktop app, the address of this session's view, and the models each has open, and exits with 1 when neither runs.
+- `arcue mcp` is an MCP server for the user's MCP apps; don't run it yourself. To set it up, follow https://github.com/skibitsky/arcue/blob/main/INSTALL.md#mcp-server.
 
 ## Where Arcue shows models
 

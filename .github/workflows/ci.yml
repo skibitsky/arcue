@@ -79,9 +79,9 @@ jobs:
       - name: Test the file lock and the Node platform
         shell: bash
         run: pnpm exec vitest run --project "@arcue/platform-node" packages/platform-node/src/file-lock.test.ts packages/platform-node/src/node-platform.test.ts
-      - name: Test arcue serve --detach in its own processes
+      - name: Test arcue serve --detach and arcue mcp in their own processes
         shell: bash
-        run: pnpm exec vitest run --project "@arcue/cli processes" apps/cli/src/detach.process.test.ts
+        run: pnpm exec vitest run --project "@arcue/cli processes" apps/cli/src/detach.process.test.ts apps/cli/src/mcp.process.test.ts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plugin

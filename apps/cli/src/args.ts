@@ -7,6 +7,7 @@ export type Command =
   | { command: "serve"; port?: number; detach?: boolean; idleStopMs?: number }
   | { command: "stop" }
   | { command: "status"; view?: string }
+  | { command: "mcp"; view?: string }
   | { command: "setup" }
   | { command: "help" };
 
@@ -40,6 +41,11 @@ export const USAGE = `Usage:
   arcue status [--view <name>]
       Reports whether Arcue runs in a browser and in the desktop app, this session's view, and which assets each has
       open. Exits with 1 when neither runs.
+  arcue mcp [--view <name>]
+      Runs an MCP server on stdin and stdout. Its tools list the open models, read and send a model's comments,
+      resolve or reopen them, show models, render screenshots and inspect files. They show models where "arcue open"
+      does, and start Arcue in the browser when "arcue open" finds no Arcue to use.
+      --view names the session, as for "arcue open"; without it or a session variable, the view is "mcp".
   arcue setup
       Through the agent plugin's launcher, on a computer without Node 24 or later: downloads the Node build the
       plugin pins from nodejs.org once, checks its SHA-256 checksum, and keeps it in this user's cache. No other
@@ -63,6 +69,7 @@ export function parseArgs(args: readonly string[]): Command {
     return { command: "help" };
   }
   if (command === "status") return parseStatus(rest);
+  if (command === "mcp") return parseMcp(rest);
   if (command === "stop") {
     if (rest.length > 0) throw new UsageError(`"arcue stop" takes no arguments, got "${rest.join(" ")}".`);
     return { command: "stop" };
@@ -110,6 +117,16 @@ export function parseArgs(args: readonly string[]): Command {
 }
 
 function parseStatus(args: readonly string[]): Command {
+  const view = parseViewOnly("status", args);
+  return { command: "status", ...(view !== undefined ? { view } : {}) };
+}
+
+function parseMcp(args: readonly string[]): Command {
+  const view = parseViewOnly("mcp", args);
+  return { command: "mcp", ...(view !== undefined ? { view } : {}) };
+}
+
+function parseViewOnly(command: string, args: readonly string[]): string | undefined {
   let view: string | undefined;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] ?? "";
@@ -118,14 +135,14 @@ function parseStatus(args: readonly string[]): Command {
       throw new UsageError(
         arg.startsWith("--")
           ? `Unknown option "${arg}".`
-          : `"arcue status" takes no arguments but --view, got "${args.join(" ")}".`,
+          : `"arcue ${command}" takes no arguments but --view, got "${args.join(" ")}".`,
       );
     }
     const value = inline ?? args[++index];
     if (value === undefined || value === "") throw new UsageError("--view needs a value.");
     view = value;
   }
-  return { command: "status", ...(view !== undefined ? { view } : {}) };
+  return view;
 }
 
 function parseInspect(args: readonly string[]): Command {

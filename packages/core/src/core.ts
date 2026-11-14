@@ -316,7 +316,9 @@ export class ArcueCore {
       registry.handleCommand("warning.dismiss", (args) => this.#dismissWarnings(args.assetId, [args.warningId])),
       registry.handleCommand("warning.dismissAll", (args) => this.#dismissWarnings(args.assetId, null)),
       registry.handleCommand("round.copy", (args, context) =>
-        this.#inCompositionLine(this.#asset(args.assetId), () => this.#copyRound(args.assetId, context.user)),
+        this.#inCompositionLine(this.#asset(args.assetId), () =>
+          this.#copyRound(args.assetId, args.clipboard, context.user),
+        ),
       ),
       registry.handleCommand("review.undo", (args) => this.#undo(args.assetId, "undo")),
       registry.handleCommand("review.redo", (args) => this.#undo(args.assetId, "redo")),
@@ -1845,7 +1847,11 @@ export class ArcueCore {
     });
   }
 
-  async #copyRound(assetId: string, author: Author | undefined): Promise<CommandOutput<"round.copy">> {
+  async #copyRound(
+    assetId: string,
+    clipboard: boolean,
+    author: Author | undefined,
+  ): Promise<CommandOutput<"round.copy">> {
     const asset = this.#asset(assetId);
     const reviewFolder = asset.location.folder;
     await this.#settings.reload();
@@ -1916,11 +1922,13 @@ export class ArcueCore {
       };
     });
     let copiedToClipboard = false;
-    try {
-      await this.#platform.writeClipboard(prompt);
-      copiedToClipboard = true;
-    } catch {
-      copiedToClipboard = false;
+    if (clipboard) {
+      try {
+        await this.#platform.writeClipboard(prompt);
+        copiedToClipboard = true;
+      } catch {
+        copiedToClipboard = false;
+      }
     }
     this.registry.emit("round.copied", { assetId: asset.id, round });
     return { round, prompt, copiedToClipboard };

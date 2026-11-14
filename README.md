@@ -84,15 +84,15 @@ The [desktop app](INSTALL.md#desktop-app) puts the `arcue` command on your PATH,
 ## Build it into your own workflow
 
 - **The `arcue` command.** `arcue open` shows a model at a clip and frame, `arcue serve --detach` runs Arcue in any browser on your own files beside the desktop app, `arcue stop` stops it, and `arcue inspect --json` lists a file's meshes, bones, clips, materials and import warnings. It comes with the desktop app and the plugin. Call it from scripts, CI or your own tools.
+- **The MCP server.** `arcue mcp` gives any MCP app tools to list the open models, read and send a model's comments with their screenshots, resolve or reopen them, show models, render screenshots and inspect files. [Set it up](INSTALL.md#mcp-server).
 - **Review files.** Every copied prompt is also saved as [`round.json`](skills/arcue/references/round-json.md) with its screenshots in `.arcue/reviews/`, so any script can read the feedback.
 - **Composition files.** A [`composition.json`](skills/arcue/references/composition.md) loads animation files, attachments and textures together with a model.
-- **Commands.** Every action in Arcue is a typed command with a JSON Schema in [`packages/protocol`](packages/protocol). The window and the `arcue` command call the same commands, and the planned MCP server will too.
+- **Commands.** Every action in Arcue is a typed command with a JSON Schema in [`packages/protocol`](packages/protocol). The window, the `arcue` command and its MCP server call the same commands.
 
 ## Roadmap
 
 - glTF and GLB files, then OBJ and USD.
 - Feedback that arrives in your running agent session, without copy and paste.
-- An MCP server, so the agent can read comments with their screenshots, reply to them and mark them fixed.
 - Two versions side by side, with a synced camera and timeline and a heatmap of what moved.
 - Onion skinning for animation.
 - Lighting presets and custom environments.

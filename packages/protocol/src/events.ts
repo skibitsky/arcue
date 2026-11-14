@@ -34,7 +34,7 @@ export const events = {
     payload: z.object({ assetId: assetIdSchema, candidate: reviewCandidateSchema }),
   }),
   "round.copied": event({
-    description: "A round was saved and its prompt copied.",
+    description: "A round was saved, and its prompt copied unless the caller took it.",
     payload: z.object({ assetId: assetIdSchema, round: z.int().positive() }),
   }),
   "settings.changed": event({

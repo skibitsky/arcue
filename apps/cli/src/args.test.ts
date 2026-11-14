@@ -29,6 +29,8 @@ describe("parseArgs", () => {
       move: true,
     });
     expect(parseArgs(["status", "--view=review"])).toEqual({ command: "status", view: "review" });
+    expect(parseArgs(["mcp", "--view", "review"])).toEqual({ command: "mcp", view: "review" });
+    expect(parseArgs(["mcp"])).toEqual({ command: "mcp" });
   });
 
   it("parses inspect with and without --json", () => {
@@ -106,6 +108,7 @@ describe("parseArgs", () => {
     );
     expect(() => parseArgs(["status", "--view"])).toThrow("--view needs a value");
     expect(() => parseArgs(["status", "--move"])).toThrow('Unknown option "--move"');
+    expect(() => parseArgs(["mcp", "Hero.fbx"])).toThrow('"arcue mcp" takes no arguments but --view, got "Hero.fbx".');
     expect(() => parseArgs(["open", "a.fbx", "--view="])).toThrow("--view needs a value");
     expect(() => parseArgs(["open", "a.fbx", "--move=yes"])).toThrow('Unknown option "--move=yes"');
     expect(() => parseArgs(["setup", "now"])).toThrow('"arcue setup" takes no arguments, got "now".');

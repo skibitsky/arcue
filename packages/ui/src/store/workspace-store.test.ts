@@ -60,6 +60,32 @@ describe("view commands", () => {
     expect(viewport.screenshots.at(-1)?.overlays?.every((overlay) => overlay.number === null)).toBe(true);
   });
 
+  it("refuses a screenshot until the 3D view shows the asset's scene", async () => {
+    const { client, store } = setup();
+    const { assetId } = await client.execute("asset.open", { path: STONE_RESONATOR_PATH });
+    const session = store.session(assetId);
+    if (!session) throw new Error("The asset has no session.");
+    const shown = Promise.withResolvers<void>();
+    const viewport = new TestViewport();
+    const setScene = viewport.setScene.bind(viewport);
+    viewport.setScene = async (scene) => {
+      await shown.promise;
+      await setScene(scene);
+    };
+    session.attachViewport(viewport, document.createElement("div"));
+    await flush();
+
+    await expect(client.execute("view.screenshot", { assetId })).rejects.toMatchObject({
+      code: "unavailable",
+      message: `The 3D view of asset ${assetId} is not ready.`,
+    });
+    shown.resolve();
+    await flush();
+    await expect(client.execute("view.screenshot", { assetId })).resolves.toMatchObject({
+      png: expect.any(Uint8Array),
+    });
+  });
+
   it("releases a tab without closing the asset or reporting, and returns its view", async () => {
     const { client, store, session } = await openStone();
     session.setFrame(12);
