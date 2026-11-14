@@ -86,6 +86,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
         starting = null;
       })),
   };
+  const leases: Leases = new Map();
   const server = new McpServer(
     { name: "arcue", version: options.version },
     {
@@ -176,42 +177,44 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     },
     async ({ path, clip, frame, move }, { mcpReq: { signal } }) => {
       const file = await modelFile(options.cwd, path);
-      return withCore(options, async (core) => {
-        const open = await openAsset(core, file);
-        const at = open?.path ?? file;
-        let named = clip;
-        if (clip !== undefined) {
-          const { assetId } = open ?? (await openInView(core, { path: at, view: options.view, move }));
-          await loaded(core.client, assetId, options.loadTimeoutMs, signal);
-          named = await clipNamed(core.client, { assetId, name: basename(file) }, clip, frame);
-        }
-        const input: CommandInput<"asset.openInView"> = {
-          path: at,
-          view: options.view,
-          move,
-          ...(named !== undefined ? { clip: named } : {}),
-          ...(frame !== undefined ? { frame } : {}),
-        };
-        const { assetId, shown } = await openInView(core, input);
-        const moment =
-          named !== undefined
-            ? ` at clip "${named}"${frame !== undefined ? `, frame ${frame}` : ""}`
-            : frame !== undefined
-              ? ` at frame ${frame}`
-              : "";
-        const name = `${basename(file)}${moment}`;
-        const lines = startedLine(core);
-        if (shown === "view") lines.push(`Arcue shows ${name} in this session's page as ${assetId}.`);
-        else if (shown === "window" && core.page !== null) {
-          lines.push(
-            `Arcue shows ${name} as ${assetId} in another of its pages, since this session's page is not open: ${core.page}`,
-          );
-        } else if (shown === "window") lines.push(`Arcue shows ${name} in the Arcue app as ${assetId}.`);
-        else if (core.page !== null) {
-          lines.push(`Arcue holds ${name} as ${assetId} until this session's page opens: ${core.page}`);
-        } else lines.push(`Arcue holds ${name} as ${assetId} until one of its windows opens.`);
-        return result(text(lines.join("\n")));
-      });
+      return withCore(options, (core) =>
+        leased(leases, core, file, true, async () => {
+          const open = await openAsset(core, file);
+          const at = open?.path ?? file;
+          let named = clip;
+          if (clip !== undefined) {
+            const { assetId } = open ?? (await openInView(core, { path: at, view: options.view, move }));
+            await loaded(core.client, assetId, options.loadTimeoutMs, signal);
+            named = await clipNamed(core.client, { assetId, name: basename(file) }, clip, frame);
+          }
+          const input: CommandInput<"asset.openInView"> = {
+            path: at,
+            view: options.view,
+            move,
+            ...(named !== undefined ? { clip: named } : {}),
+            ...(frame !== undefined ? { frame } : {}),
+          };
+          const { assetId, shown } = await openInView(core, input);
+          const moment =
+            named !== undefined
+              ? ` at clip "${named}"${frame !== undefined ? `, frame ${frame}` : ""}`
+              : frame !== undefined
+                ? ` at frame ${frame}`
+                : "";
+          const name = `${basename(file)}${moment}`;
+          const lines = startedLine(core);
+          if (shown === "view") lines.push(`Arcue shows ${name} in this session's page as ${assetId}.`);
+          else if (shown === "window" && core.page !== null) {
+            lines.push(
+              `Arcue shows ${name} as ${assetId} in another of its pages, since this session's page is not open: ${core.page}`,
+            );
+          } else if (shown === "window") lines.push(`Arcue shows ${name} in the Arcue app as ${assetId}.`);
+          else if (core.page !== null) {
+            lines.push(`Arcue holds ${name} as ${assetId} until this session's page opens: ${core.page}`);
+          } else lines.push(`Arcue holds ${name} as ${assetId} until one of its windows opens.`);
+          return result(text(lines.join("\n")));
+        }),
+      );
     },
   );
 
@@ -239,7 +242,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     async ({ path, status, comments, screenshots }) => {
       const file = await modelFile(options.cwd, path);
       return withCore(options, (core) =>
-        withModel(core, file, options, async (asset) => {
+        withModel(core, file, options, leases, async (asset) => {
           const review = await core.client.query("review.get", { assetId: asset.assetId });
           const missing = comments?.find((id) => !review.comments.some((entry) => entry.id === id));
           if (missing !== undefined) throw new Error(`${asset.name} has no comment ${missing}.`);
@@ -277,12 +280,12 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     async ({ path }, { mcpReq: { signal } }) => {
       const file = await modelFile(options.cwd, path);
       return withCore(options, (core) =>
-        withModel(core, file, options, async (asset) => {
+        withModel(core, file, options, leases, async (asset) => {
           const empty = () =>
             result(text([...startedLine(core), `${asset.name} has no comments in its queue.`].join("\n")));
           const before = await core.client.query("review.get", { assetId: asset.assetId });
           if (before.queue.length === 0) return empty();
-          await loaded(core.client, asset.assetId, options.loadTimeoutMs, signal);
+          const current = await loaded(core.client, asset.assetId, options.loadTimeoutMs, signal);
           signal.throwIfAborted();
           let copy: CommandOutput<"round.copy">;
           try {
@@ -302,6 +305,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
           const { content: images, left } = await screenshotsOf(core.client, asset.assetId, shots);
           const notes = [
             ...startedLine(core),
+            ...staleLine(current),
             `The round's comments by number: ${ids.map((id, index) => `${index + 1} ${id}`).join(", ")}.`,
             ...(copy.copiedToClipboard ? ["Arcue also copied the prompt to the clipboard."] : []),
             ...(left > 0 ? [`${leftOut(left)} get_comments with their ids gives them.`] : []),
@@ -324,7 +328,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     async ({ path, comment }) => {
       const file = await modelFile(options.cwd, path);
       return withCore(options, (core) =>
-        withModel(core, file, options, async (asset) => {
+        withModel(core, file, options, leases, async (asset) => {
           const review = await core.client.query("review.get", { assetId: asset.assetId });
           const found = review.comments.find((entry) => entry.id === comment);
           if (!found) throw new Error(`${asset.name} has no comment ${comment}.`);
@@ -352,7 +356,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     async ({ path, comment, text: message }) => {
       const file = await modelFile(options.cwd, path);
       return withCore(options, (core) =>
-        withModel(core, file, options, async (asset) => {
+        withModel(core, file, options, leases, async (asset) => {
           await core.client.execute("comment.reopen", { assetId: asset.assetId, commentId: comment, text: message });
           return result(text(`Reopened ${comment} on ${asset.name}. It waits in the queue with the follow-up.`));
         }),
@@ -378,39 +382,41 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     },
     async ({ path, comment, clip, frame, width, height }, { mcpReq: { signal } }) => {
       const file = await modelFile(options.cwd, path);
-      return withCore(options, async (core) => {
-        const open = await openAsset(core, file);
-        const asset = open ?? {
-          ...(await openInView(core, { path: file, view: options.view, move: false })),
-          name: basename(file),
-        };
-        await loaded(core.client, asset.assetId, options.loadTimeoutMs, signal);
-        let time: TimeSelection | undefined;
-        let camera: Comment["camera"] | undefined;
-        if (comment !== undefined) {
-          const review = await core.client.query("review.get", { assetId: asset.assetId });
-          const found = review.comments.find((entry) => entry.id === comment);
-          if (!found) throw new Error(`${asset.name} has no comment ${comment}.`);
-          time = selectionOf(found.time);
-          camera = found.camera;
-        }
-        if (clip !== undefined || frame !== undefined) {
-          const onScreen =
-            clip ?? clipOf(time) ?? (await core.client.query("viewState.get", { assetId: asset.assetId }))?.clip;
-          if (onScreen === undefined || onScreen === null) throw new Error("A frame needs a clip.");
-          const at = frame ?? (clip !== undefined ? frameOf(time) : undefined) ?? 0;
-          time = { kind: "frame", clip: await clipNamed(core.client, asset, onScreen, at), frame: at };
-        }
-        const input: CommandInput<"view.screenshot"> = {
-          assetId: asset.assetId,
-          width,
-          height,
-          ...(time !== undefined ? { time } : {}),
-          ...(camera !== undefined ? { camera } : {}),
-        };
-        const png = await screenshotWhenReady(core, asset.name, input, signal);
-        return result(text(`${asset.name}${timeLabel(time)}:`), image(png));
-      });
+      return withCore(options, (core) =>
+        leased(leases, core, file, true, async () => {
+          const open = await openAsset(core, file);
+          const asset = open ?? {
+            ...(await openInView(core, { path: file, view: options.view, move: false })),
+            name: basename(file),
+          };
+          const current = await loaded(core.client, asset.assetId, options.loadTimeoutMs, signal);
+          let time: TimeSelection | undefined;
+          let camera: Comment["camera"] | undefined;
+          if (comment !== undefined) {
+            const review = await core.client.query("review.get", { assetId: asset.assetId });
+            const found = review.comments.find((entry) => entry.id === comment);
+            if (!found) throw new Error(`${asset.name} has no comment ${comment}.`);
+            time = selectionOf(found.time);
+            camera = found.camera;
+          }
+          if (clip !== undefined || frame !== undefined) {
+            const onScreen =
+              clip ?? clipOf(time) ?? (await core.client.query("viewState.get", { assetId: asset.assetId }))?.clip;
+            if (onScreen === undefined || onScreen === null) throw new Error("A frame needs a clip.");
+            const at = frame ?? (clip !== undefined ? frameOf(time) : undefined) ?? 0;
+            time = { kind: "frame", clip: await clipNamed(core.client, asset, onScreen, at), frame: at };
+          }
+          const input: CommandInput<"view.screenshot"> = {
+            assetId: asset.assetId,
+            width,
+            height,
+            ...(time !== undefined ? { time } : {}),
+            ...(camera !== undefined ? { camera } : {}),
+          };
+          const png = await screenshotWhenReady(core, asset.name, input, signal);
+          return result(text([...staleLine(current), `${asset.name}${timeLabel(time)}:`].join("\n")), image(png));
+        }),
+      );
     },
   );
 
@@ -484,6 +490,12 @@ function startedLine(core: Core): string[] {
   return core.started && core.page !== null ? [`Started Arcue in the browser. This session's page: ${core.page}`] : [];
 }
 
+function staleLine(asset: AssetSummary): string[] {
+  return asset.status === "failed"
+    ? [`Arcue could not load the latest ${asset.name} and uses the version it loaded before: ${asset.error}`]
+    : [];
+}
+
 async function openInView(
   core: Core,
   input: CommandInput<"asset.openInView">,
@@ -512,24 +524,75 @@ async function openAsset(core: Core, file: string): Promise<AssetSummary | undef
   return undefined;
 }
 
+/** The tool calls on each file's model, and the model they opened for themselves alone. */
+type Leases = Map<string, Lease>;
+
+interface Lease {
+  calls: number;
+  opened: string | null;
+  /** A call that shows the model ran, so the model stays open. */
+  keep: boolean;
+  closing: Promise<void> | null;
+}
+
+/** Runs `work` as one of the calls on the file's model; the last of them closes the model they opened for themselves. */
+async function leased<Value>(
+  leases: Leases,
+  core: Core,
+  file: string,
+  keep: boolean,
+  work: (lease: Lease) => Promise<Value>,
+): Promise<Value> {
+  let lease = leases.get(file);
+  while (lease?.closing) {
+    await lease.closing;
+    lease = leases.get(file);
+  }
+  if (!lease) {
+    lease = { calls: 0, opened: null, keep: false, closing: null };
+    leases.set(file, lease);
+  }
+  lease.calls++;
+  lease.keep ||= keep;
+  try {
+    return await work(lease);
+  } finally {
+    lease.calls--;
+    if (lease.calls === 0) {
+      const { opened } = lease;
+      if (opened === null || lease.keep) leases.delete(file);
+      else {
+        lease.closing = core.client
+          .execute("asset.close", { assetId: opened })
+          .then(
+            () => undefined,
+            () => undefined,
+          )
+          .finally(() => leases.delete(file));
+        await lease.closing;
+      }
+    }
+  }
+}
+
 /**
- * Runs `work` on the file's open asset. When no window has it, it opens the file for the view, and closes it again
- * afterwards unless this session's page shows it, so that it holds no model for a page nobody opened.
+ * Runs `work` on the file's open asset. When no window has it, it opens the file for the view, and the last call on it
+ * closes it again unless this session's page shows it, so that it holds no model for a page nobody opened.
  */
 async function withModel<Value>(
   core: Core,
   file: string,
   options: ArcueMcpOptions,
+  leases: Leases,
   work: (asset: { assetId: string; name: string }) => Promise<Value>,
 ): Promise<Value> {
-  const open = await openAsset(core, file);
-  if (open) return work(open);
-  const { assetId, shown } = await openInView(core, { path: file, view: options.view, move: false });
-  try {
-    return await work({ assetId, name: basename(file) });
-  } finally {
-    if (shown !== "view") await core.client.execute("asset.close", { assetId }).catch(() => undefined);
-  }
+  return leased(leases, core, file, false, async (lease) => {
+    const open = await openAsset(core, file);
+    if (open) return work(open);
+    const { assetId, shown } = await openInView(core, { path: file, view: options.view, move: false });
+    if (shown !== "view") lease.opened = assetId;
+    return work({ assetId, name: basename(file) });
+  });
 }
 
 /**
@@ -562,6 +625,7 @@ async function screenshotWhenReady(
   }
 }
 
+/** The asset once it has loaded and no reload is under way. A failed reload keeps the version loaded before it. */
 async function loaded(
   client: CoreClient,
   assetId: string,
@@ -574,8 +638,10 @@ async function loaded(
     const { assets } = await client.query("asset.list", {});
     const asset = assets.find((entry) => entry.assetId === assetId);
     if (!asset) throw new Error("Arcue closed the model.");
-    if (asset.version !== null) return asset;
-    if (asset.status === "failed") throw new Error(`Arcue could not load ${asset.name}: ${asset.error}`);
+    if (asset.status === "failed" && asset.version === null) {
+      throw new Error(`Arcue could not load ${asset.name}: ${asset.error}`);
+    }
+    if (asset.status !== "loading" && asset.version !== null) return asset;
     if (Date.now() >= deadline) throw new Error(`${asset.name} is still loading. Try again once it has loaded.`);
     await sleep(LOAD_POLL_MS, undefined, { signal });
   }

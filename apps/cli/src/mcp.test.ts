@@ -526,6 +526,92 @@ describe("arcue mcp", () => {
       expect(requestsNamed(core, "review.get")).toEqual([{ assetId: "a1" }]);
     });
 
+    it("keeps a model it opened open until the last call on it ends", async () => {
+      let open = false;
+      const core = await serve({
+        "asset.list": () => ({ assets: open ? [{ ...heroAsset(), assetId: "a3" }] : [] }),
+        "asset.openInView": async () => {
+          await sleep(100);
+          open = true;
+          return { assetId: "a3", shown: "held" };
+        },
+        "review.get": () => review([comment(FIRST, { status: "draft", rounds: [] })]),
+        "round.copy": async () => {
+          await sleep(300);
+          return { round: 1, prompt: "3D review · round 1 · 1 comment", copiedToClipboard: false };
+        },
+        "comment.screenshot": () => png,
+        "asset.close": () => {
+          open = false;
+          return null;
+        },
+      });
+      const client = await connect();
+
+      const [listed, sent] = await Promise.all([
+        call(client, "get_comments", { path: model }),
+        call(client, "send_round", { path: model }),
+      ]);
+      const after = await call(client, "get_comments", { path: model, screenshots: false });
+
+      expect(listed.isError, texts(listed).join("\n")).toBeFalsy();
+      expect(sent.isError, texts(sent).join("\n")).toBeFalsy();
+      expect(after.isError, texts(after).join("\n")).toBeFalsy();
+      const names = core.requests.map((request) => request.name);
+      expect(names.filter((name) => name === "asset.close")).toHaveLength(2);
+      expect(names.indexOf("asset.close")).toBeGreaterThan(names.indexOf("round.copy"));
+      expect(names.at(-1)).toBe("asset.close");
+    });
+
+    it("opens the model again for a call that comes while the last call closes it", async () => {
+      let open = false;
+      const later: { call?: Promise<CallToolResult> } = {};
+      let client: Client | null = null;
+      const core = await serve({
+        "asset.list": () => ({ assets: open ? [{ ...heroAsset(), assetId: "a3" }] : [] }),
+        "asset.openInView": () => {
+          open = true;
+          return { assetId: "a3", shown: "held" };
+        },
+        "review.get": () => review([]),
+        "asset.close": async () => {
+          if (client && !later.call) later.call = call(client, "get_comments", { path: model });
+          await sleep(200);
+          open = false;
+          return null;
+        },
+      });
+      client = await connect();
+
+      await call(client, "get_comments", { path: model });
+      const result = await later.call;
+
+      expect(result?.isError).toBeFalsy();
+      expect(requestsNamed(core, "asset.openInView")).toHaveLength(2);
+      expect(requestsNamed(core, "asset.close")).toHaveLength(2);
+    });
+
+    it("keeps a model open that a call showed while another call had it open", async () => {
+      let open = false;
+      const core = await serve({
+        "asset.list": () => ({ assets: open ? [{ ...heroAsset(), assetId: "a3" }] : [] }),
+        "asset.openInView": () => {
+          open = true;
+          return { assetId: "a3", shown: "held" };
+        },
+        "review.get": async () => {
+          await sleep(200);
+          return review([]);
+        },
+        "asset.close": () => null,
+      });
+      const client = await connect();
+
+      await Promise.all([call(client, "get_comments", { path: model }), call(client, "open_model", { path: model })]);
+
+      expect(requestsNamed(core, "asset.close")).toEqual([]);
+    });
+
     it("says when Arcue in the browser stops during a call", async () => {
       await serve({
         "review.get": () => {
@@ -626,7 +712,7 @@ describe("arcue mcp", () => {
       let lists = 0;
       await roundCore({
         "asset.list": () => ({
-          assets: [{ ...heroAsset(), status: "loading", version: ++lists > 2 ? "v1" : null }],
+          assets: [++lists > 2 ? heroAsset() : { ...heroAsset(), status: "loading", version: null }],
         }),
       });
       const client = await connect();
@@ -635,6 +721,37 @@ describe("arcue mcp", () => {
 
       expect(result.isError).toBeFalsy();
       expect(lists).toBeGreaterThan(2);
+    });
+
+    it("waits for a reload of the changed file before it sends a round", async () => {
+      let lists = 0;
+      const core = await roundCore({
+        "asset.list": () => ({
+          assets: [++lists > 3 ? heroAsset() : { ...heroAsset(), status: "loading", version: "v0" }],
+        }),
+      });
+      const client = await connect();
+
+      const result = await call(client, "send_round", { path: model });
+
+      expect(result.isError).toBeFalsy();
+      const names = core.requests.map((request) => request.name);
+      expect(names.lastIndexOf("asset.list")).toBeLessThan(names.indexOf("round.copy"));
+      expect(lists).toBe(4);
+    });
+
+    it("sends on the version loaded before when the changed file failed to load, and says so", async () => {
+      await roundCore({
+        "asset.list": () => ({ assets: [{ ...heroAsset(), status: "failed", error: "Bad file." }] }),
+      });
+      const client = await connect();
+
+      const result = await call(client, "send_round", { path: model });
+
+      expect(result.isError).toBeFalsy();
+      expect(texts(result).at(-1)).toContain(
+        "Arcue could not load the latest Hero.fbx and uses the version it loaded before: Bad file.",
+      );
     });
 
     it("says when the model failed to load or is still loading", async () => {
@@ -781,6 +898,20 @@ describe("arcue mcp", () => {
         { time: { kind: "frame", clip: "Armature|Walk", frame: 20 } },
       ]);
       expect(texts(without)).toEqual(["A frame needs a clip."]);
+    });
+
+    it("says when it renders the version loaded before because the changed file failed to load", async () => {
+      await serve({
+        "asset.list": () => ({ assets: [{ ...heroAsset(), status: "failed", error: "Bad file." }] }),
+        "view.screenshot": () => ({ png }),
+      });
+      const client = await connect();
+
+      const result = await call(client, "screenshot", { path: model });
+
+      expect(texts(result)).toEqual([
+        "Arcue could not load the latest Hero.fbx and uses the version it loaded before: Bad file.\nHero.fbx as on screen:",
+      ]);
     });
 
     it("waits while the window's 3D view gets ready", async () => {
