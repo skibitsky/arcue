@@ -423,6 +423,9 @@ export class WorkspaceStore {
     "view.screenshot": async ({ assetId, width, height, time, camera, drawComments }) => {
       const session = this.#require(assetId);
       const viewport = this.#requireViewport(assetId);
+      if (!session.showsCurrentScene()) {
+        throw new ArcueError("unavailable", `The 3D view of asset ${assetId} is not ready.`);
+      }
       const overlays = drawComments
         ? session
             .overlays()

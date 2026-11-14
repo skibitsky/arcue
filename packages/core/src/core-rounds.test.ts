@@ -200,6 +200,16 @@ describe("round.copy", () => {
     expect(test.platform.clipboardText).toBe(result.prompt);
   });
 
+  it("leaves the clipboard as it is when the caller takes the prompt itself", async () => {
+    const test = await setup(true);
+    test.platform.clipboardText = "The user's own text.";
+    await test.core.client.execute("comment.create", looseComment(test.assetId));
+    const result = await test.core.client.execute("round.copy", { assetId: test.assetId, clipboard: false });
+    expect(result).toMatchObject({ round: 1, copiedToClipboard: false });
+    expect(test.platform.clipboardText).toBe("The user's own text.");
+    await expect(test.platform.exists(`${HERO_REVIEW}/rounds/round-1/prompt.md`)).resolves.toBe(true);
+  });
+
   it("marks a reopened comment as a follow-up and lists its earlier messages", async () => {
     const test = await setup();
     const { assetId } = test;

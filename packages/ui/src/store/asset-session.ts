@@ -152,6 +152,7 @@ export class AssetSession {
   #container: HTMLElement | null = null;
   #unbindViewport: (() => void) | null = null;
   #sceneOnViewport: SceneDescription | null = null;
+  #sceneShown: SceneDescription | null = null;
   #loadingVersion: string | null = null;
   #loadSequence = 0;
   #reviewSequence = 0;
@@ -355,6 +356,7 @@ export class AssetSession {
     this.#viewport = viewport;
     this.#container = container;
     this.#sceneOnViewport = null;
+    this.#sceneShown = null;
     this.#overlayKey = [];
     const { tool, displayMode, skeleton, parts, brushSize, speed, loop } = this.state.get();
     viewport.setTool(tool);
@@ -417,6 +419,7 @@ export class AssetSession {
       this.#reconcileClip(scene, viewport);
       this.#reconcileParts(scene);
     }
+    this.#sceneShown = scene;
     this.state.patch({ viewportReady: true });
     viewport.setHighlight(this.#highlightedMeshes());
     this.#syncSelection(true);
@@ -816,6 +819,12 @@ export class AssetSession {
       this.setClip(time.clip, time.start);
       if (selectRange) this.setRange({ start: time.start, end: time.end });
     }
+  }
+
+  /** Whether the 3D view shows the asset's current version, so a screenshot renders it. */
+  showsCurrentScene(): boolean {
+    const { viewportReady, scene } = this.state.get();
+    return viewportReady && scene !== null && this.#sceneShown === scene;
   }
 
   hasUnsavedBox(): boolean {

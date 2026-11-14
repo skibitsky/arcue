@@ -155,9 +155,10 @@ export const commands = {
     output: z.void(),
   }),
   "round.copy": command({
-    description: "Save the asset's queue as the next round, mark its comments sent, and copy the prompt.",
+    description:
+      "Save the asset's queue as the next round, mark its comments sent, and copy the prompt. With clipboard false, the clipboard stays as it is and the caller takes the prompt from the result.",
     runsIn: "core",
-    input: z.object(assetRef),
+    input: z.object({ ...assetRef, clipboard: z.boolean().default(true) }),
     output: z.object({
       round: z.int().positive(),
       prompt: z.string(),

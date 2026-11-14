@@ -1,4 +1,5 @@
 import { realpath, stat } from "node:fs/promises";
+import { createServer } from "node:net";
 import { resolve } from "node:path";
 import type { CoreConnection } from "@arcue/platform-node";
 import { connectToCore, readBridgeInfo } from "@arcue/platform-node";
@@ -79,6 +80,8 @@ export async function run(
         return await inspect(command, env, cwd, output, options.importWorkerEntry ?? bundledImportWorker);
       case "serve":
         return await serve(command, env, output, options);
+      case "mcp":
+        return await mcp(command, env, cwd, options);
       case "stop":
         return await stopServe(env, output, options);
       case "setup":
@@ -296,6 +299,54 @@ function openedInView(
     text: `No Arcue window opened in time to show ${path}. Arcue holds it as ${assetId}; run arcue open again once its window is open.`,
     shown: false,
   };
+}
+
+/** Runs the MCP server. When the port Arcue in the browser would use is taken, it starts it on another. */
+async function mcp(
+  command: Extract<Command, { command: "mcp" }>,
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  options: RunOptions,
+): Promise<number> {
+  const detach = async (port?: number) => {
+    const lines: string[] = [];
+    const capture = { out: (text: string) => lines.push(text), err: (text: string) => lines.push(text) };
+    const code = await detachServe(
+      { command: "serve", detach: true, ...(port ? { port } : {}) },
+      env,
+      capture,
+      options,
+    );
+    return code === 0 ? null : lines.join("").trim();
+  };
+  const startServe = async () => {
+    let failure = await detach();
+    if (failure?.includes(" is in use.")) failure = await detach(await anyFreePort());
+    if (failure !== null) throw new Error(failure);
+  };
+  const { serveMcp } = await import("./mcp");
+  await serveMcp({
+    userData: userDataDir(env),
+    view: sessionView(env, command.view),
+    cwd,
+    importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
+    startServe,
+    version: (await buildOf(options)) ?? "dev",
+  });
+  return 0;
+}
+
+function anyFreePort(): Promise<number> {
+  return new Promise((resolvePromise, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() =>
+        typeof address === "object" && address ? resolvePromise(address.port) : reject(new Error("No port is free.")),
+      );
+    });
+  });
 }
 
 async function serve(

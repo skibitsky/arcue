@@ -11,6 +11,7 @@ Arcue is an app for reviewing 3D models and animations with an AI agent. The use
 | Claude Code, in a terminal or the Code tab of the Claude desktop app | [Claude Code](#claude-code) |
 | Codex, in a terminal or the Codex app | [Codex](#codex) |
 | Any other agent | [Other agents](#other-agents) |
+| Any app that connects to MCP servers | [MCP server](#mcp-server) |
 | Only the desktop app and its `arcue` command | [Desktop app](#desktop-app) |
 
 ## Claude Code
@@ -50,6 +51,19 @@ In the Codex app, the plugin shows Arcue in the in-app browser. In a terminal, i
 
 2. Install the Arcue desktop app as [Desktop app](#desktop-app) describes, and tell the user to paste each round of comments to you.
 3. Check that `arcue help` runs. The skill uses the `arcue` command to open models in the app and to inspect files, in bash, zsh, Git Bash or PowerShell.
+
+## MCP server
+
+`arcue mcp` is an MCP server whose tools list the open models, read and send a model's comments with their screenshots, resolve or reopen them, show models, render screenshots and inspect files. It runs on the desktop app's `arcue` command.
+
+1. Install the [desktop app](#desktop-app).
+2. Add the server:
+   - Claude Code: `claude mcp add --scope user arcue -- arcue mcp`
+   - Codex: `codex mcp add arcue -- arcue mcp`
+   - Other apps: a stdio server with the command `arcue` and the argument `mcp`.
+
+   When the app can't find `arcue`, give its full path: `/Applications/Arcue.app/Contents/Resources/bin/arcue` on macOS, or `C:\Users\<user>\AppData\Local\Programs\Arcue\bin\arcue.exe` on Windows.
+3. Ask the user to start a new session, so the app loads the server.
 
 ## Desktop app
 

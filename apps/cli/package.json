@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "catalog:",
     "@types/ws": "^8.18.2",
     "vite": "catalog:",
@@ -22,6 +23,8 @@
     "@arcue/import-fbx": "workspace:*",
     "@arcue/platform-node": "workspace:*",
     "@arcue/protocol": "workspace:*",
-    "ws": "^8.22.0"
+    "@modelcontextprotocol/server": "2.4.0",
+    "ws": "^8.22.0",
+    "zod": "catalog:"
   }
 }
