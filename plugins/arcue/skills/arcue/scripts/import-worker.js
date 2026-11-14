@@ -1,4 +1,4 @@
-import { E as warningId, J as fileNameOf, L as unshownUvSetWarnings, Nt as ArcueError, R as frameCountFor, V as mergeKeyTimes, Y as imageMimeType, Z as topologyFingerprint, at as describeParts, dt as TEXTURE_SLOTS, ft as TEXTURE_SLOT_KEYS, it as defaultViewBounds, lt as TEXTURE_REF_KEYS, m as serveImportWorker, nt as describeTextureUses, q as parseStoredPath, rt as importWarning, t as portEndpoint, z as isKeyedEveryFrame } from "./arcue-Byuc2fTf.js";
+import { E as warningId, J as fileNameOf, L as unshownUvSetWarnings, Nt as ArcueError, R as frameCountFor, V as mergeKeyTimes, Y as imageMimeType, Z as topologyFingerprint, at as describeParts, dt as TEXTURE_SLOTS, ft as TEXTURE_SLOT_KEYS, it as defaultViewBounds, lt as TEXTURE_REF_KEYS, m as serveImportWorker, nt as describeTextureUses, q as parseStoredPath, rt as importWarning, t as portEndpoint, z as isKeyedEveryFrame } from "./arcue-CacpvMqY.js";
 import { parentPort } from "node:worker_threads";
 //#region ../../packages/scene/src/clip.ts
 var UNTITLED_CLIP = "Untitled clip";

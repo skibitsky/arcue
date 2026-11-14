@@ -42,6 +42,24 @@ function floatSafeRemainder(val, step) {
 	if (Math.abs(ratio - roundedRatio) < tolerance) return 0;
 	return ratio - roundedRatio;
 }
+var EVALUATING = /* @__PURE__*/ Symbol("evaluating");
+function defineLazy(object, key, getter) {
+	let value = void 0;
+	Object.defineProperty(object, key, {
+		get() {
+			if (value === EVALUATING) return;
+			if (value === void 0) {
+				value = EVALUATING;
+				value = getter();
+			}
+			return value;
+		},
+		set(v) {
+			Object.defineProperty(object, key, { value: v });
+		},
+		configurable: true
+	});
+}
 function assignProp(target, prop, value) {
 	Object.defineProperty(target, prop, {
 		value,
@@ -523,6 +541,8 @@ function constantCatch(value) {
 //#endregion
 //#region ../../node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/core.js
 var _a$1;
+/** A special constant with type `never` */
+var NEVER = /*@__PURE__*/ Object.freeze({ status: "aborted" });
 var _zodDesc = {
 	value: void 0,
 	enumerable: false
@@ -973,7 +993,7 @@ var uuid = (version) => {
 	return new RegExp(`^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-${version}[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$`);
 };
 /** Practical email validation */
-var email = /^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/;
+var email$1 = /^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/;
 var _emoji$1 = `^(?=[\\s\\S]*[\\p{Extended_Pictographic}\\p{Regional_Indicator}\\u20E3])[\\p{Extended_Pictographic}\\p{Emoji_Component}]+$`;
 function emoji() {
 	return new RegExp(_emoji$1, "u");
@@ -993,7 +1013,7 @@ var dateSource = `(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][
 function anchor(source) {
 	return new RegExp(`^${source}$`);
 }
-var date = /*@__PURE__*/ anchor(dateSource);
+var date$1 = /*@__PURE__*/ anchor(dateSource);
 function timeSource(args) {
 	const hhmm = `(?:[01]\\d|2[0-3]):[0-5]\\d`;
 	return typeof args.precision === "number" ? args.precision === -1 ? `${hhmm}` : args.precision === 0 ? `${hhmm}:[0-5]\\d` : `${hhmm}:[0-5]\\d\\.\\d{${args.precision}}` : args.seconds ? `${hhmm}:[0-5]\\d(?:\\.\\d+)?` : `${hhmm}(?::[0-5]\\d(?:\\.\\d+)?)?`;
@@ -1015,6 +1035,7 @@ var anyString = /^[\s\S]{0,}$/;
 var integer = /^-?\d+$/;
 var number$1 = /^-?\d+(?:\.\d+)?$/;
 var boolean$1 = /^(?:true|false)$/i;
+var _null$2 = /^null$/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 //#endregion
@@ -1512,7 +1533,7 @@ var $ZodUUID = /*@__PURE__*/ $constructor("$ZodUUID", (inst, def) => {
 	$ZodStringFormat.init(inst, def);
 });
 var $ZodEmail = /*@__PURE__*/ $constructor("$ZodEmail", (inst, def) => {
-	def.pattern ?? (def.pattern = email);
+	def.pattern ?? (def.pattern = email$1);
 	$ZodStringFormat.init(inst, def);
 });
 function canParseURL(input) {
@@ -1655,7 +1676,7 @@ var $ZodISODateTime = /*@__PURE__*/ $constructor("$ZodISODateTime", (inst, def) 
 	$ZodStringFormat.init(inst, def);
 });
 var $ZodISODate = /*@__PURE__*/ $constructor("$ZodISODate", (inst, def) => {
-	def.pattern ?? (def.pattern = date);
+	def.pattern ?? (def.pattern = date$1);
 	$ZodStringFormat.init(inst, def);
 });
 var $ZodISOTime = /*@__PURE__*/ $constructor("$ZodISOTime", (inst, def) => {
@@ -1835,6 +1856,26 @@ var $ZodBoolean = /*@__PURE__*/ $constructor("$ZodBoolean", (inst, def) => {
 		});
 		return payload;
 	};
+});
+var $ZodNull = /*@__PURE__*/ $constructor("$ZodNull", (inst, def) => {
+	$ZodType.init(inst, def);
+	inst._zod.pattern = _null$2;
+	inst._zod.values = /* @__PURE__ */ new Set([null]);
+	inst._zod.parse = (payload, _ctx) => {
+		const input = payload.value;
+		if (input === null) return payload;
+		payload.issues.push({
+			expected: "null",
+			code: "invalid_type",
+			input,
+			inst
+		});
+		return payload;
+	};
+});
+var $ZodAny = /*@__PURE__*/ $constructor("$ZodAny", (inst, def) => {
+	$ZodType.init(inst, def);
+	inst._zod.parse = (payload) => payload;
 });
 var $ZodUnknown = /*@__PURE__*/ $constructor("$ZodUnknown", (inst, def) => {
 	$ZodType.init(inst, def);
@@ -2867,6 +2908,9 @@ function handlePipeResult(left, next, ctx) {
 		issues: left.issues
 	}, ctx);
 }
+var $ZodPreprocess = /*@__PURE__*/ $constructor("$ZodPreprocess", (inst, def) => {
+	$ZodPipe.init(inst, def);
+});
 var $ZodReadonly = /*@__PURE__*/ $constructor("$ZodReadonly", (inst, def) => {
 	$ZodType.init(inst, def);
 	defineLazyInternal(inst, "propValues", (zod) => zod.def.innerType._zod.propValues);
@@ -2884,6 +2928,21 @@ function handleReadonlyResult(payload) {
 	if (!payload.memo) payload.value = Object.freeze(payload.value);
 	return payload;
 }
+var $ZodLazy = /*@__PURE__*/ $constructor("$ZodLazy", (inst, def) => {
+	$ZodType.init(inst, def);
+	defineLazy(inst._zod, "innerType", () => {
+		const d = def;
+		if (!d._cachedInner) d._cachedInner = def.getter();
+		return d._cachedInner;
+	});
+	defineLazyInternal(inst, "pattern", (zod) => zod.innerType?._zod?.pattern);
+	defineLazyInternal(inst, "propValues", (zod) => zod.innerType?._zod?.propValues);
+	defineLazyInternal(inst, "optin", (zod) => zod.innerType?._zod?.optin ?? void 0);
+	defineLazyInternal(inst, "optout", (zod) => zod.innerType?._zod?.optout ?? void 0);
+	inst._zod.parse = (payload, ctx) => {
+		return inst._zod.innerType._zod.run(payload, ctx);
+	};
+});
 var $ZodCustom = /*@__PURE__*/ $constructor("$ZodCustom", (inst, def) => {
 	$ZodCheck.init(inst, def);
 	$ZodType.init(inst, def);
@@ -3608,6 +3667,15 @@ function _number(Class, params) {
 	}));
 }
 // @__NO_SIDE_EFFECTS__
+function _coercedNumber(Class, params) {
+	return new Class(snapshotChecks({
+		type: "number",
+		coerce: true,
+		checks: [],
+		...normalizeParams(params)
+	}));
+}
+// @__NO_SIDE_EFFECTS__
 function _int(Class, params) {
 	return new Class({
 		type: "number",
@@ -3623,6 +3691,17 @@ function _boolean(Class, params) {
 		type: "boolean",
 		...normalizeParams(params)
 	});
+}
+// @__NO_SIDE_EFFECTS__
+function _null$1(Class, params) {
+	return new Class({
+		type: "null",
+		...normalizeParams(params)
+	});
+}
+// @__NO_SIDE_EFFECTS__
+function _any(Class) {
+	return new Class({ type: "any" });
 }
 // @__NO_SIDE_EFFECTS__
 function _unknown(Class) {
@@ -4424,11 +4503,32 @@ var numberProcessor = (schema, ctx, _json, params) => {
 var booleanProcessor = (_schema, _ctx, json, _params) => {
 	json.type = "boolean";
 };
+var bigintProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "BigInt cannot be represented in JSON Schema");
+};
+var symbolProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "Symbols cannot be represented in JSON Schema");
+};
+var nullProcessor = (_schema, ctx, json, _params) => {
+	if (ctx.target === "openapi-3.0") {
+		json.type = "string";
+		json.nullable = true;
+		json.enum = [null];
+	} else json.type = "null";
+};
+var undefinedProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "Undefined cannot be represented in JSON Schema");
+};
 var voidProcessor = (schema, ctx, json, params) => {
 	handleUnrepresentable(schema, ctx, json, params, "Void cannot be represented in JSON Schema");
 };
 var neverProcessor = (_schema, _ctx, json, _params) => {
 	json.not = {};
+};
+var anyProcessor = (_schema, _ctx, _json, _params) => {};
+var unknownProcessor = (_schema, _ctx, _json, _params) => {};
+var dateProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "Date cannot be represented in JSON Schema");
 };
 var enumProcessor = (schema, _ctx, json, _params) => {
 	const def = schema._zod.def;
@@ -4467,11 +4567,46 @@ var literalProcessor = (schema, ctx, json, params) => {
 		json.enum = vals;
 	}
 };
+var nanProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "NaN cannot be represented in JSON Schema");
+};
+var templateLiteralProcessor = (schema, _ctx, json, _params) => {
+	const _json = json;
+	const pattern = schema._zod.pattern;
+	if (!pattern) throw new Error("Pattern not found in template literal");
+	_json.type = "string";
+	_json.pattern = pattern.source;
+};
+var fileProcessor = (schema, _ctx, json, _params) => {
+	const _json = json;
+	_json.type = "string";
+	_json.format = "binary";
+	_json.contentEncoding = "binary";
+	const { minimum, maximum, mime } = aggregateChecks(schema);
+	if (minimum !== void 0) _json.minLength = minimum;
+	if (maximum !== void 0) _json.maxLength = maximum;
+	if (!mime) return;
+	if (mime.length === 0) _json.not = {};
+	else if (mime.length === 1) _json.contentMediaType = mime[0];
+	else _json.anyOf = mime.map((m) => ({ contentMediaType: m }));
+};
+var successProcessor = (_schema, _ctx, json, _params) => {
+	json.type = "boolean";
+};
 var customProcessor = (schema, ctx, json, params) => {
 	handleUnrepresentable(schema, ctx, json, params, "Custom types cannot be represented in JSON Schema");
 };
+var functionProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "Function types cannot be represented in JSON Schema");
+};
 var transformProcessor = (schema, ctx, json, params) => {
 	handleUnrepresentable(schema, ctx, json, params, "Transforms cannot be represented in JSON Schema");
+};
+var mapProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "Map cannot be represented in JSON Schema");
+};
+var setProcessor = (schema, ctx, json, params) => {
+	handleUnrepresentable(schema, ctx, json, params, "Set cannot be represented in JSON Schema");
 };
 var arrayProcessor = (schema, ctx, _json, params) => {
 	const json = _json;
@@ -4786,12 +4921,99 @@ var readonlyProcessor = (schema, ctx, json, params) => {
 	seen.ref = def.innerType;
 	json.readOnly = true;
 };
+var promiseProcessor = (schema, ctx, _json, params) => {
+	const def = schema._zod.def;
+	processSchema(def.innerType, ctx, params);
+	const seen = ctx.seen.get(schema);
+	seen.ref = def.innerType;
+};
 var optionalProcessor = (schema, ctx, _json, params) => {
 	const def = schema._zod.def;
 	processSchema(def.innerType, ctx, params);
 	const seen = ctx.seen.get(schema);
 	seen.ref = def.innerType;
 };
+var lazyProcessor = (schema, ctx, _json, params) => {
+	const innerType = schema._zod.innerType;
+	processSchema(innerType, ctx, params);
+	const seen = ctx.seen.get(schema);
+	seen.ref = innerType;
+};
+var allProcessors = {
+	string: stringProcessor,
+	number: numberProcessor,
+	boolean: booleanProcessor,
+	bigint: bigintProcessor,
+	symbol: symbolProcessor,
+	null: nullProcessor,
+	undefined: undefinedProcessor,
+	void: voidProcessor,
+	never: neverProcessor,
+	any: anyProcessor,
+	unknown: unknownProcessor,
+	date: dateProcessor,
+	enum: enumProcessor,
+	literal: literalProcessor,
+	nan: nanProcessor,
+	template_literal: templateLiteralProcessor,
+	file: fileProcessor,
+	success: successProcessor,
+	custom: customProcessor,
+	function: functionProcessor,
+	transform: transformProcessor,
+	map: mapProcessor,
+	set: setProcessor,
+	array: arrayProcessor,
+	object: objectProcessor,
+	union: unionProcessor,
+	intersection: intersectionProcessor,
+	tuple: tupleProcessor,
+	record: recordProcessor,
+	nullable: nullableProcessor,
+	nonoptional: nonoptionalProcessor,
+	default: defaultProcessor,
+	prefault: prefaultProcessor,
+	catch: catchProcessor,
+	pipe: pipeProcessor,
+	readonly: readonlyProcessor,
+	promise: promiseProcessor,
+	optional: optionalProcessor,
+	lazy: lazyProcessor
+};
+function toJSONSchema(input, params) {
+	if ("_idmap" in input) {
+		const registry = input;
+		const ctx = initializeContext({
+			...params,
+			processors: allProcessors
+		});
+		const defs = {};
+		for (const entry of registry._idmap.entries()) {
+			const [_, schema] = entry;
+			processSchema(schema, ctx);
+		}
+		const schemas = {};
+		ctx.external = {
+			registry,
+			uri: params?.uri,
+			defs
+		};
+		for (const entry of registry._idmap.entries()) {
+			const [key, schema] = entry;
+			extractDefs(ctx, schema);
+			assignProp(schemas, key, finalize(ctx, schema));
+		}
+		if (Object.keys(defs).length > 0) schemas.__shared = { [ctx.target === "draft-2020-12" ? "$defs" : "definitions"]: defs };
+		return { schemas };
+	}
+	const ctx = initializeContext({
+		...params,
+		processors: allProcessors
+	});
+	processSchema(input, ctx);
+	extractDefs(ctx, input);
+	return finalize(ctx, input);
+}
 //#endregion
 //#region ../../node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/errors.js
 var _installedErrorProtos = /* @__PURE__ */ new WeakSet([Object.prototype, Error.prototype]);
@@ -5199,6 +5421,9 @@ var ZodEmail = /*@__PURE__*/ $constructor("ZodEmail", (inst, def) => {
 	$ZodEmail.init(inst, def);
 	ZodStringFormat.init(inst, def);
 });
+function email(params) {
+	return /* @__PURE__ */ _email(ZodEmail, params);
+}
 var ZodGUID = /*@__PURE__*/ $constructor("ZodGUID", (inst, def) => {
 	$ZodGUID.init(inst, def);
 	ZodStringFormat.init(inst, def);
@@ -5363,6 +5588,22 @@ var ZodBoolean = /*@__PURE__*/ $constructor("ZodBoolean", (inst, def) => {
 function boolean(params) {
 	return /* @__PURE__ */ _boolean(ZodBoolean, params);
 }
+var ZodNull = /*@__PURE__*/ $constructor("ZodNull", (inst, def) => {
+	$ZodNull.init(inst, def);
+	ZodType.init(inst, def);
+	inst._zod.processJSONSchema = (ctx, json, params) => nullProcessor(inst, ctx, json, params);
+});
+function _null(params) {
+	return /* @__PURE__ */ _null$1(ZodNull, params);
+}
+var ZodAny = /*@__PURE__*/ $constructor("ZodAny", (inst, def) => {
+	$ZodAny.init(inst, def);
+	ZodType.init(inst, def);
+	inst._zod.processJSONSchema = (ctx, json, params) => void 0;
+});
+function any() {
+	return /* @__PURE__ */ _any(ZodAny);
+}
 var ZodUnknown = /*@__PURE__*/ $constructor("ZodUnknown", (inst, def) => {
 	$ZodUnknown.init(inst, def);
 	ZodType.init(inst, def);
@@ -5475,6 +5716,14 @@ function strictObject(shape, params) {
 		type: "object",
 		shape,
 		catchall: never(),
+		...normalizeParams(params)
+	});
+}
+function looseObject(shape, params) {
+	return new ZodObject({
+		type: "object",
+		shape,
+		catchall: unknown(),
 		...normalizeParams(params)
 	});
 }
@@ -5765,6 +6014,10 @@ function pipe(in_, out) {
 		out
 	});
 }
+var ZodPreprocess = /*@__PURE__*/ $constructor("ZodPreprocess", (inst, def) => {
+	ZodPipe.init(inst, def);
+	$ZodPreprocess.init(inst, def);
+});
 var ZodReadonly = /*@__PURE__*/ $constructor("ZodReadonly", (inst, def) => {
 	$ZodReadonly.init(inst, def);
 	ZodType.init(inst, def);
@@ -5775,6 +6028,18 @@ function readonly(innerType) {
 	return new ZodReadonly({
 		type: "readonly",
 		innerType
+	});
+}
+var ZodLazy = /*@__PURE__*/ $constructor("ZodLazy", (inst, def) => {
+	$ZodLazy.init(inst, def);
+	ZodType.init(inst, def);
+	inst._zod.processJSONSchema = (ctx, json, params) => lazyProcessor(inst, ctx, json, params);
+	inst.unwrap = () => inst._zod.def.getter();
+});
+function lazy(getter) {
+	return new ZodLazy({
+		type: "lazy",
+		getter
 	});
 }
 var ZodCustom = /*@__PURE__*/ $constructor("ZodCustom", (inst, def) => {
@@ -5791,10 +6056,20 @@ function refine(fn, _params = {}) {
 function superRefine(fn, params) {
 	return /* @__PURE__ */ _superRefine(fn, params);
 }
+function preprocess(fn, schema) {
+	return new ZodPreprocess({
+		type: "pipe",
+		in: transform(fn),
+		out: schema
+	});
+}
 //#endregion
 //#region ../../node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/iso.js
 function datetime(params) {
 	return /* @__PURE__ */ _isoDateTime(ZodISODateTime, params);
+}
+function date(params) {
+	return /* @__PURE__ */ _isoDate(ZodISODate, params);
 }
 //#endregion
 //#region ../../packages/protocol/src/anchors.ts
@@ -8253,9 +8528,12 @@ var commands = {
 		output: _void()
 	}),
 	"round.copy": command({
-		description: "Save the asset's queue as the next round, mark its comments sent, and copy the prompt.",
+		description: "Save the asset's queue as the next round, mark its comments sent, and copy the prompt. With clipboard false, the clipboard stays as it is and the caller takes the prompt from the result.",
 		runsIn: "core",
-		input: object(assetRef$1),
+		input: object({
+			...assetRef$1,
+			clipboard: boolean().default(true)
+		}),
 		output: object({
 			round: int().positive(),
 			prompt: string(),
@@ -9587,4 +9865,4 @@ function portEndpoint(port) {
 	};
 }
 //#endregion
-export { findNode as $, MODEL_FILE_EXTENSIONS as A, messageChannel as At, lastFrame as B, viewAddress as C, coreKindOf as Ct, screenshotOwner as D, MAX_FRAME_BYTES as Dt, warningId as E, sharesReviews as Et, memberRoles as F, rangesWithin as G, countInRanges as H, viewStateSchema as I, fileNameOf as J, materialSlots as K, unshownUvSetWarnings as L, compositionFileSchema as M, reportListenerError as Mt, joinsByName as N, ArcueError as Nt, COMPOSITION_FILE_NAME as O, framedChannel as Ot, keysModelBones as P, COMMENT_ID_PATTERN as Pt, composeScene as Q, frameCountFor as R, VIEW_PARAMETER as S, connectBridge as St, settingsSchema as T, launchInfoSchema as Tt, decodeRanges as U, mergeKeyTimes as V, encodeRanges as W, sameTopology as X, imageMimeType as Y, topologyFingerprint as Z, isEnvelope as _, SERVE_CORE_PATH as _t, LOCKS_FOLDER as a, describeParts as at, commands as b, bridgeInfoFile as bt, lockWaitingSchema as c, shownByDefault as ct, importFindFileInputSchema as d, TEXTURE_SLOTS as dt, memberPath as et, importReadFileInputSchema as f, TEXTURE_SLOT_KEYS as ft, withTransfer as g, LOCAL_PAGE_OWNER as gt, createPeer as h, LAUNCH_INFO_FILE as ht, roundDataSchema as i, defaultViewBounds as it, animatesModel as j, callEach as jt, IMAGE_FILE_EXTENSIONS as k, framedEndpoint as kt, isQueryName as l, TEXTURE_REF_KEYS as lt, serveImportWorker as m, LAST_CORE_FILE as mt, binaryFrameCodec as n, describeTextureUses as nt, START_LOCK_FILE as o, isDefaultPartView as ot, importRequests as p, HANDSHAKE_MAX_FRAME_BYTES as pt, parseStoredPath as q, jsonFrameCodec as r, importWarning as rt, lockRecordSchema as s, knownPartView as st, portEndpoint as t, splitMemberPath as tt, queries as u, TEXTURE_REF_NAMES as ut, reviewFileSchema as v, SERVE_STOPPED_CLOSE_CODE as vt, viewNameSchema as w, lastCoreSchema as wt, isCommandName as x, bridgeInfoSchema as xt, reviewFormat as y, acceptBridge as yt, isKeyedEveryFrame as z };
+export { findNode as $, preprocess as $t, MODEL_FILE_EXTENSIONS as A, messageChannel as At, lastFrame as B, any as Bt, viewAddress as C, coreKindOf as Ct, screenshotOwner as D, MAX_FRAME_BYTES as Dt, warningId as E, sharesReviews as Et, memberRoles as F, date as Ft, rangesWithin as G, int as Gt, countInRanges as H, boolean as Ht, viewStateSchema as I, datetime as It, fileNameOf as J, literal as Jt, materialSlots as K, intersection as Kt, unshownUvSetWarnings as L, ZodNumber as Lt, compositionFileSchema as M, reportListenerError as Mt, joinsByName as N, ArcueError as Nt, COMPOSITION_FILE_NAME as O, framedChannel as Ot, keysModelBones as P, COMMENT_ID_PATTERN as Pt, composeScene as Q, optional as Qt, frameCountFor as R, _enum as Rt, VIEW_PARAMETER as S, connectBridge as St, settingsSchema as T, launchInfoSchema as Tt, decodeRanges as U, discriminatedUnion as Ut, mergeKeyTimes as V, array as Vt, encodeRanges as W, email as Wt, sameTopology as X, number as Xt, imageMimeType as Y, looseObject as Yt, topologyFingerprint as Z, object as Zt, isEnvelope as _, SERVE_CORE_PATH as _t, LOCKS_FOLDER as a, safeParse as an, describeParts as at, commands as b, bridgeInfoFile as bt, lockWaitingSchema as c, NEVER as cn, shownByDefault as ct, importFindFileInputSchema as d, TEXTURE_SLOTS as dt, record as en, memberPath as et, importReadFileInputSchema as f, TEXTURE_SLOT_KEYS as ft, withTransfer as g, LOCAL_PAGE_OWNER as gt, createPeer as h, LAUNCH_INFO_FILE as ht, roundDataSchema as i, url as in, defaultViewBounds as it, animatesModel as j, callEach as jt, IMAGE_FILE_EXTENSIONS as k, framedEndpoint as kt, isQueryName as l, TEXTURE_REF_KEYS as lt, serveImportWorker as m, LAST_CORE_FILE as mt, binaryFrameCodec as n, union as nn, describeTextureUses as nt, START_LOCK_FILE as o, toJSONSchema as on, isDefaultPartView as ot, importRequests as p, HANDSHAKE_MAX_FRAME_BYTES as pt, parseStoredPath as q, lazy as qt, jsonFrameCodec as r, unknown as rn, importWarning as rt, lockRecordSchema as s, _coercedNumber as sn, knownPartView as st, portEndpoint as t, string as tn, splitMemberPath as tt, queries as u, TEXTURE_REF_NAMES as ut, reviewFileSchema as v, SERVE_STOPPED_CLOSE_CODE as vt, viewNameSchema as w, lastCoreSchema as wt, isCommandName as x, bridgeInfoSchema as xt, reviewFormat as y, acceptBridge as yt, isKeyedEveryFrame as z, _null as zt };
