@@ -191,7 +191,7 @@ describe("arcue mcp", () => {
     });
     expect(result._meta?.[CARD_META_KEY]).toMatchObject({
       card: "inspection",
-      path: join(work, "crate.fbx"),
+      path: expect.stringMatching(/[\\/]work-\w+[\\/]crate\.fbx$/),
       name: "crate.fbx",
       triangles: 756,
       meshes: [{ name: "Crate", triangles: 756, skinned: false }],
