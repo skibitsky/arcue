@@ -1,7 +1,8 @@
-import { $t as preprocess, A as MODEL_FILE_EXTENSIONS, Bt as any, C as viewAddress, Ft as date, Gt as int, Ht as boolean, It as datetime, Jt as literal, Kt as intersection, Lt as ZodNumber, Nt as ArcueError, Pt as COMMENT_ID_PATTERN, Qt as optional, Rt as _enum, Ut as discriminatedUnion, Vt as array, Wt as email, Xt as number$1, Yt as looseObject, Zt as object, an as safeParse, cn as NEVER, en as record, in as url, nn as union, on as toJSONSchema, qt as lazy, rn as unknown, sn as _coercedNumber, tn as string, zt as _null } from "./arcue-CacpvMqY.js";
-import { a as formatInspection, h as warningPrompt, o as formatLabel, p as fromNativePath, s as inspectFile, t as connectForOpen, w as connectToCore } from "./arcue-BXRf8zy7.js";
+import { D as readBridgeInfo, E as connectToCore, _ as warningPrompt, c as formatLabel, h as fromNativePath, l as inspectFile, p as systemClock, r as connectForOpen, s as formatInspection, t as import_websocket } from "./arcue-CLLhAA6U.js";
+import { $t as intersection, Bt as ArcueError, Ct as SERVE_CORE_PATH, Et as bridgeAuthorization, Gt as _enum, Ht as date, I as MODEL_FILE_EXTENSIONS, Jt as array, Kt as _null, O as VIEW_PARAMETER, Pt as MAX_FRAME_BYTES, Qt as int, Ut as datetime, Vt as COMMENT_ID_PATTERN, Wt as ZodNumber, Xt as discriminatedUnion, Yt as boolean, Zt as email, a as MAX_PIECE_BYTES, an as optional, c as WINDOW_CHANNEL_META_KEY, cn as string, dn as url, en as lazy, fn as safeParse, hn as NEVER, in as object, k as viewAddress, l as WINDOW_CHANNEL_TOOL, ln as union, mn as _coercedNumber, nn as looseObject, o as MCP_VIEW_META_KEY, on as preprocess, pn as toJSONSchema, qt as any, rn as number$1, s as MCP_VIEW_URI, sn as record, tn as literal, u as windowChannelInputSchema, un as unknown } from "./arcue-DRTHS0tu.js";
 import { realpath, stat } from "node:fs/promises";
 import { basename, extname, resolve } from "node:path";
+import { randomBytes } from "node:crypto";
 import { setTimeout as setTimeout$1 } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import process$1 from "node:process";
@@ -55,6 +56,11 @@ function G(B, Q, F, V, q) {
 		mimeType: L,
 		...V
 	}, q);
+}
+var W = "io.modelcontextprotocol/ui";
+function H(B) {
+	if (!B) return;
+	return B.extensions?.[W];
 }
 //#endregion
 //#region ../../node_modules/.pnpm/@modelcontextprotocol+server@2.4.0/node_modules/@modelcontextprotocol/server/dist/chunk-vYduTEsO.mjs
@@ -17393,17 +17399,279 @@ var StdioServerTransport = class {
 var CARD_META_KEY = "arcue/card";
 /** The card that `get_comments` and `inspect_model` render in apps that show MCP Apps. */
 var CARD_URI = "ui://arcue/card.html";
-/** What `send_round` puts in its result's `_meta` under this key when it sent a round. */
+/** What `send_round` puts in its result's `_meta` under this key when it sent a round, as the view reads it too. */
 var ROUND_META_KEY = "arcue/round";
+//#endregion
+//#region src/window-relay.ts
+var RECEIVE_BYTES = 2 * MAX_PIECE_BYTES;
+var WAIT_MS = 2e4;
+var IDLE_MS = 15e3;
+var SWEEP_MS = 3e3;
+var MAX_CHANNELS = 16;
+/** The largest message a view sends, such as a comment with its screenshot. */
+var MAX_VIEW_MESSAGE_BYTES = 67108864;
+/**
+* The channels of the windows in the views an app shows. A view cannot reach Arcue in the browser itself, so it calls a
+* tool for each piece of work, and the relay holds a socket to the core for it.
+*
+* The view numbers the pieces it sends, and names the first piece it has not taken when it receives, so a call that it
+* makes again after losing the answer neither repeats nor loses one.
+*/
+var WindowRelay = class {
+	#channels = /* @__PURE__ */ new Map();
+	#options;
+	#pieceBytes;
+	constructor(options) {
+		this.#options = options;
+		this.#pieceBytes = Math.min(options.pieceBytes ?? 196608, MAX_PIECE_BYTES);
+	}
+	async open() {
+		const limit = this.#options.maxChannels ?? MAX_CHANNELS;
+		if (this.#channels.size >= limit) throw new ArcueError("unavailable", `Arcue shows at most ${limit} views at once. Close one, or reload the app.`);
+		const socket = await this.#options.connect();
+		const id = randomBytes(16).toString("base64url");
+		const channel = {
+			socket,
+			out: [],
+			base: 0,
+			next: 0,
+			partial: [],
+			partialBytes: 0,
+			closed: false,
+			wake: null,
+			calls: 0,
+			onCall: /* @__PURE__ */ new Set(),
+			cancelIdle: () => void 0
+		};
+		this.#channels.set(id, channel);
+		socket.onMessage((bytes) => {
+			if (channel.closed) return;
+			channel.out.push(...this.#split(bytes));
+			channel.wake?.();
+		});
+		socket.onClose(() => {
+			channel.closed = true;
+			channel.partial = [];
+			channel.wake?.();
+			if (channel.calls === 0 && channel.out.length === 0) this.#drop(id);
+		});
+		this.#armIdle(id, channel);
+		return id;
+	}
+	/** Takes the view's pieces from number `seq` on, skipping those it sent before, and returns the next number. */
+	send(id, seq, pieces) {
+		return this.#during(id, (channel) => {
+			if (seq > channel.next) throw new ArcueError("invalid-input", "A piece before these did not arrive.");
+			for (const piece of pieces.slice(channel.next - seq)) {
+				const bytes = Buffer.from(piece.data, "base64");
+				channel.partial.push(bytes);
+				channel.partialBytes += bytes.byteLength;
+				if (channel.partialBytes > MAX_VIEW_MESSAGE_BYTES) {
+					this.close(id);
+					throw new ArcueError("invalid-input", "A message is too large.");
+				}
+				if (piece.more) continue;
+				const message = Buffer.concat(channel.partial);
+				channel.partial = [];
+				channel.partialBytes = 0;
+				if (!channel.closed) channel.socket.send(message);
+			}
+			channel.next = Math.max(channel.next, seq + pieces.length);
+			return channel.next;
+		});
+	}
+	/**
+	* Returns the pieces for the view from number `from` on, which drops the ones before it, once there are any, the
+	* channel closes, the wait ends, a later receive starts or the signal aborts.
+	*/
+	async receive(id, from, signal) {
+		return this.#during(id, async (channel) => {
+			if (from < channel.base || from > channel.base + channel.out.length) throw new ArcueError("invalid-input", "The view asked for pieces it took already or that never came.");
+			channel.out.splice(0, from - channel.base);
+			channel.base = from;
+			channel.wake?.();
+			if (channel.out.length === 0 && !channel.closed) await this.#wait(channel, signal);
+			if (channel.base !== from) return {
+				from,
+				pieces: [],
+				closed: false
+			};
+			const limit = this.#options.receiveBytes ?? RECEIVE_BYTES;
+			const pieces = [];
+			let bytes = 0;
+			for (const piece of channel.out) {
+				const size = piece.bytes.byteLength;
+				if (pieces.length > 0 && bytes + size > limit) break;
+				const data = piece.bytes.toString("base64");
+				pieces.push(piece.more ? {
+					data,
+					more: true
+				} : { data });
+				bytes += size;
+			}
+			return {
+				from,
+				pieces,
+				closed: channel.closed && pieces.length === channel.out.length
+			};
+		});
+	}
+	close(id) {
+		const channel = this.#channels.get(id);
+		if (!channel) return;
+		this.#drop(id);
+		channel.closed = true;
+		channel.wake?.();
+		channel.socket.close();
+	}
+	/**
+	* Closes the channels of views that are gone, which hold windows that never answer: it ends each receive that waits,
+	* and closes each channel whose view does not call again within `sweepMs`. Resolves once their sockets closed.
+	*/
+	async sweep() {
+		await Promise.all([...this.#channels].map(([id, channel]) => this.#check(id, channel)));
+	}
+	/** Closes every channel, as when the app's connection ends. */
+	dispose() {
+		for (const id of [...this.#channels.keys()]) this.close(id);
+	}
+	#channel(id) {
+		const channel = this.#channels.get(id);
+		if (!channel) throw new ArcueError("not-found", "This window's channel is closed.");
+		return channel;
+	}
+	/** Runs one call on the channel, which stays open while a call runs and for `idleMs` after the last. */
+	#during(id, work) {
+		const channel = this.#channel(id);
+		channel.calls++;
+		channel.cancelIdle();
+		for (const listener of [...channel.onCall]) listener();
+		const done = () => {
+			channel.calls--;
+			if (channel.calls > 0 || this.#channels.get(id) !== channel) return;
+			if (channel.closed && channel.out.length === 0) this.#drop(id);
+			else this.#armIdle(id, channel);
+		};
+		let value;
+		try {
+			value = work(channel);
+		} catch (error) {
+			done();
+			throw error;
+		}
+		if (value instanceof Promise) value.finally(done).catch(() => void 0);
+		else done();
+		return value;
+	}
+	#check(id, channel) {
+		return new Promise((resolve) => {
+			const called = () => {
+				cancel();
+				channel.onCall.delete(called);
+				resolve();
+			};
+			channel.onCall.add(called);
+			const cancel = this.#options.setTimer(this.#options.sweepMs ?? SWEEP_MS, () => {
+				channel.onCall.delete(called);
+				const open = this.#channels.get(id) === channel && !channel.closed;
+				if (open) channel.socket.onClose(resolve);
+				this.close(id);
+				if (!open) resolve();
+			});
+			channel.wake?.();
+		});
+	}
+	#armIdle(id, channel) {
+		channel.cancelIdle();
+		channel.cancelIdle = this.#options.setTimer(this.#options.idleMs ?? IDLE_MS, () => {
+			if (channel.calls === 0) this.close(id);
+		});
+	}
+	#drop(id) {
+		const channel = this.#channels.get(id);
+		if (!channel) return;
+		channel.cancelIdle();
+		this.#channels.delete(id);
+	}
+	#wait(channel, signal) {
+		return new Promise((resolve) => {
+			const cancel = this.#options.setTimer(this.#options.waitMs ?? WAIT_MS, () => wake());
+			const wake = () => {
+				cancel();
+				signal?.removeEventListener("abort", wake);
+				if (channel.wake === wake) channel.wake = null;
+				resolve();
+			};
+			channel.wake = wake;
+			signal?.addEventListener("abort", wake, { once: true });
+			if (signal?.aborted) wake();
+		});
+	}
+	#split(bytes) {
+		const size = this.#pieceBytes;
+		const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+		const pieces = [];
+		for (let at = 0; at === 0 || at < buffer.byteLength; at += size) {
+			const end = Math.min(at + size, buffer.byteLength);
+			pieces.push({
+				bytes: buffer.subarray(at, end),
+				more: end < buffer.byteLength
+			});
+		}
+		return pieces;
+	}
+};
+var HANDSHAKE_MS = 1e4;
+/**
+* Connects to Arcue in the browser at `url` as a page of the view, with the token from its `serve.json` in place of
+* a page's origin.
+*/
+function openWindowSocket(url, token, view) {
+	const address = new URL(SERVE_CORE_PATH, url);
+	address.protocol = address.protocol === "https:" ? "wss:" : "ws:";
+	address.searchParams.set(VIEW_PARAMETER, view);
+	const socket = new import_websocket.default(address, {
+		headers: { authorization: bridgeAuthorization(token) },
+		handshakeTimeout: HANDSHAKE_MS,
+		maxPayload: MAX_FRAME_BYTES,
+		perMessageDeflate: false
+	});
+	return new Promise((resolve, reject) => {
+		socket.once("error", reject);
+		socket.once("open", () => {
+			socket.off("error", reject);
+			socket.on("error", () => socket.terminate());
+			resolve({
+				send: (bytes) => socket.send(bytes),
+				onMessage(listener) {
+					socket.on("message", (data, binary) => {
+						if (binary && data instanceof Buffer) listener(data);
+						else socket.terminate();
+					});
+				},
+				onClose(listener) {
+					socket.once("close", () => listener());
+				},
+				close: () => socket.close()
+			});
+		});
+	});
+}
 //#endregion
 //#region src/mcp.ts
 /** The card's page, which the build writes beside `arcue.js`. */
 var bundledCardPage = fileURLToPath(new URL("./card.html", import.meta.url));
+/** The view's page, which the build of the web UI writes beside `arcue.js`. */
+var bundledViewPage = fileURLToPath(new URL("./view.html", import.meta.url));
 /** The view of a server that has no `--view` and no session's variables. */
 var DEFAULT_VIEW = "mcp";
 /** The most PNG bytes one result carries, so that it stays within what MCP clients read. */
 var MAX_IMAGE_BYTES = 4194304;
 var LOAD_POLL_MS = 200;
+/** How long views wait after Arcue in the browser failed to start before one starts it again. */
+var START_RETRY_MS = 1e4;
+/** The most models whose last showing a view's channel records. */
+var MAX_SHOWN = 1e3;
 var VIEW_READY_MS = 3e4;
 var OLDER_CORE = "The Arcue that runs is older than this arcue command and cannot show models in a session's view. Restart it.";
 var pathInput = string().min(1).describe("The model file, such as an FBX or .blend: absolute, or relative to the folder the server runs in.");
@@ -17426,6 +17694,14 @@ var carded = (card, ...content) => ({
 });
 /** The longest lists of meshes and clips a card shows. */
 var CARD_LIST_LIMIT = 200;
+var viewResult = (shown, ...content) => ({
+	content,
+	_meta: { [MCP_VIEW_META_KEY]: shown }
+});
+var channelResult = (output) => ({
+	content: [],
+	_meta: { [WINDOW_CHANNEL_META_KEY]: output }
+});
 /** The MCP server of `arcue mcp`. Each tool call connects to the core that `arcue open` would use for the view. */
 function createArcueMcpServer(given) {
 	let starting = null;
@@ -17436,10 +17712,52 @@ function createArcueMcpServer(given) {
 		})
 	};
 	const leases = /* @__PURE__ */ new Map();
+	/** When `open_model` last showed each model, by its path, so a view of an earlier one can tell. */
+	const shownAt = /* @__PURE__ */ new Map();
+	let lastShown = 0;
+	const openWindow = options.openWindow ?? openWindowSocket;
+	/** Why Arcue in the browser last failed to start for a view, so views that call again soon do not start it again. */
+	let startFailure = null;
+	const relay = new WindowRelay({
+		setTimer: systemClock.setTimer,
+		connect: async () => {
+			const attempt = async () => {
+				const info = await readBridgeInfo(options.userData, "serve");
+				if (info?.url === void 0) return null;
+				return openWindow(info.url, info.token, options.view).catch(() => null);
+			};
+			const socket = await attempt();
+			if (socket) return socket;
+			if (startFailure && Date.now() - startFailure.at < START_RETRY_MS) throw startFailure.error;
+			await options.startServe().catch((error) => {
+				startFailure = {
+					at: Date.now(),
+					error
+				};
+				throw error;
+			});
+			startFailure = null;
+			const started = await attempt();
+			if (!started) throw new Error("Arcue in the browser started but does not take the view's window.");
+			return started;
+		}
+	});
 	const server = new McpServer({
 		name: "arcue",
 		version: options.version
 	}, { instructions: ["Arcue is an app where people pin or paint comments on 3D models at a frame. These tools list the models open in Arcue, read a model's comments with their screenshots, send its queued comments as a round, show the model at a clip and frame, render screenshots, and resolve or reopen comments.", `Paths are model files, absolute or relative to ${options.cwd}. A comment's vertex numbers count the file's own vertices, in the file's order.`].join(" ") });
+	server.server.onclose = () => relay.dispose();
+	/** The client renders the view, so `open_model` shows the model there, through Arcue in the browser. */
+	const showsViews = () => H(server.server.getClientCapabilities())?.mimeTypes?.includes("text/html;profile=mcp-app") ?? false;
+	G(server, "Arcue view", MCP_VIEW_URI, { description: "The page that apps showing MCP Apps render for open_model. It holds no data." }, async () => ({ contents: [{
+		uri: MCP_VIEW_URI,
+		mimeType: L,
+		text: await options.viewHtml(),
+		_meta: { ui: {
+			prefersBorder: false,
+			csp: { resourceDomains: ["https://assets.claude.ai"] }
+		} }
+	}] }));
 	G(server, "Arcue card", CARD_URI, { description: "The page that apps showing MCP Apps render for get_comments and inspect_model. It holds no data." }, async () => ({ contents: [{
 		uri: CARD_URI,
 		mimeType: L,
@@ -17506,9 +17824,9 @@ function createArcueMcpServer(given) {
 		});
 		return carded(inspectionCard(file, inspection), text(json ? JSON.stringify(inspection) : formatInspection(inspection)));
 	});
-	server.registerTool("open_model", {
+	j(server, "open_model", {
 		title: "Show a model in Arcue",
-		description: "Show a model in Arcue, at a clip and frame when given: in this session's page of Arcue in the browser, or in the Arcue desktop app. The result says where, with the page's address when it is not open yet.",
+		description: "Show a model in Arcue, at a clip and frame when given: in apps that show MCP Apps, in Arcue's view in the conversation; elsewhere in this session's page of Arcue in the browser, or in the Arcue desktop app. The result says where, with the page's address when it is not open yet.",
 		inputSchema: object({
 			path: pathInput,
 			clip: clipInput.optional(),
@@ -17520,9 +17838,12 @@ function createArcueMcpServer(given) {
 			destructiveHint: false,
 			idempotentHint: true,
 			openWorldHint: false
-		}
+		},
+		_meta: { ui: { resourceUri: MCP_VIEW_URI } }
 	}, async ({ path, clip, frame, move }, { mcpReq: { signal } }) => {
 		const file = await modelFile(options.cwd, path);
+		const here = showsViews();
+		if (here) await relay.sweep();
 		return withCore(options, (core) => leased(leases, core, file, true, async () => {
 			const open = await openAsset(core, file);
 			const at = open?.path ?? file;
@@ -17548,6 +17869,19 @@ function createArcueMcpServer(given) {
 			});
 			const moment = named !== void 0 ? ` at clip "${named}"${frame !== void 0 ? `, frame ${frame}` : ""}` : frame !== void 0 ? ` at frame ${frame}` : "";
 			const name = `${basename(file)}${moment}`;
+			if (here) {
+				const { assets } = await core.client.query("asset.list", {});
+				const shownPath = assets.find((asset) => asset.assetId === assetId)?.path ?? fromNativePath(file);
+				lastShown = Math.max(Date.now(), lastShown + 1);
+				shownAt.set(shownPath, lastShown);
+				return viewResult({
+					path: shownPath,
+					assetId,
+					shownAt: lastShown,
+					...named !== void 0 ? { clip: named } : {},
+					...frame !== void 0 ? { frame } : {}
+				}, text(`Arcue shows ${name} as ${assetId} in its view in this conversation.`));
+			}
 			const lines = startedLine(core);
 			if (shown === "view") lines.push(`Arcue shows ${name} in this session's page as ${assetId}.`);
 			else if (shown === "window" && core.page !== null) lines.push(`Arcue shows ${name} as ${assetId} in another of its pages, since this session's page is not open: ${core.page}`);
@@ -17555,8 +17889,40 @@ function createArcueMcpServer(given) {
 			else if (core.page !== null) lines.push(`Arcue holds ${name} as ${assetId} until this session's page opens: ${core.page}`);
 			else lines.push(`Arcue holds ${name} as ${assetId} until one of its windows opens.`);
 			return result(text(lines.join("\n")));
-		}));
+		}), here ? "serve" : "open");
 	});
+	const windowChannel = server.registerTool(WINDOW_CHANNEL_TOOL, {
+		title: "Carry the view's window",
+		description: "Carries the messages between Arcue's view in the conversation and Arcue in the browser. Only the view calls it.",
+		inputSchema: windowChannelInputSchema,
+		annotations: {
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: false,
+			openWorldHint: false
+		},
+		_meta: { ui: { visibility: ["app"] } }
+	}, async ({ op, channel, path, shownAt: at, seq, from, pieces }, { mcpReq: { signal } }) => {
+		if (op === "open") {
+			const id = await relay.open();
+			const latest = path === void 0 || at === void 0 || at >= (shownAt.get(path) ?? 0);
+			if (path !== void 0 && at !== void 0 && latest && (shownAt.has(path) || shownAt.size < MAX_SHOWN)) shownAt.set(path, at);
+			return channelResult({
+				channel: id,
+				latest
+			});
+		}
+		if (channel === void 0) throw new Error(`${op} needs the channel.`);
+		if (op === "send") return channelResult({ next: relay.send(channel, seq ?? 0, pieces ?? []) });
+		if (op === "receive") return channelResult(await relay.receive(channel, from ?? 0, signal));
+		relay.close(channel);
+		return channelResult({});
+	});
+	/** Only an app that shows the view lists the tool, which only the view calls. */
+	windowChannel.disable();
+	server.server.oninitialized = () => {
+		if (showsViews()) windowChannel.enable();
+	};
 	j(server, "get_comments", {
 		title: "Read a model's comments",
 		description: "List the review comments on a model, with their screenshots: each comment's id, status, rounds, messages, clip and frame, the mesh, vertices and bones it points at, and the camera. A draft waits in the reviewer's queue, sent went to the agent in a round, and resolved was fixed. Opens the model in Arcue when it is not open.",
@@ -17773,7 +18139,11 @@ async function serveMcp(options, streams = {
 		view: options.view ?? DEFAULT_VIEW
 	});
 	const { promise: closed, resolve: close } = Promise.withResolvers();
-	server.server.onclose = () => close();
+	const disposeRelay = server.server.onclose;
+	server.server.onclose = () => {
+		disposeRelay?.();
+		close();
+	};
 	await server.connect(new StdioServerTransport(streams.stdin, streams.stdout));
 	await closed;
 }
@@ -17787,7 +18157,7 @@ async function modelFile(cwd, path) {
 * Connects to the core `arcue open` would use for the view, and starts Arcue in the browser where `arcue open` would
 * say to.
 */
-async function withCore(options, work) {
+async function withCore(options, work, to = "open") {
 	let started = false;
 	const route = async () => {
 		try {
@@ -17799,7 +18169,22 @@ async function withCore(options, work) {
 		started = true;
 		return connectForOpen(options.userData, options.view);
 	};
-	const { connection, kind } = await route();
+	const toServe = async () => {
+		const running = await connectToCore(options.userData, "serve");
+		if (running) return {
+			connection: running,
+			kind: "serve"
+		};
+		await options.startServe();
+		started = true;
+		const connection = await connectToCore(options.userData, "serve");
+		if (!connection) throw new Error("Arcue in the browser did not start.");
+		return {
+			connection,
+			kind: "serve"
+		};
+	};
+	const { connection, kind } = await (to === "serve" ? toServe() : route());
 	const url = kind === "serve" ? connection.info.url : void 0;
 	const core = {
 		client: connection.client,
@@ -18121,4 +18506,4 @@ function leftOut(count) {
 	return count === 1 ? "Left out the screenshot of 1 more comment." : `Left out the screenshots of ${count} more comments.`;
 }
 //#endregion
-export { bundledCardPage, serveMcp };
+export { bundledCardPage, bundledViewPage, serveMcp };

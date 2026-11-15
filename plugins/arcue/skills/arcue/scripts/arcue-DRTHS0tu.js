@@ -6463,6 +6463,13 @@ var LOCAL_PAGE_OWNER = "arcue-owner";
 * fails to connect rather than misreads.
 */
 var SERVE_CORE_PATH = "/core/2";
+/**
+* The Authorization header with which a program that is not a page, such as `arcue mcp` for the view an app shows,
+* connects to `SERVE_CORE_PATH` as a page: the token from `serve.json`, with no Origin header.
+*/
+function bridgeAuthorization(token) {
+	return `Bearer ${token}`;
+}
 /** The file in the app's data folder that tells the command line how to start the app when it is not running. */
 var LAUNCH_INFO_FILE = "launch.json";
 var launchInfoSchema = object({
@@ -9545,6 +9552,68 @@ var lockWaitingSchema = object({
 	pid: int().positive()
 });
 //#endregion
+//#region ../../packages/protocol/src/mcp-view.ts
+/** The page of Arcue's view, which apps that show MCP Apps render for `open_model`. */
+var MCP_VIEW_URI = "ui://arcue/view.html";
+/** Where an `open_model` result names the model it showed, for the view. */
+var MCP_VIEW_META_KEY = "arcue/view";
+/** The app-only tool through which the view's window talks to the core. */
+var WINDOW_CHANNEL_TOOL = "window_channel";
+/** Where a `window_channel` result carries its answer. */
+var WINDOW_CHANNEL_META_KEY = "arcue/channel";
+/** The most bytes one piece of a message holds; a larger message travels as several pieces. */
+var MAX_PIECE_BYTES = 196608;
+/** The most bytes of pieces one `window_channel` call sends. */
+var MAX_SEND_BYTES = 2 * MAX_PIECE_BYTES;
+object({
+	round: int().min(0),
+	/** The round's comments, in the order of its prompt. */
+	comments: array(string())
+});
+object({
+	/** The model's path as the core lists it, which names it also after the core restarts. */
+	path: string().min(1),
+	assetId: string().min(1),
+	/** When the model was shown, so a view that a later `open_model` superseded can tell. */
+	shownAt: int().min(0),
+	/** The clip and frame it was shown at, which the view shows again when it opens the model again. */
+	clip: string().min(1).optional(),
+	frame: int().min(0).max(4294967295).optional()
+});
+var channelPieceSchema = object({
+	data: string().max(Math.ceil(MAX_PIECE_BYTES / 3) * 4).regex(/^[A-Za-z0-9+/]*={0,2}$/, "Expected base64."),
+	/** More pieces of the same message follow. */
+	more: boolean().optional()
+});
+var channelIdSchema = string().regex(/^[A-Za-z0-9_-]{22}$/, "Expected a channel id.");
+/**
+* A call of `window_channel`. `open` connects a window for the server's view, naming the path and `shownAt` of the
+* model the view shows. `send` passes pieces numbered from `seq`, and `receive` asks for the pieces from number `from`
+* on, which drops the ones before it; both may repeat a call whose answer was lost. `close` ends the channel.
+*/
+var windowChannelInputSchema = object({
+	op: _enum([
+		"open",
+		"send",
+		"receive",
+		"close"
+	]),
+	channel: channelIdSchema.optional(),
+	path: string().min(1).max(4096).optional(),
+	shownAt: int().min(0).optional(),
+	seq: int().min(0).optional(),
+	from: int().min(0).optional(),
+	pieces: array(channelPieceSchema).max(64).refine((pieces) => pieces.reduce((length, piece) => length + piece.data.length, 0) <= MAX_SEND_BYTES / 3 * 4, `Expected at most ${MAX_SEND_BYTES} bytes of pieces.`).optional()
+});
+object({
+	channel: channelIdSchema.optional(),
+	latest: boolean().optional(),
+	next: int().min(0).optional(),
+	from: int().min(0).optional(),
+	pieces: array(channelPieceSchema).optional(),
+	closed: boolean().optional()
+});
+//#endregion
 //#region ../../packages/protocol/src/round.ts
 /** `posed` is null when the 3D view did not compute the target's position at the comment's time. */
 var restAndPosedSchema = object({
@@ -9865,4 +9934,4 @@ function portEndpoint(port) {
 	};
 }
 //#endregion
-export { findNode as $, preprocess as $t, MODEL_FILE_EXTENSIONS as A, messageChannel as At, lastFrame as B, any as Bt, viewAddress as C, coreKindOf as Ct, screenshotOwner as D, MAX_FRAME_BYTES as Dt, warningId as E, sharesReviews as Et, memberRoles as F, date as Ft, rangesWithin as G, int as Gt, countInRanges as H, boolean as Ht, viewStateSchema as I, datetime as It, fileNameOf as J, literal as Jt, materialSlots as K, intersection as Kt, unshownUvSetWarnings as L, ZodNumber as Lt, compositionFileSchema as M, reportListenerError as Mt, joinsByName as N, ArcueError as Nt, COMPOSITION_FILE_NAME as O, framedChannel as Ot, keysModelBones as P, COMMENT_ID_PATTERN as Pt, composeScene as Q, optional as Qt, frameCountFor as R, _enum as Rt, VIEW_PARAMETER as S, connectBridge as St, settingsSchema as T, launchInfoSchema as Tt, decodeRanges as U, discriminatedUnion as Ut, mergeKeyTimes as V, array as Vt, encodeRanges as W, email as Wt, sameTopology as X, number as Xt, imageMimeType as Y, looseObject as Yt, topologyFingerprint as Z, object as Zt, isEnvelope as _, SERVE_CORE_PATH as _t, LOCKS_FOLDER as a, safeParse as an, describeParts as at, commands as b, bridgeInfoFile as bt, lockWaitingSchema as c, NEVER as cn, shownByDefault as ct, importFindFileInputSchema as d, TEXTURE_SLOTS as dt, record as en, memberPath as et, importReadFileInputSchema as f, TEXTURE_SLOT_KEYS as ft, withTransfer as g, LOCAL_PAGE_OWNER as gt, createPeer as h, LAUNCH_INFO_FILE as ht, roundDataSchema as i, url as in, defaultViewBounds as it, animatesModel as j, callEach as jt, IMAGE_FILE_EXTENSIONS as k, framedEndpoint as kt, isQueryName as l, TEXTURE_REF_KEYS as lt, serveImportWorker as m, LAST_CORE_FILE as mt, binaryFrameCodec as n, union as nn, describeTextureUses as nt, START_LOCK_FILE as o, toJSONSchema as on, isDefaultPartView as ot, importRequests as p, HANDSHAKE_MAX_FRAME_BYTES as pt, parseStoredPath as q, lazy as qt, jsonFrameCodec as r, unknown as rn, importWarning as rt, lockRecordSchema as s, _coercedNumber as sn, knownPartView as st, portEndpoint as t, string as tn, splitMemberPath as tt, queries as u, TEXTURE_REF_NAMES as ut, reviewFileSchema as v, SERVE_STOPPED_CLOSE_CODE as vt, viewNameSchema as w, lastCoreSchema as wt, isCommandName as x, bridgeInfoSchema as xt, reviewFormat as y, acceptBridge as yt, isKeyedEveryFrame as z, _null as zt };
+export { parseStoredPath as $, intersection as $t, viewNameSchema as A, coreKindOf as At, keysModelBones as B, ArcueError as Bt, isEnvelope as C, SERVE_CORE_PATH as Ct, isCommandName as D, bridgeInfoFile as Dt, commands as E, bridgeAuthorization as Et, IMAGE_FILE_EXTENSIONS as F, framedChannel as Ft, isKeyedEveryFrame as G, _enum as Gt, viewStateSchema as H, date as Ht, MODEL_FILE_EXTENSIONS as I, framedEndpoint as It, countInRanges as J, array as Jt, lastFrame as K, _null as Kt, animatesModel as L, messageChannel as Lt, warningId as M, launchInfoSchema as Mt, screenshotOwner as N, sharesReviews as Nt, VIEW_PARAMETER as O, bridgeInfoSchema as Ot, COMPOSITION_FILE_NAME as P, MAX_FRAME_BYTES as Pt, materialSlots as Q, int as Qt, compositionFileSchema as R, callEach as Rt, withTransfer as S, LOCAL_PAGE_OWNER as St, reviewFormat as T, acceptBridge as Tt, unshownUvSetWarnings as U, datetime as Ut, memberRoles as V, COMMENT_ID_PATTERN as Vt, frameCountFor as W, ZodNumber as Wt, encodeRanges as X, discriminatedUnion as Xt, decodeRanges as Y, boolean as Yt, rangesWithin as Z, email as Zt, importFindFileInputSchema as _, TEXTURE_SLOTS as _t, MAX_PIECE_BYTES as a, optional as an, findNode as at, serveImportWorker as b, LAST_CORE_FILE as bt, WINDOW_CHANNEL_META_KEY as c, string as cn, describeTextureUses as ct, LOCKS_FOLDER as d, url as dn, describeParts as dt, lazy as en, fileNameOf as et, START_LOCK_FILE as f, safeParse as fn, isDefaultPartView as ft, queries as g, TEXTURE_REF_NAMES as gt, isQueryName as h, NEVER as hn, TEXTURE_REF_KEYS as ht, roundDataSchema as i, object as in, composeScene as it, settingsSchema as j, lastCoreSchema as jt, viewAddress as k, connectBridge as kt, WINDOW_CHANNEL_TOOL as l, union as ln, importWarning as lt, lockWaitingSchema as m, _coercedNumber as mn, shownByDefault as mt, binaryFrameCodec as n, looseObject as nn, sameTopology as nt, MCP_VIEW_META_KEY as o, preprocess as on, memberPath as ot, lockRecordSchema as p, toJSONSchema as pn, knownPartView as pt, mergeKeyTimes as q, any as qt, jsonFrameCodec as r, number as rn, topologyFingerprint as rt, MCP_VIEW_URI as s, record as sn, splitMemberPath as st, portEndpoint as t, literal as tn, imageMimeType as tt, windowChannelInputSchema as u, unknown as un, defaultViewBounds as ut, importReadFileInputSchema as v, TEXTURE_SLOT_KEYS as vt, reviewFileSchema as w, SERVE_STOPPED_CLOSE_CODE as wt, createPeer as x, LAUNCH_INFO_FILE as xt, importRequests as y, HANDSHAKE_MAX_FRAME_BYTES as yt, joinsByName as z, reportListenerError as zt };
