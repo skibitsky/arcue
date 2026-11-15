@@ -3442,7 +3442,7 @@ function commentWarning(warning) {
 }
 /** The text the copy button puts on the clipboard: one instruction for an agent, then each warning not dismissed. */
 function warningPrompt(assetPath, warnings) {
-	const listed = warnings.filter((warning) => !warning.dismissed);
+	const listed = warnings.filter((warning) => warning.dismissed !== true);
 	if (listed.length === 0) return `${assetPath} has no import warnings.`;
 	const lines = [`Fix these import warnings for ${assetPath}.`];
 	listed.forEach((warning, index) => {
@@ -7160,15 +7160,19 @@ var FORMAT_NAMES = {
 	gltf: "glTF",
 	glb: "GLB"
 };
+/** The file's format and the tool that exported it, such as "FBX from Blender 4.2". */
+function formatLabel(inspection) {
+	const format = FORMAT_NAMES[inspection.format] ?? inspection.format;
+	return inspection.exporter ? `${format} from ${inspection.exporter}` : format;
+}
 /** A few aligned lines for people. Empty sections are left out. */
 function formatInspection(inspection) {
 	const rows = [];
 	const add = (label, lines) => {
 		if (lines.length > 0) rows.push([label, lines]);
 	};
-	const format = FORMAT_NAMES[inspection.format] ?? inspection.format;
 	add("File", [inspection.file.path]);
-	add("Format", [inspection.exporter ? `${format} from ${inspection.exporter}` : format]);
+	add("Format", [formatLabel(inspection)]);
 	if (inspection.clips.length > 0) add("Frame rate", [`${formatNumber(inspection.fps)} fps`]);
 	add("Up axis", [inspection.upAxis]);
 	if (inspection.unitMeters !== 1) add("Unit", [`${formatNumber(inspection.unitMeters)} m`]);
@@ -7284,4 +7288,4 @@ function messageOf(error) {
 	return error instanceof Error ? error.message : String(error);
 }
 //#endregion
-export { readBridgeInfo as C, connectToCore as S, recordLastCore as _, formatInspection as a, isRunning as b, WindowPresence as c, startNodeImportWorker as d, fromNativePath as f, claimStart as g, CoreRunningError as h, bundledImportWorker as i, NodePlatform as l, startBridgeServer as m, doesNotAnswer as n, inspectFile as o, ArcueCore as p, inBrowser as r, userDataDir as s, connectForOpen as t, systemClock as u, waitForStarts as v, runningCore as w, blockingCore as x, readLastCore as y };
+export { blockingCore as C, runningCore as E, isRunning as S, readBridgeInfo as T, CoreRunningError as _, formatInspection as a, waitForStarts as b, userDataDir as c, systemClock as d, startNodeImportWorker as f, startBridgeServer as g, warningPrompt as h, bundledImportWorker as i, WindowPresence as l, ArcueCore as m, doesNotAnswer as n, formatLabel as o, fromNativePath as p, inBrowser as r, inspectFile as s, connectForOpen as t, NodePlatform as u, claimStart as v, connectToCore as w, readLastCore as x, recordLastCore as y };

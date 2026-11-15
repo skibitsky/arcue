@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { At as messageChannel, C as viewAddress, Dt as MAX_FRAME_BYTES, Et as sharesReviews, Nt as ArcueError, gt as LOCAL_PAGE_OWNER, kt as framedEndpoint, n as binaryFrameCodec, vt as SERVE_STOPPED_CLOSE_CODE, w as viewNameSchema } from "./arcue-CacpvMqY.js";
-import { C as readBridgeInfo, S as connectToCore, _ as recordLastCore, a as formatInspection, b as isRunning, c as WindowPresence, d as startNodeImportWorker, f as fromNativePath, g as claimStart, h as CoreRunningError, i as bundledImportWorker, l as NodePlatform, m as startBridgeServer, n as doesNotAnswer, o as inspectFile, p as ArcueCore, r as inBrowser, s as userDataDir, t as connectForOpen, u as systemClock, v as waitForStarts, w as runningCore, x as blockingCore, y as readLastCore } from "./arcue-v_YL1v9P.js";
+import { C as blockingCore, E as runningCore, S as isRunning, T as readBridgeInfo, _ as CoreRunningError, a as formatInspection, b as waitForStarts, c as userDataDir, d as systemClock, f as startNodeImportWorker, g as startBridgeServer, i as bundledImportWorker, l as WindowPresence, m as ArcueCore, n as doesNotAnswer, p as fromNativePath, r as inBrowser, s as inspectFile, t as connectForOpen, u as NodePlatform, v as claimStart, w as connectToCore, x as readLastCore, y as recordLastCore } from "./arcue-BXRf8zy7.js";
 import { createRequire } from "node:module";
 import { mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
 import { connect, createServer } from "node:net";
@@ -4913,16 +4913,23 @@ async function mcp(command, env, cwd, options) {
 		if (failure?.includes(" is in use.")) failure = await detach(await anyFreePort());
 		if (failure !== null) throw new Error(failure);
 	};
-	const { serveMcp } = await import("./arcue-BrTBxSiV.js");
+	const { bundledCardPage, serveMcp } = await import("./arcue-nJZbRgEH.js");
 	await serveMcp({
 		userData: userDataDir(env),
 		view: sessionView(env, command.view),
 		cwd,
 		importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
 		startServe,
-		version: await buildOf(options) ?? "dev"
+		version: await buildOf(options) ?? "dev",
+		cardHtml: () => readFile(bundledCardPage, "utf8").catch((error) => {
+			if (!isMissing(error)) throw error;
+			throw new Error(`Arcue's card page is missing from ${bundledCardPage}. Reinstall Arcue.`);
+		})
 	});
 	return 0;
+}
+function isMissing(error) {
+	return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 function anyFreePort() {
 	return new Promise((resolvePromise, reject) => {
