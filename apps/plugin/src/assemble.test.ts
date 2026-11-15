@@ -22,6 +22,7 @@ const launcher = fromRoot("apps/plugin/launcher");
 let temp: string;
 let cli: string;
 let web: string;
+let view: string;
 let out: string;
 
 beforeEach(async () => {
@@ -35,6 +36,8 @@ beforeEach(async () => {
   await mkdir(join(web, "assets"), { recursive: true });
   await writeFile(join(web, "index.html"), "<!doctype html>");
   await writeFile(join(web, "assets", "index.js"), "");
+  view = join(temp, "view.html");
+  await writeFile(view, "<!doctype html><title>Arcue</title>");
 });
 
 afterEach(async () => {
@@ -45,6 +48,7 @@ const sources = () => ({
   skill,
   cliBuild: cli,
   webBuild: web,
+  viewPage: view,
   icon: fromRoot("assets/branding/png/arcue-256.png"),
   readme: fromRoot("apps/plugin/README.md"),
   license: fromRoot("LICENSE"),
@@ -115,8 +119,10 @@ describe("assemblePlugin", () => {
       "import-worker.js",
       "node-sha256sums.txt",
       "package.json",
+      "view.html",
       "web",
     ]);
+    expect(await readFile(join(copied, "scripts", "view.html"), "utf8")).toBe("<!doctype html><title>Arcue</title>");
     expect((await readdir(join(copied, "scripts", "web"), { recursive: true })).sort()).toEqual([
       "assets",
       "assets/index.js",
@@ -192,6 +198,12 @@ describe("assemblePlugin", () => {
 
   it("asks for the web page to be built when it is missing", async () => {
     await rm(join(web, "index.html"));
+
+    await expect(assemblePlugin(sources(), out)).rejects.toThrow("pnpm --filter @arcue/web build:local");
+  });
+
+  it("asks for the view to be built when it is missing", async () => {
+    await rm(view);
 
     await expect(assemblePlugin(sources(), out)).rejects.toThrow("pnpm --filter @arcue/web build:local");
   });

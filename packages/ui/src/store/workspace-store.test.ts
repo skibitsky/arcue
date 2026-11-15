@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FakeCoreClient } from "../../dev/fake-core";
 import { STONE_RESONATOR_PATH } from "../../dev/sample-data";
 import { flush, ManualTimers, openStone, POINT, setup, TestViewport, withPoseClips } from "../test-helpers";
-import { NEW_COMMENT_OVERLAY } from "./asset-session";
+import { NEW_COMMENT_OVERLAY, RoundNotPosted } from "./asset-session";
 import { currentMessage } from "./history";
 import { createWorkspaceStore, VIEW_COMMANDS } from "./workspace-store";
 
@@ -395,6 +395,52 @@ describe("copy prompt", () => {
     await session.copyPrompt();
     expect(store.state.get().copySheet?.round).toBe(4);
     expect(store.state.get().toast?.kind).toBe("info");
+  });
+
+  it("sends the queue where the window sends it, and says when it could not", async () => {
+    const sent: string[] = [];
+    let failure: Error | null = null;
+    const { session, store, copied } = await openStone({
+      sendRound: {
+        label: "Send to chat",
+        send: async (asset) => {
+          if (failure) throw failure;
+          sent.push(asset.path);
+        },
+      },
+    });
+    expect(session.sendLabel).toBe("Send to chat");
+
+    failure = new Error("Arcue could not send the comments.");
+    await session.copyPrompt();
+    expect(store.state.get().toast).toMatchObject({ kind: "alert", message: "Arcue could not send the comments." });
+
+    failure = new RoundNotPosted(4, "3D review · round 4");
+    await session.copyPrompt();
+    expect(store.state.get().copySheet).toEqual({ round: 4, prompt: "3D review · round 4" });
+    expect(store.state.get().toast).toMatchObject({ kind: "info", message: "Saved round 4. Copy the selected text." });
+
+    failure = null;
+    await session.copyPrompt();
+    expect(sent).toEqual([session.state.get().summary.path]);
+    expect(store.state.get().toast).toMatchObject({ kind: "copied", message: "Sent 3 comments" });
+    expect(copied).toEqual([]);
+  });
+
+  it("says there is nothing to send while the queue is empty", async () => {
+    let send = async () => undefined;
+    const { session, store, client } = await openStone({ sendRound: { label: "Send to chat", send: () => send() } });
+    send = async () => {
+      await client.execute("round.copy", { assetId: session.assetId });
+    };
+    await session.copyPrompt();
+    await flush();
+    expect(session.state.get().review?.queue).toEqual([]);
+    await session.copyPrompt();
+    expect(store.state.get().toast).toMatchObject({
+      kind: "info",
+      message: "Nothing to send yet. Add a comment first.",
+    });
   });
 });
 

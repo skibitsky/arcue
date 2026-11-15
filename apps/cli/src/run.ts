@@ -324,7 +324,12 @@ async function mcp(
     if (failure?.includes(" is in use.")) failure = await detach(await anyFreePort());
     if (failure !== null) throw new Error(failure);
   };
-  const { bundledCardPage, serveMcp } = await import("./mcp");
+  const { bundledCardPage, bundledViewPage, serveMcp } = await import("./mcp");
+  const page = (path: string, name: string) =>
+    readFile(path, "utf8").catch((error: unknown) => {
+      if (!isMissing(error)) throw error;
+      throw new Error(`Arcue's ${name} page is missing from ${path}. Reinstall Arcue.`);
+    });
   await serveMcp({
     userData: userDataDir(env),
     view: sessionView(env, command.view),
@@ -332,11 +337,8 @@ async function mcp(
     importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
     startServe,
     version: (await buildOf(options)) ?? "dev",
-    cardHtml: () =>
-      readFile(bundledCardPage, "utf8").catch((error: unknown) => {
-        if (!isMissing(error)) throw error;
-        throw new Error(`Arcue's card page is missing from ${bundledCardPage}. Reinstall Arcue.`);
-      }),
+    cardHtml: () => page(bundledCardPage, "card"),
+    viewHtml: () => page(bundledViewPage, "view"),
   });
   return 0;
 }

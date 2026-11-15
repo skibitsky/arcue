@@ -17,11 +17,15 @@ const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const launcher = fileURLToPath(new URL("../packaging/arcue", import.meta.url));
 const cliBuild = join(repo, "apps", "cli", "dist");
 const webBuild = join(repo, "apps", "web", "dist-local");
+const viewPage = join(repo, "apps", "web", "dist-view", "view.html");
 await access(join(cliBuild, "arcue.js")).catch(() => {
   throw new Error(`${cliBuild} has no arcue.js. Build the command line first: pnpm --filter @arcue/cli build`);
 });
 await access(join(webBuild, "index.html")).catch(() => {
   throw new Error(`${webBuild} has no index.html. Build the page first: pnpm --filter @arcue/web build:local`);
+});
+await access(viewPage).catch(() => {
+  throw new Error(`${viewPage} is missing. Build the view first: pnpm --filter @arcue/web build:local`);
 });
 
 await buildProcesses();
@@ -45,6 +49,7 @@ await rm(command, { recursive: true, force: true });
 await cp(cliBuild, join(command, "cli"), { recursive: true });
 await writeFile(join(command, "cli", "package.json"), `${JSON.stringify({ type: "module" })}\n`);
 await cp(webBuild, join(command, "cli", "web"), { recursive: true });
+await copyFile(viewPage, join(command, "cli", "view.html"));
 if (platform === "darwin") await installLauncher(join(command, "bin", "arcue"));
 
 const require = createRequire(import.meta.url);

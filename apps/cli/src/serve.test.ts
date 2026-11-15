@@ -23,6 +23,7 @@ import type { CoreClient, IncomingRequest } from "@arcue/protocol";
 import {
   BRIDGE_INFO_FILE,
   binaryFrameCodec,
+  bridgeAuthorization,
   bridgeInfoSchema,
   createPeer,
   createRemoteClient,
@@ -139,6 +140,16 @@ function openSocket(
   options: ClientOptions = {},
 ): Promise<WebSocket> {
   const socket = new WebSocket(`${url.replace("http:", "ws:")}${path}`, { origin, ...options });
+  return new Promise((resolve, reject) => {
+    socket.once("open", () => resolve(socket));
+    socket.once("error", reject);
+  });
+}
+
+/** A socket from a program rather than a page, which sends no Origin header. */
+function openProgramSocket(url: string, authorization: string | null, path = SERVE_CORE_PATH): Promise<WebSocket> {
+  const headers = authorization === null ? {} : { authorization };
+  const socket = new WebSocket(`${url.replace("http:", "ws:")}${path}`, { headers });
   return new Promise((resolve, reject) => {
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
@@ -392,6 +403,40 @@ describe("arcue serve", () => {
     await expect(openSocket(url, "https://evil.example")).rejects.toThrow("403");
     await expect(openSocket(url, "null")).rejects.toThrow("403");
     await expect(openSocket(url, url, "/other")).rejects.toThrow("403");
+  });
+
+  it("connects a program that presents the token from serve.json as a view's page", async () => {
+    const { url } = await serve();
+    const model = join(temp, "Hero.fbx");
+    writeFileSync(model, "fbx");
+    const token = (await readBridgeInfo(userData, "serve"))?.token ?? "";
+    const viewed: IncomingRequest[] = [];
+    windowClient(
+      await openProgramSocket(url, bridgeAuthorization(token), `${SERVE_CORE_PATH}?view=3f9a0c1d2b4e`),
+      viewed,
+    );
+    const connection = await connectToCore(userData, "serve");
+
+    await expect(
+      connection?.client.execute("asset.openInView", { path: model, view: "3f9a0c1d2b4e" }),
+    ).resolves.toMatchObject({ shown: "view" });
+
+    expect(viewed.map((request) => request.name)).toEqual(["view.showAsset"]);
+    connection?.close();
+  });
+
+  it("refuses a program socket without the token, and the token from a page of another origin", async () => {
+    const { url } = await serve();
+    const token = (await readBridgeInfo(userData, "serve"))?.token ?? "";
+
+    await expect(openProgramSocket(url, null)).rejects.toThrow("403");
+    await expect(openProgramSocket(url, bridgeAuthorization(`${token.slice(1)}x`))).rejects.toThrow("403");
+    await expect(openProgramSocket(url, token)).rejects.toThrow("403");
+    await expect(
+      openSocket(url, "https://evil.example", SERVE_CORE_PATH, {
+        headers: { authorization: bridgeAuthorization(token) },
+      }),
+    ).rejects.toThrow("403");
   });
 
   it("refuses a page from a release that sent JSON frames, which connects on the old path", async () => {

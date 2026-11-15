@@ -5,9 +5,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { FakeCore, FakeCoreOptions } from "@arcue/platform-node/test";
 import { startFakeCore } from "@arcue/platform-node/test";
 import type { Comment, ReviewFile } from "@arcue/protocol";
-import { ArcueError, BRIDGE_INFO_FILE, SERVE_INFO_FILE } from "@arcue/protocol";
+import {
+  ArcueError,
+  BRIDGE_INFO_FILE,
+  MCP_VIEW_META_KEY,
+  MCP_VIEW_URI,
+  SERVE_INFO_FILE,
+  WINDOW_CHANNEL_META_KEY,
+  WINDOW_CHANNEL_TOOL,
+} from "@arcue/protocol";
 import { Client } from "@modelcontextprotocol/client";
-import type { CallToolResult } from "@modelcontextprotocol/server";
+import type { CallToolResult, ClientCapabilities } from "@modelcontextprotocol/server";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CARD_META_KEY, CARD_URI, ROUND_META_KEY } from "./card-data";
@@ -22,6 +30,7 @@ const SECOND = "c01k9qv3m4x7r2t8w5y6z0abcdf";
 const THIRD = "c01k9qv3m4x7r2t8w5y6z0abcdg";
 const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const CARD_HTML = "<!doctype html><title>card</title>";
+const VIEW_HTML = "<!doctype html><title>view</title>";
 
 let temp: string;
 let userData: string;
@@ -46,7 +55,13 @@ afterEach(async () => {
   rmSync(temp, { recursive: true, force: true });
 });
 
-async function connect(overrides: Partial<ArcueMcpOptions> = {}): Promise<Client> {
+/** The capabilities of a client that renders MCP Apps. */
+const SHOWS_VIEWS = { extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } };
+
+async function connect(
+  overrides: Partial<ArcueMcpOptions> = {},
+  capabilities: ClientCapabilities = {},
+): Promise<Client> {
   const server = createArcueMcpServer({
     userData,
     view: VIEW,
@@ -58,12 +73,13 @@ async function connect(overrides: Partial<ArcueMcpOptions> = {}): Promise<Client
     },
     version: "test",
     cardHtml: async () => CARD_HTML,
+    viewHtml: async () => VIEW_HTML,
     loadTimeoutMs: 2000,
     ...overrides,
   });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
-  const client = new Client({ name: "test", version: "1" });
+  const client = new Client({ name: "test", version: "1" }, { capabilities });
   await client.connect(clientSide);
   clients.push(client);
   return client;
@@ -169,12 +185,13 @@ function review(comments: Comment[], rounds: ReviewFile["rounds"] = []): ReviewF
 }
 
 describe("arcue mcp", () => {
-  it("lists its tools", async () => {
+  it("lists its tools, and the view's channel only to an app that shows the view", async () => {
     const client = await connect();
+    const showing = await connect({}, SHOWS_VIEWS);
 
-    const { tools } = await client.listTools();
+    const { tools } = await showing.listTools();
 
-    expect(tools.map((tool) => tool.name).sort()).toEqual([
+    const names = [
       "get_comments",
       "inspect_model",
       "list_models",
@@ -183,23 +200,41 @@ describe("arcue mcp", () => {
       "resolve_comment",
       "screenshot",
       "send_round",
-    ]);
+    ];
+    expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(names);
+    expect(tools.map((tool) => tool.name).sort()).toEqual([...names, WINDOW_CHANNEL_TOOL]);
     expect(tools.find((tool) => tool.name === "list_models")?.annotations?.readOnlyHint).toBe(true);
     expect(tools.find((tool) => tool.name === "get_comments")?.annotations?.readOnlyHint).toBe(false);
+    const ui = (name: string) => tools.find((tool) => tool.name === name)?._meta?.ui;
     const carded = tools.filter((tool) => isRecord(tool._meta?.ui) && tool._meta.ui.resourceUri === CARD_URI);
     expect(carded.map((tool) => tool.name).sort()).toEqual(["get_comments", "inspect_model"]);
+    expect(ui("open_model")).toEqual({ resourceUri: MCP_VIEW_URI });
+    expect(ui(WINDOW_CHANNEL_TOOL)).toEqual({ visibility: ["app"] });
   });
 
-  it("serves the card for the tools that show one", async () => {
+  it("serves the card and the view for the tools that show them", async () => {
     const client = await connect();
 
     const { resources } = await client.listResources();
     const { contents } = await client.readResource({ uri: CARD_URI });
+    const view = await client.readResource({ uri: MCP_VIEW_URI });
 
     expect(resources.map(({ uri, description }) => ({ uri, description }))).toEqual([
       {
+        uri: MCP_VIEW_URI,
+        description: "The page that apps showing MCP Apps render for open_model. It holds no data.",
+      },
+      {
         uri: CARD_URI,
         description: "The page that apps showing MCP Apps render for get_comments and inspect_model. It holds no data.",
+      },
+    ]);
+    expect(view.contents).toEqual([
+      {
+        uri: MCP_VIEW_URI,
+        mimeType: "text/html;profile=mcp-app",
+        text: VIEW_HTML,
+        _meta: { ui: { prefersBorder: false, csp: { resourceDomains: ["https://assets.claude.ai"] } } },
       },
     ]);
     expect(contents).toEqual([
@@ -239,6 +274,41 @@ describe("arcue mcp", () => {
       expect(requestsNamed(core, "asset.openInView")).toEqual([
         { path: model, view: VIEW, move: false, clip: "Armature|Walk", frame: 12 },
       ]);
+    });
+
+    it("shows the model in Arcue in the browser for a client that shows views, and names it for the view", async () => {
+      fakes.push(
+        await startFakeCore(userData, {
+          file: BRIDGE_INFO_FILE,
+          kind: "desktop",
+          locks: 1,
+          answers: { "asset.openInView": () => ({ assetId: "a2", shown: "window" }) },
+        }),
+      );
+      const client = await connect(
+        {
+          startServe: async () => {
+            starts++;
+            await serve({ "asset.openInView": () => ({ assetId: "a1", shown: "held" }) });
+          },
+        },
+        SHOWS_VIEWS,
+      );
+
+      const first = await call(client, "open_model", { path: model });
+      const second = await call(client, "open_model", { path: model, frame: 3 });
+
+      expect(starts).toBe(1);
+      expect(texts(first)).toEqual(["Arcue shows Hero.fbx as a1 in its view in this conversation."]);
+      expect(texts(second)).toEqual(["Arcue shows Hero.fbx at frame 3 as a1 in its view in this conversation."]);
+      const shown = (result: CallToolResult) => result._meta?.[MCP_VIEW_META_KEY];
+      const shownAt = (result: CallToolResult) => {
+        const value = shown(result);
+        return isRecord(value) ? Number(value.shownAt) : Number.NaN;
+      };
+      expect(shown(first)).toEqual({ path: model, assetId: "a1", shownAt: expect.any(Number) });
+      expect(shownAt(second)).toBeGreaterThan(shownAt(first));
+      expect(first.structuredContent).toBeUndefined();
     });
 
     it("refuses a clip or frame the model does not have, naming its clips", async () => {
@@ -1086,6 +1156,125 @@ describe("arcue mcp", () => {
 
       expect(texts(result)).toEqual(["No models are open in Arcue."]);
       expect(starts).toBe(0);
+    });
+  });
+
+  describe("window_channel", () => {
+    interface Opened {
+      url: string;
+      token: string;
+      view: string;
+      sent: string[];
+      deliver(text: string): void;
+      closed: boolean;
+    }
+
+    function windows(): { opened: Opened[]; openWindow: ArcueMcpOptions["openWindow"] } {
+      const opened: Opened[] = [];
+      return {
+        opened,
+        openWindow: async (url, token, view) => {
+          let deliver: (bytes: Uint8Array) => void = () => undefined;
+          const window: Opened = {
+            url,
+            token,
+            view,
+            sent: [],
+            deliver: (text) => deliver(Buffer.from(text)),
+            closed: false,
+          };
+          opened.push(window);
+          return {
+            send: (bytes) => window.sent.push(Buffer.from(bytes).toString()),
+            onMessage: (listener) => {
+              deliver = listener;
+            },
+            onClose: () => undefined,
+            close: () => {
+              window.closed = true;
+            },
+          };
+        },
+      };
+    }
+
+    const channelOf = (result: CallToolResult) => {
+      const output = result._meta?.[WINDOW_CHANNEL_META_KEY];
+      return isRecord(output) ? output : {};
+    };
+    const base64 = (text: string) => Buffer.from(text).toString("base64");
+
+    it("connects the view's window to Arcue in the browser with its token, starting it, and carries its messages", async () => {
+      const { opened, openWindow } = windows();
+      const client = await connect(
+        {
+          openWindow,
+          startServe: async () => {
+            starts++;
+            await serve();
+          },
+        },
+        SHOWS_VIEWS,
+      );
+
+      const open = await call(client, WINDOW_CHANNEL_TOOL, { op: "open" });
+      const channel = channelOf(open).channel;
+      const sent = await call(client, WINDOW_CHANNEL_TOOL, {
+        op: "send",
+        channel,
+        seq: 0,
+        pieces: [{ data: base64("hello") }],
+      });
+      opened[0]?.deliver("welcome");
+      const received = await call(client, WINDOW_CHANNEL_TOOL, { op: "receive", channel, from: 0 });
+      await call(client, WINDOW_CHANNEL_TOOL, { op: "close", channel });
+      const gone = await call(client, WINDOW_CHANNEL_TOOL, { op: "receive", channel, from: 1 });
+
+      expect(starts).toBe(1);
+      expect(open.content).toEqual([]);
+      expect(channelOf(open)).toEqual({ channel: expect.stringMatching(/^[\w-]{22}$/), latest: true });
+      expect(opened.map(({ url, token, view }) => ({ url, token, view }))).toEqual([
+        { url: SERVE_URL, token: expect.any(String), view: VIEW },
+      ]);
+      expect(opened[0]?.token).toBe(fakes[0]?.info.token);
+      expect(channelOf(sent)).toEqual({ next: 1 });
+      expect(opened[0]?.sent).toEqual(["hello"]);
+      expect(channelOf(received)).toEqual({ from: 0, pieces: [{ data: base64("welcome") }], closed: false });
+      expect(opened[0]?.closed).toBe(true);
+      expect(gone.isError).toBe(true);
+      expect(texts(gone)).toEqual(["This window's channel is closed."]);
+    });
+
+    it("tells a view whether a later open_model showed its model since", async () => {
+      await serve({ "asset.openInView": () => ({ assetId: "a1", shown: "held" }) });
+      const client = await connect({ openWindow: windows().openWindow }, SHOWS_VIEWS);
+      const shownAt = async () => {
+        const shown = (await call(client, "open_model", { path: model }))._meta?.[MCP_VIEW_META_KEY];
+        return isRecord(shown) ? shown.shownAt : null;
+      };
+      const earlier = await shownAt();
+      const later = await shownAt();
+      const latest = async (at: unknown) =>
+        channelOf(await call(client, WINDOW_CHANNEL_TOOL, { op: "open", path: model, shownAt: at })).latest;
+
+      expect(await latest(earlier)).toBe(false);
+      expect(await latest(later)).toBe(true);
+      expect(await latest(later)).toBe(true);
+    });
+
+    it("refuses a call without its channel, or with pieces that are not base64", async () => {
+      const client = await connect({ openWindow: windows().openWindow }, SHOWS_VIEWS);
+
+      const missing = await call(client, WINDOW_CHANNEL_TOOL, { op: "send", seq: 0, pieces: [] });
+      const garbled = await call(client, WINDOW_CHANNEL_TOOL, {
+        op: "send",
+        channel: "a".repeat(22),
+        pieces: [{ data: "not base64!" }],
+      });
+
+      expect(texts(missing)).toEqual(["send needs the channel."]);
+      expect(garbled.isError).toBe(true);
+      expect(texts(garbled).join("")).toContain("Expected base64.");
     });
   });
 

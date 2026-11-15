@@ -181,6 +181,8 @@ const paths = {
       <path d="M3.5 16L12 20.5 20.5 16" />
     </>
   ),
+  expand: <path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5" />,
+  collapse: <path d="M4 14h6v6M20 10h-6V4M10 14l-6.5 6.5M14 10l6.5-6.5" />,
   tab: (
     <>
       <rect x="3.5" y="5.5" width="17" height="14" rx="2.5" />

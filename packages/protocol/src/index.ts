@@ -36,6 +36,7 @@ export type {
 export {
   acceptBridge,
   BRIDGE_INFO_FILE,
+  bridgeAuthorization,
   bridgeInfoFile,
   bridgeInfoSchema,
   connectBridge,
@@ -140,6 +141,22 @@ export type { ListenerErrorHandler } from "./listener-errors";
 export { reportListenerError } from "./listener-errors";
 export type { LockRecord, LockWaiting } from "./locks";
 export { LOCKS_FOLDER, lockRecordSchema, lockWaitingSchema, START_LOCK_FILE } from "./locks";
+export type { ChannelPiece, ShownModel, WindowChannelInput, WindowChannelOutput } from "./mcp-view";
+export {
+  channelPieceSchema,
+  MAX_CHANNEL_PIECES,
+  MAX_PIECE_BYTES,
+  MAX_SEND_BYTES,
+  MCP_VIEW_META_KEY,
+  MCP_VIEW_URI,
+  ROUND_META_KEY,
+  roundMetaSchema,
+  shownModelSchema,
+  WINDOW_CHANNEL_META_KEY,
+  WINDOW_CHANNEL_TOOL,
+  windowChannelInputSchema,
+  windowChannelOutputSchema,
+} from "./mcp-view";
 export type { PartSummary } from "./parts";
 export { partSummarySchema } from "./parts";
 export type { Queries, QueryArgs, QueryInput, QueryName, QueryOutput } from "./queries";

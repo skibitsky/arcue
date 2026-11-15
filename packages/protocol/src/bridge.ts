@@ -95,6 +95,14 @@ export const LOCAL_PAGE_OWNER = "arcue-owner";
  */
 export const SERVE_CORE_PATH = "/core/2";
 
+/**
+ * The Authorization header with which a program that is not a page, such as `arcue mcp` for the view an app shows,
+ * connects to `SERVE_CORE_PATH` as a page: the token from `serve.json`, with no Origin header.
+ */
+export function bridgeAuthorization(token: string): string {
+  return `Bearer ${token}`;
+}
+
 /** The file in the app's data folder that tells the command line how to start the app when it is not running. */
 export const LAUNCH_INFO_FILE = "launch.json";
 

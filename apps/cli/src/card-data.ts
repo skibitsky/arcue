@@ -1,11 +1,13 @@
+import type { ROUND_META_KEY as SHARED_ROUND_META_KEY } from "@arcue/protocol";
+
 /** What Arcue's card shows for a tool result, which the server puts in the result's `_meta` under this key. */
 export const CARD_META_KEY = "arcue/card";
 
 /** The card that `get_comments` and `inspect_model` render in apps that show MCP Apps. */
 export const CARD_URI = "ui://arcue/card.html";
 
-/** What `send_round` puts in its result's `_meta` under this key when it sent a round. */
-export const ROUND_META_KEY = "arcue/round";
+/** What `send_round` puts in its result's `_meta` under this key when it sent a round, as the view reads it too. */
+export const ROUND_META_KEY: typeof SHARED_ROUND_META_KEY = "arcue/round";
 
 /** The most screenshots `get_comments` and `send_round` return in one result. */
 export const MAX_SCREENSHOTS = 8;

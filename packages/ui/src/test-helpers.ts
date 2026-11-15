@@ -36,6 +36,7 @@ import {
   STONE_VERSION,
   stoneResonatorReview,
 } from "../dev/sample-data";
+import type { RoundSender } from "./store/asset-session";
 import type { FileHost } from "./store/view-files";
 import { createWorkspaceStore } from "./store/workspace-store";
 
@@ -343,6 +344,8 @@ interface SetupOptions {
   files?: FileHost;
   /** What `composition.fileRoles` reports for a file. */
   roles?: (file: string) => QueryOutput<"composition.fileRoles"> | null;
+  /** Sends the queue in place of copying its prompt. */
+  sendRound?: RoundSender;
 }
 
 export function setup(options: SetupOptions = {}) {
@@ -361,6 +364,7 @@ export function setup(options: SetupOptions = {}) {
       copied.push(text);
     },
     ...(options.files ? { files: options.files } : {}),
+    ...(options.sendRound ? { sendRound: options.sendRound } : {}),
   });
   client.connectWindow(store.handleRequest);
   store.start();

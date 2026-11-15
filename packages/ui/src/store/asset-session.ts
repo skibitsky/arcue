@@ -29,6 +29,7 @@ import {
 } from "@arcue/scene";
 import type { CommentOverlay, ScreenPosition, ToolId, Viewport } from "@arcue/viewport";
 import { plural } from "../format";
+import type { ImageUrls } from "../image-urls";
 import { commentPartView } from "./comment-view";
 import { currentMessage, lastRound, pendingFollowUp, queuedComments } from "./history";
 import { Store } from "./observable";
@@ -62,6 +63,32 @@ export interface SessionHost {
   /** Shows the prompt in a sheet with its text selected; `round` names the round it was saved as, when there is one. */
   showCopySheet(sheet: { round: number | null; prompt: string }): void;
   setTimer(delayMs: number, callback: () => void): () => void;
+  /** Sends the queue to the agent in place of copying its prompt, or null where the window copies it. */
+  readonly sendRound: RoundSender | null;
+  readonly imageUrls: ImageUrls;
+}
+
+/** Sends a model's queue to the agent in place of copying its prompt, as Arcue's view in an app's conversation does. */
+export interface RoundSender {
+  /** The label of the button that copies the prompt elsewhere, such as "Send to chat". */
+  label: string;
+  /**
+   * Saves the queue as a round and hands its prompt to the agent. Rejects with a `RoundNotPosted` when it saved the
+   * round but could not hand the prompt over.
+   */
+  send(asset: AssetSummary): Promise<void>;
+}
+
+/** A `RoundSender` saved the round, but the agent did not take its prompt, which the window then offers to copy. */
+export class RoundNotPosted extends Error {
+  readonly round: number;
+  readonly prompt: string;
+
+  constructor(round: number, prompt: string) {
+    super(`Saved round ${round}, but the chat did not take its prompt.`);
+    this.round = round;
+    this.prompt = prompt;
+  }
 }
 
 export type BoxMode = "new" | "edit" | "reopen";
@@ -1167,17 +1194,30 @@ export class AssetSession {
       if (!(await this.submitBox())) return;
     }
     const count = this.state.get().review?.queue.length ?? 0;
+    const sender = this.#host.sendRound;
     if (count === 0) {
-      this.#host.notify({ message: "Nothing to copy yet. Add a comment first.", kind: "info" });
+      const verb = sender ? "send" : "copy";
+      this.#host.notify({ message: `Nothing to ${verb} yet. Add a comment first.`, kind: "info" });
+      return;
+    }
+    if (sender) {
+      try {
+        await sender.send(this.state.get().summary);
+        this.#afterRound();
+        this.#host.notify({ message: `Sent ${plural(count, "comment")}`, kind: "copied" });
+      } catch (error) {
+        if (error instanceof RoundNotPosted) {
+          this.#afterRound();
+          this.#host.notify({ message: `Saved round ${error.round}. Copy the selected text.`, kind: "info" });
+          this.#host.showCopySheet({ round: error.round, prompt: error.prompt });
+        } else this.#host.notify({ message: messageOf(error), kind: "alert" });
+      }
       return;
     }
     try {
       const { round, prompt, copiedToClipboard } = await this.#client.execute("round.copy", { assetId: this.assetId });
       const copied = copiedToClipboard || (await this.#host.writeClipboard(prompt));
-      const current = this.state.get().box;
-      const keepBox = current !== null && current.mode !== "edit" && current.text.trim() !== "";
-      this.state.patch({ selection: null, box: keepBox ? current : null });
-      this.#syncSelection();
+      this.#afterRound();
       if (copied) {
         this.#host.notify({ message: `Copied ${plural(count, "comment")} as round ${round}`, kind: "copied" });
       } else {
@@ -1187,6 +1227,19 @@ export class AssetSession {
     } catch (error) {
       this.#host.notify({ message: messageOf(error), kind: "alert" });
     }
+  }
+
+  /** The label of the button that sends the queue, where the window sends it in place of copying its prompt. */
+  get sendLabel(): string | null {
+    return this.#host.sendRound?.label ?? null;
+  }
+
+  /** Clears the selection once a round went out, and the box unless it holds text for a new comment. */
+  #afterRound(): void {
+    const current = this.state.get().box;
+    const keepBox = current !== null && current.mode !== "edit" && current.text.trim() !== "";
+    this.state.patch({ selection: null, box: keepBox ? current : null });
+    this.#syncSelection();
   }
 
   /** Reads the warnings of the version on screen again. An answer older than the latest request is dropped. */
@@ -1340,7 +1393,7 @@ export class AssetSession {
     viewport.setOverlays(this.overlays());
   }
 
-  /** Fetches a comment's screenshot once per edit and keeps it as an object URL. A failed fetch is tried again. */
+  /** Fetches a comment's screenshot once per edit and keeps an address for it. A failed fetch is tried again. */
   async loadThumbnail(comment: Comment): Promise<void> {
     const key = `${comment.id}:${comment.updatedAt}:${comment.context.screenshot ?? ""}`;
     if (this.#thumbnailKeys.get(comment.id) === key) return;
@@ -1349,19 +1402,17 @@ export class AssetSession {
     try {
       const bytes = await this.#client.query("comment.screenshot", { assetId: this.assetId, commentId: comment.id });
       this.#thumbnailAttempts.delete(comment.id);
-      if (bytes && typeof URL.createObjectURL === "function") {
-        url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/png" }));
-      }
+      if (bytes) url = this.#host.imageUrls.create(bytes, "image/png");
     } catch {
       if (this.#thumbnailKeys.get(comment.id) === key) this.#retryThumbnail(comment.id);
       return;
     }
     if (this.#disposed || this.#thumbnailKeys.get(comment.id) !== key) {
-      if (url) URL.revokeObjectURL(url);
+      if (url) this.#host.imageUrls.revoke(url);
       return;
     }
     const previous = this.thumbnails.get().urls[comment.id];
-    if (previous) URL.revokeObjectURL(previous);
+    if (previous) this.#host.imageUrls.revoke(previous);
     this.thumbnails.set({ urls: { ...this.thumbnails.get().urls, [comment.id]: url } });
   }
 
@@ -1392,7 +1443,7 @@ export class AssetSession {
     const kept: Record<string, string | null> = {};
     for (const [id, url] of Object.entries(urls)) {
       if (queued.has(id)) kept[id] = url;
-      else if (url) URL.revokeObjectURL(url);
+      else if (url) this.#host.imageUrls.revoke(url);
     }
     this.thumbnails.set({ urls: kept });
   }
@@ -1436,7 +1487,7 @@ export class AssetSession {
     this.#cancelAdded?.();
     this.#unbindViewport?.();
     this.#viewport = null;
-    for (const url of Object.values(this.thumbnails.get().urls)) if (url) URL.revokeObjectURL(url);
+    for (const url of Object.values(this.thumbnails.get().urls)) if (url) this.#host.imageUrls.revoke(url);
   }
 }
 
