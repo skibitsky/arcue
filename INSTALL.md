@@ -11,7 +11,7 @@ Arcue is an app for reviewing 3D models and animations with an AI agent. The use
 | Claude Code, in a terminal or the Code tab of the Claude desktop app | [Claude Code](#claude-code) |
 | Codex, in a terminal or the Codex app | [Codex](#codex) |
 | Any other agent | [Other agents](#other-agents) |
-| Any app that connects to MCP servers | [MCP server](#mcp-server) |
+| The Claude desktop app's chat or Cowork, or any app that connects to MCP servers | [MCP server](#mcp-server) |
 | Only the desktop app and its `arcue` command | [Desktop app](#desktop-app) |
 
 ## Claude Code
@@ -60,12 +60,15 @@ In apps that show MCP Apps, `get_comments` shows the comments as a card with the
 
 1. Install the [desktop app](#desktop-app).
 2. Add the server:
+   - The Claude desktop app, for its chat and Cowork: ask the user to choose **Add to Claude…** in Arcue's menu, the Arcue menu on macOS or Help elsewhere. It adds the app's `arcue mcp` to `claude_desktop_config.json` in Claude's settings folder. Then they quit Claude and open it again.
    - Claude Code: `claude mcp add --scope user arcue -- arcue mcp`
    - Codex: `codex mcp add arcue -- arcue mcp`
    - Other apps: a stdio server with the command `arcue` and the argument `mcp`.
 
    When the app can't find `arcue`, give its full path: `/Applications/Arcue.app/Contents/Resources/bin/arcue` on macOS, or `C:\Users\<user>\AppData\Local\Programs\Arcue\bin\arcue.exe` on Windows.
 3. Ask the user to start a new session, so the app loads the server.
+
+Without the desktop app, the Claude desktop app runs Arcue's extension on its own Node: download `https://github.com/skibitsky/arcue/releases/latest/download/Arcue.mcpb` and open it, and Claude asks to install it. Claude can't start Arcue in the browser in the background on that Node, so the extension runs it in its own process, which stops after 30 minutes with no view open.
 
 ## Desktop app
 

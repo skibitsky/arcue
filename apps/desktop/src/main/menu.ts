@@ -1,18 +1,25 @@
 import type { MenuItemConstructorOptions } from "electron";
 import { app, Menu } from "electron";
+import { addToClaude } from "./add-to-claude";
 import { installCommand } from "./install-command";
 import type { WindowManager } from "./windows";
 
 /**
  * The native menus. Tab commands go to the focused window; the rest run in the main process. Undo and redo go to the
  * focused window too, which undoes text in a focused text field and the visible tab's review otherwise; the window
- * leaves those keys to these items, so one key press never undoes twice. The update item, when the app updates, goes
- * in the app menu on macOS and in Help elsewhere; install the menu again when it changes.
+ * leaves those keys to these items, so one key press never undoes twice. The update item, when the app updates, and
+ * Add to Claude go in the app menu on macOS and in Help elsewhere; install the menu again when the update item changes.
  */
 export function installMenu(windows: WindowManager, update: MenuItemConstructorOptions | null): void {
   const mac = process.platform === "darwin";
   const developer = !app.isPackaged;
   const updateItem = update ? [{ id: "update", ...update }] : [];
+  const addToClaudeItem: MenuItemConstructorOptions = {
+    id: "add-to-claude",
+    label: "Add to Claude…",
+    click: () => void addToClaude(),
+  };
+  const helpItems = [...updateItem, ...(developer ? [] : [addToClaudeItem])];
   const template: MenuItemConstructorOptions[] = [
     ...(mac
       ? [
@@ -26,6 +33,7 @@ export function installMenu(windows: WindowManager, update: MenuItemConstructorO
                 : [
                     { type: "separator" as const },
                     { id: "install-command", label: "Install arcue Command…", click: () => void installCommand() },
+                    addToClaudeItem,
                   ]),
               { type: "separator" as const },
               { role: "services" as const },
@@ -81,7 +89,7 @@ export function installMenu(windows: WindowManager, update: MenuItemConstructorO
       ],
     },
     { role: "windowMenu" },
-    ...(!mac && updateItem.length > 0 ? [{ label: "Help", submenu: updateItem }] : []),
+    ...(!mac && helpItems.length > 0 ? [{ label: "Help", submenu: helpItems }] : []),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

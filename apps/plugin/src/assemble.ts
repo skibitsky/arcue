@@ -61,10 +61,41 @@ export function crlf(text: string): string {
 /**
  * Replaces `out` with a marketplace that lists the plugin, and the plugin itself. Claude Code and Codex both read
  * `.claude-plugin/marketplace.json`, and each reads its own plugin manifest. The command line goes into the skill's
- * `scripts` folder, where the skill looks for it, with its launchers, the page `arcue serve` serves in its `web`
- * folder, and Arcue's view. A `package.json` there has Node load it as ES modules, whatever `type` a parent folder's `package.json` sets.
+ * `scripts` folder, where the skill looks for it, with its launchers.
  */
 export async function assemblePlugin(sources: PluginSources, out: string): Promise<void> {
+  await checkBuilds(sources);
+  const launchers = await readLaunchers(sources.launcher);
+  parseNodePins(launchers.get(NODE_PINS_FILE) ?? "");
+  if (/[^\p{ASCII}]/u.test(launchers.get("arcue-node.cmd") ?? "")) {
+    throw new Error("arcue-node.cmd must be ASCII: cmd.exe reads it in the console's code page.");
+  }
+  await rm(out, { recursive: true, force: true });
+  const plugin = join(out, PLUGIN_PATH);
+  const skill = join(plugin, "skills", PLUGIN.name);
+  await writeJson(join(out, ".claude-plugin", "marketplace.json"), marketplaceManifest());
+  await writeJson(join(plugin, ".claude-plugin", "plugin.json"), claudeManifest());
+  await writeJson(join(plugin, ".codex-plugin", "plugin.json"), codexManifest());
+  await cp(sources.skill, skill, { recursive: true, dereference: true });
+  await copyCommandLine(sources, join(skill, "scripts"));
+  for (const file of LAUNCHER_FILES) {
+    const text = launchers.get(file.source) ?? "";
+    const path = join(skill, "scripts", file.name);
+    await writeFile(path, file.eol === "crlf" ? crlf(text) : lf(text));
+    if (file.executable) await chmod(path, 0o755);
+  }
+  await mkdir(join(plugin, dirname(ICON_PATH)), { recursive: true });
+  await copyFile(sources.icon, join(plugin, ICON_PATH));
+  await copyFile(sources.readme, join(plugin, "README.md"));
+  await copyFile(sources.license, join(plugin, "LICENSE"));
+  await writeFile(join(plugin, ".gitattributes"), "* -text\n");
+  await writeFile(join(out, "README.md"), BRANCH_README);
+}
+
+export type CommandLineSources = Pick<PluginSources, "cliBuild" | "webBuild" | "viewPage">;
+
+/** Checks that the command line, the page `arcue serve` serves and the view are built, saying how to build what is not. */
+export async function checkBuilds(sources: CommandLineSources): Promise<void> {
   await access(join(sources.cliBuild, "arcue.js")).catch(() => {
     throw new Error(
       `${sources.cliBuild} has no arcue.js. Build the command line first: pnpm --filter @arcue/cli build`,
@@ -78,40 +109,23 @@ export async function assemblePlugin(sources: PluginSources, out: string): Promi
   await access(sources.viewPage).catch(() => {
     throw new Error(`${sources.viewPage} is missing. Build the view first: pnpm --filter @arcue/web build:local`);
   });
-  const launchers = await readLaunchers(sources.launcher);
-  parseNodePins(launchers.get(NODE_PINS_FILE) ?? "");
-  if (/[^\p{ASCII}]/u.test(launchers.get("arcue-node.cmd") ?? "")) {
-    throw new Error("arcue-node.cmd must be ASCII: cmd.exe reads it in the console's code page.");
-  }
   const forbidden = new Set<string>([...LAUNCHER_FILES.map((file) => file.name), "package.json", "node", "node.exe"]);
   for (const name of await readdir(sources.cliBuild)) {
     if (forbidden.has(name)) {
       throw new Error(`${sources.cliBuild} has ${name}, which the plugin's scripts folder must not hold.`);
     }
   }
-  await rm(out, { recursive: true, force: true });
-  const plugin = join(out, PLUGIN_PATH);
-  const skill = join(plugin, "skills", PLUGIN.name);
-  await writeJson(join(out, ".claude-plugin", "marketplace.json"), marketplaceManifest());
-  await writeJson(join(plugin, ".claude-plugin", "plugin.json"), claudeManifest());
-  await writeJson(join(plugin, ".codex-plugin", "plugin.json"), codexManifest());
-  await cp(sources.skill, skill, { recursive: true, dereference: true });
-  await cp(sources.cliBuild, join(skill, "scripts"), { recursive: true, dereference: true });
-  await writeJson(join(skill, "scripts", "package.json"), { type: "module" });
-  for (const file of LAUNCHER_FILES) {
-    const text = launchers.get(file.source) ?? "";
-    const path = join(skill, "scripts", file.name);
-    await writeFile(path, file.eol === "crlf" ? crlf(text) : lf(text));
-    if (file.executable) await chmod(path, 0o755);
-  }
-  await cp(sources.webBuild, join(skill, "scripts", "web"), { recursive: true, dereference: true });
-  await copyFile(sources.viewPage, join(skill, "scripts", VIEW_PAGE));
-  await mkdir(join(plugin, dirname(ICON_PATH)), { recursive: true });
-  await copyFile(sources.icon, join(plugin, ICON_PATH));
-  await copyFile(sources.readme, join(plugin, "README.md"));
-  await copyFile(sources.license, join(plugin, "LICENSE"));
-  await writeFile(join(plugin, ".gitattributes"), "* -text\n");
-  await writeFile(join(out, "README.md"), BRANCH_README);
+}
+
+/**
+ * Copies the command line into `folder`, with the page `arcue serve` serves in its `web` folder and Arcue's view. A
+ * `package.json` there has Node load it as ES modules, whatever `type` a parent folder's `package.json` sets.
+ */
+export async function copyCommandLine(sources: CommandLineSources, folder: string): Promise<void> {
+  await cp(sources.cliBuild, folder, { recursive: true, dereference: true });
+  await writeJson(join(folder, "package.json"), { type: "module" });
+  await cp(sources.webBuild, join(folder, "web"), { recursive: true, dereference: true });
+  await copyFile(sources.viewPage, join(folder, VIEW_PAGE));
 }
 
 async function readLaunchers(launcher: string): Promise<Map<string, string>> {
@@ -202,7 +216,7 @@ The Publish plugin workflow builds this branch from \`main\` with \`apps/plugin\
 - Codex: \`codex plugin marketplace add skibitsky/arcue@plugin\`, then \`codex plugin add arcue@arcue\`
 `;
 
-async function writeJson(path: string, value: unknown): Promise<void> {
+export async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }

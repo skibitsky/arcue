@@ -3,9 +3,10 @@ name: Release
 # Builds the desktop app, with the arcue command, for macOS, Windows and Linux on Arm and x64. Windows and Linux build
 # on a runner of each architecture. Both macOS apps build on Apple silicon, as pnpm has no Intel macOS build, and the
 # Intel app runs there under Rosetta. Each job installs what it built, checks that arcue runs from PATH on the app's
-# own Node and opens models in the app, and uninstalls it again. A tag v<version> on a commit on main, where <version>
-# is the version in apps/desktop/package.json, then publishes a GitHub release with the installers, SHA256SUMS.txt and
-# build provenance attestations. Pull requests that change the packaging, and manual runs, build unsigned and keep the
+# own Node and opens models in the app, and uninstalls it again. Another job builds Arcue.mcpb, the extension that adds
+# arcue mcp to the Claude desktop app without the Arcue app. A tag v<version> on a commit on main, where <version>
+# is the version in apps/desktop/package.json, then publishes a GitHub release with the installers, the extension,
+# SHA256SUMS.txt and build provenance attestations. Pull requests that change the packaging, and manual runs, build unsigned and keep the
 # installers as workflow artifacts instead.
 #
 # Only a tag push signs. Its builds run in the release environment, which holds the signing secrets and variables and
@@ -34,6 +35,12 @@ on:
     paths:
       - apps/desktop/**
       - apps/cli/**
+      - apps/plugin/package.json
+      - apps/plugin/src/assemble.ts
+      - apps/plugin/src/mcpb.ts
+      - apps/plugin/src/zip.ts
+      - apps/plugin/scripts/build-mcpb.ts
+      - apps/plugin/scripts/check-mcpb.mjs
       - assets/branding/**
       - pnpm-workspace.yaml
       - pnpm-lock.yaml
@@ -494,9 +501,44 @@ jobs:
           if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
           rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
 
+  extension:
+    name: Build the extension for Claude
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: ${{ github.ref_type != 'tag' && 'pnpm' || '' }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arcue/plugin build:mcpb
+      - name: Inspect a sample with the command line in the extension
+        run: |
+          unzip -q apps/plugin/out/Arcue.mcpb -d "$RUNNER_TEMP/extension"
+          ARCUE_USER_DATA="$RUNNER_TEMP/data" node "$RUNNER_TEMP/extension/server/arcue.js" inspect samples/stone-striker.fbx
+      - name: Let Electron's sandbox create the user namespaces it runs in
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+      - name: Run the extension's server in an Electron utility process, as the Claude desktop app does
+        run: >-
+          xvfb-run -a pnpm --filter @arcue/desktop exec electron "$GITHUB_WORKSPACE/apps/plugin/scripts/check-mcpb.mjs"
+          "$RUNNER_TEMP/extension" "$GITHUB_WORKSPACE/samples/stone-striker.fbx"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installers-extension
+          path: apps/plugin/out/Arcue.mcpb
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Publish the release
-    needs: build
+    needs: [build, extension]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: release

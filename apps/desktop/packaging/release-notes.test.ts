@@ -47,6 +47,12 @@ describe("releaseNotes", () => {
     );
   });
 
+  it("says how to add Arcue to the Claude desktop app, from the app or with the release's extension, after the installers", () => {
+    expect(releaseNotes(input)).toContain(
+      "choose More info > Run anyway.\n\nTo use Arcue in the Claude desktop app, choose Add to Claude in Arcue's menu: Arcue on macOS, Help elsewhere. Without the Arcue app, open [Arcue.mcpb](https://github.com/skibitsky/arcue/releases/download/v1.2.0/Arcue.mcpb) in Claude.\n\n## Verify a download",
+    );
+  });
+
   it("says how to open what is not signed, and nothing for what is", () => {
     const unsigned = releaseNotes(input);
     expect(unsigned).toContain("The first time you open it:");

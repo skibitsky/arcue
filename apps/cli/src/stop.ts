@@ -102,7 +102,8 @@ async function connectOrRefuse(
 
 /**
  * Waits until the core's process has ended. Once its bridge file no longer names it and nothing listens on its socket,
- * a process that lingers with its pid, as a zombie or a pid used again, counts as stopped after a while.
+ * a hosted core has stopped, and a process that lingers with its pid, as a zombie or a pid used again, counts as
+ * stopped after a while.
  */
 async function waitStopped(userData: string, kind: CoreKind, info: BridgeInfo, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -111,7 +112,10 @@ async function waitStopped(userData: string, kind: CoreKind, info: BridgeInfo, t
     if (!isRunning(info.pid)) return true;
     if (goneSince === null) {
       const current = await readBridgeInfo(userData, kind);
-      if (current?.token !== info.token && !(await listens(info.socket))) goneSince = Date.now();
+      if (current?.token !== info.token && !(await listens(info.socket))) {
+        if (info.hosted) return true;
+        goneSince = Date.now();
+      }
     } else if (Date.now() - goneSince >= LINGER_MS) {
       return true;
     }

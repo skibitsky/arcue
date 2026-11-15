@@ -91,6 +91,8 @@ export interface ServeOptions {
   lockTimeoutMs?: number;
   /** Which arcue.js runs the core, for `serve.json`: the first 16 hex digits of its SHA-256. */
   build?: string;
+  /** Whether the core runs inside a program that goes on after it stops, such as `arcue mcp`, for `serve.json`. */
+  hosted?: boolean;
 }
 
 /** Why Arcue in the browser stops by itself, because `arcue stop` asked it to, or because it was closed first. */
@@ -231,6 +233,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
       onError: options.onError,
       url,
       build: options.build,
+      hosted: options.hosted,
       claim,
     });
   } catch (error) {

@@ -54,6 +54,8 @@ export type BridgeServerOptions = CommonBridgeOptions &
         url: string;
         /** Which arcue.js runs the core: the first 16 hex digits of its SHA-256. */
         build?: string;
+        /** Whether the core runs inside a program that goes on after it stops. */
+        hosted?: boolean;
       }
   );
 
@@ -204,6 +206,7 @@ async function listenForBridges(options: BridgeServerOptions): Promise<BridgeSer
     kind,
     locks: LOCK_PROTOCOL,
     ...(options.kind === "serve" && options.build !== undefined ? { build: options.build } : {}),
+    ...(options.kind === "serve" && options.hosted ? { hosted: true as const } : {}),
   };
   try {
     await writeBridgeFile(infoPath, info);

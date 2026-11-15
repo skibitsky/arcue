@@ -13,6 +13,9 @@ const DOWNLOADS: { computer: string; platform: Platform; arch: Arch; kind: Insta
   { computer: "Other Linux on Arm", platform: "linux", arch: "arm64", kind: "tar" },
 ];
 
+/** The extension that adds `arcue mcp` to the Claude desktop app, which the Release workflow builds with the plugin's tools. */
+export const CLAUDE_EXTENSION = "Arcue.mcpb";
+
 export interface ReleaseNotesInput {
   /** The repository, as owner/name. */
   repository: string;
@@ -65,6 +68,8 @@ export function releaseNotes({
       : `[INSTALL.md](${site}/blob/${tag}/INSTALL.md#desktop-app) has the steps for each computer, but its commands download the latest release: use the files above for this one.`,
     "The macOS, Windows and Debian installers put the `arcue` command on PATH; on macOS, choose Arcue > Install arcue Command. For a tarball, INSTALL.md shows how to link it.",
     ...(firstLaunch.length > 0 ? ["", "The first time you open it:", "", ...firstLaunch] : []),
+    "",
+    `To use Arcue in the Claude desktop app, choose Add to Claude in Arcue's menu: Arcue on macOS, Help elsewhere. Without the Arcue app, open [${CLAUDE_EXTENSION}](${site}/releases/download/${tag}/${CLAUDE_EXTENSION}) in Claude.`,
     "",
     "## Verify a download",
     "",
