@@ -72,7 +72,7 @@ if (mode === "wait") {
 }, 120_000);
 
 afterAll(async () => {
-  if (temp) await rm(temp, { recursive: true, force: true });
+  if (temp) await rm(temp, { recursive: true, force: true, maxRetries: 10 });
 });
 
 describe.skipIf(process.platform !== "win32")("bin\\arcue.exe", () => {
@@ -107,6 +107,7 @@ describe.skipIf(process.platform !== "win32")("bin\\arcue.exe", () => {
     await vi.waitFor(() => expect(alive(child)).toBe(false), { timeout: 10_000 });
     expect(alive(grandchild)).toBe(true);
     process.kill(grandchild);
+    await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 10_000 });
   });
 
   it("asks for a reinstall when the app beside it is incomplete", async () => {

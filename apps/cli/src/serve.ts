@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -26,6 +26,7 @@ import type { ByteStream, ListenerErrorHandler, SetTimer } from "@arcue/protocol
 import {
   ArcueError,
   binaryFrameCodec,
+  bridgeAuthorization,
   framedEndpoint,
   LOCAL_PAGE_OWNER,
   MAX_FRAME_BYTES,
@@ -147,7 +148,8 @@ const PAGE_CLOSE_MS = 1_000;
  * page outside views, which may be another session's, so an open for a view never waits for a browser.
  *
  * Only pages from this server's own origin can connect to the core, and only through a localhost address, so other
- * websites and DNS rebinding cannot reach it. No website may show its pages in a frame, where the user could not see a
+ * websites and DNS rebinding cannot reach it. A program that presents the token from `serve.json` and no origin, as
+ * `arcue mcp` does for the view an app shows, connects as a page too. No website may show its pages in a frame, where the user could not see a
  * model the command line opens and clicks could be hijacked. Like any local web server, it is open to other programs on
  * this computer while it runs.
  */
@@ -285,11 +287,7 @@ export async function startServer(options: ServeOptions): Promise<ArcueServer> {
     });
     server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       const address = URL.parse(request.url ?? "/", url);
-      if (
-        !allowed(request) ||
-        address?.pathname !== SERVE_CORE_PATH ||
-        request.headers.origin !== `http://${request.headers.host}`
-      ) {
+      if (!allowed(request) || address?.pathname !== SERVE_CORE_PATH || !fromPageOrBridge(request, bridge.info.token)) {
         socket.end(`HTTP/1.1 403 Forbidden\r\n${rawHeaders(PAGE_HEADERS)}Connection: close\r\n\r\n`);
         return;
       }
@@ -394,6 +392,18 @@ async function closePages(sockets: WebSocketServer, code: number): Promise<void>
   clearTimeout(timer);
   for (const client of sockets.clients) client.terminate();
   sockets.close();
+}
+
+/**
+ * Whether a socket comes from the server's own page, or from a program that presents the bridge token, which no
+ * browser can send.
+ */
+function fromPageOrBridge(request: IncomingMessage, token: string): boolean {
+  const { origin, authorization } = request.headers;
+  if (origin !== undefined) return origin === `http://${request.headers.host}`;
+  const given = Buffer.from(authorization ?? "");
+  const expected = Buffer.from(bridgeAuthorization(token));
+  return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
 /** The agent session's view a page's socket address names, null for none, or undefined for a name that is not one. */

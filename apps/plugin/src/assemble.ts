@@ -24,11 +24,16 @@ export const PLUGIN_BRANCH = "plugin";
 /** The plugin's icon, relative to its folder. */
 export const ICON_PATH = "assets/icon.png";
 
+/** Where the command line reads Arcue's view, beside `arcue.js`. */
+export const VIEW_PAGE = "view.html";
+
 export interface PluginSources {
   skill: string;
   cliBuild: string;
   /** The page `arcue serve` serves. */
   webBuild: string;
+  /** Arcue's view, the page apps that show MCP Apps render for `open_model`. */
+  viewPage: string;
   /** A square PNG. */
   icon: string;
   readme: string;
@@ -56,8 +61,8 @@ export function crlf(text: string): string {
 /**
  * Replaces `out` with a marketplace that lists the plugin, and the plugin itself. Claude Code and Codex both read
  * `.claude-plugin/marketplace.json`, and each reads its own plugin manifest. The command line goes into the skill's
- * `scripts` folder, where the skill looks for it, with its launchers and the page `arcue serve` serves in its `web`
- * folder. A `package.json` there has Node load it as ES modules, whatever `type` a parent folder's `package.json` sets.
+ * `scripts` folder, where the skill looks for it, with its launchers, the page `arcue serve` serves in its `web`
+ * folder, and Arcue's view. A `package.json` there has Node load it as ES modules, whatever `type` a parent folder's `package.json` sets.
  */
 export async function assemblePlugin(sources: PluginSources, out: string): Promise<void> {
   await access(join(sources.cliBuild, "arcue.js")).catch(() => {
@@ -69,6 +74,9 @@ export async function assemblePlugin(sources: PluginSources, out: string): Promi
     throw new Error(
       `${sources.webBuild} has no index.html. Build the page first: pnpm --filter @arcue/web build:local`,
     );
+  });
+  await access(sources.viewPage).catch(() => {
+    throw new Error(`${sources.viewPage} is missing. Build the view first: pnpm --filter @arcue/web build:local`);
   });
   const launchers = await readLaunchers(sources.launcher);
   parseNodePins(launchers.get(NODE_PINS_FILE) ?? "");
@@ -97,6 +105,7 @@ export async function assemblePlugin(sources: PluginSources, out: string): Promi
     if (file.executable) await chmod(path, 0o755);
   }
   await cp(sources.webBuild, join(skill, "scripts", "web"), { recursive: true, dereference: true });
+  await copyFile(sources.viewPage, join(skill, "scripts", VIEW_PAGE));
   await mkdir(join(plugin, dirname(ICON_PATH)), { recursive: true });
   await copyFile(sources.icon, join(plugin, ICON_PATH));
   await copyFile(sources.readme, join(plugin, "README.md"));

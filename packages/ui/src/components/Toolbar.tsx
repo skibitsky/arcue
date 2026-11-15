@@ -5,6 +5,7 @@ import { Popover } from "radix-ui";
 import type { DragEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { formatCount, formatHeight, plural, sceneStats } from "../format";
+import type { ImageUrls } from "../image-urls";
 import type { AssetSession } from "../store/asset-session";
 import { BRUSH_MAX, BRUSH_MIN } from "../store/asset-session";
 import { useSelect } from "../store/observable";
@@ -327,7 +328,7 @@ function TextureSlotRow({
       </>
     ) : (
       <>
-        <TextureThumb texture={texture} />
+        <TextureThumb texture={texture} urls={store.imageUrls} />
         <span className="nm">{name}</span>
       </>
     );
@@ -392,17 +393,13 @@ function TextureSlotRow({
 const PREVIEW_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"]);
 
 /** A small preview of a texture the browser can show, or an image icon for one it cannot. */
-function TextureThumb({ texture }: { texture: Texture | null }) {
+function TextureThumb({ texture, urls }: { texture: Texture | null; urls: ImageUrls }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!texture || !PREVIEW_TYPES.has(texture.mimeType) || typeof URL.createObjectURL !== "function") {
-      setUrl(null);
-      return;
-    }
-    const made = URL.createObjectURL(new Blob([new Uint8Array(texture.bytes)], { type: texture.mimeType }));
+    const made = texture && PREVIEW_TYPES.has(texture.mimeType) ? urls.create(texture.bytes, texture.mimeType) : null;
     setUrl(made);
-    return () => URL.revokeObjectURL(made);
-  }, [texture]);
+    return made === null ? undefined : () => urls.revoke(made);
+  }, [texture, urls]);
   if (!url) return <Icon name="image" />;
   return <img className="sw" src={url} alt="" />;
 }

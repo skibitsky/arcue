@@ -9,6 +9,7 @@ await assemblePlugin(
     skill: fromRoot("skills/arcue"),
     cliBuild: fromRoot("apps/cli/dist"),
     webBuild: fromRoot("apps/web/dist-local"),
+    viewPage: fromRoot("apps/web/dist-view/view.html"),
     icon: fromRoot("assets/branding/png/arcue-256.png"),
     readme: fromRoot("apps/plugin/README.md"),
     license: fromRoot("LICENSE"),

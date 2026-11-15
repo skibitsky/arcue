@@ -9,15 +9,16 @@ import {
   viewNameSchema,
   windowTabsSchema,
 } from "@arcue/protocol";
-import type { Readable, ReleasedTab, WorkspaceStore } from "@arcue/ui";
+import type { ImageUrls, Readable, ReleasedTab, RoundSender, WorkspaceStore } from "@arcue/ui";
 import { createWorkspaceStore, Store, TabRestore } from "@arcue/ui";
+import type { CoreSocket } from "./core-socket";
 import { webSocketStream } from "./core-socket";
 import type { ServedPage } from "./served-page";
 import { PROBE_TIMEOUT_MS } from "./served-page";
 
 export interface LocalHostOptions {
   /** Opens a new socket to the core on the server the page came from. */
-  openSocket(): WebSocket;
+  openSocket(): CoreSocket;
   /** The agent session's view the page's address names, or null for none. A name that is not valid never connects. */
   view: string | null;
   /** Keeps the tabs across a reload; null where the browser refuses storage. */
@@ -35,6 +36,14 @@ export interface LocalHostOptions {
    */
   probe?: () => Promise<ServedPage>;
   reload?: () => void;
+  /** Called each time the page opened its tabs again after it connected. */
+  onReopened?: () => void;
+  /** Sees each request the core sends the page before the page answers it, and returns what to do once it did. */
+  onRequest?: (request: IncomingRequest) => (() => void) | undefined;
+  /** Sends a model's queue to the agent in place of copying its prompt. */
+  sendRound?: RoundSender;
+  /** Makes the addresses of screenshots and texture previews. Defaults to object URLs. */
+  imageUrls?: ImageUrls;
 }
 
 /** What the page shows about its address beside the store's connection state. */
@@ -52,7 +61,7 @@ interface SavedTabs {
 
 /** One socket the page opened, and whether the client took it. */
 interface Attempt {
-  socket: WebSocket;
+  socket: CoreSocket;
   attached: boolean;
 }
 
@@ -101,7 +110,7 @@ export class LocalHost {
   #disposed = false;
   #reloading = false;
   /** The socket that is connecting or in use. */
-  #socket: WebSocket | null = null;
+  #socket: CoreSocket | null = null;
   #cancelRetry: (() => void) | null = null;
   /** The probe that runs before the next attempt, and whether the page asked to connect at once meanwhile. */
   #retryProbe: { now: boolean } | null = null;
@@ -121,7 +130,11 @@ export class LocalHost {
     this.client = new ReconnectingClient({
       handleRequest: (request) => {
         this.#noteShow(request);
-        return this.store.handleRequest(request);
+        const answered = options.onRequest?.(request);
+        const answer = this.store.handleRequest(request);
+        if (answered && answer instanceof Promise) answer.then(answered, () => undefined);
+        else answered?.();
+        return answer;
       },
       onLost: () => {
         this.#socket = null;
@@ -129,7 +142,12 @@ export class LocalHost {
       },
       onListenerError: (error) => console.error(error),
     });
-    this.store = createWorkspaceStore({ client: this.client, setTimer: this.#setTimer });
+    this.store = createWorkspaceStore({
+      client: this.client,
+      setTimer: this.#setTimer,
+      ...(options.sendRound ? { sendRound: options.sendRound } : {}),
+      ...(options.imageUrls ? { imageUrls: options.imageUrls } : {}),
+    });
     this.#restore = new TabRestore(this.store, this.client);
   }
 
@@ -230,7 +248,7 @@ export class LocalHost {
       this.#retryLater();
       return;
     }
-    let socket: WebSocket;
+    let socket: CoreSocket;
     try {
       socket = this.#options.openSocket();
     } catch {
@@ -297,6 +315,7 @@ export class LocalHost {
       .catch((error: unknown) => console.error(error))
       .finally(() => {
         if (this.#shows === shows) this.#shows = null;
+        if (!this.#disposed) this.#options.onReopened?.();
       });
   }
 

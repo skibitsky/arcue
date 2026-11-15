@@ -1,0 +1,99 @@
+/* Arcue's view in an app's conversation. The workspace keeps Arcue's dark surfaces, as a 3D view does; the notes
+   around it take the chat's neutrals from the host's variables, and Arcue's own where there are none. */
+:root {
+  color-scheme: light dark;
+  --view-text: var(
+    --color-text-secondary,
+    light-dark(color-mix(in srgb, var(--palette-charcoal) 78%, transparent), var(--text-muted))
+  );
+  --view-inline-height: 440px;
+  --safe-top: 0px;
+  --safe-right: 0px;
+  --safe-bottom: 0px;
+  --safe-left: 0px;
+}
+
+html,
+body {
+  background: transparent;
+}
+
+html:not([data-mode="fullscreen"]),
+html:not([data-mode="fullscreen"]) body {
+  height: auto;
+}
+
+html[data-mode="fullscreen"] #app {
+  height: 100vh;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  background: var(--surface-base);
+}
+
+.mcp-view,
+[data-radix-popper-content-wrapper] {
+  color-scheme: dark;
+}
+
+.mcp-view {
+  position: relative;
+  height: 100%;
+  border-radius: var(--border-radius-lg, var(--radius-lg));
+  overflow: auto;
+}
+
+html:not([data-mode="fullscreen"]) .mcp-view {
+  height: var(--view-inline-height);
+}
+
+html[data-mode="fullscreen"] .mcp-view {
+  border-radius: 0;
+}
+
+/* A view holds the models an agent shows it, so it offers no new tab, and a model leaves it only for another view. */
+.mcp-view :is(.tab-add, .tab-x) {
+  display: none;
+}
+
+/* In the conversation, where the app can show the view full screen, it is one model's stage and timeline. */
+html[data-can-fullscreen]:not([data-mode="fullscreen"]) .mcp-view {
+  overflow: hidden;
+
+  & .arcue-window {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  & .ws {
+    display: flex;
+    flex-direction: column;
+  }
+
+  & .stage,
+  & .viewport-area {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+  }
+
+  & :is(.panel, .outline, [id^="arcue-outline-"], [id^="arcue-outline-"] + .tb-sep) {
+    display: none;
+  }
+
+  &:not([data-connection="reconnecting"]) .statusbar {
+    display: none;
+  }
+}
+
+.mcp-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 2px;
+  color: var(--view-text);
+  font-family: var(--font-sans);
+  white-space: pre-wrap;
+}
+
+.mcp-notice p {
+  margin: 0;
+}

@@ -4,7 +4,7 @@ import type { Readable, Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { warningPrompt } from "@arcue/core";
-import { connectToCore, fromNativePath } from "@arcue/platform-node";
+import { connectToCore, fromNativePath, readBridgeInfo, systemClock } from "@arcue/platform-node";
 import type {
   AssetInspection,
   AssetSummary,
@@ -14,10 +14,27 @@ import type {
   CoreClient,
   CoreKind,
   ReviewFile,
+  ShownModel,
   TimeSelection,
+  WindowChannelOutput,
 } from "@arcue/protocol";
-import { ArcueError, COMMENT_ID_PATTERN, MODEL_FILE_EXTENSIONS, viewAddress } from "@arcue/protocol";
-import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from "@modelcontextprotocol/ext-apps/server";
+import {
+  ArcueError,
+  COMMENT_ID_PATTERN,
+  MCP_VIEW_META_KEY,
+  MCP_VIEW_URI,
+  MODEL_FILE_EXTENSIONS,
+  viewAddress,
+  WINDOW_CHANNEL_META_KEY,
+  WINDOW_CHANNEL_TOOL,
+  windowChannelInputSchema,
+} from "@arcue/protocol";
+import {
+  getUiCapability,
+  RESOURCE_MIME_TYPE,
+  registerAppResource,
+  registerAppTool,
+} from "@modelcontextprotocol/ext-apps/server";
 import type { CallToolResult, ImageContent, TextContent } from "@modelcontextprotocol/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
@@ -26,6 +43,8 @@ import type { CardComment, CardData, CommentsCardData, InspectionCardData, Round
 import { CARD_META_KEY, CARD_URI, MAX_SCREENSHOTS, ROUND_META_KEY } from "./card-data";
 import { formatInspection, formatLabel, inspectFile } from "./inspect";
 import { connectForOpen } from "./routing";
+import type { RelaySocket } from "./window-relay";
+import { openWindowSocket, WindowRelay } from "./window-relay";
 
 export interface ArcueMcpOptions {
   userData: string;
@@ -38,6 +57,10 @@ export interface ArcueMcpOptions {
   version: string;
   /** The page of Arcue's card, which apps that show MCP Apps render for `get_comments` and `inspect_model`. */
   cardHtml: () => Promise<string>;
+  /** The page of Arcue's view, which apps that show MCP Apps render for `open_model`. */
+  viewHtml: () => Promise<string>;
+  /** Connects a window of the view an app shows to Arcue in the browser. Defaults to a socket with the token. */
+  openWindow?: (url: string, token: string, view: string) => Promise<RelaySocket>;
   /** How long a tool waits for a model to load. Defaults to 2 minutes. */
   loadTimeoutMs?: number;
 }
@@ -45,11 +68,18 @@ export interface ArcueMcpOptions {
 /** The card's page, which the build writes beside `arcue.js`. */
 export const bundledCardPage = fileURLToPath(new URL("./card.html", import.meta.url));
 
+/** The view's page, which the build of the web UI writes beside `arcue.js`. */
+export const bundledViewPage = fileURLToPath(new URL("./view.html", import.meta.url));
+
 /** The view of a server that has no `--view` and no session's variables. */
 const DEFAULT_VIEW = "mcp";
 /** The most PNG bytes one result carries, so that it stays within what MCP clients read. */
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const LOAD_POLL_MS = 200;
+/** How long views wait after Arcue in the browser failed to start before one starts it again. */
+const START_RETRY_MS = 10_000;
+/** The most models whose last showing a view's channel records. */
+const MAX_SHOWN = 1000;
 const VIEW_READY_MS = 30_000;
 
 const OLDER_CORE =
@@ -92,6 +122,15 @@ interface Core {
   started: boolean;
 }
 
+const viewResult = (shown: ShownModel, ...content: TextContent[]): CallToolResult => ({
+  content,
+  _meta: { [MCP_VIEW_META_KEY]: shown },
+});
+const channelResult = (output: WindowChannelOutput): CallToolResult => ({
+  content: [],
+  _meta: { [WINDOW_CHANNEL_META_KEY]: output },
+});
+
 /** The MCP server of `arcue mcp`. Each tool call connects to the core that `arcue open` would use for the view. */
 export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
   let starting: Promise<void> | null = null;
@@ -103,6 +142,33 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
       })),
   };
   const leases: Leases = new Map();
+  /** When `open_model` last showed each model, by its path, so a view of an earlier one can tell. */
+  const shownAt = new Map<string, number>();
+  let lastShown = 0;
+  const openWindow = options.openWindow ?? openWindowSocket;
+  /** Why Arcue in the browser last failed to start for a view, so views that call again soon do not start it again. */
+  let startFailure: { at: number; error: unknown } | null = null;
+  const relay = new WindowRelay({
+    setTimer: systemClock.setTimer,
+    connect: async () => {
+      const attempt = async () => {
+        const info = await readBridgeInfo(options.userData, "serve");
+        if (info?.url === undefined) return null;
+        return openWindow(info.url, info.token, options.view).catch(() => null);
+      };
+      const socket = await attempt();
+      if (socket) return socket;
+      if (startFailure && Date.now() - startFailure.at < START_RETRY_MS) throw startFailure.error;
+      await options.startServe().catch((error: unknown) => {
+        startFailure = { at: Date.now(), error };
+        throw error;
+      });
+      startFailure = null;
+      const started = await attempt();
+      if (!started) throw new Error("Arcue in the browser started but does not take the view's window.");
+      return started;
+    },
+  });
   const server = new McpServer(
     { name: "arcue", version: options.version },
     {
@@ -111,6 +177,28 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
         `Paths are model files, absolute or relative to ${options.cwd}. A comment's vertex numbers count the file's own vertices, in the file's order.`,
       ].join(" "),
     },
+  );
+
+  server.server.onclose = () => relay.dispose();
+  /** The client renders the view, so `open_model` shows the model there, through Arcue in the browser. */
+  const showsViews = () =>
+    getUiCapability(server.server.getClientCapabilities())?.mimeTypes?.includes(RESOURCE_MIME_TYPE) ?? false;
+
+  registerAppResource(
+    server,
+    "Arcue view",
+    MCP_VIEW_URI,
+    { description: "The page that apps showing MCP Apps render for open_model. It holds no data." },
+    async () => ({
+      contents: [
+        {
+          uri: MCP_VIEW_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: await options.viewHtml(),
+          _meta: { ui: { prefersBorder: false, csp: { resourceDomains: ["https://assets.claude.ai"] } } },
+        },
+      ],
+    }),
   );
 
   registerAppResource(
@@ -199,12 +287,13 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "open_model",
     {
       title: "Show a model in Arcue",
       description:
-        "Show a model in Arcue, at a clip and frame when given: in this session's page of Arcue in the browser, or in the Arcue desktop app. The result says where, with the page's address when it is not open yet.",
+        "Show a model in Arcue, at a clip and frame when given: in apps that show MCP Apps, in Arcue's view in the conversation; elsewhere in this session's page of Arcue in the browser, or in the Arcue desktop app. The result says where, with the page's address when it is not open yet.",
       inputSchema: z.object({
         path: pathInput,
         clip: clipInput.optional(),
@@ -212,49 +301,103 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
         move: z.boolean().default(false).describe("Take the model from another session's view when one shows it."),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: MCP_VIEW_URI } },
     },
     async ({ path, clip, frame, move }, { mcpReq: { signal } }) => {
       const file = await modelFile(options.cwd, path);
-      return withCore(options, (core) =>
-        leased(leases, core, file, true, async () => {
-          const open = await openAsset(core, file);
-          const at = open?.path ?? file;
-          let named = clip;
-          if (clip !== undefined) {
-            const { assetId } = open ?? (await openInView(core, { path: at, view: options.view, move }));
-            await loaded(core.client, assetId, options.loadTimeoutMs, signal);
-            named = await clipNamed(core.client, { assetId, name: basename(file) }, clip, frame);
-          }
-          const input: CommandInput<"asset.openInView"> = {
-            path: at,
-            view: options.view,
-            move,
-            ...(named !== undefined ? { clip: named } : {}),
-            ...(frame !== undefined ? { frame } : {}),
-          };
-          const { assetId, shown } = await openInView(core, input);
-          const moment =
-            named !== undefined
-              ? ` at clip "${named}"${frame !== undefined ? `, frame ${frame}` : ""}`
-              : frame !== undefined
-                ? ` at frame ${frame}`
-                : "";
-          const name = `${basename(file)}${moment}`;
-          const lines = startedLine(core);
-          if (shown === "view") lines.push(`Arcue shows ${name} in this session's page as ${assetId}.`);
-          else if (shown === "window" && core.page !== null) {
-            lines.push(
-              `Arcue shows ${name} as ${assetId} in another of its pages, since this session's page is not open: ${core.page}`,
-            );
-          } else if (shown === "window") lines.push(`Arcue shows ${name} in the Arcue app as ${assetId}.`);
-          else if (core.page !== null) {
-            lines.push(`Arcue holds ${name} as ${assetId} until this session's page opens: ${core.page}`);
-          } else lines.push(`Arcue holds ${name} as ${assetId} until one of its windows opens.`);
-          return result(text(lines.join("\n")));
-        }),
+      const here = showsViews();
+      if (here) await relay.sweep();
+      return withCore(
+        options,
+        (core) =>
+          leased(leases, core, file, true, async () => {
+            const open = await openAsset(core, file);
+            const at = open?.path ?? file;
+            let named = clip;
+            if (clip !== undefined) {
+              const { assetId } = open ?? (await openInView(core, { path: at, view: options.view, move }));
+              await loaded(core.client, assetId, options.loadTimeoutMs, signal);
+              named = await clipNamed(core.client, { assetId, name: basename(file) }, clip, frame);
+            }
+            const input: CommandInput<"asset.openInView"> = {
+              path: at,
+              view: options.view,
+              move,
+              ...(named !== undefined ? { clip: named } : {}),
+              ...(frame !== undefined ? { frame } : {}),
+            };
+            const { assetId, shown } = await openInView(core, input);
+            const moment =
+              named !== undefined
+                ? ` at clip "${named}"${frame !== undefined ? `, frame ${frame}` : ""}`
+                : frame !== undefined
+                  ? ` at frame ${frame}`
+                  : "";
+            const name = `${basename(file)}${moment}`;
+            if (here) {
+              const { assets } = await core.client.query("asset.list", {});
+              const shownPath = assets.find((asset) => asset.assetId === assetId)?.path ?? fromNativePath(file);
+              lastShown = Math.max(Date.now(), lastShown + 1);
+              shownAt.set(shownPath, lastShown);
+              return viewResult(
+                {
+                  path: shownPath,
+                  assetId,
+                  shownAt: lastShown,
+                  ...(named !== undefined ? { clip: named } : {}),
+                  ...(frame !== undefined ? { frame } : {}),
+                },
+                text(`Arcue shows ${name} as ${assetId} in its view in this conversation.`),
+              );
+            }
+            const lines = startedLine(core);
+            if (shown === "view") lines.push(`Arcue shows ${name} in this session's page as ${assetId}.`);
+            else if (shown === "window" && core.page !== null) {
+              lines.push(
+                `Arcue shows ${name} as ${assetId} in another of its pages, since this session's page is not open: ${core.page}`,
+              );
+            } else if (shown === "window") lines.push(`Arcue shows ${name} in the Arcue app as ${assetId}.`);
+            else if (core.page !== null) {
+              lines.push(`Arcue holds ${name} as ${assetId} until this session's page opens: ${core.page}`);
+            } else lines.push(`Arcue holds ${name} as ${assetId} until one of its windows opens.`);
+            return result(text(lines.join("\n")));
+          }),
+        here ? "serve" : "open",
       );
     },
   );
+
+  const windowChannel = server.registerTool(
+    WINDOW_CHANNEL_TOOL,
+    {
+      title: "Carry the view's window",
+      description:
+        "Carries the messages between Arcue's view in the conversation and Arcue in the browser. Only the view calls it.",
+      inputSchema: windowChannelInputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    async ({ op, channel, path, shownAt: at, seq, from, pieces }, { mcpReq: { signal } }) => {
+      if (op === "open") {
+        const id = await relay.open();
+        const latest = path === undefined || at === undefined || at >= (shownAt.get(path) ?? 0);
+        if (path !== undefined && at !== undefined && latest && (shownAt.has(path) || shownAt.size < MAX_SHOWN)) {
+          shownAt.set(path, at);
+        }
+        return channelResult({ channel: id, latest });
+      }
+      if (channel === undefined) throw new Error(`${op} needs the channel.`);
+      if (op === "send") return channelResult({ next: relay.send(channel, seq ?? 0, pieces ?? []) });
+      if (op === "receive") return channelResult(await relay.receive(channel, from ?? 0, signal));
+      relay.close(channel);
+      return channelResult({});
+    },
+  );
+  /** Only an app that shows the view lists the tool, which only the view calls. */
+  windowChannel.disable();
+  server.server.oninitialized = () => {
+    if (showsViews()) windowChannel.enable();
+  };
 
   registerAppTool(
     server,
@@ -479,7 +622,11 @@ export async function serveMcp(
 ): Promise<void> {
   const server = createArcueMcpServer({ ...options, view: options.view ?? DEFAULT_VIEW });
   const { promise: closed, resolve: close } = Promise.withResolvers<void>();
-  server.server.onclose = () => close();
+  const disposeRelay = server.server.onclose;
+  server.server.onclose = () => {
+    disposeRelay?.();
+    close();
+  };
   await server.connect(new StdioServerTransport(streams.stdin, streams.stdout));
   await closed;
 }
@@ -498,7 +645,11 @@ async function modelFile(cwd: string, path: string): Promise<string> {
  * Connects to the core `arcue open` would use for the view, and starts Arcue in the browser where `arcue open` would
  * say to.
  */
-async function withCore<Value>(options: ArcueMcpOptions, work: (core: Core) => Promise<Value>): Promise<Value> {
+async function withCore<Value>(
+  options: ArcueMcpOptions,
+  work: (core: Core) => Promise<Value>,
+  to: "open" | "serve" = "open",
+): Promise<Value> {
   let started = false;
   const route = async () => {
     try {
@@ -510,7 +661,16 @@ async function withCore<Value>(options: ArcueMcpOptions, work: (core: Core) => P
     started = true;
     return connectForOpen(options.userData, options.view);
   };
-  const { connection, kind } = await route();
+  const toServe = async () => {
+    const running = await connectToCore(options.userData, "serve");
+    if (running) return { connection: running, kind: "serve" as const };
+    await options.startServe();
+    started = true;
+    const connection = await connectToCore(options.userData, "serve");
+    if (!connection) throw new Error("Arcue in the browser did not start.");
+    return { connection, kind: "serve" as const };
+  };
+  const { connection, kind } = await (to === "serve" ? toServe() : route());
   const url = kind === "serve" ? connection.info.url : undefined;
   const core: Core = {
     client: connection.client,

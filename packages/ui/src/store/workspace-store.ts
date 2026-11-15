@@ -14,7 +14,9 @@ import type {
 import { ArcueError, commands, isCommandName, withTransfer } from "@arcue/protocol";
 import type { TextureSlot } from "@arcue/scene";
 import { fileNameOf, materialSlots, missingSlots } from "@arcue/scene";
-import type { SessionHost, ToastInput } from "./asset-session";
+import type { ImageUrls } from "../image-urls";
+import { objectUrls } from "../image-urls";
+import type { RoundSender, SessionHost, ToastInput } from "./asset-session";
 import { AssetSession, messageOf, NEW_COMMENT_OVERLAY } from "./asset-session";
 import { Store } from "./observable";
 import type { DropChoice, DropPrompt, DroppedModel, FileHost } from "./view-files";
@@ -59,6 +61,10 @@ export interface WorkspaceStoreOptions {
   setTimer?: (delayMs: number, callback: () => void) => () => void;
   /** The host's open dialog and dropped files. Without it the window adds no files to a view. */
   files?: FileHost;
+  /** Sends a model's queue to the agent in place of copying its prompt. */
+  sendRound?: RoundSender;
+  /** Makes the addresses of screenshots and texture previews. Defaults to object URLs. */
+  imageUrls?: ImageUrls;
 }
 
 /** The commands with runsIn "view", which the core routes to the window that shows the asset. */
@@ -108,6 +114,7 @@ async function browserClipboard(text: string): Promise<void> {
  */
 export class WorkspaceStore {
   readonly client: CoreClient;
+  readonly imageUrls: ImageUrls;
   readonly state: Store<WorkspaceState>;
   readonly #sessions = new Map<string, AssetSession>();
   readonly #summaries = new Map<string, AssetSummary>();
@@ -124,6 +131,7 @@ export class WorkspaceStore {
 
   constructor(options: WorkspaceStoreOptions) {
     this.client = options.client;
+    this.imageUrls = options.imageUrls ?? objectUrls;
     this.#setTimer = options.setTimer ?? defaultTimer;
     this.#writeClipboard = options.writeClipboard ?? browserClipboard;
     this.#files = options.files ?? null;
@@ -149,6 +157,8 @@ export class WorkspaceStore {
       },
       showCopySheet: (sheet) => this.state.patch({ copySheet: sheet }),
       setTimer: this.#setTimer,
+      sendRound: options.sendRound ?? null,
+      imageUrls: this.imageUrls,
     };
   }
 

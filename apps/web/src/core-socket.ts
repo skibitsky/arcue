@@ -11,8 +11,14 @@ export function coreSocketUrl(location: Pick<Location, "protocol" | "host" | "se
   return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${SERVE_CORE_PATH}${query}`;
 }
 
+/** What the page needs of its socket to the core: a WebSocket, or the channel Arcue's view opens through its app. */
+export type CoreSocket = Pick<
+  WebSocket,
+  "binaryType" | "readyState" | "send" | "close" | "addEventListener" | "removeEventListener"
+>;
+
 /** One frame per message. Frames written before the socket opens wait for it. */
-export function webSocketStream(socket: WebSocket): ByteStream {
+export function webSocketStream(socket: CoreSocket): ByteStream {
   socket.binaryType = "arraybuffer";
   const waiting: Uint8Array<ArrayBuffer>[] = [];
   socket.addEventListener("open", () => {

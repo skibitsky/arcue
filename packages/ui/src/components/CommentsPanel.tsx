@@ -315,11 +315,12 @@ function NoteField({ session }: { session: AssetSession }) {
 }
 
 function CopyPromptButton({ session, count }: { session: AssetSession; count: number }) {
+  const label = session.sendLabel ?? "Copy prompt";
   return (
-    <Tip label="Copy prompt" shortcut={modShortcut("C", { shift: true })}>
+    <Tip label={label} shortcut={modShortcut("C", { shift: true })}>
       <button type="button" className="primary" disabled={count === 0} onClick={() => void session.copyPrompt()}>
-        <Icon name="copy" />
-        <span>Copy prompt</span>
+        <Icon name={session.sendLabel ? "sent" : "copy"} />
+        <span>{label}</span>
         {count > 0 ? <span className="badge">{count}</span> : null}
       </button>
     </Tip>
