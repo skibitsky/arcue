@@ -1,4 +1,7 @@
-import { ArcueCore, ManualClock, MemoryPlatform } from "@arcue/core";
+import type { ArcueCore } from "@arcue/core";
+import { ManualClock } from "@arcue/core";
+import type { RecordingPlatform, TestCore } from "@arcue/core/test-support";
+import { fakeAsset, startTestCore } from "@arcue/core/test-support";
 import type { ByteStream, ChannelPiece, CoreClient, WindowChannelInput, WindowChannelOutput } from "@arcue/protocol";
 import {
   binaryFrameCodec,
@@ -12,8 +15,6 @@ import {
   WINDOW_CHANNEL_META_KEY,
   WINDOW_CHANNEL_TOOL,
 } from "@arcue/protocol";
-import type { Importer, SceneDescription } from "@arcue/scene";
-import { SCENE_SPACE } from "@arcue/scene";
 import type { McpUiHostCapabilities } from "@modelcontextprotocol/ext-apps";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalHost } from "../local-host";
@@ -24,29 +25,6 @@ import { McpView } from "./view-host";
 const HERO = "/work/Hero.fbx";
 const CRATE = "/work/Crate.fbx";
 const VIEW = "3f9a0c1d2b4e";
-
-function emptyScene(): SceneDescription {
-  return {
-    source: {
-      format: "fbx",
-      exporter: null,
-      fps: 30,
-      originalSpace: SCENE_SPACE,
-      conversion: { scale: 1, rotation: [0, 0, 0, 1] },
-      warnings: [],
-    },
-    nodes: [],
-    meshes: [],
-    skeletons: [],
-    materials: [],
-    textures: [],
-    clips: [],
-    parts: [],
-    bounds: { min: [0, 0, 0], max: [0, 0, 0] },
-  };
-}
-
-const emptyImporter: Importer = { format: "fbx", extensions: [".fbx"], import: async () => emptyScene() };
 
 /** One window's channel, as `arcue mcp` keeps it, on a connection of the view to the core. */
 class Channel {
@@ -114,22 +92,25 @@ class Channel {
 
 /** Arcue in the browser behind `arcue mcp`: `open_model` and the `window_channel` tool, in memory. */
 class FakeArcue {
-  readonly clock = new ManualClock();
-  readonly platform = new MemoryPlatform({
-    clock: this.clock,
-    files: { [HERO]: "hero", [CRATE]: "crate" },
-    importers: [emptyImporter],
-  });
-  core: ArcueCore | null = null;
+  #test: TestCore | null = null;
   readonly #channels = new Map<string, Channel>();
   readonly #shownAt = new Map<string, number>();
   #lastShown = 0;
   #connections = 0;
 
   async start(): Promise<this> {
-    this.core = await ArcueCore.start({ platform: this.platform, onError: () => undefined });
-    cores.push(this.core);
+    const files = {
+      [HERO]: fakeAsset({ meshes: [{ name: "Body", grid: 1 }], clips: [{ name: "Armature|Walk", frames: 31 }] }),
+      [CRATE]: fakeAsset({ meshes: [{ name: "Box", grid: 2 }] }),
+    };
+    this.#test = await startTestCore(files);
+    this.#test.window.close();
+    cores.push(this.#test.core);
     return this;
+  }
+
+  get platform(): RecordingPlatform {
+    return this.#started().platform;
   }
 
   /** The command line's connection, as `open_model` uses it. */
@@ -180,8 +161,12 @@ class FakeArcue {
   }
 
   #running(): ArcueCore {
-    if (!this.core) throw new Error("No core runs.");
-    return this.core;
+    return this.#started().core;
+  }
+
+  #started(): TestCore {
+    if (!this.#test) throw new Error("No core runs.");
+    return this.#test;
   }
 }
 
