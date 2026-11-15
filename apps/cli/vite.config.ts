@@ -2,6 +2,7 @@ import { copyFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { defineConfig } from "vite";
+import { cardPage } from "./card-page.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -22,6 +23,7 @@ export default defineConfig({
     noExternal: true,
   },
   plugins: [
+    cardPage(),
     {
       name: "copy-ufbx-wasm",
       apply: "build",

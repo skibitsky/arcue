@@ -1,7 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node"],
+    "allowImportingTsExtensions": true
   },
-  "include": ["src", "vite.config.ts", "vitest.config.ts", "vitest.processes.config.ts", "../../types/runtime.d.ts"]
+  "include": [
+    "src",
+    "card-page.ts",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "vitest.processes.config.ts",
+    "../../types/runtime.d.ts"
+  ]
 }

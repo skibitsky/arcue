@@ -17,3 +17,4 @@ export type {
 export type { CallContext, CallerKind, CommandRegistry } from "./registry";
 export { locateComposition } from "./review-store";
 export type { ServeOptions } from "./serve";
+export { warningPrompt } from "./warnings";

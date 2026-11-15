@@ -10,11 +10,13 @@ import type { CommandInput, CoreClient } from "@arcue/protocol";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import { CARD_META_KEY, CARD_URI } from "./card-data";
 import { outsideSessions, sessionView } from "./session-view";
 import { registerPid } from "./test-pids";
 
 const processRun = inject("processRun");
 const crate = fileURLToPath(new URL("../../../samples/crate.fbx", import.meta.url));
+const rockLods = fileURLToPath(new URL("../../../samples/rock-lods.fbx", import.meta.url));
 const png = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
 const camera: CommandInput<"comment.create">["camera"] = {
   position: [0, 1, 3],
@@ -31,6 +33,7 @@ let transport: StdioClientTransport;
 interface ToolResult {
   isError?: boolean;
   content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
+  _meta?: Record<string, unknown>;
 }
 
 /** The test's environment for arcue: its own data folder, and no agent session's variables. */
@@ -186,7 +189,36 @@ describe("arcue mcp", () => {
       file: { name: "crate.fbx" },
       meshes: [{ name: "Crate", triangles: 756 }],
     });
+    expect(result._meta?.[CARD_META_KEY]).toMatchObject({
+      card: "inspection",
+      path: expect.stringMatching(/[\\/]work-\w+[\\/]crate\.fbx$/),
+      name: "crate.fbx",
+      triangles: 756,
+      meshes: [{ name: "Crate", triangles: 756, skinned: false }],
+      prompt: null,
+    });
     await expect(connectToCore(userData, "serve")).resolves.toBeNull();
+  });
+
+  it("counts a model's triangles on its card at the most detailed level, without collision helpers", async () => {
+    copyFileSync(rockLods, join(work, "rock-lods.fbx"));
+
+    const result = await call("inspect_model", { path: "rock-lods.fbx" });
+
+    expect(result.isError, texts(result).join("\n")).toBeFalsy();
+    expect(result._meta?.[CARD_META_KEY]).toMatchObject({ triangles: 1600 });
+  });
+
+  it("serves the built card", async () => {
+    const { contents } = await client.readResource({ uri: CARD_URI });
+
+    const [page] = contents;
+    expect(page?.mimeType).toBe("text/html;profile=mcp-app");
+    const html = page && "text" in page ? page.text : "";
+    expect(html).toMatch(/^<!doctype html>/);
+    expect(html).toContain('<script type="module">');
+    expect(html).toContain("<style>");
+    expect(html).not.toMatch(/<script[^>]* src=|<link[^>]* href=/);
   });
 
   it("ends when its client closes its input", async () => {

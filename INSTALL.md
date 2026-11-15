@@ -56,6 +56,8 @@ In the Codex app, the plugin shows Arcue in the in-app browser. In a terminal, i
 
 `arcue mcp` is an MCP server whose tools list the open models, read and send a model's comments with their screenshots, resolve or reopen them, show models, render screenshots and inspect files. It runs on the desktop app's `arcue` command.
 
+In apps that show MCP Apps, `get_comments` shows the comments as a card with their screenshots, where you can send the queue or resolve a comment, and `inspect_model` shows what the file holds, with a button that asks to fix its warnings.
+
 1. Install the [desktop app](#desktop-app).
 2. Add the server:
    - Claude Code: `claude mcp add --scope user arcue -- arcue mcp`

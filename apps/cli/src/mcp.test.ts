@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { CARD_META_KEY, CARD_URI, ROUND_META_KEY } from "./card-data";
 import type { ArcueMcpOptions } from "./mcp";
 import { createArcueMcpServer } from "./mcp";
 
@@ -20,6 +21,7 @@ const FIRST = "c01k9qv3m4x7r2t8w5y6z0abcde";
 const SECOND = "c01k9qv3m4x7r2t8w5y6z0abcdf";
 const THIRD = "c01k9qv3m4x7r2t8w5y6z0abcdg";
 const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+const CARD_HTML = "<!doctype html><title>card</title>";
 
 let temp: string;
 let userData: string;
@@ -55,6 +57,7 @@ async function connect(overrides: Partial<ArcueMcpOptions> = {}): Promise<Client
       throw new Error("Arcue in the browser did not start.");
     },
     version: "test",
+    cardHtml: async () => CARD_HTML,
     loadTimeoutMs: 2000,
     ...overrides,
   });
@@ -68,6 +71,10 @@ async function connect(overrides: Partial<ArcueMcpOptions> = {}): Promise<Client
 
 async function call(client: Client, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
   return (await client.callTool({ name, arguments: args })) as CallToolResult;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function texts(result: CallToolResult): string[] {
@@ -179,6 +186,40 @@ describe("arcue mcp", () => {
     ]);
     expect(tools.find((tool) => tool.name === "list_models")?.annotations?.readOnlyHint).toBe(true);
     expect(tools.find((tool) => tool.name === "get_comments")?.annotations?.readOnlyHint).toBe(false);
+    const carded = tools.filter((tool) => isRecord(tool._meta?.ui) && tool._meta.ui.resourceUri === CARD_URI);
+    expect(carded.map((tool) => tool.name).sort()).toEqual(["get_comments", "inspect_model"]);
+  });
+
+  it("serves the card for the tools that show one", async () => {
+    const client = await connect();
+
+    const { resources } = await client.listResources();
+    const { contents } = await client.readResource({ uri: CARD_URI });
+
+    expect(resources.map(({ uri, description }) => ({ uri, description }))).toEqual([
+      {
+        uri: CARD_URI,
+        description: "The page that apps showing MCP Apps render for get_comments and inspect_model. It holds no data.",
+      },
+    ]);
+    expect(contents).toEqual([
+      {
+        uri: CARD_URI,
+        mimeType: "text/html;profile=mcp-app",
+        text: CARD_HTML,
+        _meta: { ui: { prefersBorder: false, csp: { resourceDomains: ["https://assets.claude.ai"] } } },
+      },
+    ]);
+  });
+
+  it("says why when it cannot read the card's page", async () => {
+    const client = await connect({
+      cardHtml: async () => {
+        throw new Error("Arcue's card page is missing.");
+      },
+    });
+
+    await expect(client.readResource({ uri: CARD_URI })).rejects.toThrow("Arcue's card page is missing.");
   });
 
   describe("open_model", () => {
@@ -397,6 +438,35 @@ describe("arcue mcp", () => {
       expect(label).toBe(`Screenshot of ${SECOND}:`);
       expect(images(result)).toEqual([Buffer.from(png).toString("base64")]);
       expect(requestsNamed(core, "comment.screenshot")).toEqual([{ assetId: "a1", commentId: SECOND }]);
+      expect(result._meta?.[CARD_META_KEY]).toEqual({
+        card: "comments",
+        path: model,
+        name: "Hero.fbx",
+        counts: { draft: 1, sent: 1, resolved: 1 },
+        queued: 1,
+        comments: [
+          { id: SECOND, status: "sent", text: "Still bent.", moment: "Charge, frame 34", hasScreenshot: true },
+          { id: THIRD, status: "draft", text: "The thumb tip bends outward.", moment: null, hasScreenshot: false },
+        ],
+        screenshots: [SECOND],
+      });
+    });
+
+    it("names a range comment's frames on the card, and leaves its screenshots out when asked", async () => {
+      const ranged = comment(FIRST, {
+        time: { kind: "range", clip: "Armature|Walk", clipDisplayName: "Walk", start: 4, end: 9 },
+      });
+      const core = await serve({ "review.get": () => review([ranged]), "comment.screenshot": () => png });
+      const client = await connect();
+
+      const result = await call(client, "get_comments", { path: model, screenshots: false });
+
+      expect(images(result)).toEqual([]);
+      expect(requestsNamed(core, "comment.screenshot")).toEqual([]);
+      expect(result._meta?.[CARD_META_KEY]).toMatchObject({
+        comments: [{ id: FIRST, moment: "Walk, frames 4 to 9", hasScreenshot: true }],
+        screenshots: [],
+      });
     });
 
     it("lists a region comment with its vertex ranges and a range of frames", async () => {
@@ -465,6 +535,20 @@ describe("arcue mcp", () => {
       expect(texts(result).at(-1)).toBe(
         "Left out the screenshot of 1 more comment. Pass their ids as comments to get them.",
       );
+      expect(result._meta?.[CARD_META_KEY]).toMatchObject({ screenshots: ids.slice(0, 8) });
+    });
+
+    it("names on the card only the comments whose screenshots it carries", async () => {
+      await serve({
+        "review.get": () => review([comment(FIRST), comment(SECOND)]),
+        "comment.screenshot": (input) => ((input as { commentId: string }).commentId === FIRST ? null : png),
+      });
+      const client = await connect();
+
+      const result = await call(client, "get_comments", { path: model });
+
+      expect(images(result)).toHaveLength(1);
+      expect(result._meta?.[CARD_META_KEY]).toMatchObject({ screenshots: [SECOND] });
     });
 
     it("leaves out the screenshots past the size budget", async () => {
@@ -480,6 +564,7 @@ describe("arcue mcp", () => {
       expect(texts(result).at(-1)).toBe(
         "Left out the screenshots of 2 more comments. Pass their ids as comments to get them.",
       );
+      expect(result._meta?.[CARD_META_KEY]).toMatchObject({ screenshots: [FIRST] });
     });
 
     it("opens a model that no window has to read its comments, and closes it again", async () => {
@@ -669,6 +754,7 @@ describe("arcue mcp", () => {
       ]);
       expect(images(result)).toHaveLength(1);
       expect(requestsNamed(core, "round.copy")).toEqual([{ assetId: "a1", clipboard: false }]);
+      expect(result._meta?.[ROUND_META_KEY]).toEqual({ round: 1, comments: [FIRST, SECOND] });
     });
 
     it("says when an older Arcue copied the prompt to the clipboard anyway", async () => {
@@ -689,6 +775,7 @@ describe("arcue mcp", () => {
       const result = await call(client, "send_round", { path: model });
 
       expect(texts(result)).toEqual(["Hero.fbx has no comments in its queue."]);
+      expect(result._meta?.[ROUND_META_KEY]).toBeUndefined();
       expect(core.requests.map((request) => request.name)).not.toContain("round.copy");
     });
 

@@ -2,8 +2,11 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, extname, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { warningPrompt } from "@arcue/core";
 import { connectToCore, fromNativePath } from "@arcue/platform-node";
 import type {
+  AssetInspection,
   AssetSummary,
   CommandInput,
   CommandOutput,
@@ -14,11 +17,14 @@ import type {
   TimeSelection,
 } from "@arcue/protocol";
 import { ArcueError, COMMENT_ID_PATTERN, MODEL_FILE_EXTENSIONS, viewAddress } from "@arcue/protocol";
+import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { CallToolResult, ImageContent, TextContent } from "@modelcontextprotocol/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
-import { formatInspection, inspectFile } from "./inspect";
+import type { CardComment, CardData, CommentsCardData, InspectionCardData, RoundMeta } from "./card-data";
+import { CARD_META_KEY, CARD_URI, MAX_SCREENSHOTS, ROUND_META_KEY } from "./card-data";
+import { formatInspection, formatLabel, inspectFile } from "./inspect";
 import { connectForOpen } from "./routing";
 
 export interface ArcueMcpOptions {
@@ -30,13 +36,17 @@ export interface ArcueMcpOptions {
   /** Starts Arcue in the browser in the background, as `arcue serve --detach` does, or rejects saying why it did not. */
   startServe: () => Promise<void>;
   version: string;
+  /** The page of Arcue's card, which apps that show MCP Apps render for `get_comments` and `inspect_model`. */
+  cardHtml: () => Promise<string>;
   /** How long a tool waits for a model to load. Defaults to 2 minutes. */
   loadTimeoutMs?: number;
 }
 
+/** The card's page, which the build writes beside `arcue.js`. */
+export const bundledCardPage = fileURLToPath(new URL("./card.html", import.meta.url));
+
 /** The view of a server that has no `--view` and no session's variables. */
 const DEFAULT_VIEW = "mcp";
-const MAX_SCREENSHOTS = 8;
 /** The most PNG bytes one result carries, so that it stays within what MCP clients read. */
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const LOAD_POLL_MS = 200;
@@ -66,6 +76,12 @@ const image = (png: Uint8Array): ImageContent => ({
   mimeType: "image/png",
 });
 const result = (...content: (TextContent | ImageContent)[]): CallToolResult => ({ content });
+const carded = (card: CardData, ...content: (TextContent | ImageContent)[]): CallToolResult => ({
+  content,
+  _meta: { [CARD_META_KEY]: card },
+});
+/** The longest lists of meshes and clips a card shows. */
+const CARD_LIST_LIMIT = 200;
 
 interface Core {
   client: CoreClient;
@@ -95,6 +111,23 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
         `Paths are model files, absolute or relative to ${options.cwd}. A comment's vertex numbers count the file's own vertices, in the file's order.`,
       ].join(" "),
     },
+  );
+
+  registerAppResource(
+    server,
+    "Arcue card",
+    CARD_URI,
+    { description: "The page that apps showing MCP Apps render for get_comments and inspect_model. It holds no data." },
+    async () => ({
+      contents: [
+        {
+          uri: CARD_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: await options.cardHtml(),
+          _meta: { ui: { prefersBorder: false, csp: { resourceDomains: ["https://assets.claude.ai"] } } },
+        },
+      ],
+    }),
   );
 
   server.registerTool(
@@ -133,7 +166,8 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "inspect_model",
     {
       title: "Inspect a model",
@@ -144,6 +178,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
         json: z.boolean().default(false).describe("Return the full result as JSON."),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: CARD_URI } },
     },
     async ({ path, json }) => {
       const file = await modelFile(options.cwd, path);
@@ -157,7 +192,10 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
       }).catch((error: unknown) => {
         throw workerError ?? error;
       });
-      return result(text(json ? JSON.stringify(inspection) : formatInspection(inspection)));
+      return carded(
+        inspectionCard(file, inspection),
+        text(json ? JSON.stringify(inspection) : formatInspection(inspection)),
+      );
     },
   );
 
@@ -218,7 +256,8 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "get_comments",
     {
       title: "Read a model's comments",
@@ -238,6 +277,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
           .describe(`Add the screenshots of up to ${MAX_SCREENSHOTS} comments; the result says how many it left out.`),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: CARD_URI } },
     },
     async ({ path, status, comments, screenshots }) => {
       const file = await modelFile(options.cwd, path);
@@ -252,17 +292,19 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
           const content: (TextContent | ImageContent)[] = [
             text([...startedLine(core), summaryLine(asset.name, review, listed)].join("\n")),
           ];
-          if (listed.length === 0) return result(...content);
+          const card = commentsCard(file, asset.name, review, listed);
+          if (listed.length === 0) return carded(card, ...content);
           content.push(text(JSON.stringify(listed.map(commentEntry))));
           if (screenshots) {
             const shots = listed
               .filter((comment) => comment.context.screenshot !== null)
               .map((comment) => ({ id: comment.id, label: comment.id }));
-            const { content: images, left } = await screenshotsOf(core.client, asset.assetId, shots);
+            const { content: images, ids, left } = await screenshotsOf(core.client, asset.assetId, shots);
             content.push(...images);
+            card.screenshots = ids;
             if (left > 0) content.push(text(`${leftOut(left)} Pass their ids as comments to get them.`));
           }
-          return result(...content);
+          return carded(card, ...content);
         }),
       );
     },
@@ -310,7 +352,11 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
             ...(copy.copiedToClipboard ? ["Arcue also copied the prompt to the clipboard."] : []),
             ...(left > 0 ? [`${leftOut(left)} get_comments with their ids gives them.`] : []),
           ];
-          return result(text(copy.prompt), ...images, text(notes.join("\n")));
+          const round: RoundMeta = { round: copy.round, comments: ids };
+          return {
+            ...result(text(copy.prompt), ...images, text(notes.join("\n"))),
+            _meta: { [ROUND_META_KEY]: round },
+          };
         }),
       );
     },
@@ -744,6 +790,67 @@ function timeLabel(time: TimeSelection | undefined): string {
   return ` at clip "${time.clip}", frame ${time.start}`;
 }
 
+function commentsCard(file: string, name: string, review: ReviewFile, listed: readonly Comment[]): CommentsCardData {
+  return {
+    card: "comments",
+    path: file,
+    name,
+    counts: countsOf(review.comments),
+    queued: review.queue.length,
+    comments: listed.map(cardComment),
+    screenshots: [],
+  };
+}
+
+function cardComment(comment: Comment): CardComment {
+  const { time } = comment;
+  return {
+    id: comment.id,
+    status: comment.status,
+    text: comment.followUps.at(-1)?.text ?? comment.text,
+    moment:
+      time.kind === "none"
+        ? null
+        : time.kind === "frame"
+          ? `${time.clipDisplayName}, frame ${time.frame}`
+          : `${time.clipDisplayName}, frames ${time.start} to ${time.end}`,
+    hasScreenshot: comment.context.screenshot !== null,
+  };
+}
+
+function inspectionCard(file: string, inspection: AssetInspection): InspectionCardData {
+  return {
+    card: "inspection",
+    path: file,
+    name: inspection.file.name,
+    format: formatLabel(inspection),
+    height: inspection.height,
+    triangles: shownTriangles(inspection.parts),
+    meshes: inspection.meshes
+      .slice(0, CARD_LIST_LIMIT)
+      .map((mesh) => ({ name: mesh.name, triangles: mesh.triangles, skinned: mesh.skinned })),
+    meshCount: inspection.meshes.length,
+    bones: inspection.bones.length,
+    materials: inspection.materials.length,
+    clips: inspection.clips
+      .slice(0, CARD_LIST_LIMIT)
+      .map((clip) => ({ name: clip.name, displayName: clip.displayName, frames: clip.frames })),
+    clipCount: inspection.clips.length,
+    warnings: inspection.warnings.map((warning) => ({ severity: warning.severity, message: warning.message })),
+    prompt: inspection.warnings.length > 0 ? warningPrompt(inspection.file.path, inspection.warnings) : null,
+  };
+}
+
+/** The triangles the model shows at its most detailed level, without collision helpers, sockets or hidden parts. */
+function shownTriangles(parts: AssetInspection["parts"]): number {
+  return parts
+    .filter((part) => part.role === "model" && part.shownByDefault)
+    .reduce((sum, part) => {
+      const finest = Math.min(...part.levels.map((level) => level.level));
+      return sum + (part.levels.find((level) => level.level === finest)?.triangles ?? 0);
+    }, 0);
+}
+
 /**
  * The comments' screenshots, each after a line that names it, up to `MAX_SCREENSHOTS` and `MAX_IMAGE_BYTES`, and how
  * many it left out.
@@ -752,20 +859,20 @@ async function screenshotsOf(
   client: CoreClient,
   assetId: string,
   shots: readonly { id: string; label: string }[],
-): Promise<{ content: (TextContent | ImageContent)[]; left: number }> {
+): Promise<{ content: (TextContent | ImageContent)[]; ids: string[]; left: number }> {
   const content: (TextContent | ImageContent)[] = [];
-  let count = 0;
+  const ids: string[] = [];
   let bytes = 0;
   for (const [index, { id, label }] of shots.entries()) {
-    if (count === MAX_SCREENSHOTS) return { content, left: shots.length - index };
+    if (ids.length === MAX_SCREENSHOTS) return { content, ids, left: shots.length - index };
     const png = await client.query("comment.screenshot", { assetId, commentId: id });
     if (png === null) continue;
-    if (count > 0 && bytes + png.byteLength > MAX_IMAGE_BYTES) return { content, left: shots.length - index };
+    if (ids.length > 0 && bytes + png.byteLength > MAX_IMAGE_BYTES) return { content, ids, left: shots.length - index };
     content.push(text(`Screenshot of ${label}:`), image(png));
-    count++;
+    ids.push(id);
     bytes += png.byteLength;
   }
-  return { content, left: 0 };
+  return { content, ids, left: 0 };
 }
 
 function leftOut(count: number): string {
