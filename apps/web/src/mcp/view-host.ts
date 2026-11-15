@@ -220,12 +220,15 @@ export class McpView {
     }
   }
 
-  /** Moves the model's tab here from the window that shows it, or opens the model again, and returns its asset. */
+  /** Moves the model's tab here from the window that shows it, or opens it again where it was shown, and returns its asset. */
   async #modelIn(host: LocalHost): Promise<string> {
-    const path = this.#shown?.model.path ?? "";
+    const { path = "", clip, frame } = this.#shown?.model ?? {};
     const { assets } = await host.client.query("asset.list", {});
     const assetId = assets.find((entry) => entry.path === path)?.assetId;
-    if (assetId === undefined) return (await host.client.execute("asset.open", { path })).assetId;
+    if (assetId === undefined) {
+      const at = { ...(clip !== undefined ? { clip } : {}), ...(frame !== undefined ? { frame } : {}) };
+      return (await host.client.execute("asset.open", { path, ...at })).assetId;
+    }
     if (!host.store.session(assetId)) await host.client.execute("view.moveAsset", { assetId });
     return assetId;
   }

@@ -16,6 +16,7 @@ import type { Importer, SceneDescription } from "@arcue/scene";
 import { SCENE_SPACE } from "@arcue/scene";
 import type { McpUiHostCapabilities } from "@modelcontextprotocol/ext-apps";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LocalHost } from "../local-host";
 import { fromBase64, toBase64 } from "./tool-socket";
 import type { McpViewOptions, ToolResult, ViewApp } from "./view-host";
 import { McpView } from "./view-host";
@@ -127,6 +128,7 @@ class FakeArcue {
 
   async start(): Promise<this> {
     this.core = await ArcueCore.start({ platform: this.platform, onError: () => undefined });
+    cores.push(this.core);
     return this;
   }
 
@@ -139,13 +141,13 @@ class FakeArcue {
   }
 
   /** Shows a model in the view as `open_model` does, and answers what it answers. */
-  async openModel(path: string): Promise<ToolResult> {
-    const { assetId } = await this.bridge().execute("asset.openInView", { path, view: VIEW, move: false });
+  async openModel(path: string, at: { clip?: string; frame?: number } = {}): Promise<ToolResult> {
+    const { assetId } = await this.bridge().execute("asset.openInView", { path, view: VIEW, move: false, ...at });
     this.#lastShown++;
     this.#shownAt.set(path, this.#lastShown);
     return {
       content: [{ type: "text", text: `Arcue shows ${path} as ${assetId} in its view in this conversation.` }],
-      _meta: { [MCP_VIEW_META_KEY]: { path, assetId, shownAt: this.#lastShown } },
+      _meta: { [MCP_VIEW_META_KEY]: { path, assetId, shownAt: this.#lastShown, ...at } },
     };
   }
 
@@ -226,9 +228,11 @@ class FakeApp implements ViewApp {
 }
 
 const views: McpView[] = [];
+const cores: ArcueCore[] = [];
 
 afterEach(() => {
   for (const view of views.splice(0)) view.dispose();
+  for (const core of cores.splice(0)) core.dispose();
 });
 
 function startView(app: FakeApp, result: ToolResult, path = HERO, options: McpViewOptions = {}): McpView {
@@ -237,6 +241,11 @@ function startView(app: FakeApp, result: ToolResult, path = HERO, options: McpVi
   view.toolInput({ path });
   view.toolResult(result);
   return view;
+}
+
+function hostOf(view: McpView): LocalHost {
+  if (!view.host) throw new Error("The view has no host.");
+  return view.host;
 }
 
 /** The paths of the view's tabs and the active one's. */
@@ -291,16 +300,18 @@ describe("McpView", () => {
     expect(app.toolCalls.every((name) => name === WINDOW_CHANNEL_TOOL)).toBe(true);
   });
 
-  it("opens the model again when the core no longer has it", async () => {
+  it("opens the model again at the clip and frame it was shown at when the core no longer has it", async () => {
     const arcue = await new FakeArcue().start();
-    const result = await arcue.openModel(HERO);
+    const result = await arcue.openModel(HERO, { clip: "Armature|Walk", frame: 12 });
     const { assets } = await arcue.bridge().query("asset.list", {});
     for (const asset of assets) await arcue.bridge().execute("asset.close", { assetId: asset.assetId });
     expect(await arcue.paths()).toEqual([]);
 
     const view = startView(new FakeApp(arcue), result);
+    const execute = vi.spyOn(hostOf(view).client, "execute");
     await vi.waitFor(() => expect(tabs(view)).toEqual({ paths: [HERO], active: HERO }));
     expect(await arcue.paths()).toEqual([HERO]);
+    expect(execute).toHaveBeenCalledWith("asset.open", { path: HERO, clip: "Armature|Walk", frame: 12 });
   });
 
   it("gives the model up to a later view, and takes it back when asked", async () => {

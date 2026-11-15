@@ -340,7 +340,13 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
               lastShown = Math.max(Date.now(), lastShown + 1);
               shownAt.set(shownPath, lastShown);
               return viewResult(
-                { path: shownPath, assetId, shownAt: lastShown },
+                {
+                  path: shownPath,
+                  assetId,
+                  shownAt: lastShown,
+                  ...(named !== undefined ? { clip: named } : {}),
+                  ...(frame !== undefined ? { frame } : {}),
+                },
                 text(`Arcue shows ${name} as ${assetId} in its view in this conversation.`),
               );
             }

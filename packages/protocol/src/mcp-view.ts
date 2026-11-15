@@ -36,6 +36,9 @@ export const shownModelSchema = z.object({
   assetId: z.string().min(1),
   /** When the model was shown, so a view that a later `open_model` superseded can tell. */
   shownAt: z.int().min(0),
+  /** The clip and frame it was shown at, which the view shows again when it opens the model again. */
+  clip: z.string().min(1).optional(),
+  frame: z.int().min(0).max(0xffffffff).optional(),
 });
 
 /** The model an `open_model` result shows. */

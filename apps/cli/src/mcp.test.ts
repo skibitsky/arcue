@@ -307,6 +307,7 @@ describe("arcue mcp", () => {
         return isRecord(value) ? Number(value.shownAt) : Number.NaN;
       };
       expect(shown(first)).toEqual({ path: model, assetId: "a1", shownAt: expect.any(Number) });
+      expect(shown(second)).toEqual({ path: model, assetId: "a1", shownAt: expect.any(Number), frame: 3 });
       expect(shownAt(second)).toBeGreaterThan(shownAt(first));
       expect(first.structuredContent).toBeUndefined();
     });
