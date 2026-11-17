@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { C as readLastCore, D as readBridgeInfo, E as connectToCore, O as runningCore, S as waitForStarts, T as blockingCore, a as inBrowser, b as claimStart, d as WindowPresence, f as NodePlatform, g as ArcueCore, h as fromNativePath, i as doesNotAnswer, l as inspectFile, m as startNodeImportWorker, n as import_websocket_server, o as bundledImportWorker, p as systemClock, r as connectForOpen, s as formatInspection, u as userDataDir, v as startBridgeServer, w as isRunning, x as recordLastCore, y as CoreRunningError } from "./arcue-CLLhAA6U.js";
-import { A as viewNameSchema, Bt as ArcueError, Et as bridgeAuthorization, It as framedEndpoint, Lt as messageChannel, Nt as sharesReviews, Pt as MAX_FRAME_BYTES, St as LOCAL_PAGE_OWNER, k as viewAddress, n as binaryFrameCodec, wt as SERVE_STOPPED_CLOSE_CODE } from "./arcue-DRTHS0tu.js";
+import { C as readLastCore, D as readBridgeInfo, E as connectToCore, O as runningCore, S as waitForStarts, T as blockingCore, a as inBrowser, b as claimStart, d as WindowPresence, f as NodePlatform, g as ArcueCore, h as fromNativePath, i as doesNotAnswer, l as inspectFile, m as startNodeImportWorker, n as import_websocket_server, o as bundledImportWorker, p as systemClock, r as connectForOpen, s as formatInspection, u as userDataDir, v as startBridgeServer, w as isRunning, x as recordLastCore, y as CoreRunningError } from "./arcue-DHkKMS0E.js";
+import { A as viewNameSchema, Bt as ArcueError, Et as bridgeAuthorization, It as framedEndpoint, Lt as messageChannel, Nt as sharesReviews, Pt as MAX_FRAME_BYTES, St as LOCAL_PAGE_OWNER, k as viewAddress, n as binaryFrameCodec, wt as SERVE_STOPPED_CLOSE_CODE } from "./arcue-DgAKlMPA.js";
 import { mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
 import { connect, createServer } from "node:net";
 import { dirname, extname, join, parse, resolve, sep } from "node:path";
@@ -328,7 +328,7 @@ async function detachServe(command, env, output, options) {
 			return already(info);
 		}
 	}
-	const port = command.port ?? await freePort(portOf((await readLastCore(userData))?.serveUrl)) ?? 4530;
+	const port = command.port ?? await servePort(userData);
 	if (!(await stat(self.script).catch(() => null))?.isFile()) {
 		output.out(`This arcue has no arcue.js in ${dirname(self.script)}.\n`);
 		return 1;
@@ -483,6 +483,10 @@ async function answeringWithin(userData, ms) {
 		await setTimeout$1(POLL_MS$1);
 	}
 }
+/** The port Arcue in the browser ran on last when it is free, so its open pages find it again, or else the default. */
+async function servePort(userData) {
+	return await freePort(portOf((await readLastCore(userData))?.serveUrl)) ?? 4530;
+}
 /** The port when nothing listens on it on 127.0.0.1 or ::1, the addresses `arcue serve` takes it on, or undefined. */
 async function freePort(port) {
 	if (port === void 0 || !await listensOn(port, "127.0.0.1")) return void 0;
@@ -624,6 +628,7 @@ async function startServer(options) {
 			onError: options.onError,
 			url,
 			build: options.build,
+			hosted: options.hosted,
 			claim
 		});
 	} catch (error) {
@@ -955,6 +960,85 @@ function webSocketStream(socket) {
 	};
 }
 //#endregion
+//#region src/serve-here.ts
+/**
+* Whether this process can run `arcue serve --detach`, which starts its own program again as Node. An Electron utility
+* process, where the Claude desktop app runs its extensions' servers on its own Node, can't: its program is Electron's
+* helper, which may not run as Node.
+*/
+function startsItself(proc = process) {
+	return Reflect.get(proc, "type") === void 0;
+}
+/**
+* Arcue in the browser in this process, for an `arcue mcp` that can't start it in the background. It runs until it stops
+* by itself or `arcue stop` asks it to, and `start` starts it again after that, until `close`.
+*/
+var ServeHere = class {
+	#options;
+	#server = null;
+	#starting = null;
+	#closing = null;
+	#closed = false;
+	constructor(options) {
+		this.#options = options;
+	}
+	/** Starts Arcue in the browser here, unless it runs already, here or in another process. */
+	start() {
+		this.#starting ??= this.#start().finally(() => {
+			this.#starting = null;
+		});
+		return this.#starting;
+	}
+	async close() {
+		this.#closed = true;
+		await this.#starting?.catch(() => void 0);
+		const server = this.#server;
+		this.#server = null;
+		await Promise.all([this.#closing, server?.close(SERVE_STOPPED_CLOSE_CODE)]);
+	}
+	async #start() {
+		await this.#closing;
+		if (this.#closed) throw new Error("Arcue's MCP server is closing.");
+		if (this.#server) return;
+		const { userData } = this.#options;
+		const blocking = await blockingCore(userData, "serve");
+		if (blocking?.reason === "unshared") throw new CoreRunningError(blocking.info, "unshared", "serve", this.#options.platform ?? process.platform);
+		if (blocking) {
+			const connection = await connectToCore(userData, "serve");
+			connection?.close();
+			if (connection) return;
+		}
+		const { importWorkerEntry, webUi, build, onError } = this.#options;
+		const serve = (port) => startServer({
+			userData,
+			importWorkerEntry,
+			webUi,
+			port,
+			idleStopMs: this.#options.idleStopMs ?? 18e5,
+			onError,
+			hosted: true,
+			...build === void 0 ? {} : { build }
+		});
+		const server = await serve(this.#options.port ?? await servePort(userData)).catch((error) => {
+			if (error instanceof Error && error.message.includes(" is in use.")) return serve(0);
+			throw error;
+		}).catch((error) => {
+			if (error instanceof CoreRunningError && error.reason === "same") return null;
+			throw error;
+		});
+		if (!server) return;
+		this.#server = server;
+		server.stopped.then((stop) => {
+			if (this.#server !== server) return;
+			this.#server = null;
+			this.#options.onStopped?.(stop.message);
+			this.#closing = server.close(SERVE_STOPPED_CLOSE_CODE).finally(() => {
+				this.#closing = null;
+			});
+		});
+	}
+};
+//#endregion
 //#region src/stop.ts
 var STOP_TIMEOUT_MS = 3e4;
 var POLL_MS = 100;
@@ -1043,7 +1127,8 @@ async function connectOrRefuse(userData, kind, output) {
 }
 /**
 * Waits until the core's process has ended. Once its bridge file no longer names it and nothing listens on its socket,
-* a process that lingers with its pid, as a zombie or a pid used again, counts as stopped after a while.
+* a hosted core has stopped, and a process that lingers with its pid, as a zombie or a pid used again, counts as
+* stopped after a while.
 */
 async function waitStopped(userData, kind, info, timeoutMs) {
 	const deadline = Date.now() + timeoutMs;
@@ -1051,7 +1136,10 @@ async function waitStopped(userData, kind, info, timeoutMs) {
 	for (;;) {
 		if (!isRunning(info.pid)) return true;
 		if (goneSince === null) {
-			if ((await readBridgeInfo(userData, kind))?.token !== info.token && !await listens(info.socket)) goneSince = Date.now();
+			if ((await readBridgeInfo(userData, kind))?.token !== info.token && !await listens(info.socket)) {
+				if (info.hosted) return true;
+				goneSince = Date.now();
+			}
 		} else if (Date.now() - goneSince >= LINGER_MS) return true;
 		if (Date.now() >= deadline) return false;
 		await setTimeout$1(POLL_MS);
@@ -1271,17 +1359,26 @@ async function mcp(command, env, cwd, options) {
 			...port ? { port } : {}
 		}, env, capture, options) === 0 ? null : lines.join("").trim();
 	};
+	const here = startsItself() ? null : new ServeHere({
+		userData: userDataDir(env),
+		importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
+		webUi: options.webUi ?? bundledWebUi,
+		build: await buildOf(options) ?? void 0,
+		onError: (error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`),
+		onStopped: (message) => process.stderr.write(`${message}\n`)
+	});
 	const startServe = async () => {
+		if (here) return here.start();
 		let failure = await detach();
 		if (failure?.includes(" is in use.")) failure = await detach(await anyFreePort());
 		if (failure !== null) throw new Error(failure);
 	};
-	const { bundledCardPage, bundledViewPage, serveMcp } = await import("./arcue-B0utfI7s.js");
+	const { bundledCardPage, bundledViewPage, serveMcp } = await import("./arcue-DBIcLtGX.js");
 	const page = (path, name) => readFile(path, "utf8").catch((error) => {
 		if (!isMissing(error)) throw error;
 		throw new Error(`Arcue's ${name} page is missing from ${path}. Reinstall Arcue.`);
 	});
-	await serveMcp({
+	const served = serveMcp({
 		userData: userDataDir(env),
 		view: sessionView(env, command.view),
 		cwd,
@@ -1291,6 +1388,18 @@ async function mcp(command, env, cwd, options) {
 		cardHtml: () => page(bundledCardPage, "card"),
 		viewHtml: () => page(bundledViewPage, "view")
 	});
+	if (!here) {
+		await served;
+		return 0;
+	}
+	const signals = stopSignal(options.stop);
+	try {
+		await Promise.race([served, signals.stopped]);
+	} finally {
+		signals.dispose();
+		options.onStopping?.();
+		await here.close();
+	}
 	return 0;
 }
 function isMissing(error) {

@@ -6432,7 +6432,9 @@ var bridgeInfoSchema = object({
 	/** The lock protocol the core follows. */
 	locks: int().positive().optional(),
 	/** Which arcue.js runs the core, for Arcue in the browser: the first 16 hex digits of its SHA-256. */
-	build: string().regex(/^[0-9a-f]{16}$/).optional()
+	build: string().regex(/^[0-9a-f]{16}$/).optional(),
+	/** Whether the core runs inside a program that goes on after it stops, such as `arcue mcp`, for Arcue in the browser. */
+	hosted: literal(true).optional()
 });
 /** Whether the core takes the same review locks as this build, so it may run beside it. */
 function sharesReviews(info) {
