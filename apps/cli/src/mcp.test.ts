@@ -274,6 +274,7 @@ describe("arcue mcp", () => {
       expect(requestsNamed(core, "asset.openInView")).toEqual([
         { path: model, view: VIEW, move: false, clip: "Armature|Walk", frame: 12 },
       ]);
+      expect(result.structuredContent).toBeUndefined();
     });
 
     it("shows the model in Arcue in the browser for a client that shows views, and names it for the view", async () => {
@@ -309,7 +310,7 @@ describe("arcue mcp", () => {
       expect(shown(first)).toEqual({ path: model, assetId: "a1", shownAt: expect.any(Number) });
       expect(shown(second)).toEqual({ path: model, assetId: "a1", shownAt: expect.any(Number), frame: 3 });
       expect(shownAt(second)).toBeGreaterThan(shownAt(first));
-      expect(first.structuredContent).toBeUndefined();
+      expect(first.structuredContent).toEqual({ [MCP_VIEW_META_KEY]: shown(first) });
     });
 
     it("refuses a clip or frame the model does not have, naming its clips", async () => {
@@ -1185,14 +1186,20 @@ describe("arcue mcp", () => {
             closed: false,
           };
           opened.push(window);
+          const closeListeners: (() => void)[] = [];
           return {
             send: (bytes) => window.sent.push(Buffer.from(bytes).toString()),
             onMessage: (listener) => {
               deliver = listener;
             },
-            onClose: () => undefined,
+            onClose: (listener) => {
+              if (window.closed) listener();
+              else closeListeners.push(listener);
+            },
             close: () => {
+              if (window.closed) return;
               window.closed = true;
+              for (const listener of closeListeners) listener();
             },
           };
         },
@@ -1248,7 +1255,7 @@ describe("arcue mcp", () => {
 
     it("tells a view whether a later open_model showed its model since", async () => {
       await serve({ "asset.openInView": () => ({ assetId: "a1", shown: "held" }) });
-      const client = await connect({ openWindow: windows().openWindow }, SHOWS_VIEWS);
+      const client = await connect({ openWindow: windows().openWindow, sweepMs: 20 }, SHOWS_VIEWS);
       const shownAt = async () => {
         const shown = (await call(client, "open_model", { path: model }))._meta?.[MCP_VIEW_META_KEY];
         return isRecord(shown) ? shown.shownAt : null;
@@ -1261,6 +1268,35 @@ describe("arcue mcp", () => {
       expect(await latest(earlier)).toBe(false);
       expect(await latest(later)).toBe(true);
       expect(await latest(later)).toBe(true);
+    });
+
+    it("closes the channels of views that are gone before it connects a window, so it can take their models", async () => {
+      await serve();
+      const { opened, openWindow } = windows();
+      const client = await connect({ openWindow, sweepMs: 20 }, SHOWS_VIEWS);
+
+      await call(client, WINDOW_CHANNEL_TOOL, { op: "open", path: model, shownAt: 1 });
+      expect(opened.map((window) => window.closed)).toEqual([false]);
+      await call(client, WINDOW_CHANNEL_TOOL, { op: "open", path: model, shownAt: 1 });
+
+      expect(opened.map((window) => window.closed)).toEqual([true, false]);
+    });
+
+    it("leaves the other windows open when a view connects for a model that a later view shows", async () => {
+      await serve({ "asset.openInView": () => ({ assetId: "a1", shown: "held" }) });
+      const { opened, openWindow } = windows();
+      const client = await connect({ openWindow, sweepMs: 20 }, SHOWS_VIEWS);
+      const shownAt = async () => {
+        const shown = (await call(client, "open_model", { path: model }))._meta?.[MCP_VIEW_META_KEY];
+        return isRecord(shown) ? shown.shownAt : null;
+      };
+      const earlier = await shownAt();
+      const later = await shownAt();
+
+      await call(client, WINDOW_CHANNEL_TOOL, { op: "open", path: model, shownAt: later });
+      await call(client, WINDOW_CHANNEL_TOOL, { op: "open", path: model, shownAt: earlier });
+
+      expect(opened.map((window) => window.closed)).toEqual([false, false]);
     });
 
     it("refuses a call without its channel, or with pieces that are not base64", async () => {

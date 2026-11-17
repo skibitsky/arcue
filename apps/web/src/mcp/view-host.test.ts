@@ -126,9 +126,11 @@ class FakeArcue {
     const { assetId } = await this.bridge().execute("asset.openInView", { path, view: VIEW, move: false, ...at });
     this.#lastShown++;
     this.#shownAt.set(path, this.#lastShown);
+    const shown = { path, assetId, shownAt: this.#lastShown, ...at };
     return {
       content: [{ type: "text", text: `Arcue shows ${path} as ${assetId} in its view in this conversation.` }],
-      _meta: { [MCP_VIEW_META_KEY]: { path, assetId, shownAt: this.#lastShown, ...at } },
+      structuredContent: { [MCP_VIEW_META_KEY]: shown },
+      _meta: { [MCP_VIEW_META_KEY]: shown },
     };
   }
 
@@ -259,9 +261,20 @@ describe("McpView", () => {
 
     const without = new McpView(app);
     views.push(without);
-    without.toolResult({ content: [{ type: "text", text: "Arcue shows Hero.fbx in the Arcue app." }] });
-    expect(without.phase.get()).toEqual({ kind: "failed", message: "Arcue shows Hero.fbx in the Arcue app." });
+    without.toolResult({ content: [{ type: "text", text: "Arcue shows Hero.fbx in the Arcue app as a1." }] });
+    expect(without.phase.get()).toEqual({
+      kind: "failed",
+      message: "Arcue shows Hero.fbx in the Arcue app as a1. This view can't show the model. Ask to see it again.",
+    });
     expect(without.host).toBeNull();
+
+    const empty = new McpView(app);
+    views.push(empty);
+    empty.toolResult({ content: [] });
+    expect(empty.phase.get()).toEqual({
+      kind: "failed",
+      message: "This view can't show the model. Ask to see it again.",
+    });
   });
 
   it("says it cannot show the model in an app that does not let it call tools", async () => {
@@ -283,6 +296,20 @@ describe("McpView", () => {
     await vi.waitFor(() => expect(view.phase.get().kind).toBe("shown"));
     expect(tabs(view)).toEqual({ paths: [HERO], active: HERO });
     expect(app.toolCalls.every((name) => name === WINDOW_CHANNEL_TOOL)).toBe(true);
+  });
+
+  it("shows its model again when the app shows the view again with the result the conversation kept", async () => {
+    const arcue = await new FakeArcue().start();
+    const result = await arcue.openModel(HERO, { clip: "Armature|Walk", frame: 12 });
+    const first = startView(new FakeApp(arcue), result);
+    await vi.waitFor(() => expect(first.phase.get().kind).toBe("shown"));
+    first.dispose();
+
+    const { _meta, ...kept } = result;
+    const again = startView(new FakeApp(arcue), kept);
+    await vi.waitFor(() => expect(again.phase.get().kind).toBe("shown"));
+    expect(again.phase.get()).toMatchObject({ model: { path: HERO, clip: "Armature|Walk", frame: 12 } });
+    expect(tabs(again)).toEqual({ paths: [HERO], active: HERO });
   });
 
   it("opens the model again at the clip and frame it was shown at when the core no longer has it", async () => {

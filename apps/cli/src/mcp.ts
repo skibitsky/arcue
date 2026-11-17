@@ -63,6 +63,11 @@ export interface ArcueMcpOptions {
   openWindow?: (url: string, token: string, view: string) => Promise<RelaySocket>;
   /** How long a tool waits for a model to load. Defaults to 2 minutes. */
   loadTimeoutMs?: number;
+  /**
+   * How long the server waits for each view to call again before it takes the view for gone and closes its window, when
+   * `open_model` shows a model or a view connects to take one. Defaults to 3 seconds.
+   */
+  sweepMs?: number;
 }
 
 /** The card's page, which the build writes beside `arcue.js`. */
@@ -124,6 +129,7 @@ interface Core {
 
 const viewResult = (shown: ShownModel, ...content: TextContent[]): CallToolResult => ({
   content,
+  structuredContent: { [MCP_VIEW_META_KEY]: shown },
   _meta: { [MCP_VIEW_META_KEY]: shown },
 });
 const channelResult = (output: WindowChannelOutput): CallToolResult => ({
@@ -150,6 +156,7 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
   let startFailure: { at: number; error: unknown } | null = null;
   const relay = new WindowRelay({
     setTimer: systemClock.setTimer,
+    ...(options.sweepMs !== undefined ? { sweepMs: options.sweepMs } : {}),
     connect: async () => {
       const attempt = async () => {
         const info = await readBridgeInfo(options.userData, "serve");
@@ -379,8 +386,10 @@ export function createArcueMcpServer(given: ArcueMcpOptions): McpServer {
     },
     async ({ op, channel, path, shownAt: at, seq, from, pieces }, { mcpReq: { signal } }) => {
       if (op === "open") {
+        const isLatest = () => path === undefined || at === undefined || at >= (shownAt.get(path) ?? 0);
+        if (path !== undefined && isLatest()) await relay.sweep();
         const id = await relay.open();
-        const latest = path === undefined || at === undefined || at >= (shownAt.get(path) ?? 0);
+        const latest = isLatest();
         if (path !== undefined && at !== undefined && latest && (shownAt.has(path) || shownAt.size < MAX_SHOWN)) {
           shownAt.set(path, at);
         }
