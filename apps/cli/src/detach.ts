@@ -109,7 +109,7 @@ export async function detachServe(
     }
   }
 
-  const port = command.port ?? (await freePort(portOf((await readLastCore(userData))?.serveUrl))) ?? DEFAULT_SERVE_PORT;
+  const port = command.port ?? (await servePort(userData));
   if (!(await stat(self.script).catch(() => null))?.isFile()) {
     output.out(`This arcue has no arcue.js in ${dirname(self.script)}.\n`);
     return 1;
@@ -259,6 +259,11 @@ async function answeringWithin(userData: string, ms: number): Promise<BridgeInfo
     if (info || Date.now() >= deadline) return info;
     await sleep(POLL_MS);
   }
+}
+
+/** The port Arcue in the browser ran on last when it is free, so its open pages find it again, or else the default. */
+export async function servePort(userData: string): Promise<number> {
+  return (await freePort(portOf((await readLastCore(userData))?.serveUrl))) ?? DEFAULT_SERVE_PORT;
 }
 
 /** The port when nothing listens on it on 127.0.0.1 or ::1, the addresses `arcue serve` takes it on, or undefined. */

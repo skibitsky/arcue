@@ -50,6 +50,8 @@ export const bridgeInfoSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{16}$/)
     .optional(),
+  /** Whether the core runs inside a program that goes on after it stops, such as `arcue mcp`, for Arcue in the browser. */
+  hosted: z.literal(true).optional(),
 });
 
 export type BridgeInfo = z.output<typeof bridgeInfoSchema>;

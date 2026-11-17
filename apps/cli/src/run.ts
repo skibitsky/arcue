@@ -12,6 +12,7 @@ import { buildOf, detachServe, OTHER_BUILD, otherBuild } from "./detach";
 import { bundledImportWorker, formatInspection, inspectFile } from "./inspect";
 import { connectForOpen, doesNotAnswer, inBrowser } from "./routing";
 import { bundledWebUi, startServer } from "./serve";
+import { ServeHere, startsItself } from "./serve-here";
 import { sessionView } from "./session-view";
 import { stopServe } from "./stop";
 
@@ -319,7 +320,18 @@ async function mcp(
     );
     return code === 0 ? null : lines.join("").trim();
   };
+  const here = startsItself()
+    ? null
+    : new ServeHere({
+        userData: userDataDir(env),
+        importWorkerEntry: options.importWorkerEntry ?? bundledImportWorker,
+        webUi: options.webUi ?? bundledWebUi,
+        build: (await buildOf(options)) ?? undefined,
+        onError: (error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`),
+        onStopped: (message) => process.stderr.write(`${message}\n`),
+      });
   const startServe = async () => {
+    if (here) return here.start();
     let failure = await detach();
     if (failure?.includes(" is in use.")) failure = await detach(await anyFreePort());
     if (failure !== null) throw new Error(failure);
@@ -330,7 +342,7 @@ async function mcp(
       if (!isMissing(error)) throw error;
       throw new Error(`Arcue's ${name} page is missing from ${path}. Reinstall Arcue.`);
     });
-  await serveMcp({
+  const served = serveMcp({
     userData: userDataDir(env),
     view: sessionView(env, command.view),
     cwd,
@@ -340,6 +352,18 @@ async function mcp(
     cardHtml: () => page(bundledCardPage, "card"),
     viewHtml: () => page(bundledViewPage, "view"),
   });
+  if (!here) {
+    await served;
+    return 0;
+  }
+  const signals = stopSignal(options.stop);
+  try {
+    await Promise.race([served, signals.stopped]);
+  } finally {
+    signals.dispose();
+    options.onStopping?.();
+    await here.close();
+  }
   return 0;
 }
 

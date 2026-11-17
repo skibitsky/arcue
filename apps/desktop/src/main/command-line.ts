@@ -16,14 +16,14 @@ export function commandInApp(execPath: string): string {
 
 /**
  * Why the command must not link into the app where it runs, if it must not: a link into the app's disk image, or into
- * the temporary copy macOS runs a downloaded app from, breaks once the app moves.
+ * the temporary copy macOS runs a downloaded app from, breaks once the app moves. `then` says what to do once it moved.
  */
-export function moveFirst(bundle: string, readOnly: boolean): string | null {
+export function moveFirst(bundle: string, readOnly: boolean, then = "install the command"): string | null {
   if (bundle.includes("/AppTranslocation/")) {
-    return "macOS runs Arcue from a temporary copy until it is in the Applications folder. Move it there, open it again, and install the command.";
+    return `macOS runs Arcue from a temporary copy until it is in the Applications folder. Move it there, open it again, and ${then}.`;
   }
   if (readOnly && bundle.startsWith("/Volumes/")) {
-    return "Arcue runs from its disk image. Drag it to the Applications folder, open it from there, and install the command.";
+    return `Arcue runs from its disk image. Drag it to the Applications folder, open it from there, and ${then}.`;
   }
   return null;
 }
