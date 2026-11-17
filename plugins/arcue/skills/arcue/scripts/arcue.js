@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { C as readLastCore, D as readBridgeInfo, E as connectToCore, O as runningCore, S as waitForStarts, T as blockingCore, a as inBrowser, b as claimStart, d as WindowPresence, f as NodePlatform, g as ArcueCore, h as fromNativePath, i as doesNotAnswer, l as inspectFile, m as startNodeImportWorker, n as import_websocket_server, o as bundledImportWorker, p as systemClock, r as connectForOpen, s as formatInspection, u as userDataDir, v as startBridgeServer, w as isRunning, x as recordLastCore, y as CoreRunningError } from "./arcue-DHkKMS0E.js";
-import { A as viewNameSchema, Bt as ArcueError, Et as bridgeAuthorization, It as framedEndpoint, Lt as messageChannel, Nt as sharesReviews, Pt as MAX_FRAME_BYTES, St as LOCAL_PAGE_OWNER, k as viewAddress, n as binaryFrameCodec, wt as SERVE_STOPPED_CLOSE_CODE } from "./arcue-DgAKlMPA.js";
+import { C as readLastCore, D as readBridgeInfo, E as connectToCore, O as runningCore, S as waitForStarts, T as blockingCore, a as inBrowser, b as claimStart, d as WindowPresence, f as NodePlatform, g as ArcueCore, h as fromNativePath, i as doesNotAnswer, l as inspectFile, m as startNodeImportWorker, n as import_websocket_server, o as bundledImportWorker, p as systemClock, r as connectForOpen, s as formatInspection, u as userDataDir, v as startBridgeServer, w as isRunning, x as recordLastCore, y as CoreRunningError } from "./arcue-CEDIKIYu.js";
+import { A as viewNameSchema, Bt as ArcueError, Et as bridgeAuthorization, It as framedEndpoint, Lt as messageChannel, Nt as sharesReviews, Pt as MAX_FRAME_BYTES, St as LOCAL_PAGE_OWNER, k as viewAddress, n as binaryFrameCodec, wt as SERVE_STOPPED_CLOSE_CODE } from "./arcue-QGFQvDM0.js";
 import { mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
 import { connect, createServer } from "node:net";
 import { dirname, extname, join, parse, resolve, sep } from "node:path";
@@ -1373,7 +1373,7 @@ async function mcp(command, env, cwd, options) {
 		if (failure?.includes(" is in use.")) failure = await detach(await anyFreePort());
 		if (failure !== null) throw new Error(failure);
 	};
-	const { bundledCardPage, bundledViewPage, serveMcp } = await import("./arcue-DBIcLtGX.js");
+	const { bundledCardPage, bundledViewPage, serveMcp } = await import("./arcue-D27dGPBc.js");
 	const page = (path, name) => readFile(path, "utf8").catch((error) => {
 		if (!isMissing(error)) throw error;
 		throw new Error(`Arcue's ${name} page is missing from ${path}. Reinstall Arcue.`);

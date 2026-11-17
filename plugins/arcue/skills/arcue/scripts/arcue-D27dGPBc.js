@@ -1,5 +1,5 @@
-import { D as readBridgeInfo, E as connectToCore, _ as warningPrompt, c as formatLabel, h as fromNativePath, l as inspectFile, p as systemClock, r as connectForOpen, s as formatInspection, t as import_websocket } from "./arcue-DHkKMS0E.js";
-import { $t as intersection, Bt as ArcueError, Ct as SERVE_CORE_PATH, Et as bridgeAuthorization, Gt as _enum, Ht as date, I as MODEL_FILE_EXTENSIONS, Jt as array, Kt as _null, O as VIEW_PARAMETER, Pt as MAX_FRAME_BYTES, Qt as int, Ut as datetime, Vt as COMMENT_ID_PATTERN, Wt as ZodNumber, Xt as discriminatedUnion, Yt as boolean, Zt as email, a as MAX_PIECE_BYTES, an as optional, c as WINDOW_CHANNEL_META_KEY, cn as string, dn as url, en as lazy, fn as safeParse, hn as NEVER, in as object, k as viewAddress, l as WINDOW_CHANNEL_TOOL, ln as union, mn as _coercedNumber, nn as looseObject, o as MCP_VIEW_META_KEY, on as preprocess, pn as toJSONSchema, qt as any, rn as number$1, s as MCP_VIEW_URI, sn as record, tn as literal, u as windowChannelInputSchema, un as unknown } from "./arcue-DgAKlMPA.js";
+import { D as readBridgeInfo, E as connectToCore, _ as warningPrompt, c as formatLabel, h as fromNativePath, l as inspectFile, p as systemClock, r as connectForOpen, s as formatInspection, t as import_websocket } from "./arcue-CEDIKIYu.js";
+import { $t as intersection, Bt as ArcueError, Ct as SERVE_CORE_PATH, Et as bridgeAuthorization, Gt as _enum, Ht as date, I as MODEL_FILE_EXTENSIONS, Jt as array, Kt as _null, O as VIEW_PARAMETER, Pt as MAX_FRAME_BYTES, Qt as int, Ut as datetime, Vt as COMMENT_ID_PATTERN, Wt as ZodNumber, Xt as discriminatedUnion, Yt as boolean, Zt as email, a as MAX_PIECE_BYTES, an as optional, c as WINDOW_CHANNEL_META_KEY, cn as string, dn as url, en as lazy, fn as safeParse, hn as NEVER, in as object, k as viewAddress, l as WINDOW_CHANNEL_TOOL, ln as union, mn as _coercedNumber, nn as looseObject, o as MCP_VIEW_META_KEY, on as preprocess, pn as toJSONSchema, qt as any, rn as number$1, s as MCP_VIEW_URI, sn as record, tn as literal, u as windowChannelInputSchema, un as unknown } from "./arcue-QGFQvDM0.js";
 import { realpath, stat } from "node:fs/promises";
 import { basename, extname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -17696,6 +17696,7 @@ var carded = (card, ...content) => ({
 var CARD_LIST_LIMIT = 200;
 var viewResult = (shown, ...content) => ({
 	content,
+	structuredContent: { [MCP_VIEW_META_KEY]: shown },
 	_meta: { [MCP_VIEW_META_KEY]: shown }
 });
 var channelResult = (output) => ({
@@ -17720,6 +17721,7 @@ function createArcueMcpServer(given) {
 	let startFailure = null;
 	const relay = new WindowRelay({
 		setTimer: systemClock.setTimer,
+		...options.sweepMs !== void 0 ? { sweepMs: options.sweepMs } : {},
 		connect: async () => {
 			const attempt = async () => {
 				const info = await readBridgeInfo(options.userData, "serve");
@@ -17904,8 +17906,10 @@ function createArcueMcpServer(given) {
 		_meta: { ui: { visibility: ["app"] } }
 	}, async ({ op, channel, path, shownAt: at, seq, from, pieces }, { mcpReq: { signal } }) => {
 		if (op === "open") {
+			const isLatest = () => path === void 0 || at === void 0 || at >= (shownAt.get(path) ?? 0);
+			if (path !== void 0 && isLatest()) await relay.sweep();
 			const id = await relay.open();
-			const latest = path === void 0 || at === void 0 || at >= (shownAt.get(path) ?? 0);
+			const latest = isLatest();
 			if (path !== void 0 && at !== void 0 && latest && (shownAt.has(path) || shownAt.size < MAX_SHOWN)) shownAt.set(path, at);
 			return channelResult({
 				channel: id,

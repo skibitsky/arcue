@@ -9557,7 +9557,10 @@ var lockWaitingSchema = object({
 //#region ../../packages/protocol/src/mcp-view.ts
 /** The page of Arcue's view, which apps that show MCP Apps render for `open_model`. */
 var MCP_VIEW_URI = "ui://arcue/view.html";
-/** Where an `open_model` result names the model it showed, for the view. */
+/**
+* Where an `open_model` result names the model it showed, for the view: in its structured content, which apps keep with
+* the conversation and give the view again when they show it again, and in its `_meta`.
+*/
 var MCP_VIEW_META_KEY = "arcue/view";
 /** The app-only tool through which the view's window talks to the core. */
 var WINDOW_CHANNEL_TOOL = "window_channel";
