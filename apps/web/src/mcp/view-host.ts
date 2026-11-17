@@ -41,6 +41,7 @@ export interface McpViewOptions {
 }
 
 const NOTHING_SHOWN = "The tool showed no model.";
+const NOT_KEPT = "This view can't show the model. Ask to see it again.";
 const CANCELLED = "Showing the model was cancelled.";
 const NO_TOOLS = "This app doesn't let Arcue's view reach Arcue, so it can't show the model here.";
 const SEND_TIMEOUT_MS = 5 * 60_000;
@@ -96,12 +97,20 @@ export class McpView {
     if (this.#phase.get().kind === "waiting") this.#phase.set({ kind: "failed", message: CANCELLED });
   }
 
-  /** The tool's result arrived: its error, or the model to show, which the view connects for. */
+  /**
+   * The tool's result arrived: its error, or the model to show, which the view connects for. An app that shows the view
+   * again gives it the result as the conversation kept it, which may hold the model only in its structured content.
+   */
   toolResult(result: ToolResult): void {
     if (this.#shown || this.#phase.get().kind === "failed") return;
-    const shown = shownModelSchema.safeParse(result._meta?.[MCP_VIEW_META_KEY]);
-    if (result.isError || !shown.success) {
+    if (result.isError) {
       this.fail(textOf(result) || NOTHING_SHOWN);
+      return;
+    }
+    const shown = shownModelSchema.safeParse(shownIn(result.structuredContent) ?? result._meta?.[MCP_VIEW_META_KEY]);
+    if (!shown.success) {
+      const text = textOf(result);
+      this.fail(text ? `${text} ${NOT_KEPT}` : NOT_KEPT);
       return;
     }
     if (this.#app.getHostCapabilities()?.serverTools === undefined) {
@@ -329,6 +338,12 @@ export class McpView {
     if (!output.success) throw new ChannelClosed("The server answered the window's channel with nothing it reads.");
     return output.data satisfies WindowChannelOutput;
   };
+}
+
+function shownIn(structured: unknown): unknown {
+  return typeof structured === "object" && structured !== null && MCP_VIEW_META_KEY in structured
+    ? structured[MCP_VIEW_META_KEY]
+    : undefined;
 }
 
 function textOf(result: ToolResult): string {

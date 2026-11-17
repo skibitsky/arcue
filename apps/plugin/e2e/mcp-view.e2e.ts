@@ -83,6 +83,11 @@ async function showView(page: Page, id: string, args: Record<string, unknown>): 
   const result = await callTool("open_model", args);
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   expect(result._meta?.[MCP_VIEW_META_KEY]).toMatchObject({ path: expect.stringContaining("stone-striker.fbx") });
+  return mountView(page, id, args, result);
+}
+
+/** Renders a view of a tool's result, as the app does when it shows the result's message. */
+async function mountView(page: Page, id: string, args: Record<string, unknown>, result: unknown): Promise<Frame> {
   await page.evaluate(
     ({ id, html, capabilities, input, result }) =>
       window.startView({
@@ -235,4 +240,16 @@ test("gives the model to a later view, and takes it back when asked", async ({ p
   await expect(earlier.getByText("stone-striker.fbx is open in a later view.")).toBeHidden();
   await ready(first);
   await expect(page.frameLocator("#second").getByText("stone-striker.fbx is open in a later view.")).toBeVisible();
+});
+
+test("shows the model again when the app shows the view again with the result it kept", async ({ page }) => {
+  await conversation(page);
+  const args = { path: "stone-striker.fbx", clip: WALK, frame: 30 };
+  const result = await callTool("open_model", args);
+  await ready(await mountView(page, "first", args, result));
+  await page.evaluate(() => document.getElementById("first")?.remove());
+
+  const { _meta, ...kept } = result;
+  await ready(await mountView(page, "again", args, kept));
+  await expect(page.frameLocator("#again").getByRole("img", { name: "Frame 30 of 60" })).toBeVisible();
 });
